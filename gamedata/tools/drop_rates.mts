@@ -423,7 +423,10 @@ function evalStatement(ctx: Ctx, rawStatement: string, mass: number): number {
             const open = statement.indexOf('(');
             const args = open < 0 ? [] : splitArgs(statement.slice(open + 1, matchParen(statement, open)));
             if (args.length > 0) {
-                ctx.emits.push({ obj: `$inv:${args[0]}|${[...new Set(ctx.gates)].join(',')}`, rate: mass, qtyMin: null, qtyMax: null, exact: ctx.exact });
+                // `~openshop(inv, buy, sell, haggle, title)`: the sell
+                // multiplier rides along when it is a literal (Zaff: 1000).
+                const sell = args.length > 2 && /^\d+$/.test(args[2].trim()) ? `@${args[2].trim()}` : '';
+                ctx.emits.push({ obj: `$inv:${args[0]}${sell}|${[...new Set(ctx.gates)].join(',')}`, rate: mass, qtyMin: null, qtyMax: null, exact: ctx.exact });
             }
             return mass;
         }
@@ -533,16 +536,20 @@ export function handlerShops(blocks: Map<string, Block>, trigger: string, subjec
         .map(row => (row.obj.startsWith('$inv:') ? row.obj.slice(5) : row.obj));
 }
 
-/** One shop-opening path: inv (`$owned_shop` = param) plus its varp gates. */
+/** One shop-opening path: inv (`$owned_shop` = param), the sell
+ * multiplier passed to `~openshop` (null: the keeper's param), its varp
+ * gates. */
 export interface ShopPath {
     inv: string;
+    sell: number | null;
     gates: string[];
 }
 
-/** Parse `handlerShops` entries (`inv|gate,gate`). */
+/** Parse `handlerShops` entries (`inv[@sell]|gate,gate`). */
 export function shopPaths(entries: string[]): ShopPath[] {
     return entries.map(entry => {
-        const [inv, gates] = entry.split('|');
-        return { inv, gates: gates ? gates.split(',').filter(gate => gate.length > 0) : [] };
+        const [head, gates] = entry.split('|');
+        const [inv, sell] = head.split('@');
+        return { inv, sell: sell ? Number(sell) : null, gates: gates ? gates.split(',').filter(gate => gate.length > 0) : [] };
     });
 }

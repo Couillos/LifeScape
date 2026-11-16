@@ -1,11 +1,9 @@
 //! Ambition catalogue: one entry per F2P skill group of rev 274 (melee
 //! counts as ONE group: attack, strength, defence, hitpoints), plus the
 //! merchant and the operator-only generalist. Each entry is a ladder of
-//! rungs: a level to reach, then a production quota (several candidate
-//! products per rung, so bots of one kind do not all make the same
-//! thing), an equipment tier or a coin target. Products were checked
-//! against the obtain index (`orchestrator obtain <item>`) and are
-//! asserted to map to a production leg in the tests.
+//! rungs (a level to reach, then a production quota, an equipment tier
+//! or a coin target) COMPUTED from the game data by `ambition_ladder`
+//! (user 2026-11-15): no product list is written by hand.
 //!
 //! Also here: skill fit (existing levels map to a sensible ambition) and
 //! the demand weights per kind (open bids, chain and method profits).
@@ -43,129 +41,50 @@ pub struct Spec {
     pub ladder: &'static [Rung],
 }
 
-const fn level_rung(skill: &'static str, level: u8) -> Rung {
-    Rung { skill, level, then: Then::Nothing }
-}
-const fn make(skill: &'static str, level: u8, items: &'static [&'static str], count: i64) -> Rung {
-    Rung { skill, level, then: Then::Produce(items, count, skill) }
-}
-const fn gear(skill: &'static str, level: u8, style: &'static str) -> Rung {
-    Rung { skill, level, then: Then::Equip(style) }
-}
+/// One catalogue row: kind, label, groups (`groups[0]` primary), and
+/// the rule its ladder is computed by (`ambition_ladder`).
+type Meta = (&'static str, &'static str, &'static [&'static str], crate::ambition_ladder::Rule);
 
-const WARRIOR: &[Rung] = &[
-    level_rung("attack", 20), level_rung("strength", 20), gear("defence", 20, "melee"),
-    make("attack", 30, &["cow_hide", "bones"], 50), level_rung("strength", 30), gear("defence", 30, "melee"),
-    level_rung("attack", 40), level_rung("strength", 40), gear("defence", 40, "melee"),
-    level_rung("attack", 50), level_rung("strength", 50), gear("defence", 50, "melee"),
-    level_rung("attack", 60), level_rung("strength", 60), gear("defence", 60, "melee"),
-];
-const RANGER: &[Rung] = &[
-    gear("ranged", 10, "ranged"), level_rung("ranged", 20), gear("ranged", 30, "ranged"), level_rung("defence", 20),
-    level_rung("ranged", 40), gear("ranged", 50, "ranged"), level_rung("ranged", 60), gear("ranged", 70, "ranged"),
-];
-// Levels first (user 2026-11-15: "assure toi que les gens entraînent
-// leur magic"): each climb picks its most profitable method (combat
-// spells, alchemy of cheap market stock, `training::best_pick`). The
-// amulet-of-magic quotas left the ladder: their crafting 13 chain held
-// six mages at magic 20 doing melee fillers.
-const MAGE: &[Rung] = &[
-    gear("magic", 10, "magic"), level_rung("magic", 20), level_rung("magic", 25), gear("magic", 30, "magic"), level_rung("magic", 35),
-    level_rung("magic", 40), level_rung("magic", 45), gear("magic", 50, "magic"), level_rung("magic", 55), level_rung("magic", 60),
-];
-const PRIEST: &[Rung] = &[
-    Rung { skill: "prayer", level: 10, then: Then::Produce(&["bones"], 100, "attack") }, level_rung("attack", 20),
-    gear("prayer", 20, "melee"), level_rung("defence", 30), level_rung("prayer", 30), gear("prayer", 40, "melee"), level_rung("prayer", 43), level_rung("prayer", 50),
-];
-// Lobster, tuna and swordfish are Karamja water: the boat is routed
-// (`access::BOAT_ROUTED`, fare budgeted like the toll), so they are quota
-// tiers since 2026-11-15 (user: "les Fisher ont accès aux lobsters et
-// swordfish ?"). Maples have no F2P tree (audit 2026-11-13). Composite
-// food (`bake:`: pies, pizza, cake) carries the cook past salmon.
-const COOK: &[Rung] = &[
-    make("cooking", 10, &["shrimp", "anchovies", "sardine", "cooked_chicken", "cooked_meat"], 50),
-    make("cooking", 20, &["trout", "herring", "pike", "bread", "redberry_pie"], 50), level_rung("fishing", 20),
-    make("cooking", 30, &["salmon", "pike", "meat_pie", "stew"], 50), make("cooking", 40, &["cake", "plain_pizza", "apple_pie", "salmon"], 50),
-    make("cooking", 50, &["lobster", "cake"], 50), make("cooking", 60, &["swordfish", "lobster"], 100),
-];
-const FISHER: &[Rung] = &[
-    make("fishing", 10, &["raw_shrimp", "raw_anchovies"], 100), make("fishing", 20, &["raw_sardine", "raw_herring", "raw_trout"], 100),
-    make("fishing", 30, &["raw_trout", "raw_salmon", "raw_pike"], 100), make("fishing", 40, &["raw_lobster", "raw_tuna", "raw_salmon"], 150),
-    make("fishing", 50, &["raw_swordfish", "raw_lobster"], 150), make("fishing", 60, &["raw_swordfish", "raw_lobster"], 200), level_rung("fishing", 70),
-];
-const WOODCUTTER: &[Rung] = &[
-    make("woodcutting", 15, &["logs"], 100), make("woodcutting", 30, &["oak_logs"], 100), make("woodcutting", 45, &["willow_logs"], 150),
-    make("woodcutting", 60, &["yew_logs", "willow_logs"], 150), make("woodcutting", 75, &["yew_logs"], 100), make("woodcutting", 90, &["yew_logs"], 200),
-];
-const FIREMAKER: &[Rung] = &[
-    level_rung("woodcutting", 15), level_rung("firemaking", 15), Rung { skill: "firemaking", level: 30, then: Then::Produce(&["oak_logs", "logs"], 100, "woodcutting") },
-    level_rung("woodcutting", 30), level_rung("firemaking", 45), Rung { skill: "firemaking", level: 60, then: Then::Produce(&["willow_logs"], 100, "woodcutting") },
-    level_rung("firemaking", 75), level_rung("firemaking", 90),
-];
-const CRAFTER: &[Rung] = &[
-    make("crafting", 5, &["ball_of_wool"], 100), make("crafting", 10, &["leather_gloves", "pot_empty", "gold_ring"], 30),
-    make("crafting", 16, &["leather_boots", "leather_cowl", "piedish", "unstrung_gold_amulet"], 30),
-    make("crafting", 20, &["leather_vambraces", "leather_armour", "bowl_empty", "strung_gold_amulet"], 30),
-    make("crafting", 30, &["leather_chaps", "sapphire_ring"], 20), level_rung("crafting", 40), level_rung("crafting", 50),
-];
-const SMITH: &[Rung] = &[
-    level_rung("mining", 10), make("smithing", 10, &["bronze_dagger", "bronze_sword", "bronze_med_helm"], 20),
-    make("smithing", 18, &["bronze_platebody", "bronze_platelegs", "bronze_kiteshield"], 10), level_rung("mining", 20),
-    make("smithing", 25, &["iron_dagger", "iron_scimitar", "iron_full_helm"], 20),
-    make("smithing", 33, &["iron_platebody", "iron_platelegs", "iron_kiteshield"], 10), level_rung("mining", 30),
-    make("smithing", 40, &["steel_dagger", "steel_sword", "steel_full_helm"], 20), make("smithing", 48, &["steel_platebody", "steel_platelegs"], 10),
-    level_rung("mining", 55), make("smithing", 58, &["mithril_dagger", "mithril_full_helm"], 10), make("smithing", 68, &["mithril_platebody", "mithril_platelegs"], 5),
-    level_rung("mining", 70), make("smithing", 78, &["adamant_dagger", "adamant_full_helm", "adamant_scimitar"], 5),
-    make("smithing", 88, &["adamant_platebody", "adamant_platelegs"], 3),
-];
-const MINER: &[Rung] = &[
-    make("mining", 10, &["copper_ore", "tin_ore", "clay"], 100), make("mining", 20, &["iron_ore", "tin_ore"], 100),
-    make("mining", 30, &["coal", "iron_ore"], 150), make("mining", 40, &["gold_ore", "coal"], 100),
-    make("mining", 55, &["mithril_ore", "coal"], 100), level_rung("mining", 70), level_rung("mining", 85),
-];
-const RUNECRAFTER: &[Rung] = &[
-    Rung { skill: "runecraft", level: 0, then: Then::Produce(&["blankrune"], 200, "mining") },
-    make("runecraft", 5, &["airrune", "mindrune"], 200), make("runecraft", 10, &["waterrune", "earthrune"], 200),
-    make("runecraft", 20, &["firerune", "bodyrune"], 200), make("runecraft", 30, &["bodyrune", "firerune", "earthrune"], 300),
-    level_rung("runecraft", 40), level_rung("runecraft", 50),
-];
-const MERCHANT_LADDER: &[Rung] = &[
-    Rung { skill: "", level: 0, then: Then::Coins(5_000) },
-    Rung { skill: "", level: 0, then: Then::Coins(20_000) },
-    Rung { skill: "", level: 0, then: Then::Coins(50_000) },
-    Rung { skill: "", level: 0, then: Then::Coins(100_000) },
-    Rung { skill: "", level: 0, then: Then::Coins(250_000) },
-    Rung { skill: "", level: 0, then: Then::Coins(500_000) },
-    Rung { skill: "", level: 0, then: Then::Coins(1_000_000) },
-];
+const META: &[Meta] = {
+    use crate::ambition_ladder::Rule::{Climber, Coins, Empty, Melee, Producer};
+    &[
+        ("warrior", "guerrier : mêlée et armures", &["melee"], Melee),
+        ("ranger", "archer : distance et équipement", &["ranged", "melee"], Climber("ranged", "ranged")),
+        ("priest", "prêtre : prière, os enterrés", &["prayer", "melee"], Climber("prayer", "melee")),
+        ("mage", "mage : magie, sorts et alchimie", &["magic"], Climber("magic", "magic")),
+        ("cook", "cuisinier : poissons et viandes cuits", &["cooking", "fishing"], Producer("cooking")),
+        ("woodcutter", "bûcheron : fournisseur de bûches", &["woodcutting"], Producer("woodcutting")),
+        ("fisher", "pêcheur : fournisseur de poisson cru", &["fishing"], Producer("fishing")),
+        ("firemaker", "allumeur : feux, bûches achetées ou coupées", &["firemaking", "woodcutting"], Climber("firemaking", "")),
+        ("crafter", "artisan : cuir, poterie, bijoux, laine", &["crafting"], Producer("crafting")),
+        ("smith", "forgeron : armes et armures de métal", &["smithing", "mining"], Producer("smithing")),
+        ("miner", "mineur : fournisseur de minerai", &["mining"], Producer("mining")),
+        ("runecrafter", "runier : essence et runes", &["runecraft", "mining"], Producer("runecraft")),
+        ("merchant", "marchand : achète bas, revend haut", &["merchant"], Coins),
+        ("generalist", "généraliste : compétence la plus basse", &[], Empty),
+        ("overall", "premier au classement overall : total level puis XP", &[], Empty),
+    ]
+};
 
 /// Every ambition the fleet draws from, plus the generalist and the
-/// operator-only overall highscore (never drawn).
-pub static SPECS: &[Spec] = &[
-    Spec { kind: "warrior", label: "guerrier : mêlée et armures", groups: &["melee"], ladder: WARRIOR },
-    Spec { kind: "ranger", label: "archer : distance et équipement", groups: &["ranged", "melee"], ladder: RANGER },
-    Spec { kind: "priest", label: "prêtre : prière, os enterrés", groups: &["prayer", "melee"], ladder: PRIEST },
-    Spec { kind: "mage", label: "mage : magie, sorts et alchimie", groups: &["magic"], ladder: MAGE },
-    Spec { kind: "cook", label: "cuisinier : poissons et viandes cuits", groups: &["cooking", "fishing"], ladder: COOK },
-    Spec { kind: "woodcutter", label: "bûcheron : fournisseur de bûches", groups: &["woodcutting"], ladder: WOODCUTTER },
-    Spec { kind: "fisher", label: "pêcheur : fournisseur de poisson cru", groups: &["fishing"], ladder: FISHER },
-    Spec { kind: "firemaker", label: "allumeur : feux, bûches achetées ou coupées", groups: &["firemaking", "woodcutting"], ladder: FIREMAKER },
-    Spec { kind: "crafter", label: "artisan : cuir, poterie, bijoux, laine", groups: &["crafting"], ladder: CRAFTER },
-    Spec { kind: "smith", label: "forgeron : armes et armures de métal", groups: &["smithing", "mining"], ladder: SMITH },
-    Spec { kind: "miner", label: "mineur : fournisseur de minerai", groups: &["mining"], ladder: MINER },
-    Spec { kind: "runecrafter", label: "runier : essence et runes", groups: &["runecraft", "mining"], ladder: RUNECRAFTER },
-    Spec { kind: "merchant", label: "marchand : achète bas, revend haut", groups: &["merchant"], ladder: MERCHANT_LADDER },
-    Spec { kind: "generalist", label: "généraliste : compétence la plus basse", groups: &[], ladder: &[] },
-    Spec { kind: "overall", label: "premier au classement overall : total level puis XP", groups: &[], ladder: &[] },
-];
+/// operator-only overall highscore (never drawn): ladders computed once
+/// from the game data (`ambition_ladder`), never written by hand.
+pub fn specs() -> &'static [Spec] {
+    static ALL: std::sync::OnceLock<Vec<Spec>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        META.iter()
+            .map(|(kind, label, groups, rule)| Spec { kind, label, groups, ladder: Box::leak(crate::ambition_ladder::build(*rule).into_boxed_slice()) })
+            .collect()
+    })
+}
 
 pub fn spec(kind: &str) -> Option<&'static Spec> {
-    SPECS.iter().find(|entry| entry.kind == kind)
+    specs().iter().find(|entry| entry.kind == kind)
 }
 
 /// The ambition covering a group (primary group match).
 pub fn kind_for_group(group: &str) -> Option<&'static str> {
-    SPECS.iter().find(|entry| entry.groups.first() == Some(&group)).map(|entry| entry.kind)
+    specs().iter().find(|entry| entry.groups.first() == Some(&group)).map(|entry| entry.kind)
 }
 
 /// Primary group of a kind (`merchant` for the merchant, `None` for the
@@ -350,7 +269,7 @@ pub fn kind_weights(items: &[DemandItem], kind_profits: &[(String, f64)]) -> Vec
     let top_weight = wanted_items.iter().map(|entry| entry.weight).fold(0.0, f64::max);
     let top_profit = kind_profits.iter().map(|(_, profit)| *profit).fold(0.0, f64::max);
     let mut out = Vec::new();
-    for entry in SPECS.iter().filter(|entry| !crate::ambition::ladderless(entry.kind)) {
+    for entry in specs().iter().filter(|entry| !crate::ambition::ladderless(entry.kind)) {
         let mut demand = 0.0;
         let mut top: Option<(&DemandItem, f64)> = None;
         for wanted in &wanted_items {

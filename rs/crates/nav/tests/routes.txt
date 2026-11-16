@@ -148,7 +148,12 @@ banque_varrock_ouest_place | 3213,3425,0 | 3185,3436,0 | f2p | reachable ; walk_
 # de nav_overrides.json : chemin paye (allow_paid) et `coins:30` en sac.
 # L'aller exige `coins:60` (aller + retour, 2026-11-15) : 30 pieces seules
 # laissaient le bot bloque sur l'ile (bateau_aller_sans_retour).
-bateau_sans_droit | 3029,3217,0 | 2915,3150,0 | f2p | unreachable=PaidOnly ; blocked_custom=boat_port_sarim_to_karamja
+# Depuis 2026-11-16 (utilisateur : Karamja universelle, comme la carte) :
+# le bateau ne depend plus de allow_paid (le peage seul), seulement des
+# pieces en sac. Sans pieces : NeedsRequirement ; avec : accessible.
+bateau_sans_droit | 3029,3217,0 | 2915,3150,0 | f2p | unreachable=NeedsRequirement ; blocked_custom=boat_port_sarim_to_karamja
+bateau_universel | 3029,3217,0 | 2915,3150,0 | f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_port_sarim_to_karamja ; uses_custom=gangplank_karamja_dock
+bateau_universel_retour | 2915,3150,0 | 3029,3217,0 | f2p,has=coins:30 | reachable ; uses_custom=boat_karamja_to_port_sarim
 bateau_sans_piece | 3029,3217,0 | 2915,3150,0 | paid,f2p | unreachable=NeedsRequirement ; blocked_custom=boat_port_sarim_to_karamja
 bateau_aller_sans_retour | 3029,3217,0 | 2915,3150,0 | paid,f2p,has=coins:30 | unreachable=NeedsRequirement ; blocked_custom=boat_port_sarim_to_karamja
 bateau_aller | 3029,3217,0 | 2915,3150,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_port_sarim_to_karamja ; uses_custom=gangplank_karamja_dock ; levels=0>1>0 ; stand=3027,3218
@@ -269,3 +274,10 @@ geants_depuis_varrock | 3185,3436,0 | 3111,9837,0 | f2p | reachable ; uses_loc=1
 # par un redeploy) : aucun bord ne sortait des temples de runecraft, tout
 # trajet lisait Disconnected ; bords custom `<rune>temple_exit_portal`.
 autel_terre_sortie | 2657,4839,0 | 3253,3420,0 | f2p | reachable ; uses_loc=2468
+# Cible bloquee derriere la cloture du peage : le seul chemin gratuit
+# fait le tour par le nord (Varrock), loin de la cible ; l'elagage par
+# distance le coupait et le plan finissait ajuste a la porte (live
+# 2026-11-16 : cruche d'eau d'Al Kharid depuis Draynor, adamantite du
+# marais depuis la banque d'Al Kharid).
+cruche_alkharid_detour | 3092,3245,0 | 3302,3170,0 | f2p | reachable ; adjusted=3301,3170 ; budget_ms=1500
+adamant_retour_nord | 3269,3164,0 | 3242,3165,0 | f2p | reachable ; adjusted=3241,3164 ; budget_ms=1500

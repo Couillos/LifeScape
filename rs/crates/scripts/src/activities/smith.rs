@@ -7,7 +7,7 @@
 //! nails alone on column5), so the cell map is a shared suffix table plus
 //! the bar prefix, never a per-product hardcode. The anvil is the
 //! brain's `--site`, else the nearest plain anvil (Doric's needs his
-//! quest, the Wilderness one is never a default).
+//! quest; the Wilderness one counts like any other, user 2026-11-16).
 //!
 //! Process: poste enclume · action forger · interface colonnes ·
 //! intrants barre + marteau · produits pièce forgée.
@@ -205,7 +205,7 @@ mod tests {
     /// Al Kharid bank, the old run searched anvils 150 tiles around the bot
     /// ("no loc anvil near (3269,3167)"). The post is the brain's site
     /// (Doric's anvil too: the brain checked the quest); without a site,
-    /// the nearest plain anvil, never Doric's nor the Wilderness one.
+    /// the nearest plain anvil, never Doric's (the Wilderness one counts).
     #[test]
     fn anvil_post_is_the_site_else_the_nearest_plain_anvil() {
         let post = anvil_post(Some((3248, 3404, 0)), 3269, 3167, 0).expect("site anvil");
@@ -215,7 +215,7 @@ mod tests {
         let falador = anvil_post(None, 2946, 3368, 0).expect("default post");
         assert_eq!(falador.loc, "anvil", "Falador defaults to a plain anvil, got {falador:?}");
         let edgeville = anvil_post(None, 3094, 3491, 0).expect("default post");
-        assert!(edgeville.z < 3520, "never the Wilderness anvil by default, got {edgeville:?}");
+        assert_eq!(edgeville.loc, "anvil", "a plain anvil, got {edgeville:?}");
         let rimmington = anvil_post(None, 2960, 3200, 0).expect("default post");
         assert_eq!((rimmington.x, rimmington.z), (2999, 3144), "south: the Rimmington-side anvil");
     }

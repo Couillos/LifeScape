@@ -112,7 +112,7 @@ const fn rung(key: &'static str, npc: &'static str, food_exempt: bool, gate: Gat
 /// or the brass-key house when the key is owned).
 /// Left out: dark wizards (magic attackers, not a melee exchange), rats
 /// (mixed 2-10 hp NPCs), imps (teleport away mid-fight, max hit 0),
-/// bears and the wilderness camps (never safe), moss giants (their F2P
+/// bears, moss giants (their F2P
 /// hall east of the Edgeville dungeon zombies sits behind the slashable
 /// web `bigweb_slashable` (3146, 9898): no nav edge, `Disconnected`
 /// offline), the Asgarnian ice dungeon (ice warriors and giants: no F2P
@@ -214,8 +214,8 @@ pub const APPROACH_MARGIN: i64 = 50;
 /// eat line. (name, max hit), or `None` (surface cluster, or every
 /// hunter on the way passive or survivable). Hunters spawn anywhere in
 /// the box spanning the entrance landing (surface + 6400) and the
-/// cluster, `APPROACH_MARGIN` wider; Wilderness ones stay out (the
-/// routes never enter it).
+/// cluster, `APPROACH_MARGIN` wider, Wilderness ones included (the
+/// routes may cross it, user 2026-11-16).
 pub fn approach_threat(rung: &Rung, cluster: (i64, i64, i64), combat: i64, eat_line: f64) -> Option<(&'static str, i64)> {
     let (x, z, level) = cluster;
     if z < UNDERGROUND_OFFSET {
@@ -228,7 +228,7 @@ pub fn approach_threat(rung: &Rung, cluster: (i64, i64, i64), combat: i64, eat_l
     let combat = u8::try_from(combat.clamp(0, i64::from(u8::MAX))).unwrap_or(u8::MAX);
     crate::danger::hunters()
         .iter()
-        .filter(|hunter| hunter.level == level && !hunter.wilderness && !spot.npc_names.contains(&hunter.name))
+        .filter(|hunter| hunter.level == level && !spot.npc_names.contains(&hunter.name))
         .filter(|hunter| (low_x..=high_x).contains(&hunter.x) && (low_z..=high_z).contains(&hunter.z))
         .filter(|hunter| crate::danger::hunts(hunter, Some(combat)))
         .filter_map(|hunter| {
@@ -239,13 +239,14 @@ pub fn approach_threat(rung: &Rung, cluster: (i64, i64, i64), combat: i64, eat_l
         .max_by_key(|(name, max_hit)| (*max_hit, *name))
 }
 
-/// F2P, non-wilderness spawn clusters of a rung on level 0 (15-tile
-/// groups, like the fight loop's), two spawns at least, sorted.
+/// F2P spawn clusters of a rung on level 0, Wilderness included (user
+/// 2026-11-16) (15-tile groups, like the fight loop's), two spawns at
+/// least, sorted.
 pub fn rung_clusters(rung: &Rung) -> Vec<(i64, i64, i64, usize)> {
     let inside = |x: i64, z: i64| rung.area.is_none_or(|(x0, z0, x1, z1)| (x0..=x1).contains(&x) && (z0..=z1).contains(&z));
     let mut groups: Vec<Vec<(i64, i64)>> = Vec::new();
     for (x, z, level) in crate::combat_spots::positions(rung.key) {
-        if level != 0 || in_wilderness_any(x, z, level) || !inside(x, z) {
+        if level != 0 || !inside(x, z) {
             continue;
         }
         let center = |group: &Vec<(i64, i64)>| {
@@ -287,9 +288,6 @@ pub fn cluster_requirement(rung: &Rung, cluster: (i64, i64, i64)) -> u8 {
             .unwrap_or(3)
     };
     let (x, z, level) = cluster;
-    if in_wilderness_any(x, z, level) {
-        return crate::danger::NEVER;
-    }
     let surface = if z >= UNDERGROUND_OFFSET {
         match crate::combat_spots::by_key(rung.key).and_then(|spot| spot.entrance) {
             Some(entrance) => entrance.surface,

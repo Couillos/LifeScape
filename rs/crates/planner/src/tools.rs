@@ -146,6 +146,10 @@ pub fn gear_ok(item: &str, ctx: &ReadyCtx) -> bool {
 /// True when the bot can work `method` now: its quest done, no gear
 /// needed or the tool (and bait) held.
 pub fn method_feasible(method: &str, ctx: &ReadyCtx) -> bool {
+    // A quarantined method (broken live, `method_health`) never launches.
+    if ctx.quarantined.iter().any(|sick| sick == method) {
+        return false;
+    }
     // A method whose quest the bot has not finished never launches.
     if crate::quests::missing_quest(method, None, ctx).is_some() {
         return false;

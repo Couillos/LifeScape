@@ -67,6 +67,9 @@ fn opplayeru_bytes(slot: u16, obj_com: u16, use_slot: u16, use_com: u16) -> Vec<
 }
 
 
+/// Ticks the server takes to open a count dialog after Offer-X.
+const COUNT_DIALOG_TICKS: u64 = 20;
+
 impl Bot {
     pub fn op_loc(&mut self, op: u8, x: i32, z: i32, loc_id: u16) -> Result<()> {
         self.act(format!("op_loc{op} {} id={loc_id} at ({x},{z})", (self.tables.loc_name)(loc_id).unwrap_or_default()));
@@ -96,6 +99,8 @@ impl Bot {
     }
 
     pub fn op_obj(&mut self, op: u8, x: i32, z: i32, obj_id: u16) -> Result<()> {
+        // A ground object op is a take: coins it lands are loot.
+        self.coin_context(super::coin_ledger::kind::LOOT);
         self.act(format!("op_obj{op} {} id={obj_id} at ({x},{z})", (self.tables.obj_name)(obj_id).unwrap_or_default()));
         let mut body = Writer::new();
         body.u16(x as u16);
@@ -135,6 +140,8 @@ impl Bot {
     /// enchant): obj, pack slot, pack com, then the spell button com,
     /// exactly the `OpHeldTDecoder` order.
     pub fn op_held_t(&mut self, obj: u16, slot: u8, com: u16, spell_com: u16) -> Result<()> {
+        // Only alchemy turns a carried item into coins.
+        self.coin_context(super::coin_ledger::kind::ALCH);
         self.act(format!("op_held_t {} x1 slot={slot}", (self.tables.obj_name)(obj).unwrap_or_default()));
         self.send_named("OPHELDT", &opheldt_bytes(obj, slot, com, spell_com))
     }
@@ -190,6 +197,11 @@ impl Bot {
 
     pub fn inv_button(&mut self, n: u8, obj: u16, slot: u8, com: u16) -> Result<()> {
         self.act(format!("inv_button{n} {} slot={slot} com={com}", (self.tables.obj_name)(obj).unwrap_or_default()));
+        // A buy (shop grid) or a sale (pack side of the shop): shop coins.
+        let shop = ["shop_template:inv", "shop_template_side:inv"].iter().any(|name| (self.tables.com_id)(name) == Some(com));
+        if shop {
+            self.coin_context(super::coin_ledger::kind::SHOP);
+        }
         let mut body = Writer::new();
         body.u16(obj);
         body.u16(u16::from(slot));
@@ -216,7 +228,10 @@ impl Bot {
 
     pub fn close_modal(&mut self) -> Result<()> {
         self.act("close_modal".to_string());
-        self.send_named("CLOSE_MODAL", &[])
+        self.send_named("CLOSE_MODAL", &[])?;
+        // The reference client closes locally; the server sends no IF_CLOSE.
+        self.world.close_interfaces();
+        Ok(())
     }
 
     pub fn talk_to(&mut self, slot: u16) -> Result<()> {
@@ -379,13 +394,33 @@ impl Bot {
                 return Ok(false);
             };
             // The whole stack at once (Offer-All, op 4) when it is exactly
-            // what is owed: one atomic click, the partner never sees a
-            // partial offer. Otherwise 10s, then 5s, then 1s (ops 3/2/1):
-            // one coin per click never reaches a big count.
+            // what is owed; a part of a stack in one Offer-X (op 5, then
+            // the count dialog: `trade.rs2` `[inv_button5,tradeside:inv]`
+            // `p_countdialog`, Client-TS `RESUME_P_COUNTDIALOG` p4). Live
+            // 2026-11-15: Offer-10 one click per round trip never paid
+            // more than ~2 100 coins in its 300 ticks (64 % of the deal
+            // timeouts). Small unstacked counts keep ops 2/1.
             let need = count - offered;
             let stack: u32 = slots.iter().filter(|(_, (held, _))| *held == obj_id).map(|(_, (_, n))| *n).sum();
-            let op = if stack == need { 4 } else if need >= 10 { 3 } else if need >= 5 { 2 } else { 1 };
-            self.inv_button(op, obj_id, slot, Self::TRADE_PACK)?;
+            if stack != need && need >= 5 {
+                self.world.count_dialog = false;
+                self.inv_button(5, obj_id, slot, Self::TRADE_PACK)?;
+                let asked = self.world.ticks + COUNT_DIALOG_TICKS;
+                while self.world.ticks < asked && !self.world.count_dialog {
+                    self.pump(1)?;
+                    if self.world.modal.is_none() {
+                        return Ok(false);
+                    }
+                }
+                if !self.world.count_dialog {
+                    return Err(Error::State(format!("Offer-X of {need} asked no count in {COUNT_DIALOG_TICKS} ticks at {:?}", self.position())));
+                }
+                self.world.count_dialog = false;
+                self.resume_pcount(i32::try_from(need).unwrap_or(i32::MAX))?;
+            } else {
+                let op = if stack == need { 4 } else if need >= 5 { 2 } else { 1 };
+                self.inv_button(op, obj_id, slot, Self::TRADE_PACK)?;
+            }
             while self.world.ticks < target && self.offered_of(obj_id) == offered {
                 self.pump(2)?;
                 if Self::trade_refused(&self.world.messages, seen) || self.world.modal.is_none() {
@@ -414,6 +449,7 @@ impl Bot {
     /// Click accept (stage 1 or confirm) until the window moves on.
     pub fn trade_accept(&mut self, timeout: u64) -> Result<bool> {
         self.act("trade_accept".to_string());
+        self.coin_context(super::coin_ledger::kind::TRADE);
         let Some(before) = self.trade_modal() else { return Ok(false) };
         let target = self.world.ticks + timeout;
         while self.world.ticks < target {
@@ -617,6 +653,7 @@ impl Bot {
 
     pub fn drop(&mut self, obj_id: u16, timeout: u64) -> Result<bool> {
         self.act(format!("drop {} id={obj_id}", (self.tables.obj_name)(obj_id).unwrap_or_default()));
+        self.coin_context(super::item_ledger::kind::DROPPED);
         let (com, slots) = self.backpack();
         let Some(com) = com else { return Err(Error::Unreachable("backpack not streamed".to_string())) };
         let Some(&(slot, _)) = slots.iter().find(|(_, (held, _))| *held == obj_id) else {

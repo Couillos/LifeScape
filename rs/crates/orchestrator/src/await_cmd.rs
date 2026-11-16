@@ -87,6 +87,9 @@ pub struct WaitFlags {
 /// Split `--wait` / `--json` / `--timeout-s N|--timeout-s=N` out of the
 /// trailing args; everything else stays a script arg. Unknown `--*`
 /// fails loud: a typo must not silently become a script argument.
+/// After a bare `--`, every arg goes to the script as is (`run admin
+/// smelt_jewelry gold_ring --wait -- --site 3272,3185,0`: the brain's
+/// launch flags, for live tests).
 pub fn split_flags(args: &[String]) -> Result<(Vec<String>, WaitFlags), String> {
     let mut kept = Vec::new();
     let mut wait = false;
@@ -95,6 +98,10 @@ pub fn split_flags(args: &[String]) -> Result<(Vec<String>, WaitFlags), String> 
     let mut index = 0;
     while index < args.len() {
         let arg = args[index].as_str();
+        if arg == "--" {
+            kept.extend(args[index + 1..].iter().cloned());
+            break;
+        }
         if arg == "--wait" {
             wait = true;
         } else if arg == "--json" {
@@ -735,6 +742,10 @@ mod tests {
         assert!(kept.is_empty());
         assert_eq!(flags.timeout_s, 12.5);
         assert!(split_flags(&["--bogus".to_string()]).is_err(), "unknown --flag fails");
+        let passed: Vec<String> = ["gold_ring", "--wait", "--", "--site", "3272,3185,0"].iter().map(|arg| arg.to_string()).collect();
+        let (kept, flags) = split_flags(&passed).expect("passthrough");
+        assert!(flags.wait);
+        assert_eq!(kept, vec!["gold_ring", "--site", "3272,3185,0"], "after --, script flags pass as is");
         assert!(split_flags(&["--timeout-s".to_string(), "zero".to_string()]).is_err(), "bad value fails");
         assert!(split_flags(&["--timeout-s".to_string(), "-5".to_string()]).is_err(), "negative fails");
     }

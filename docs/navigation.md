@@ -477,11 +477,27 @@ les dumps ne voient pas (`tables::CustomEdge`, deux genres) :
   `gangplank.rs2` : téléport puis telejump sur le quai (2956,3146,0) ou
   (3029,3217,0)).
 
-Une arête à `fare` est un chemin payant comme le péage : seulement avec
-`allow_paid`, et elle exige `coins:<fare>` en sac (ajouté au chargement).
-Diagnostic : sans `allow_paid`, `PaidOnly` bloqué par
-`Custom(<nom>) missing coins:30` ; payant sans pièces,
-`NeedsRequirement`. Le plan porte tout ce que l'exécuteur doit savoir
+Depuis 2026-11-16 (utilisateur : « aller à Karamja de manière
+universelle pour tous les scripts, comme la carte classique ») une arête
+à `fare` fait partie de la carte : seule son exigence `coins:<n>` EN SAC
+la garde (ajoutée au chargement ; l'aller `coins:60`), jamais
+`allow_paid`, qui ne garde plus que le péage d'Al Kharid
+(`plan::dijkstra`, `costs`, `route_path::EdgeUse.paid`, et
+`exec_custom_fare` côté SDK). Sans les pièces : `NeedsRequirement`,
+porté typé par `TravelError.missing` (`Error::missing_coins`) ; le
+marcheur des scripts (`skill_walk::walk_checked_at`) va alors chercher
+le manque à la banque la plus proche (`kit::toll::fetch_fare_coins`) et
+replanifie une fois. Chaque passage en banque garde l'aller-retour en
+sac (`kit::toll::reserve_at_bank`, 60 pièces ; un sac plus riche dépose
+l'excédent). Les exigences se lisent sur le SAC seul
+(`Bot::pack_items`) : la somme de tous les inventaires comptait la
+banque vue en dernier (admin avait planifié le bateau avec 401 764
+pièces en banque et un sac vide). Planner : tout site de Karamja est
+ouvert à toutes les méthodes (sol, stations, vendeurs, dialogue :
+`access::fare_only`), l'aller-retour budgété. Live 2026-11-16 : admin,
+sac vide, `ground_pickup jug_empty --site 2905,3146,0` sans `boat` :
+NoRoute `coins:60` → 60 pièces prises à Draynor → bateau → cruche →
+douanier → dépôt. Goldens `bateau_universel`, `bateau_universel_retour`. Le plan porte tout ce que l'exécuteur doit savoir
 (`custom_edge::CustomEdgeRef` : genre, loc, tuile, PNJ, réponses,
 tarif ; sérialisé dans le segment `custom`). Exécuteur SDK
 `client/travel_custom.rs` : `npc_fare` vérifie le tarif en sac, parle au
@@ -549,6 +565,19 @@ le guichet d'Edgeville (3095,3489) depuis la salle : l'échelle de cave
 posait la recherche dans la maison à clé (36), tout le donjon lisait
 ~6350 et était coupé, la maison devenait la cible ajustée (SDK :
 `Disconnected closest=(3115,3453)`). Golden `geants_guichet`.
+L'élagage ne joue plus que sans plancher (`rank_floor` à `None`, aucune
+tuile praticable dans 16 anneaux) et se mesure depuis
+`max(meilleure, départ)` (`fallback::prune_reach`) : avec un plancher, la
+première tuile à son rang arrête déjà la recherche, et une clôture peut
+imposer un détour loin de la cible (2026-11-16 : cruche d'Al Kharid
+depuis Draynor, adamantite du marais depuis la banque d'Al Kharid, le
+seul chemin gratuit fait le tour par le nord à 160+ tuiles ; avant, plan
+ajusté à la porte du péage). Plancher inatteignable (enclos de guilde vu
+de dehors) : balayage borné par `MAX_VISITS`/budget, `BudgetExhausted`
+au lieu d'une fausse tuile devant le mur. Golden `cruche_alkharid_detour`,
+`adamant_retour_nord`. Portes de quête bloquées (`blocked_locs`) :
+placard du manoir de Draynor (131, clé d'Ernest), arrière-boutique de
+Wydin (2069, Pirate's Treasure + tablier).
 
 Sorties de cave : `dump-transitions` ignorait l'en-tête
 `[oploc1,ladder_from_cellar] // mining guild ladder` (commentaire après

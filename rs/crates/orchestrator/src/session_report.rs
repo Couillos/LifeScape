@@ -38,6 +38,11 @@ pub struct Holdings {
     pub seen_messages: usize,
     /// Session bank-open counter (`Bot::bank_opens`) at the snapshot.
     pub bank_opens: u64,
+    /// Coin ledger length at the snapshot (`Bot::coin_ledger`): the run's
+    /// coin flows are the ones after it.
+    pub coin_flows: usize,
+    /// Item ledger length at the snapshot (`Bot::item_ledger`).
+    pub item_flows: usize,
 }
 
 /// Split the live inventories into visible pack/worn plus the live bank
@@ -75,6 +80,8 @@ pub fn snapshot_holdings(bot: &Bot) -> Holdings {
         pause_ticks: bot.pause_ticks,
         seen_messages: bot.world.messages.len(),
         bank_opens: bot.bank_opens,
+        coin_flows: bot.coin_ledger.flows.len(),
+        item_flows: bot.item_ledger.flows.len(),
     }
 }
 
@@ -259,6 +266,44 @@ fn bait_ids(bot: &Bot) -> Vec<u16> {
         .collect()
 }
 
+/// Provenance of an item ledger flow of `net` units of `kind` during a
+/// run of `activity`.
+fn item_provenance(kind: &str, net: i64, activity: &str) -> &'static str {
+    use lifescape_sdk::client::coin_ledger::kind as flow;
+    use lifescape_sdk::client::item_ledger::kind as item;
+    use lifescape_sdk::provenance::Provenance;
+    let provenance = match kind {
+        flow::SHOP | flow::DIALOGUE if net > 0 => Provenance::ShopBought,
+        flow::SHOP | flow::DIALOGUE => Provenance::ShopSold,
+        flow::TRADE => Provenance::Traded,
+        flow::LOOT if activity == "melee" => Provenance::Loot,
+        flow::LOOT => Provenance::GroundSpawn,
+        item::SKILL if net > 0 => Provenance::Produced,
+        item::SKILL | flow::ALCH => Provenance::Consumed,
+        item::DEATH => Provenance::Death,
+        _ if net > 0 => Provenance::Unattributed,
+        _ => Provenance::Lost,
+    };
+    provenance.as_str()
+}
+
+/// Provenance of a ledger flow of `net` coins of `kind`.
+fn coin_provenance(kind: &str, net: i64) -> &'static str {
+    use lifescape_sdk::client::coin_ledger::kind as flow;
+    use lifescape_sdk::provenance::Provenance;
+    let provenance = match kind {
+        flow::SHOP if net > 0 => Provenance::ShopSold,
+        flow::SHOP | flow::DIALOGUE => Provenance::ShopBought,
+        flow::TRADE => Provenance::Traded,
+        flow::FEE => Provenance::Fee,
+        flow::LOOT => Provenance::Loot,
+        flow::ALCH => Provenance::Produced,
+        _ if net > 0 => Provenance::Unattributed,
+        _ => Provenance::Lost,
+    };
+    provenance.as_str()
+}
+
 /// Build the report from two visible snapshots plus the bank baseline
 /// (first bank-open in-run) and the last-seen bank. Visible deltas plus
 /// bank deltas are the true flows; pre-stock cancels instead of popping
@@ -308,7 +353,48 @@ pub fn build_report(
     let made = |id: u16| debug_of(id).is_some_and(|name| flows.produced.contains(&name));
     let eaten = |id: u16| debug_of(id).is_some_and(|name| flows.consumed.contains(&name));
     let mut items: Vec<FlowLine> = Vec::new();
-    for (id, delta) in deltas {
+    // Coins by their ledger (`coin_ledger`): each flow carries the action
+    // that moved it; what the ledger misses (a transfer it could not see)
+    // stays visible as unattributed or lost. Merchant runs keep `traded`.
+    let ledger = bot.coin_ledger.totals_since(before.coin_flows);
+    let by_ledger = !trading && !ledger.is_empty() && coins.is_some();
+    if let (true, Some(coin_id)) = (by_ledger, coins) {
+        let name = display_name(bot, coin_id);
+        let mut attributed = 0i64;
+        for (kind, net) in &ledger {
+            attributed += *net;
+            items.push(FlowLine { name: name.clone(), provenance: coin_provenance(kind, *net), qty: *net });
+        }
+        let residual = coins_delta - attributed;
+        if residual != 0 {
+            items.push(FlowLine { name, provenance: coin_provenance(lifescape_sdk::client::coin_ledger::kind::UNATTRIBUTED, residual), qty: residual });
+        }
+    }
+    // Every other object by the item ledger (`item_ledger`): each flow
+    // names its action; what it leaves unexplained (unattributed, or a
+    // change it never saw) keeps the net-diff rule below.
+    let mut item_ledger: HashMap<u16, Vec<(&'static str, i64)>> = HashMap::new();
+    for (obj, kind, net) in bot.item_ledger.totals_since(before.item_flows) {
+        if kind != lifescape_sdk::client::coin_ledger::kind::UNATTRIBUTED {
+            item_ledger.entry(obj).or_default().push((kind, net));
+        }
+    }
+    for (id, mut delta) in deltas {
+        if by_ledger && Some(id) == coins {
+            continue;
+        }
+        if !trading && Some(id) != coins {
+            if let Some(entries) = item_ledger.get(&id) {
+                let name = display_name(bot, id);
+                for (kind, net) in entries {
+                    items.push(FlowLine { name: name.clone(), provenance: item_provenance(kind, *net, &ctx.activity), qty: *net });
+                    delta -= *net;
+                }
+                if delta == 0 {
+                    continue;
+                }
+            }
+        }
         let name = display_name(bot, id);
         let low = name.to_lowercase();
         let consumable = lifescape_gamedata::food::heal(&low) > 0 || baits.contains(&id) || (low.contains("bones") && prayer_gain > 0);
@@ -488,6 +574,8 @@ mod tests {
             pause_ticks: 0,
             seen_messages: 0,
             bank_opens: 0,
+            coin_flows: 0,
+            item_flows: 0,
         }
     }
 

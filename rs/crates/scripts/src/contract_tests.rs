@@ -137,6 +137,10 @@ fn shopbuy_carries_the_planners_shop() {
         .expect("shopbuy parses");
     assert_eq!((order.item.as_str(), order.qty, order.shop.as_deref(), order.site, order.toll), ("shears", 2, Some("generalshop1"), Some((3212, 3247, 0)), true));
     assert!(order.wear.is_empty());
+    assert!(!order.boat);
+    // A Karamja keeper (user 2026-11-16: Karamja must be reachable).
+    let rum = crate::activities::market_shop::parse_shopbuy(&strings(&["shopbuy", "karamja_rum", "1", "--shop", "boozeshop", "--site", "2925,3144,0", "boat"])).expect("boat parses");
+    assert!(rum.boat && !rum.toll, "{rum:?}");
     assert!(crate::activities::market_shop::parse_shopbuy(&strings(&["shopbuy", "shears", "2", "--shop"])).is_err(), "a dangling shop fails loud");
     let order = &nodes()[0];
     for method in ["market:buy", "market:sell", "market:flip", "space:cleanup"] {

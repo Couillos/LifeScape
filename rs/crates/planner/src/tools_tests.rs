@@ -112,3 +112,15 @@ fn gear_feasibility_counts_held_gear_only() {
     crate::expand::resolve_ready(&mut node, &ctx);
     assert_eq!(node.status, crate::model::NodeStatus::Blocked { reason: "missing:harpoon".to_string() }, "method {:?}", node.method);
 }
+
+/// A quarantined method (broken live: `milk:bucket_milk` 0/1694) never
+/// resolves, whatever the bot holds.
+#[test]
+fn a_quarantined_method_is_never_feasible() {
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.tools = vec!["bucket".to_string(), "bronze_axe".to_string()];
+    let logs = method_feasible("farm:logs", &ctx);
+    ctx.quarantined = vec!["milk:bucket_milk".to_string()];
+    assert!(!method_feasible("milk:bucket_milk", &ctx), "quarantined");
+    assert_eq!(method_feasible("farm:logs", &ctx), logs, "only the listed method");
+}

@@ -152,6 +152,13 @@ pub fn run_milk(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let now = step_bot.world.ticks;
         let Some((slot, x, z)) = pick_cow(step_bot, &banned, now) else {
             empty_fields += 1;
+            // No cow in sight: walk to the nearest field the dump places
+            // them in, then look again (live 2026-11-15: "no cows near"
+            // from every bank, milking 0 of 1694).
+            if empty_fields == 1 {
+                crate::kit::npc_spawn::find_or_walk(step_bot, &COW_NAMES, "milking")?;
+                return Ok(StepControl::Continue);
+            }
             if empty_fields >= EMPTY_LIMIT {
                 return Err(ScriptError::Failed(format!("no cows near {:?}", step_bot.position())));
             }

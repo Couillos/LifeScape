@@ -39,11 +39,52 @@ pub fn fare_short(carried: u32) -> u32 {
     fare().saturating_sub(carried)
 }
 
-/// Coins to withdraw so the pack carries the run's reserve: the armed
-/// reserve, else the toll fare for a run that only set `allow_paid`.
+/// Coins every bot keeps in its pack: at least the boat's round trip, so
+/// any run may sail to Karamja and back (user 2026-11-16: "aller à
+/// Karamja de manière universelle, comme la carte"); a run armed for more
+/// (`arm_fares`: toll + boat) keeps its armed reserve.
+pub fn pack_reserve(bot: &Bot) -> u32 {
+    let armed = if bot.fare_reserve > 0 {
+        bot.fare_reserve
+    } else if bot.allow_paid {
+        fare()
+    } else {
+        0
+    };
+    armed.max(boat_round_trip())
+}
+
+/// Coins a bank trip withdraws for the pack reserve, `keep` extended with
+/// the coins when they stay: a paid run (`toll`) keeps its coins and
+/// refills its reserve; every other run keeps the boat's round trip — a
+/// pack within the reserve stays, a fuller one banks and takes the
+/// reserve back out, refilled from coins the bank was last seen holding
+/// (an empty or unseen bank never loops the trip). A caller that already
+/// keeps its coins decides alone.
+pub fn reserve_at_bank(bot: &Bot, keep: &mut Vec<u16>, withdraw_coins: u32) -> u32 {
+    let Ok(coins) = obj_id(bot, "coins") else { return withdraw_coins };
+    let carried = pack_total(bot, coins);
+    if bot.allow_paid {
+        if !keep.contains(&coins) {
+            keep.push(coins);
+        }
+        return withdraw_coins.max(reserve_short(bot, carried));
+    }
+    if keep.contains(&coins) {
+        return withdraw_coins;
+    }
+    let reserve = pack_reserve(bot);
+    if carried > reserve {
+        return withdraw_coins.max(reserve);
+    }
+    keep.push(coins);
+    let banked = bot.bank_items().get(&coins).copied().unwrap_or(0);
+    withdraw_coins.max(reserve.saturating_sub(carried).min(banked))
+}
+
+/// Coins to withdraw so the pack carries its reserve (`pack_reserve`).
 pub fn reserve_short(bot: &Bot, carried: u32) -> u32 {
-    let reserve = if bot.fare_reserve > 0 { bot.fare_reserve } else { fare() };
-    reserve.saturating_sub(carried)
+    pack_reserve(bot).saturating_sub(carried)
 }
 
 /// Coins a deposit-everything restock must take back out so a paid run
@@ -54,10 +95,10 @@ pub fn restock_fare(allow_paid: bool, carried_after_deposit: u32) -> u32 {
     if allow_paid { fare_short(carried_after_deposit) } else { 0 }
 }
 
-/// `restock_fare` for a live run: the armed reserve (a boat run keeps
-/// its round trip), the toll fare for a bare `allow_paid` run.
+/// `restock_fare` for a live run: every run refills its pack reserve
+/// (`pack_reserve`: the boat's round trip at least).
 pub fn restock_reserve(bot: &Bot, carried_after_deposit: u32) -> u32 {
-    if bot.allow_paid { reserve_short(bot, carried_after_deposit) } else { 0 }
+    reserve_short(bot, carried_after_deposit)
 }
 
 /// Opt the run into paid crossings (`toll`) and carry the fare. Unpaid
@@ -104,10 +145,26 @@ pub fn carry_fare(bot: &mut Bot) -> Result<(), ScriptError> {
     bot.log(&format!("fares: fetching {short} coins from the bank at ({},{})", bank.x, bank.z));
     crate::kit::bank::bank_trip(bot, &bank, &keep, short)?;
     if reserve_short(bot, carried_coins(bot)) > 0 {
-        let reserve = if bot.fare_reserve > 0 { bot.fare_reserve } else { fare() };
-        return Err(ScriptError::Blocked { missing: vec![format!("coins:{reserve}")] });
+        return Err(ScriptError::Blocked { missing: vec![format!("coins:{}", pack_reserve(bot))] });
     }
     Ok(())
+}
+
+/// Fetch the coins a route's fare lacks (`Error::missing_coins`: the
+/// Karamja boat wants `coins:60` in the pack) from the nearest bank, the
+/// whole pack kept. `Ok(true)` once the pack carries `need`, so the walk
+/// may plan again; `Ok(false)` when it already did (another cause) or the
+/// bank had too few (the walk then fails with its own diagnosis).
+pub fn fetch_fare_coins(bot: &mut Bot, need: u32) -> Result<bool, ScriptError> {
+    let carried = carried_coins(bot);
+    if carried >= need {
+        return Ok(false);
+    }
+    let keep: Vec<u16> = pack_slots(bot).iter().map(|(_, (held, _))| *held).collect();
+    let bank = crate::kit::bank::nearest_bank(bot)?;
+    bot.log(&format!("fare: the route needs {need} coins in the pack, fetching {} at ({},{})", need - carried, bank.x, bank.z));
+    crate::kit::bank::bank_trip(bot, &bank, &keep, need - carried)?;
+    Ok(carried_coins(bot) >= need)
 }
 
 #[cfg(test)]
@@ -130,15 +187,33 @@ mod tests {
     }
 
     /// The boat keeps a round trip (30 out, 30 back); a run allowed both
-    /// crossings carries both; a bare `allow_paid` run keeps the toll.
+    /// crossings carries both; every other run keeps the boat's round
+    /// trip (Karamja universal, user 2026-11-16).
     #[test]
     fn the_boat_keeps_a_round_trip() {
         assert_eq!(boat_round_trip(), 60);
         assert_eq!((reserve(true, false), reserve(false, true), reserve(true, true), reserve(false, false)), (10, 60, 70, 0));
         let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
-        assert_eq!(reserve_short(&bot, 3), 7, "toll-only runs keep the gate fare");
+        assert_eq!(reserve_short(&bot, 3), 57, "every bot keeps the boat round trip");
+        assert_eq!(super::restock_reserve(&bot, 0), 60, "unpaid runs refill it too");
+        bot.fare_reserve = reserve(true, true);
+        assert_eq!(reserve_short(&bot, 0), 70, "an armed toll + boat run keeps both");
         bot.fare_reserve = reserve(false, true);
         assert_eq!(reserve_short(&bot, 30), 30, "back from Karamja: refill the way out");
+        bot.fare_reserve = 0;
+        crate::tables_live::attach_live_tables(&mut bot);
+        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins");
+        let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
+        // Within the reserve, bank unseen: the coins stay, no trip forced.
+        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
+        let mut keep = Vec::new();
+        assert_eq!(super::reserve_at_bank(&bot, &mut keep, 0), 0, "an unseen bank never loops the trip");
+        assert_eq!(keep, vec![coins]);
+        // A full wallet banks and takes the round trip back out.
+        bot.world.inv.insert(pack_com, [(0u8, (coins, 500u32))].into_iter().collect());
+        let mut keep = Vec::new();
+        assert_eq!(super::reserve_at_bank(&bot, &mut keep, 0), 60);
+        assert!(keep.is_empty(), "the excess is banked");
         assert_eq!(reserve_short(&bot, 75), 0);
     }
 }

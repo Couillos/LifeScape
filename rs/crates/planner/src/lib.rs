@@ -9,6 +9,7 @@
 pub mod ambition;
 pub mod ambition_catalog;
 pub mod ambition_fleet;
+pub mod ambition_ladder;
 pub mod bans;
 pub mod alchemy;
 pub mod bid_response;

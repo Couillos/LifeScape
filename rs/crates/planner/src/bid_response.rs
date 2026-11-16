@@ -505,6 +505,92 @@ pub fn opportunity(item: &str, view: &BookView, market: &dyn Fn(&str) -> Option<
     })
 }
 
+/// Why `item` is or is not a lot for this bot, stage by stage (the
+/// `orchestrator bid-why` diagnostic): the same steps as `opportunity`
+/// and `ranked_opportunities`, each one named with its numbers.
+pub fn explain(item: &str, view: &BookView, market: &dyn Fn(&str) -> Option<BookView>, bot: &Producer) -> Vec<String> {
+    let mut out = Vec::new();
+    out.push(format!("spread window: {}", if answers_now(bot.seed, item, bot.tick) { "this bot weighs it now" } else { "another bot's turn (spread)" }));
+    let legs = crate::obtain_legs::production_legs(item);
+    if legs.is_empty() {
+        out.push("no production leg: a producer never answers it".to_string());
+        return out;
+    }
+    let alch = (bot.alch_net)(item).map(|net| net - crate::alchemy::CAST_TICKS * bot.coin_rate);
+    let sales = view.current.map(|_| view.volume_24h.max(0) * crate::market_value::SALES_SHARE_PCT / 100).unwrap_or(0);
+    out.push(format!("demand: best bid {:?}, bid depth {}, sales share {sales}, alch net {alch:?}", view.best_bid(), view.bid_depth()));
+    if view.bids.is_empty() && sales <= 0 && alch.is_none() {
+        out.push("no bid, no sales, no alchemy: nothing to answer".to_string());
+        return out;
+    }
+    let depth = (view.bid_depth() + sales).max(alch.map(|_| crate::market_value::ALCH_LOT).unwrap_or(0)).clamp(1, MAX_BID_LOT * PRODUCER_SPLIT);
+    let Some(unit) = cost_at(item, depth, market, bot, Step { depth: 0, train: true, dest: VARROCK_FOUNTAIN }) else {
+        out.push(format!("no unit cost for {depth} units: no leg this bot can work (levels, tools, quests, bans, sites)"));
+        return out;
+    };
+    out.push(format!("unit: {:.0} coins + {:.0} ticks, plan {}, train {:?}", unit.coins, unit.ticks, unit.plan.join(" < "), unit.train));
+    out.extend(explain_make(item, depth, market, bot));
+    if !unit.plan.first().is_some_and(|step| step.starts_with("make ")) {
+        out.push("cheapest is buying it: a merchant's trade, not a producer's".to_string());
+        return out;
+    }
+    let Some(lot) = absorbed_lot(view, unit.total_for(depth, bot.coin_rate), (bot.held)(item), alch, PRODUCER_SPLIT, MAX_BID_LOT) else {
+        out.push(format!("no lot the book absorbs at a unit cost of {:.0} (bids under the cost)", unit.total_for(depth, bot.coin_rate)));
+        return out;
+    };
+    let Some((train_coins, train_ticks)) = training_charge(&unit.train, market, bot) else {
+        out.push("training charge unknown".to_string());
+        return out;
+    };
+    match opportunity(item, view, market, bot) {
+        Some(found) => {
+            let floor = BID_PREEMPT * bot.coin_rate.max(crate::market_fit::MIN_COIN_RATE);
+            out.push(format!(
+                "lot {} (revenue {:.0}, training {train_coins:.0} coins + {train_ticks:.0} ticks): {:.2} coins/tick vs floor {floor:.2} (own {:.2} x {BID_PREEMPT}), profit {:.0} vs {BID_MIN_PROFIT}",
+                lot.count, lot.revenue, found.rate, bot.coin_rate, found.profit
+            ));
+            out.push(if preempts(&found, bot.coin_rate) { "PREEMPTS: the bot answers it".to_string() } else { "below the floor: the ambition goes first".to_string() });
+        }
+        None => out.push("opportunity refused".to_string()),
+    }
+    out
+}
+
+/// Each production leg of `item` for this bot: why it is out, or its
+/// unit cost (the `bid-why` make side).
+fn explain_make(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView>, bot: &Producer) -> Vec<String> {
+    let mut out = Vec::new();
+    let step = Step { depth: 0, train: true, dest: VARROCK_FOUNTAIN };
+    for leg in crate::obtain_legs::production_legs(item) {
+        let reason = match leg.skill.clone() {
+            None => Some("no skill (drop or pickup)".to_string()),
+            Some((skill, level)) if skill_banned(&skill, bot.avoid) => Some(format!("{skill} banned (level {level})")),
+            Some((skill, level)) if i64::from((bot.level_of)(&skill).max(1)) + i64::from(MAX_TRAIN_LEVELS) < level => Some(format!("{skill} {level} beyond training reach")),
+            _ if leg.quest.as_ref().is_some_and(|quest| !bot.quests_done.contains(quest)) => Some(format!("quest {:?} missing", leg.quest)),
+            _ if crate::skeleton_deps::guild_only(&leg.method).is_some() => Some("guild only".to_string()),
+            _ if !(bot.units_per_6000)(&leg.method, item).is_finite() || (bot.units_per_6000)(&leg.method, item) <= 0.0 => Some("no rate".to_string()),
+            _ if leg_site(&leg.method, step.dest, bot.combat, bot.free_pass).is_none() => Some(format!("no site at combat {}", bot.combat)),
+            _ => {
+                let missing: Vec<String> = per_unit_inputs(&leg.method, &leg.inputs)
+                    .into_iter()
+                    .filter(|(input, per)| cost_at(input, (per * units as f64).ceil() as i64, market, bot, Step { depth: 1, train: true, dest: step.dest }).is_none())
+                    .map(|(input, _)| input)
+                    .collect();
+                (!missing.is_empty()).then(|| format!("inputs with no cost: {}", missing.join(",")))
+            }
+        };
+        match reason {
+            Some(why) => out.push(format!("  make {}: out ({why})", leg.method)),
+            None => out.push(format!("  make {}: workable", leg.method)),
+        }
+    }
+    match make_cost(item, units, market, bot, step) {
+        Some(made) => out.push(format!("  make cost: {:.0} coins + {:.1} ticks per unit (+{:.0} fixed coins, {:.0} fixed ticks), total {:.0} at the coin rate", made.coins, made.ticks, made.fixed_coins, made.fixed_ticks, made.total_for(units, bot.coin_rate))),
+        None => out.push("  make cost: none".to_string()),
+    }
+    out
+}
+
 /// True when an opportunity preempts the bot's ambition (scoring rule).
 pub fn preempts(found: &Opportunity, coin_rate: f64) -> bool {
     found.rate >= BID_PREEMPT * coin_rate.max(crate::market_fit::MIN_COIN_RATE) && found.profit >= BID_MIN_PROFIT

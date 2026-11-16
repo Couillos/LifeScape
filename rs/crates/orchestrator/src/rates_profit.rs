@@ -58,25 +58,24 @@ pub fn profit_rows(store: &Store, snapshot: &Snapshot) -> Vec<ProfitRow> {
     }
     let mut rows = Vec::new();
     for ((method, band), products) in bands {
-        let mut revenue_items = Vec::new();
+        // The median run priced (`rates_runs`), never the sum of every
+        // object the bucket ever saw (cook 16: 422 083 coins per 6000).
         let mut price_prior = false;
-        let mut trend_weighted = 0.0;
-        for (item, mean) in &products {
+        let mut priced = |item: &str| {
             let (price, prior) = price_of(item);
             price_prior = price_prior || prior;
-            revenue_items.push((*mean, price));
+            price
+        };
+        let Some(run) = snapshot.runs.median(&method, band, &mut priced) else { continue };
+        let revenue_items = run.revenue_items.clone();
+        let revenue = run.revenue;
+        let input_cost = run.input_cost;
+        let mut trend_weighted = 0.0;
+        for (item, (quantity, price)) in run.products.iter().zip(run.revenue_items.iter()) {
             let trend = *trends.entry(item.clone()).or_insert_with(|| trend_score(store, item));
-            trend_weighted += mean * price * trend;
+            trend_weighted += quantity * price * trend;
         }
-        let revenue: f64 = revenue_items.iter().map(|(yield_per, price)| yield_per * price).sum();
-        let mut input_cost = 0.0;
-        for ((input_method, input_item, input_band), stat) in &snapshot.inputs {
-            if input_method == &method && input_band == &band {
-                let (price, prior) = price_of(input_item);
-                price_prior = price_prior || prior;
-                input_cost += stat.mean() * price;
-            }
-        }
+        let _ = &products;
         let pause_per = snapshot.pause_per_6000(&method, band);
         let score = if revenue > 0.0 { trend_weighted / revenue } else { 0.0 };
         let profit = profit_per_6000(&revenue_items, input_cost, pause_per, score, TREND_WEIGHT);
@@ -174,17 +173,20 @@ mod tests {
         snapshot.yields.insert(("mining".to_string(), "Iron ore".to_string(), 3), bucket.clone());
         snapshot.yields.insert(("mining".to_string(), "Unknown rock".to_string(), 3), bucket.clone());
         snapshot.inputs.insert(("smelt".to_string(), "Iron ore".to_string(), 3), bucket);
+        // One run per product (2026-11-15): two mining runs, two objects.
+        snapshot.runs.record("woodcut", 1, vec![("Logs".to_string(), 120.0)]);
+        snapshot.runs.record("woodcut", 3, vec![("Oak logs".to_string(), 120.0)]);
+        snapshot.runs.record("mining", 3, vec![("Iron ore".to_string(), 120.0)]);
+        snapshot.runs.record("mining", 3, vec![("Unknown rock".to_string(), 120.0)]);
         let rows = profit_rows(&store, &snapshot);
         assert_eq!(rows.len(), 3, "one row per (method, band)");
         for row in &rows {
-            let products: Vec<(f64, f64)> = snapshot
-                .yields
-                .iter()
-                .filter(|((method, _, band), _)| *method == row.method && *band == row.band)
-                .map(|((_, item, _), stat)| (stat.mean(), price_estimate(&store, item).0))
-                .collect();
-            let revenue: f64 = products.iter().map(|(mean, price)| mean * price).sum();
-            assert_eq!(row.revenue, revenue, "{} {}", row.method, row.band);
+            let mut price = |item: &str| price_estimate(&store, item).0;
+            let median = snapshot.runs.median(&row.method, row.band, &mut price).expect("runs");
+            assert_eq!(row.revenue, median.revenue, "{} {}: the median run, never the sum", row.method, row.band);
         }
+        let mining = rows.iter().find(|row| row.method == "mining").expect("mining");
+        let both: f64 = ["Iron ore", "Unknown rock"].iter().map(|item| 120.0 * price_estimate(&store, item).0).sum();
+        assert!(mining.revenue < both, "two runs are not one run of both objects");
     }
 }

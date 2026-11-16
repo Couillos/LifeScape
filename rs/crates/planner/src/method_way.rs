@@ -75,12 +75,24 @@ pub fn flatten_prep(inputs: &[(String, i64)]) -> Vec<(String, i64)> {
     out
 }
 
-/// A spawn tile a bot may sweep: free, behind no gate, out of the
-/// Wilderness, with a bank in reach some combat level makes safe.
+/// True when a component comes back once its stage is done: the server
+/// leaves it behind (`config_recipes` leftover, `next_obj_stage`: an
+/// uncooked cake leaves its cake tin). A carried tool, never consumed
+/// per unit (live admin 2026-11-15: `bake:cake` priced and staged
+/// without its tin, the bake blocked on it).
+fn returned_by(stages: &[String], component: &str) -> bool {
+    lifescape_gamedata::script_sources::config_recipes()
+        .iter()
+        .any(|row| row.kind == "leftover" && row.output == component && row.inputs.iter().any(|input| stages.contains(input)))
+}
+
+/// A spawn tile a bot may sweep: free, behind no gate but the Karamja
+/// boat (a fare, user 2026-11-16), with a bank in reach some combat level
+/// makes safe (the Wilderness included).
 fn spawn_workable(site: &(i64, i64, i64)) -> bool {
     let (x, z, level) = *site;
     lifescape_gamedata::free_zones::is_free(x, z)
-        && lifescape_gamedata::access::gates_at(x, z, level).is_empty()
+        && lifescape_gamedata::access::gates_at(x, z, level).iter().all(lifescape_gamedata::access::fare_only)
         && lifescape_gamedata::danger::site_requirement(x, z, level) < lifescape_gamedata::danger::NEVER
 }
 
@@ -183,7 +195,14 @@ pub fn method_way(method: &str) -> Option<(String, Way)> {
         "cook" => (tail.to_string(), make_way_of(tail, &["cook"])?),
         "bake" => {
             let mut way = make_way_of(tail, &["cook", "cook_prep"])?;
-            way.inputs = flatten_prep(&way.inputs);
+            let stages: Vec<String> = way.inputs.iter().map(|(name, _)| name.clone()).collect();
+            let (carried, consumed): (Vec<(String, i64)>, Vec<(String, i64)>) = flatten_prep(&way.inputs).into_iter().partition(|(name, _)| returned_by(&stages, name));
+            way.inputs = consumed;
+            for (name, _) in carried {
+                if !way.tools.contains(&name) {
+                    way.tools.push(name);
+                }
+            }
             (tail.to_string(), way)
         }
         "smith" => (tail.to_string(), make_way_of(tail, &["smith"])?),
@@ -220,6 +239,22 @@ pub fn method_way(method: &str) -> Option<(String, Way)> {
         "milk" => (tail.to_string(), ways(tail).into_iter().find(|way| way.kind == WayKind::Harvest && way.detail.starts_with("milk"))?),
         "dye" => (tail.to_string(), ways(tail).into_iter().find(|way| way.kind == WayKind::Harvest && way.detail.starts_with("aggie"))?),
         "superheat" => (tail.to_string(), superheat_way(tail)?),
+        // `fill:<vessel>`: the filled vessel whose fill way takes it (the
+        // way the dump knows: vessel in, water point sites). Live admin
+        // 2026-11-15: no way known, the jug never staged, "missing jug".
+        "fill" => ["bucket_water", "jug_water", "bowl_water", "vial_water"].iter().find_map(|filled| {
+            let way = ways(filled).into_iter().find(|way| way.kind == WayKind::Harvest && way.detail.starts_with("fill") && way.inputs.first().is_some_and(|(input, _)| input == tail))?;
+            Some((filled.to_string(), way))
+        })?,
+        // `enchant:<input>`: the spell's product (`config_recipes` spell
+        // rows), the way the dump knows for it (runes + the jewel, magic
+        // level). Live 2026-11-15: no way known, so no pricing and no
+        // staging for the four F2P amulets.
+        "enchant" => lifescape_gamedata::script_sources::config_recipes().iter().filter(|row| row.kind == "spell" && row.inputs.first().is_some_and(|input| input == tail)).find_map(|row| {
+            let product = row.output.clone();
+            let way = ways(&product).into_iter().find(|way| way.kind == WayKind::Spell && way.inputs.first().is_some_and(|(input, _)| input == tail))?;
+            Some((product, way))
+        })?,
         "telegrab" => (tail.to_string(), telegrab_way(tail)?),
         "ground" => {
             let mut merged = ways(tail).into_iter().filter(ground_workable).reduce(|mut merged, next| {

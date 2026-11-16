@@ -68,3 +68,9 @@ batch distant (`walk_costs`, `None` = ordre Manhattan conservé).
 Règles : un script ne manipule jamais `Connection` ni un id d'opcode ; toute
 fonctionnalité ajoutée au SDK doit servir n'importe quel script. En doute
 protocole : vérifier dans `../lostcity/engine` puis valider en live.
+
+Modales : `IF_OPEN*` posent `world.modal`, `IF_CLOSE` l'efface
+(`World::close_interfaces`). `Bot::close_modal` envoie `CLOSE_MODAL` puis
+efface aussi localement, comme `Client.ts closeModal` : le serveur ne
+renvoie aucun `IF_CLOSE` (2026-11-16 : la banque fermée avant un mélange
+d'argile restait « ouverte » et le script lisait une interface fantôme).

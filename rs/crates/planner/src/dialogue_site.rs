@@ -32,12 +32,16 @@ pub fn pick_seller(item: &str, units: i64, ctx: &ReadyCtx) -> DialoguePick {
     let mut best: Option<(i64, i64, (i64, i64, i64), bool)> = None;
     for shop in lifescape_gamedata::dialogue_shops::allowed(item) {
         for site in lifescape_gamedata::dialogue_shops::sites(shop) {
-            if lifescape_gamedata::danger::required_combat_at(site.0, site.1, site.2) > ctx.combat || !lifescape_gamedata::access::gates_at(site.0, site.1, site.2).is_empty() {
+            // Karamja sellers too (the boat is a fare, user 2026-11-16).
+            if lifescape_gamedata::danger::required_combat_at(site.0, site.1, site.2) > ctx.combat
+                || !lifescape_gamedata::access::gates_at(site.0, site.1, site.2).iter().all(lifescape_gamedata::access::fare_only)
+            {
                 continue;
             }
             let across = ctx.position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, site));
             let toll = if across && !free_pass { lifescape_gamedata::toll::FARE } else { 0 };
-            let need = shop.cost * units.max(1) + toll;
+            let boat = if lifescape_gamedata::access::behind_boat(site.0, site.1, site.2) { 2 * lifescape_gamedata::services::BOAT_FARE_GP } else { 0 };
+            let need = shop.cost * units.max(1) + toll + boat;
             let key = (need, distance(&site));
             if best.as_ref().is_none_or(|(known_need, known_far, _, _)| key < (*known_need, *known_far)) {
                 best = Some((need, key.1, site, across));

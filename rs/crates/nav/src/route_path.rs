@@ -42,7 +42,8 @@ pub(crate) struct EdgeUse {
     pub id: EdgeId,
     /// Tags the edge needs (door requirement rows, custom `requires`).
     pub requires: Vec<String>,
-    /// Toll gate or fare edge: only `allow_paid` requests may cross it.
+    /// Toll gate: only `allow_paid` requests may cross it (a fare edge's
+    /// coins are a `requires` tag instead).
     pub paid: bool,
 }
 
@@ -160,7 +161,9 @@ pub(crate) fn analyze(world: &StaticWorld, tables: &Tables, from: Tile, plan: &P
                     at: index,
                     id: EdgeId::Custom(edge.name.clone()),
                     requires: row.map(|row| row.requires.clone()).unwrap_or_default(),
-                    paid: edge.fare > 0 || row.is_some_and(|row| row.fare > 0),
+                    // The boat's fare rides in `requires` (coins tag): no
+                    // `allow_paid` gate (user 2026-11-16, Karamja universal).
+                    paid: false,
                 });
                 if row.is_none() {
                     priced_ok = false;

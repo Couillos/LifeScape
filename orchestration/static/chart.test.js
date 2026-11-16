@@ -133,3 +133,39 @@ test('foldPrint splits the live tail by taker side', () => {
   LifeChart.foldPrint(old, { q: 1, p: 2, s: 'buy' });
   assert.deepEqual(old, { o: 2, h: 2, l: 2, c: 2, v: 4, vb: 1, vs: 0, n: 2 }, 'rows without a split start at zero');
 });
+
+test('axisLabel dates hourly slots once the view spans several days', () => {
+  const start = new Date(2026, 10, 12, 14, 0, 0).getTime() / 1000;
+  assert.equal(LifeChart.axisLabel(start, 3600, 24), '14:00');
+  assert.equal(LifeChart.axisLabel(start, 3600, 168), '12/11 14:00');
+  assert.equal(LifeChart.axisLabel(start, 86400, 30), '12/11');
+  assert.equal(LifeChart.axisLabel(start, 86400, 183), '12/11');
+});
+
+test('the hover snaps to the nearest slot with data (sparse 7 d / 30 d views)', () => {
+  const rows = [null, null, 5, null, null, null, 9, null];
+  assert.equal(LifeChart.nearestFilled(rows, 2), 2, 'a filled slot answers itself');
+  assert.equal(LifeChart.nearestFilled(rows, 0), 2);
+  assert.equal(LifeChart.nearestFilled(rows, 5), 6);
+  assert.equal(LifeChart.nearestFilled(rows, 7), 6);
+  assert.equal(LifeChart.nearestFilled([null, null], 1), -1, 'nothing to show');
+});
+
+test('time labels never crowd: their count follows the plot width', () => {
+  // 7 d view: 168 hourly slots, "12/11 14:00" ~66 px wide.
+  assert.equal(LifeChart.labelEvery(168, 600, 66), 24, 'seven labels in 600 px: one a day');
+  assert.equal(LifeChart.labelEvery(168, 300, 66), 56, 'three in 300 px');
+  assert.equal(LifeChart.labelEvery(24, 1200, 30), 1, 'room for every hour');
+  assert.equal(LifeChart.labelEvery(24, 900, 30), 2, 'every other hour when 24 do not fit');
+  assert.ok(Math.ceil(168 / LifeChart.labelEvery(168, 300, 66)) * (66 + 14) <= 300 + 66 + 14);
+});
+
+test('value labels keep their distance and tick counts follow the pane height', () => {
+  assert.equal(LifeChart.tickCount(200, 26, 4), 4);
+  assert.equal(LifeChart.tickCount(60, 26, 4), 2, 'a short pane holds fewer ticks');
+  assert.equal(LifeChart.tickCount(10, 26, 4), 1);
+  const taken = [];
+  assert.ok(LifeChart.spaced(taken, 100));
+  assert.ok(!LifeChart.spaced(taken, 108), 'too close to the last label');
+  assert.ok(LifeChart.spaced(taken, 120));
+});

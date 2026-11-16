@@ -46,6 +46,8 @@ pub enum Provenance {
     Death,
     /// Unexplained gap: labelled at the report, never a yield (D45).
     Unattributed,
+    /// Coins paid for a service: toll, fare, tanning (`coin_ledger`).
+    Fee,
 }
 
 impl Provenance {
@@ -61,6 +63,7 @@ impl Provenance {
             Provenance::Lost => "lost",
             Provenance::Death => "death",
             Provenance::Unattributed => "unattributed",
+            Provenance::Fee => "fee",
         }
     }
 
@@ -76,11 +79,12 @@ impl Provenance {
             "lost" => Some(Provenance::Lost),
             "death" => Some(Provenance::Death),
             "unattributed" => Some(Provenance::Unattributed),
+            "fee" => Some(Provenance::Fee),
             _ => None,
         }
     }
 
-    pub fn all() -> [&'static str; 10] {
+    pub fn all() -> [&'static str; 11] {
         [
             "produced",
             "loot",
@@ -92,6 +96,7 @@ impl Provenance {
             "lost",
             "death",
             "unattributed",
+            "fee",
         ]
     }
 }
@@ -185,7 +190,7 @@ mod tests {
     /// Provenance names round-trip; the set is exactly the report contract.
     #[test]
     fn provenance_names_round_trip() {
-        assert_eq!(Provenance::all().len(), 10);
+        assert_eq!(Provenance::all().len(), 11);
         for name in Provenance::all() {
             assert_eq!(Provenance::parse(name).map(|provenance| provenance.as_str()), Some(name));
         }

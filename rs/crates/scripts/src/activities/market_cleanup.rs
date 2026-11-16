@@ -83,6 +83,27 @@ fn withdraw_all(bot: &mut Bot, ids: &[u16]) -> Result<(), ScriptError> {
     Ok(())
 }
 
+/// Drops the cheapest carried stack outside `sheltered` (and not
+/// `target`, the stack about to be withdrawn) when the pack is full.
+fn free_one_slot(bot: &mut Bot, sheltered: &HashSet<u16>, target: u16) -> Result<(), ScriptError> {
+    if crate::kit::pack::free_slots(bot) > 0 {
+        return Ok(());
+    }
+    let coins = obj_id(bot, "coins").ok();
+    let victim = crate::kit::pack::pack_slots(bot)
+        .iter()
+        .map(|(_, (held, count))| (*held, *count))
+        .filter(|(held, _)| !sheltered.contains(held) && *held != target && Some(*held) != coins && !crate::kit::pack::is_worn(bot, *held))
+        .min_by_key(|(held, count)| lifescape_gamedata::obj_by_id(usize::from(*held)).map(|entry| entry.price.max(1)).unwrap_or(1) * i64::from(*count));
+    let Some((held, _)) = victim else {
+        bot.log("cleanup D17: the pack is full of protected stacks, nothing to drop");
+        return Ok(());
+    };
+    bot.log(&format!("cleanup D17: dropping {} to free a pack slot", crate::kit::pack::obj_label(bot, held)));
+    bot.drop(held, 750)?;
+    Ok(())
+}
+
 /// D17 candidate (pure): surplus the carnet refused this pass (it can
 /// never sell, only its drop frees the slot) and stock resting listed
 /// since an earlier pass. Listings placed this pass are not in
@@ -203,6 +224,11 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
             let Some(id) = by_name.get(name.as_str()).copied() else { continue };
             cancel_for(bot, id)?;
+            // A full pack takes no withdrawal (live sean_lane 2026-11-15:
+            // 28 slots the full bank refused, every D17 stack "still
+            // locked" after its order was cancelled): the cheapest
+            // unprotected carried stack goes first, by the same rule.
+            free_one_slot(bot, &sheltered, id)?;
             // Pack first (a clogged pack blocks the withdraw), then the
             // banked stack pack by pack (an unnoted stack outgrows one
             // pack), each load dropped: whole stacks go. A withdraw that
@@ -227,7 +253,7 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 }
             }
             if known_bank(bot).get(&id).copied().unwrap_or(0) > 0 {
-                bot.log(&format!("cleanup D17 could not clear {name} (still locked)"));
+                bot.log(&format!("cleanup D17 could not clear {name} (still banked: locked, or no pack room)"));
                 continue;
             }
             bot.log(&format!("cleanup D17 dropped {name}"));

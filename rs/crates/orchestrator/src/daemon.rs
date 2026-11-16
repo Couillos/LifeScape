@@ -439,7 +439,7 @@ impl Orchestrator {
                 ("cmd", str_value("call")),
                 ("method", str_value(method)),
                 ("args", Value::Arr(args.to_vec())),
-                ("admin", Value::Bool(account == "admin")),
+                ("admin", Value::Bool(crate::economy_guard::is_staff(account))),
             ]),
             Duration::from_secs(WORKER_TIMEOUT),
         )
@@ -457,7 +457,7 @@ impl Orchestrator {
             account,
             &object(vec![
                 ("cmd", str_value("methods")),
-                ("admin", Value::Bool(account == "admin")),
+                ("admin", Value::Bool(crate::economy_guard::is_staff(account))),
             ]),
             Duration::from_secs(WORKER_TIMEOUT),
         )
@@ -697,6 +697,13 @@ impl Orchestrator {
                 return self.call_job(account, method, &args);
             }
             "methods" => return self.methods_job(account),
+            "bid_why" => {
+                let item = request.get("item").as_str().unwrap_or("");
+                return match crate::brain_bids::explain_for(account, item) {
+                    Ok(lines) => object(vec![("ok", Value::Bool(true)), ("lines", Value::Arr(lines.iter().map(|line| str_value(line)).collect()))]),
+                    Err(error) => object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]),
+                };
+            }
             "status" => {
                 let live: HashMap<String, Arc<Job>> = self.jobs.lock().unwrap().clone();
                 let mut names: Vec<String> = if account.is_empty() {

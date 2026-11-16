@@ -171,6 +171,32 @@ impl Store {
         Ok(out)
     }
 
+    /// Item flows of every report created at or after `since`, oldest
+    /// first: (method, ticks, context level, [(item, provenance, qty)]).
+    /// The rates' per-run profit rebuilds from it at a cold start.
+    pub fn report_flows_since(&self, since: i64) -> Result<Vec<(String, i64, i64, Vec<(String, String, i64)>)>, Error> {
+        let mut statement = self.connection.prepare(
+            "SELECT r.report_id, r.method, r.ticks, r.context_level, y.item_name, y.provenance, y.quantity FROM task_reports r \
+             JOIN task_yields y ON y.report_id = r.report_id WHERE r.created_clock >= ?1 AND y.item_name != '' ORDER BY r.report_id",
+        )?;
+        let rows = statement.query_map(rusqlite::params![since], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?, row.get::<_, i64>(6)?))
+        })?;
+        let mut out: Vec<(String, i64, i64, Vec<(String, String, i64)>)> = Vec::new();
+        let mut last_id = -1;
+        for row in rows {
+            let (id, method, ticks, level, item, provenance, quantity) = row?;
+            if id != last_id {
+                out.push((method, ticks, level, Vec::new()));
+                last_id = id;
+            }
+            if let Some(entry) = out.last_mut() {
+                entry.3.push((item, provenance, quantity));
+            }
+        }
+        Ok(out)
+    }
+
     /// Recomputes summed quantities per (method, item, provenance) join.
     /// Reports are counted distinct so multi-line reports count once.
     pub fn aggregate_yields(&self) -> Result<Vec<YieldAggregate>, Error> {

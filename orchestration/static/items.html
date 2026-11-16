@@ -38,6 +38,11 @@
   #resbar button.cur { color: #ff0; border-color: #ff0; }
   #detail { flex: 2 1 520px; min-width: 340px; }
   canvas { background: #111; border: 1px solid #444; width: 100%; height: auto; display: block; }
+  #flows { border-collapse: collapse; font-size: 12px; margin: 4px 0 8px; }
+  #flows td, #flows th { border: 1px solid #333; padding: 2px 8px; text-align: right; white-space: nowrap; }
+  #flows th { color: #888; font-weight: normal; }
+  #flows td.left, #flows th.left { text-align: left; }
+  #flows tr.net td { border-top: 2px solid #444; color: #888; }
   .muted { color: #888; }
 </style>
 </head>
@@ -64,11 +69,16 @@
   <div id="detail">
     <h2 id="title">Total items</h2>
     <div id="resbar">
-      <button id="res1h" class="cur" onclick="setRes('1h')">24h</button>
-      <button id="res1d" onclick="setRes('1d')">6 mois</button>
-      <span id="legend" class="muted"></span>
+      <button id="period-day" class="cur" onclick="setPeriod('day')">24h</button>
+      <button id="period-week" onclick="setPeriod('week')">7d</button>
+      <button id="period-month" onclick="setPeriod('month')">30d</button>
+      <button id="period-half" onclick="setPeriod('half')">6M</button>
     </div>
     <canvas id="chart" width="720" height="340"></canvas>
+    <div id="flowsbox" style="display:none">
+      <h2>Provenance / destination</h2>
+      <table id="flows"></table>
+    </div>
   </div>
 </div>
 <script src="/chart.js"></script>

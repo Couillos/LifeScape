@@ -5,6 +5,8 @@
 //! `res=1h`, the 24 h default) and `holdings_daily` (400 days, `res=1d`,
 //! each value the last measure of its day). `item` is an obj id, an
 //! exact item name, or absent for the whole-economy total.
+//! `/api/items/flows` serves an object's sources and sinks by provenance
+//! (task report lines, `Store::item_flows_since`), staff excluded.
 
 #![forbid(unsafe_code)]
 
@@ -80,6 +82,91 @@ pub(crate) fn items_list_api(dispatch: &crate::web::Dispatch) -> Response {
     let reply = dispatch(object(vec![("cmd", str_value("items"))]));
     let data = reply.get("data").clone();
     ok_json(if data.is_null() { reply } else { data })
+}
+
+/// Rows served for the all-items flow view (same cut as the CLI).
+const FLOW_ROWS_ALL: usize = 60;
+/// Longest flow window: the 6-month chart period plus slack.
+const FLOW_MAX_HOURS: i64 = 400 * 24;
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0)
+}
+
+/// Resolve the flows `item` value to the display name the task reports
+/// carry: absent means every item, digits an obj id, anything else a
+/// (percent-decoded) display name matched case-insensitively.
+fn flows_item(raw: Option<&str>) -> Result<Option<String>, String> {
+    let Some(raw) = raw.map(crate::web_errors::percent_decode) else { return Ok(None) };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if let Ok(obj_id) = trimmed.parse::<i64>() {
+        if obj_id > 0 {
+            return Ok(Some(crate::holdings::item_name(obj_id)));
+        }
+        return Err(format!("bad item '{trimmed}'"));
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+/// The flows payload over the store: `{ok,item,hours,since,flows:[{item,
+/// provenance,quantity,lines}]}`, sorted by |quantity| (store order),
+/// cut to `FLOW_ROWS_ALL` rows without an item filter.
+fn flows_payload(store: &lifescape_store::Store, item: Option<&str>, hours: i64, since: i64, excluded: &[String]) -> Result<lifescape_json::Value, String> {
+    use lifescape_json::{object, str_value, Value};
+    let mut flows = store.item_flows_since(since, excluded, item).map_err(|error| format!("item flows: {error}"))?;
+    if item.is_none() {
+        flows.truncate(FLOW_ROWS_ALL);
+    }
+    let rows = flows
+        .iter()
+        .map(|(name, provenance, quantity, lines)| {
+            object(vec![
+                ("item", str_value(name)),
+                ("provenance", str_value(provenance)),
+                ("quantity", Value::Int(*quantity)),
+                ("lines", Value::Int(*lines)),
+            ])
+        })
+        .collect();
+    Ok(object(vec![
+        ("ok", Value::Bool(true)),
+        ("item", item.map(str_value).unwrap_or(Value::Null)),
+        ("hours", Value::Int(hours)),
+        ("since", Value::Int(since)),
+        ("flows", Value::Arr(rows)),
+    ]))
+}
+
+/// `GET /api/items/flows?item=&hours=24`: where one object (obj id or
+/// display name; absent = the main flows of every object) came from and
+/// went over the last `hours`, by provenance (task report lines, + =
+/// entered a pack, - = left it), staff and persisted exclusions out.
+/// Same data as `orchestrator economy [hours] item <name>`.
+pub(crate) fn items_flows_api(query: &str, run_dir: &Path) -> Response {
+    let params = parse_query(query);
+    let hours = match params.get("hours").map(String::as_str) {
+        None => 24,
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(hours) if (1..=FLOW_MAX_HOURS).contains(&hours) => hours,
+            _ => return ok_json(err_json(format!("bad hours '{raw}': want 1..{FLOW_MAX_HOURS}"))),
+        },
+    };
+    let item = match flows_item(params.get("item").map(String::as_str)) {
+        Ok(item) => item,
+        Err(error) => return ok_json(err_json(error)),
+    };
+    let store = match store_for(run_dir) {
+        Ok(store) => store,
+        Err(error) => return ok_json(err_json(error)),
+    };
+    let excluded: Vec<String> = crate::economy_guard::excluded_accounts().into_iter().collect();
+    match flows_payload(&store, item.as_deref(), hours, now_secs() - hours * 3600, &excluded) {
+        Ok(payload) => ok_json(payload),
+        Err(error) => ok_json(err_json(error)),
+    }
 }
 
 #[cfg(test)]
@@ -177,6 +264,91 @@ mod tests {
         assert_eq!(empty.get("points").as_arr().map(Vec::len), Some(0));
         let _ = std::fs::remove_dir_all(&run);
         let _ = std::fs::remove_dir_all(&bare);
+    }
+
+    fn report_with(store: &lifescape_store::Store, account: &str, clock: i64, lines: &[(&str, &str, i64)]) {
+        let report_id = store
+            .record_task_report(&lifescape_store::NewTaskReport {
+                account: account.to_string(),
+                node_id: "node".to_string(),
+                method: "method".to_string(),
+                script: "script".to_string(),
+                ticks: 10,
+                stop: "done".to_string(),
+                context_level: 1,
+                clock,
+            })
+            .unwrap();
+        for (item_name, provenance, quantity) in lines {
+            store
+                .record_task_yield(&lifescape_store::NewTaskYield {
+                    report_id,
+                    item_name: item_name.to_string(),
+                    provenance: provenance.to_string(),
+                    quantity: *quantity,
+                    skill: String::new(),
+                    xp: 0,
+                })
+                .unwrap();
+        }
+    }
+
+    /// One object's flows by provenance over the window: lines summed
+    /// across accounts, staff and older reports left out, sorted by size;
+    /// without a filter every object shows.
+    #[test]
+    fn flows_payload_sums_filters_and_excludes() {
+        let store = lifescape_store::Store::open_in_memory().unwrap();
+        report_with(&store, "bot-one", 5_000, &[("Logs", "produced", 12), ("Logs", "shop_sold", -10), ("Coins", "shop_sold", 40)]);
+        report_with(&store, "bot-two", 6_000, &[("Logs", "produced", 3)]);
+        report_with(&store, "admin", 6_000, &[("Logs", "loot", 999)]);
+        report_with(&store, "bot-one", 1_000, &[("Logs", "lost", -50)]);
+        let excluded = vec!["admin".to_string()];
+        let logs = flows_payload(&store, Some("logs"), 1, 4_000, &excluded).unwrap();
+        assert_eq!(logs.get("ok").as_bool(), Some(true));
+        assert_eq!(logs.get("item").as_str(), Some("logs"));
+        assert_eq!(logs.get("hours").as_i64(), Some(1));
+        assert_eq!(logs.get("since").as_i64(), Some(4_000));
+        let rows = logs.get("flows").as_arr().unwrap();
+        assert_eq!(rows.len(), 2, "produced + shop_sold; admin loot and the old loss are out");
+        assert_eq!(rows[0].get("provenance").as_str(), Some("produced"));
+        assert_eq!(rows[0].get("quantity").as_i64(), Some(15));
+        assert_eq!(rows[0].get("lines").as_i64(), Some(2));
+        assert_eq!(rows[1].get("provenance").as_str(), Some("shop_sold"));
+        assert_eq!(rows[1].get("quantity").as_i64(), Some(-10));
+        let every = flows_payload(&store, None, 1, 4_000, &excluded).unwrap();
+        assert!(every.get("item").is_null());
+        let names: Vec<&str> = every.get("flows").as_arr().unwrap().iter().filter_map(|row| row.get("item").as_str()).collect();
+        assert_eq!(names, vec!["Coins", "Logs", "Logs"]);
+    }
+
+    /// The route reads loud on a bad window or item, serves an empty
+    /// list on an empty store, and resolves an obj id to its name.
+    #[test]
+    fn flows_route_validates_and_resolves() {
+        let run = scratch_run("flows");
+        let store = lifescape_store::Store::open(&run.join("lifescape.db")).unwrap();
+        report_with(&store, "bot-one", now_secs() - 60, &[("Coins", "shop_sold", 40)]);
+        let coins = body(&items_flows_api("item=995&hours=24", &run));
+        assert_eq!(coins.get("ok").as_bool(), Some(true));
+        assert_eq!(coins.get("item").as_str(), Some("Coins"));
+        assert_eq!(coins.get("flows").as_arr().map(Vec::len), Some(1));
+        let named = body(&items_flows_api("item=coins", &run));
+        assert_eq!(named.get("hours").as_i64(), Some(24), "default window");
+        assert_eq!(named.get("flows").as_arr().map(Vec::len), Some(1));
+        let spaced = body(&items_flows_api("item=Raw%20shrimps&hours=168", &run));
+        assert_eq!(spaced.get("item").as_str(), Some("Raw shrimps"));
+        assert_eq!(spaced.get("flows").as_arr().map(Vec::len), Some(0), "nothing recorded is an empty list");
+        assert_eq!(body(&items_flows_api("hours=0", &run)).get("ok").as_bool(), Some(false));
+        assert_eq!(body(&items_flows_api("hours=abc", &run)).get("ok").as_bool(), Some(false));
+        assert_eq!(body(&items_flows_api("item=0", &run)).get("ok").as_bool(), Some(false));
+        // Routed by the dashboard: a bad window answers the route's own
+        // error (before any store is opened), never the 404 fallback.
+        let dispatch: crate::web::Dispatch = std::sync::Arc::new(|_| Value::Null);
+        let routed = crate::web::handle_get("/api/items/flows", "hours=0", &dispatch);
+        assert_eq!(routed.status, 200);
+        assert!(body(&routed).get("error").as_str().unwrap_or("").starts_with("bad hours"));
+        let _ = std::fs::remove_dir_all(&run);
     }
 
     /// The frozen JSON history feeds the endpoint through the one-shot

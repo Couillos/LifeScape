@@ -191,8 +191,16 @@ fn ready_resolution_prices_and_picks() {
     let mut quiet = ctx.clone();
     quiet.best_ask = None;
     resolve_ready(&mut no_ask, &quiet);
-    assert_eq!(no_ask.method.as_deref(), Some("farm:feather"), "no seller: produce it");
-    assert!(no_ask.alternatives.iter().any(|alt| alt.method == "market:bid"), "standing bid beside production");
+    // User 2026-11-15: no player sells and the fishing shop does, within
+    // the wallet: the keeper (Port Sarim feathers, a 2004 habit).
+    assert_eq!(no_ask.method.as_deref(), Some("shop:buy"), "no seller: the keeper");
+    let mut dear = quiet.clone();
+    dear.shop_price = 2_000;
+    let mut no_shop = nodes[0].clone();
+    no_shop.method = None;
+    resolve_ready(&mut no_shop, &dear);
+    assert_eq!(no_shop.method.as_deref(), Some("farm:feather"), "a keeper the wallet cannot pay: produce it");
+    assert!(no_shop.alternatives.iter().any(|alt| alt.method == "market:bid"), "standing bid beside production");
 
     let mut broke = quiet.clone();
     broke.coins = 0;
@@ -427,11 +435,12 @@ fn reach_tranches_work_the_tier_open_at_their_start() {
 /// sword: smithed; air runes: runecrafted); a non-producible one keeps
 /// it (shears, nature runes are not sold in F2P shops at all).
 #[test]
-fn merchant_legs_follow_d_a() {
-    for producible in ["bronze_sword", "airrune", "pot_flour"] {
-        let nodes = expand_goal(&GoalKind::Obtain { item: producible.to_string(), count: 1 }, &profile());
-        assert!(!nodes[0].alternatives.iter().any(|alt| alt.method == "shop:buy"), "{producible}: no shop leg, got {:?}", nodes[0].alternatives);
-    }
+fn merchant_legs_follow_the_keepers() {
+    // User 2026-11-15: a stocked object has a shop leg, producible or not.
+    let nodes = expand_goal(&GoalKind::Obtain { item: "bronze_sword".to_string(), count: 1 }, &profile());
+    assert!(nodes[0].alternatives.iter().any(|alt| alt.method == "shop:buy"), "bronze_sword: a keeper stocks it, got {:?}", nodes[0].alternatives);
+    let nature = expand_goal(&GoalKind::Obtain { item: "naturerune".to_string(), count: 1 }, &profile());
+    assert!(!nature[0].alternatives.iter().any(|alt| alt.method == "shop:buy"), "no F2P keeper stocks nature runes");
     let shears = expand_goal(&GoalKind::Obtain { item: "shears".to_string(), count: 1 }, &profile());
     assert!(shears[0].alternatives.iter().any(|alt| alt.method == "shop:buy"), "shears stay buyable");
     // The tool gate counts held gear only, merchant goods included (the

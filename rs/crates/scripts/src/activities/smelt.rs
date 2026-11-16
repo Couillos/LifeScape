@@ -47,12 +47,12 @@ pub fn short_inputs(recipe_inputs: &[(String, i64)], carried: &dyn Fn(&str) -> i
 }
 
 /// Furnace post for a run starting at (x, z, level): the nearest F2P
-/// furnace on that level (Manhattan), Wilderness furnaces only with
-/// `wild`, never Tutorial Island's. `None` when the level has none.
-pub fn furnace_post(x: i64, z: i64, level: i64, allow_wild: bool) -> Option<knowledge::stations::Station> {
+/// furnace on that level (Manhattan), the Wilderness one included (user
+/// 2026-11-16), never Tutorial Island's. `None` when the level has none.
+pub fn furnace_post(x: i64, z: i64, level: i64) -> Option<knowledge::stations::Station> {
     knowledge::stations::stations_of("furnace")
         .into_iter()
-        .filter(|post| post.level == level && knowledge::obtain::station_open(&post.loc, post.x, post.z) && (allow_wild || !knowledge::danger::in_wilderness(post.x, post.z, post.level)))
+        .filter(|post| post.level == level && knowledge::obtain::station_open(&post.loc, post.x, post.z))
         .min_by_key(|post| ((post.x - x).abs() + (post.z - z).abs(), post.x, post.z))
 }
 
@@ -118,8 +118,8 @@ pub fn run_smelt(bot: &mut Bot, args: &[String]) -> ScriptResult {
         Some((site_x, site_z, site_level)) => (i64::from(site_x), i64::from(site_z), i64::from(site_level)),
         None => (i64::from(bot.world.x), i64::from(bot.world.z), i64::from(bot.world.level)),
     };
-    let post = furnace_post(here_x, here_z, here_level, spec.allow_wild || spec.site.is_some())
-        .ok_or_else(|| ScriptError::Usage(format!("no furnace on level {here_level} (wild={}) from {:?}", spec.allow_wild, bot.position())))?;
+    let post = furnace_post(here_x, here_z, here_level)
+        .ok_or_else(|| ScriptError::Usage(format!("no furnace on level {here_level} from {:?}", bot.position())))?;
     bot.log(&format!("furnace post at ({},{})", post.x, post.z));
     let odds = knowledge::recipes::success_odds(&recipe.source);
     let still_wanted = |seen: &Bot, goal: Option<WantGoal>| wanted_sets(goal, pack_total(seen, bar).saturating_add(banked_usable(seen, bar)), bar, odds);
@@ -264,11 +264,12 @@ mod tests {
     /// will_field at Edgeville): the post was picked near the bank but the
     /// job searched 150 tiles around the BANK, so every bot banking far
     /// from a furnace failed "no produce station". The post is the
-    /// furnace nearest the bot, Wilderness only when allowed.
+    /// furnace nearest the bot, the Wilderness one included (user
+    /// 2026-11-16: the Wilderness is open to every bot).
     #[test]
-    fn furnace_post_is_the_nearest_furnace_outside_the_wilderness() {
+    fn furnace_post_is_the_nearest_furnace() {
         let near = |x: i64, z: i64| {
-            let post = furnace_post(x, z, 0, false).expect("a furnace");
+            let post = furnace_post(x, z, 0).expect("a furnace");
             (post.x, post.z)
         };
         let lumbridge = near(3253, 3420);
@@ -277,11 +278,9 @@ mod tests {
         assert_eq!(falador, (2975, 3368), "Falador west bank smelts at Falador");
         let al_kharid = near(3269, 3167);
         assert!((al_kharid.0 - 3272).abs() <= 1 && (al_kharid.1 - 3185).abs() <= 1, "Al Kharid smelts at home, got {al_kharid:?}");
-        assert_eq!(near(3096, 3493), (2975, 3368), "Edgeville goes to Falador, never the Wilderness furnace");
+        assert_eq!(near(3096, 3493), (2975, 3368), "Edgeville: Falador is still the nearest");
         let north = near(3140, 3600);
-        assert!(north.1 < 3520, "deep north still avoids the Wilderness furnace, got {north:?}");
-        let wild = furnace_post(3140, 3600, 0, true).expect("wild furnace");
-        assert!(wild.z >= 3520, "wild allowed: the Wilderness furnace is nearest, got ({},{})", wild.x, wild.z);
+        assert!(north.1 >= 3520, "deep north smelts at the Wilderness furnace, got {north:?}");
     }
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;

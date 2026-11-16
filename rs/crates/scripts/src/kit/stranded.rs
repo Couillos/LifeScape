@@ -87,27 +87,6 @@ pub fn earn_fare_if_stranded(bot: &mut Bot) -> Result<(), ScriptError> {
     Ok(())
 }
 
-/// A run that does not sail (no `boat` order) starting on Karamja goes
-/// home first: its paths are unpaid, so every bank and site on the
-/// mainland reads `Disconnected` from the island (leo_king 2026-11-15:
-/// fare earned, 192 NoRoute to the Draynor bank from a melee run). The
-/// customs crossing alone is opened, for this walk only.
-pub fn leave_island_unless_sailing(bot: &mut Bot, args: &[String]) -> Result<(), ScriptError> {
-    let (x, z, level) = (bot.world.x as i64, bot.world.z as i64, bot.world.level as i64);
-    if !knowledge::access::behind_boat(x, z, level) || args.iter().any(|arg| arg == "boat") {
-        return Ok(());
-    }
-    let (dock_x, dock_z, dock_level) = knowledge::access::KARAMJA_DOCK;
-    bot.log(&format!("on Karamja without a boat order at {:?}: sailing back to Port Sarim first", bot.position()));
-    bot.intend("sailing back from Karamja");
-    let was_paid = bot.allow_paid;
-    bot.allow_paid = true;
-    let walked = bot.travel_to(lifescape_sdk::plan::Tile { x: dock_x as i32, z: dock_z as i32, level: dock_level as i32 });
-    bot.allow_paid = was_paid;
-    walked?;
-    Ok(())
-}
-
 /// The crate is full: the server said so (`banana_crate.rs2`: "The crate
 /// is already full."), or ten bananas went in since the job began. The
 /// `crate_bananas` varp never reaches the client (leo_king 2026-11-15:

@@ -369,7 +369,7 @@ pub(crate) fn plan_costs_with(
             // never improve a fallback (same prune as `dijkstra`). Never
             // prunes while a walkable target is unsettled: it might lie
             // beyond.
-            if settle.is_empty() && blocked.iter().all(|target| crate::fallback::past_fallback(next, target.dest, target.rank.1)) {
+            if settle.is_empty() && blocked.iter().all(|target| target.floor.is_none() && crate::fallback::past_fallback(next, target.dest, crate::fallback::prune_reach(from, target.dest, target.rank.1))) {
                 continue;
             }
             if !search.in_bounds(next) {
@@ -474,10 +474,8 @@ pub(crate) fn plan_costs_with(
         }
         if let Some(edges) = customs.get(&here.key()) {
             for edge in edges {
-                // A fare edge (the Karamja boat) is a paid path, like a toll.
-                if search.tables.customs[edge.index].fare > 0 && !options.allow_paid {
-                    continue;
-                }
+                // A fare edge (the Karamja boat) is gated by its coins
+                // `requires` only, like `plan::dijkstra` (never `allow_paid`).
                 if !search.tables.customs[edge.index].requires.iter().all(|tag| search.options.satisfied.contains(tag)) {
                     continue;
                 }

@@ -324,14 +324,7 @@ impl World {
             "IF_OPENSIDE" => self.open_modal("side", body)?,
             "IF_OPENMAIN_SIDE" => self.open_modal("main_side", body)?,
             "IF_OPENOVERLAY" => self.open_modal("overlay", body)?,
-            "IF_CLOSE" => {
-                self.modal = None;
-                self.texts.clear();
-                self.pending_texts.clear();
-                self.modal_models.clear();
-                self.pending_models.clear();
-                self.chat_interfaces.clear();
-            }
+            "IF_CLOSE" => self.close_interfaces(),
             "IF_SETTEXT" => {
                 let com = zone.u16()?;
                 let value = zone.jstr(10)?;
@@ -399,6 +392,17 @@ impl World {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Every modal closed (server IF_CLOSE, or the client's own close:
+    /// Client-TS `closeModal` resets its ids without a server echo).
+    pub fn close_interfaces(&mut self) {
+        self.modal = None;
+        self.texts.clear();
+        self.pending_texts.clear();
+        self.modal_models.clear();
+        self.pending_models.clear();
+        self.chat_interfaces.clear();
     }
 
     fn open_modal(&mut self, kind: &str, body: &[u8]) -> Result<()> {

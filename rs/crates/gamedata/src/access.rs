@@ -2,7 +2,7 @@
 //! before it may work a site the danger model calls safe. The planner's
 //! site pick reads `gates_at` and either passes the gate (level, uniform,
 //! key held), files its dependency (`access:<guild>`, the key's obtain),
-//! or refuses the site (boat without a nav edge, underground, Wilderness).
+//! or refuses the site (boat without a nav edge, underground).
 //!
 //! Server truth (rev 274, doors located in `content/maps`):
 //! - Crafting Guild door `crafting_guild_door` (2933, 3289):
@@ -21,7 +21,8 @@
 //!   `BOAT_ROUTED` is true: a Karamja site (tuna, lobster, swordfish,
 //!   Karamja gold) is a paid site, its round trip budgeted like the Al
 //!   Kharid toll (planner `combat::pick_site_gated`, launch flag `boat`);
-//! - Wilderness (`danger::in_wilderness`): no combat level makes it safe;
+//! - the Wilderness is open (user 2026-11-16): its hunters count in the
+//!   danger model like any other, the zone is never a gate;
 //! - underground (level 0, z ≥ 6400) outside the Mining Guild: dungeons
 //!   reached by trapdoors and ladders the scripts never take for a gather
 //!   or a drop farm (`kit::hunt::run_spot_with` refuses a bare key
@@ -65,19 +66,22 @@ pub enum Gate {
     /// (Champions' Guild, `champions_guild.rs2`: 32). Never opened by the
     /// planner today (no quest-point count in its context).
     QuestPoints { area: &'static str, points: i64 },
+    /// Door the content script opens only for a quest's own state (an
+    /// item used on it, a quest stage): never opened by the planner.
+    Quest { area: &'static str, quest: &'static str },
+    /// Tiles no player ever reaches (a museum display behind barriers):
+    /// the spawns there are scenery.
+    Sealed { area: &'static str },
     /// Below ground with no gate the planner models.
     Underground,
-    /// Wilderness surface.
-    Wilderness,
 }
 
 impl Gate {
     /// Planner key of the gate (`access:<area>` blocks, logs).
     pub fn area(&self) -> &'static str {
         match self {
-            Gate::Guild { area, .. } | Gate::Key { area, .. } | Gate::Boat { area, .. } | Gate::QuestPoints { area, .. } => area,
+            Gate::Guild { area, .. } | Gate::Key { area, .. } | Gate::Boat { area, .. } | Gate::QuestPoints { area, .. } | Gate::Quest { area, .. } | Gate::Sealed { area } => area,
             Gate::Underground => "underground",
-            Gate::Wilderness => "wilderness",
         }
     }
 }
@@ -107,6 +111,28 @@ fn areas() -> Vec<Area> {
             gate: Gate::Guild { area: "crafting_guild", skill: "crafting", level: 40, uniform: Some("brown_apron") },
             door: Some((2933, 3290, 0)),
         },
+        // The guild's silver yard east of the door (walls x 2939..2943,
+        // z 3286..3291, open only to the guild interior): live admin
+        // 2026-11-15, the silver rock (2943,3290) read public and the
+        // stand outside its wall answered "I can't reach that!".
+        Area {
+            x: (2939, 2943),
+            z: (3285, 3291),
+            levels: (0, 0),
+            gate: Gate::Guild { area: "crafting_guild", skill: "crafting", level: 40, uniform: Some("brown_apron") },
+            door: Some((2933, 3290, 0)),
+        },
+        // The guild's north room west of the door (walls x 2927..2932,
+        // z up to 3292: pottery oven, amulet mould on the table), open
+        // only from the guild interior: live admin2 2026-11-16, the mould
+        // read public and the bot stood outside the west wall.
+        Area {
+            x: (2928, 2931),
+            z: (3289, 3292),
+            levels: (0, 0),
+            gate: Gate::Guild { area: "crafting_guild", skill: "crafting", level: 40, uniform: Some("brown_apron") },
+            door: Some((2933, 3290, 0)),
+        },
         // Three floors north of the south door (3143, 3444): ranges on
         // the first floor (3143..3145, 3452), the windmill hopper on top.
         Area {
@@ -129,13 +155,29 @@ fn areas() -> Vec<Area> {
         // Champions' Guild (door 1805 at (3191,3363), 32 quest points):
         // nav reads every tile here NeedsRequirement (live 2026-11-14,
         // ryan_park sent to chickens at (3198,3355) through the door).
+        // Its south row holds Scavvo upstairs at (3191,3351,1) (live
+        // admin2 2026-11-16: the rune store read public, "no reachable
+        // keeper" on every buy).
         Area {
             x: (3188, 3198),
-            z: (3352, 3362),
+            z: (3351, 3362),
             levels: (0, 1),
             gate: Gate::QuestPoints { area: "champions_guild", points: 32 },
             door: Some((3191, 3364, 0)),
         },
+        // Draynor Manor closet (door 131 at (3107,3367), nav blocked):
+        // `quest_haunted.rs2` opens it on the closet key used on it
+        // only; the rubber tube spawns inside (live admin 2026-11-15).
+        Area { x: (3108, 3112), z: (3366, 3368), levels: (0, 0), gate: Gate::Quest { area: "draynor_manor_closet", quest: "haunted" }, door: None },
+        // Wydin's back room (door 2069 at (3012,3204), nav blocked):
+        // `food_store.rs2` lets in Pirate's Treasure employees wearing
+        // the white apron only; the white apron spawns inside.
+        Area { x: (3009, 3011), z: (3205, 3210), levels: (0, 0), gate: Gate::Quest { area: "wydin_back_room", quest: "hunt" }, door: None },
+        // Varrock museum armour display (marble 747 at (3254,3451..3453),
+        // statues west, museum barriers east): the iron sword, platelegs
+        // and platebody spawned there are never picked up (live 2026-11-16:
+        // admin "nothing to pick", oscar_cole four budget-exhausted runs).
+        Area { x: (3254, 3254), z: (3451, 3453), levels: (0, 0), gate: Gate::Sealed { area: "varrock_museum_display" }, door: None },
         // Karamja (F2P north half), south of the Rimmington coast.
         Area { x: (2740, 2975), z: (2880, 3186), levels: (0, 1), gate: Gate::Boat { area: "karamja", fare: crate::services::BOAT_FARE_GP }, door: None },
         // Crandor: Ned's ship during Dragon Slayer only.
@@ -144,18 +186,14 @@ fn areas() -> Vec<Area> {
 }
 
 /// Gates of the site (x, z, level): the most specific area first, then
-/// the generic Wilderness and underground gates. Empty = open.
+/// the generic underground gate. Empty = open. The Wilderness is no gate
+/// (user 2026-11-16: accessible to every bot, always).
 pub fn gates_at(x: i64, z: i64, level: i64) -> Vec<Gate> {
     let mut out: Vec<Gate> = areas()
         .into_iter()
         .filter(|area| inside(area, x, z, level))
         .map(|area| area.gate)
         .collect();
-    // The danger test reads level 0 only: underground rows (z ≥ 6400)
-    // are dungeons, never the Wilderness surface.
-    if z < 6400 && crate::danger::in_wilderness(x, z, level) {
-        out.push(Gate::Wilderness);
-    }
     let modelled = out.iter().any(|gate| matches!(gate, Gate::Guild { .. }));
     if z >= 6400 && !modelled {
         out.push(Gate::Underground);
@@ -194,6 +232,13 @@ pub fn shop_floor_routed(x: i64, z: i64, level: i64) -> bool {
     level == 0 && ROUTED_SHOP_FLOORS.iter().any(|((west, east), (south, north))| (*west..=*east).contains(&x) && (*south..=*north).contains(&z))
 }
 
+/// True when every bot passes the gate with coins alone: the Karamja
+/// boat, part of the map like a road (user 2026-11-16), its round trip
+/// carried in the pack.
+pub fn fare_only(gate: &Gate) -> bool {
+    matches!(gate, Gate::Boat { area: "karamja", .. }) && !impassable(gate)
+}
+
 /// True when no bot can ever pass the gate today (no nav edge, no model).
 pub fn impassable(gate: &Gate) -> bool {
     match gate {
@@ -201,8 +246,8 @@ pub fn impassable(gate: &Gate) -> bool {
         // Dragon Slayer) stays out.
         Gate::Boat { area: "karamja", .. } => !BOAT_ROUTED,
         Gate::Boat { .. } => true,
-        Gate::Underground | Gate::Wilderness => true,
-        Gate::Guild { .. } | Gate::Key { .. } | Gate::QuestPoints { .. } => false,
+        Gate::Underground | Gate::Sealed { .. } => true,
+        Gate::Guild { .. } | Gate::Key { .. } | Gate::QuestPoints { .. } | Gate::Quest { .. } => false,
     }
 }
 
@@ -219,6 +264,20 @@ mod tests {
         assert!(!shop_floor_routed(3040, 9740, 0), "the Mining Guild keeps its gate");
         assert!(!shop_floor_routed(3100, 9900, 0), "another dungeon");
         assert!(!shop_floor_routed(2998, 3444, 0), "surface");
+    }
+
+    /// The guild's silver yard and the two quest-locked rooms are gated;
+    /// the path outside the yard's east wall is open.
+    #[test]
+    fn walled_rooms_are_gated() {
+        assert!(super::gates_at(2943, 3290, 0).iter().any(|gate| gate.area() == "crafting_guild"));
+        assert!(super::gates_at(2944, 3290, 0).is_empty());
+        assert!(super::gates_at(2928, 3290, 0).iter().any(|gate| gate.area() == "crafting_guild"), "the mould room");
+        assert!(super::gates_at(2926, 3290, 0).is_empty(), "outside its west wall");
+        assert!(super::gates_at(3254, 3452, 0).iter().any(super::impassable), "the museum display");
+        assert!(super::gates_at(3111, 3367, 0).iter().any(|gate| gate.area() == "draynor_manor_closet"));
+        assert!(super::gates_at(3010, 3208, 0).iter().any(|gate| gate.area() == "wydin_back_room"));
+        assert!(super::gates_at(3191, 3351, 1).iter().any(|gate| gate.area() == "champions_guild"), "Scavvo's floor");
     }
 
     #[test]
@@ -250,7 +309,7 @@ mod tests {
         assert!(behind_boat(2924, 3178, 0) && !behind_boat(2955, 3192, 0));
         assert_eq!(mainland_anchor(2924, 3178, 0), KARAMJA_DOCK, "Karamja reads at the Port Sarim dock");
         assert_eq!(mainland_anchor(2975, 3234, 0), (2975, 3234, 0));
-        assert_eq!(gates_at(3050, 3704, 0), vec![Gate::Wilderness]);
+        assert!(gates_at(3050, 3704, 0).is_empty(), "the Wilderness is open");
         assert_eq!(gates_at(3100, 9900, 0), vec![Gate::Underground]);
         assert_eq!(gates_at(3232, 3203, 0), Vec::new(), "Lumbridge is open");
     }

@@ -98,3 +98,28 @@ Budgets = 2-3× p95 W5/W2, écrêtés par le smoke cap 2000 :
 Aucun scénario >5 min (~5000 ticks) : pas de réouverture de session (désynchro
 PNJ). Porte Port Sarim loc 1530 flaky évitée par les scénarios ; couverte par
 le test `stuck_bot_fails_within_20_ticks` (rejet `can't reach` → fail ≤20t).
+
+## Méthodes en live : `check-method` (2026-11-15)
+
+L'audit a trouvé des familles entières à 0 % en live sans que personne ne le
+voie (bijoux 0/38, traite 0/1694, tannage 0/56). `orchestrator check-method`
+lance une méthode du planner exactement comme le brain : `mapping::map_method`
+sur un nœud `obtain` du produit (`méthode@objet`, écrit par `--print-all`
+pour toute jambe d'obtention F2P hors marché), sur un compte staff seulement
+(`admin`, `admin2`). Préparation par cheats qui restent chez le staff
+(règle 13) : stats de combat 70, kit staff (`STAFF_KIT`), niveau de la
+recette, intrants pour `n` actions, outils, pièces de trajet, variables de
+quête si la voie en exige une ; un script encore en cours est arrêté
+(`unload`). Verdict sur le nombre de produits (sac + banque + porté), jamais
+sur le seul code de sortie ; une ligne JSON par test dans
+`run/method_checks.jsonl`. `--plan` affiche ce que le planner prépare
+(script, arguments, intrants, outils, niveau) sans rien lancer.
+
+Banque F2P = 60 types (`bank.constant` `^bank_free_slots`) : au-delà de 40
+types, le testeur vide sa banque avec `check_dispose` (outil dev staff) :
+retrait en billets, téléport sur la plage de Catherby (zone membres
+qu'aucun bot F2P n'atteint), objets jetés, retour ; pièces et kit gardés.
+Rien n'est vendu, échangé ni posé où un bot passe.
+
+`run <compte> <script> ... --wait -- --site x,z,niv` : après `--`, les
+arguments passent tels quels au script (drapeaux de lancement du brain).

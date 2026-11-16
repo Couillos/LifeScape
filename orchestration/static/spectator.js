@@ -1,8 +1,18 @@
-(() => {
+// Pure panel helpers (node-testable, spectator.test.js).
+var SpectatorPanels = (function () {
+  const SKILLS = ["attack","defence","strength","hitpoints","ranged","prayer","magic","cooking","woodcutting","fletching","fishing","firemaking","crafting","smithing","mining","herblore","agility","thieving","slayer","farming","runecraft"];
+  // Skills table rows: one per skill, in stat order.
+  function skillRows(skills) {
+    return (skills || []).map(s => ({ skill: SKILLS[s.id] || ('stat' + s.id), level: s.level, xp: s.xp }));
+  }
+  return { SKILLS: SKILLS, skillRows: skillRows };
+})();
+if (typeof module !== 'undefined' && module.exports) module.exports = SpectatorPanels;
+
+if (typeof document !== 'undefined') (() => {
 // Everything stays inside this closure: a browser extension injected into
 // the page shares the global scope, and generic globals (socket, select,
 // connect...) collide with its bundle.
-const SKILLS = ["attack","defence","strength","hitpoints","ranged","prayer","magic","cooking","woodcutting","fletching","fishing","firemaking","crafting","smithing","mining","herblore","agility","thieving","slayer","farming","runecraft"];
 
 let selected = null;
 let last = null;      // current snapshot (map + overlays always draw from this one object)
@@ -131,6 +141,12 @@ if (localStorage.getItem("list-hidden") === "0") toggleList(false);
 // also feeds canvas labels, which must stay raw).
 const escHtml = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const dash = (value) => (value === null || value === undefined || value === "") ? "-" : value;
+// Skills table (shared TableSort): raw values sort, xp shows separators.
+const SKILL_COLUMNS = [
+  { key: "skill", label: "Skill", kind: "str" },
+  { key: "level", label: "Level", kind: "num" },
+  { key: "xp", label: "XP", kind: "num", fmt: (value) => escHtml(typeof value === "number" ? value.toLocaleString("en-US") : dash(value)) },
+];
 // Bot table columns (shared TableSort, table.js): raw values sort, fmt
 // only changes the display. Goal/task come from the life file (backend
 // web_job_lives.rs); manual bots have none.
@@ -197,10 +213,12 @@ async function select(account) {
   logShown = 0;
   // New bot, new base: drop the previous bot's line nodes and caches so
   // the next frames rebuild from scratch (same as a full server resend).
-  for (const id of ["infotext", "log", "dialog", "chat", "inv", "skills", "scenery"]) {
+  for (const id of ["infotext", "log", "chat", "inv", "scenery"]) {
     const pre = document.getElementById(id);
     if (pre) { pre.textContent = ""; pre._lines = undefined; }
   }
+  const skillTable = document.getElementById("skills");
+  skillTable.textContent = ""; skillTable._key = undefined;
   paint(); // drop the previous bot at once; the next state paints the new one
   setTitle("Following: " + account.replace(/_/g, " "), "");
   const picker = document.getElementById("account");
@@ -578,13 +596,10 @@ function updatePanels() {
   lines.push(`status: ${last.status || '?'}${last.paused ? ' (paused)' : ''}`);
   lines.push(`script: ${last.script || '-'}`);
   lines.push(`ticks: ${last.ticks ?? '?'}`);
-  lines.push(`pid: ${last.pid ?? last.session_pid ?? '?'}`);
-  lines.push(`restarts: ${last.restarts ?? 0}`);
   if (last.last_error) lines.push(`last error: ${JSON.stringify(last.last_error)}`);
   lines.push(modal ? `window open: ${modal}` : 'no window open');
   if (hint) lines.push(`hint arrow: ${hint}`);
   if (last.flash !== null && last.flash !== undefined && last.flash !== -1) lines.push(`flashing tab: ${last.flash}`);
-  if (last.last_event) lines.push(`last event: ${last.last_event.event} (resolved=${last.last_event.resolved})`);
   if (last.requirements) {
     const req = last.requirements;
     const reasons = (req.reasons || []).map(r => {
@@ -606,7 +621,6 @@ function updatePanels() {
   }
   syncStatePre(document.getElementById('infotext'), lines, '(no state)');
 
-  setText(document.getElementById('dialog'), last.modal_name ? `window: ${last.modal_name}` : '(no window open)');
   syncStatePre(document.getElementById('chat'), last.chat || [], '(no messages)');
 
   const fmt = (items, empty) => (items && items.length)
@@ -619,9 +633,15 @@ function updatePanels() {
   syncStatePre(document.getElementById('inv'),
     ['Backpack:'].concat(fmt(last.inv, '(empty)'), ['', 'Worn:'], fmt(last.worn, '(nothing)')),
     '(empty)');
-  syncStatePre(document.getElementById('skills'),
-    (last.skills || []).map(s => `${SKILLS[s.id] || ('stat' + s.id)} ${s.level} (${s.xp}xp)`),
-    '(no skills)');
+  // Rebuilt only when a value changed: a selection or a header click
+  // inside the table survives the other frames.
+  const skillRows = SpectatorPanels.skillRows(last.skills);
+  const skillKey = JSON.stringify(skillRows);
+  const skillTable = document.getElementById('skills');
+  if (skillTable._key !== skillKey) {
+    skillTable._key = skillKey;
+    TableSort.render('skills', SKILL_COLUMNS, skillRows);
+  }
 
   const locCounts = {};
   let sceneryCount = 0;

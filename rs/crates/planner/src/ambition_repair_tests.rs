@@ -98,15 +98,17 @@ fn unprofitable_bids_never_make_a_quota() {
 fn a_draw_with_no_milestone_is_refused() {
     let master = |_: &str| 99u8;
     let held = nothing_held;
+    // A climbing kind past its last rung has nothing left (computed
+    // firemaker ladder: levels only).
     assert_eq!(
-        new_ambition("crafter", "random", &now(&master, 0, &held), 1, &[], ZERO).err(),
-        Some(AmbitionError::NoMilestone("crafter".to_string()))
+        new_ambition("firemaker", "random", &now(&master, 0, &held), 1, &[], ZERO).err(),
+        Some(AmbitionError::NoMilestone("firemaker".to_string()))
     );
     assert_eq!(new_ambition("bogus", "random", &now(&master, 0, &held), 1, &[], ZERO).err(), Some(AmbitionError::UnknownKind("bogus".to_string())));
     assert!(new_ambition(GENERALIST, "operator", &now(&master, 0, &held), 1, &[], ZERO).is_ok(), "the generalist holds no milestone by design");
+    // A producer at 99 still has its top quota (computed ladders reach 90).
     let extended = new_ambition_extended("crafter", "coverage:crafting", &now(&master, 0, &held), 1, &[], ZERO).expect("extended");
-    assert!(open_count(&extended) > 0 && !achieved(&extended));
-    assert!(extended.milestones.iter().all(|stone| stone.origin == "extend"), "{:?}", extended.milestones);
+    assert!(open_count(&extended) > 0 && !achieved(&extended), "{:?}", extended.milestones);
 }
 
 /// Finding 7: a rich bot's merchant ambition starts past the coins it
@@ -144,7 +146,7 @@ fn an_exhausted_ladder_extends() {
     assert!(warrior.milestones.iter().any(|stone| matches!(stone.target, Target::Equip { .. })), "{:?}", warrior.milestones);
     let mid = |skill: &str| if skill == "attack" || skill == "strength" || skill == "defence" { 70u8 } else { 1 };
     let mut climber = new_ambition_extended("warrior", "coverage:melee", &now(&mid, 0, &nothing_held), 3, &[], ZERO).expect("warrior 70");
-    assert!(climber.milestones.iter().any(|stone| matches!(&stone.target, Target::Level { level: 75, .. })), "{:?}", climber.milestones);
+    assert!(climber.milestones.iter().any(|stone| matches!(&stone.target, Target::Level { level: 80, .. })), "the computed ladder climbs to 90: {:?}", climber.milestones);
     for stone in &mut climber.milestones {
         stone.status = MilestoneStatus::Done;
     }
@@ -156,10 +158,10 @@ fn an_exhausted_ladder_extends() {
 #[test]
 fn refresh_reports_the_milestones_it_closes() {
     let mut smith = new_ambition("smith", "random", &now(&fresh, 0, &nothing_held), 3, &[], ZERO).expect("smith");
-    let mining = |skill: &str| if skill == "mining" { 12 } else { 1 };
-    let closed = refresh(&mut smith, &now(&mining, 0, &nothing_held), 3, &[]);
-    assert_eq!(closed, vec!["m1".to_string()], "mining 10 met");
-    assert!(refresh(&mut smith, &now(&mining, 0, &nothing_held), 3, &[]).is_empty(), "closed once");
+    let smithing = |skill: &str| if skill == "smithing" { 12 } else { 1 };
+    let closed = refresh(&mut smith, &now(&smithing, 0, &nothing_held), 3, &[]);
+    assert_eq!(closed, vec!["m1".to_string()], "smithing 10 met");
+    assert!(refresh(&mut smith, &now(&smithing, 0, &nothing_held), 3, &[]).is_empty(), "closed once");
 }
 
 fn fleet_bot(seed: u64) -> FleetBot {

@@ -222,4 +222,36 @@ mod candle_chain_tests {
         );
         Ok(())
     }
+
+    /// Dashboard 7-day (hourly) and 30-day (daily) views: one chained
+    /// candle per window over the whole span once a price is known before
+    /// it, the live window last.
+    #[test]
+    fn week_hourly_and_month_daily_windows_are_full() -> Result<(), Error> {
+        const DAY: i64 = 86_400;
+        let mut store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 315)?;
+        let fill = |clock: i64, price: i64| NewExecution {
+            item_id: 315,
+            quantity: 1,
+            price,
+            clock,
+            server_tick: clock,
+            taker_side: None,
+        };
+        let now = 20_500 * DAY + 13 * HOUR + 120;
+        store.record_execution(&fill(now - 40 * DAY, 25))?;
+        store.record_execution(&fill(now - 3 * DAY, 31))?;
+        let week_from = (now / HOUR) * HOUR - 167 * HOUR;
+        let (week, _) = store.continuous_candles(315, YieldCandleResolution::Hour1, week_from, now + 1)?;
+        assert_eq!(week.len(), 168);
+        assert_eq!(week.first().map(|candle| candle.window_start), Some(week_from));
+        assert_eq!(week.last().map(|candle| candle.close_price), Some(31));
+        let month_from = (now / DAY) * DAY - 29 * DAY;
+        let (month, previous_close) = store.continuous_candles(315, YieldCandleResolution::Day1, month_from, now + 1)?;
+        assert_eq!(previous_close, Some(25));
+        assert_eq!(month.len(), 30);
+        assert_eq!(month.last().map(|candle| candle.window_start), Some((now / DAY) * DAY));
+        Ok(())
+    }
 }

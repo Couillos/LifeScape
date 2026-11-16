@@ -301,6 +301,12 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         }
     }
     let id = life.nodes[index].id.clone();
+    // Method health (`method_health`): what the method itself did.
+    match &decision {
+        Verdict::Done | Verdict::EngagementEnd => crate::method_health::record(&account, &method, crate::method_health::Outcome::Ok, ""),
+        Verdict::Failure(text) | Verdict::Contract(text) | Verdict::Travel(text) => crate::method_health::record(&account, &method, crate::method_health::Outcome::Fail, text),
+        Verdict::AwaitFill | Verdict::Stopped | Verdict::Blocked(_) => {}
+    }
     match &decision {
         Verdict::Done => {
             // D-B: whichever leg landed first, the other one closes.

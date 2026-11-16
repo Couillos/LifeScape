@@ -26,6 +26,10 @@ pub struct Gate {
 #[derive(Debug, Clone)]
 pub struct Opening {
     pub inv: String,
+    /// Sell multiplier the `~openshop(inv, buy, sell, …)` call passes
+    /// (Zaff: 1000); `None` when the keeper's `shop_sell_multiplier`
+    /// param prices the shop (`~openshop_activenpc`).
+    pub sell_multiplier: Option<i64>,
     pub gates: Vec<Gate>,
 }
 
@@ -60,7 +64,7 @@ fn table() -> &'static Vec<ShopNpc> {
                         quest: gate.get("quest").as_str().map(str::to_string),
                     })
                     .collect();
-                opens.push(Opening { inv: open.get("inv").as_str().unwrap_or("").to_string(), gates });
+                opens.push(Opening { inv: open.get("inv").as_str().unwrap_or("").to_string(), sell_multiplier: open.get("sell_multiplier").as_i64(), gates });
             }
             out.push(ShopNpc {
                 npc: row.get("npc").as_str().unwrap_or("").to_string(),

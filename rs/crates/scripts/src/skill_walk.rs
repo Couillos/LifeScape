@@ -184,6 +184,7 @@ pub fn walk_checked_at(bot: &mut Bot, dest_x: i32, dest_z: i32, dest_level: i32,
     }
     check_events(bot)?;
     let mut rescued = false;
+    let mut fetched = false;
     loop {
         if bot.world.ticks > deadline {
             return Err(Error::Timeout(format!(
@@ -243,6 +244,16 @@ pub fn walk_checked_at(bot: &mut Bot, dest_x: i32, dest_z: i32, dest_level: i32,
                 if hurt_aborts(hitpoints(bot), hitpoints_before, max_hitpoints(bot)) && crate::randomevent::event_at(bot).is_none() {
                     bot.log("hurt walking, fleeing");
                     return Ok(false);
+                }
+                // A fare the pack cannot pay (the Karamja boat: part of the
+                // map for every script, user 2026-11-16): fetch the coins
+                // from the bank once, then walk again.
+                if let Some(need) = err.missing_coins() {
+                    if !fetched && crate::kit::toll::fetch_fare_coins(bot, need)? {
+                        fetched = true;
+                        continue;
+                    }
+                    return Err(err.into());
                 }
                 if rescued {
                     return Err(err.into());

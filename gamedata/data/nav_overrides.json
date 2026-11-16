@@ -1,5 +1,7 @@
 {
   "blocked_locs": [
+    {"loc": 131, "reason": "closet_door (Draynor Manor, (3107,3367,0)): quest_haunted.rs2 [oploc1,closet_door] only says 'The door is locked.'; it opens on [oplocu] with the closet key (Ernest the Chicken) alone; live admin 2026-11-15 ground:rubber_tube DoorDidNotOpen", "verified": "2026-11-16"},
+    {"loc": 2069, "reason": "wydindoor (Port Sarim food store back room, (3012,3204,0)): food_store.rs2 [oploc1,wydindoor] turns away anyone not employed for Pirate's Treasure (hunt_store_employed) or not wearing the white apron while Wydin stands within 10 tiles; live admin 2026-11-15 ground:white_apron DoorDidNotOpen", "verified": "2026-11-16"},
     {"loc": 1591, "reason": "lockeddoor1 (name Door, op1 Open): locked_doors.rs2 [oploc1,lockeddoor1] only says 'You try and open the door...' then 'The door is locked tight, I can't open it.', never swings; live bct5rxpg-14906 (3268,3435) DoorDidNotOpen", "verified": "2026-11-13"}
   ],
   "custom_edges": [

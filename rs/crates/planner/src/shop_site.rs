@@ -1,16 +1,19 @@
 //! The planner's shop for a `shop:buy` leg (audit 2026-11-13 item B3/C10:
-//! the script picked the nearest shop itself, Wilderness, toll and
-//! underground included). The brain picks the shop and its keeper's
+//! the script picked the nearest shop itself, toll and underground
+//! included). The brain picks the shop and its keeper's
 //! site from the obtain index (`Way::Shop`: shop key, quest, NPC spawns),
 //! the script walks there and buys.
 //!
 //! Rules: a shop whose quest the bot has not finished is out (Oziach
-//! before Dragon Slayer); a keeper in the Wilderness, underground or behind
-//! a gate the bot does not pass is out (`gamedata::access`), except the
-//! underground floors the nav routes (`shop_floor_routed`: the Dwarven
-//! Mine, Nurmof's pickaxes, 2026-11-14); a keeper whose
-//! tile a hunter covers at the bot's combat level is out; across the
-//! Al Kharid fence only with the fare covered. Nearest first.
+//! before Dragon Slayer); a keeper underground or behind a gate the bot
+//! does not pass is out (`gamedata::access`), except the underground
+//! floors the nav routes (`shop_floor_routed`: the Dwarven Mine, Nurmof's
+//! pickaxes, 2026-11-14); a keeper whose tile a hunter covers at the
+//! bot's combat level is out; the Wilderness is open (user 2026-11-16);
+//! across the Al Kharid fence or on Karamja (user 2026-11-16: "le planner
+//! doit pouvoir aller à Karamja") only with the fares covered, the launch
+//! then carries `toll` / `boat`. A keeper reached without a fare first,
+//! then the nearest.
 
 use crate::combat::{Fare, Pass};
 use crate::expand::ReadyCtx;
@@ -24,7 +27,7 @@ pub fn pick_shop(item: &str, ctx: &ReadyCtx) -> Option<(String, (i64, i64, i64))
         Some((x, z, level)) => (site.0 - x).abs() + (site.1 - z).abs() + if site.2 == level { 0 } else { 1000 },
         None => 0,
     };
-    let mut best: Option<(i64, String, (i64, i64, i64))> = None;
+    let mut best: Option<((bool, i64), String, (i64, i64, i64))> = None;
     for way in ways(item).into_iter().filter(|way| way.kind == WayKind::Shop) {
         if let Some(quest) = &way.quest {
             let key = quest.strip_prefix("quest_").unwrap_or(quest);
@@ -37,20 +40,27 @@ pub fn pick_shop(item: &str, ctx: &ReadyCtx) -> Option<(String, (i64, i64, i64))
             // An underground keeper the nav routes (the Dwarven Mine:
             // Nurmof's pickaxes) is a walk, not a refusal.
             let routed = lifescape_gamedata::access::shop_floor_routed(x, z, level);
-            let passes = |gate: &lifescape_gamedata::access::Gate| pass.opens(gate) || (routed && *gate == lifescape_gamedata::access::Gate::Underground);
+            let boat = lifescape_gamedata::access::behind_boat(x, z, level);
+            let passes = |gate: &lifescape_gamedata::access::Gate| {
+                pass.opens(gate)
+                    || (routed && *gate == lifescape_gamedata::access::Gate::Underground)
+                    || (boat && matches!(gate, lifescape_gamedata::access::Gate::Boat { area: "karamja", .. }) && !lifescape_gamedata::access::impassable(gate))
+            };
             if !lifescape_gamedata::access::gates_at(x, z, level).iter().all(passes) {
                 continue;
             }
             if lifescape_gamedata::danger::required_combat_at(x, z, level) > ctx.combat {
                 continue;
             }
-            let across = ctx.position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, *site));
-            if across && !(fare.free_pass || fare.wallet >= lifescape_gamedata::toll::FARE) {
+            let need = crate::combat::fare_need(*site, ctx.position, fare);
+            if need > fare.wallet {
                 continue;
             }
-            let far = distance(site);
-            if best.as_ref().is_none_or(|(known, _, _)| far < *known) {
-                best = Some((far, way.detail.clone(), *site));
+            // A paid trip only when no free keeper sells (the boat costs a
+            // round trip): rank (paid, distance).
+            let rank = (need > 0, distance(site));
+            if best.as_ref().is_none_or(|(known, _, _)| rank < *known) {
+                best = Some((rank, way.detail.clone(), *site));
             }
         }
     }
@@ -68,8 +78,8 @@ mod tests {
     use super::{pick_shop, shop_at};
     use crate::expand::ReadyCtx;
 
-    /// Shears from Lumbridge: a nearby general store, never a Wilderness
-    /// or gated keeper; the mapping finds the same shop from the site.
+    /// Shears from Lumbridge: a nearby general store, never a gated
+    /// keeper; the mapping finds the same shop from the site.
     #[test]
     fn shears_come_from_a_reachable_shop() {
         let mut ctx = ReadyCtx::blind(0.5);
@@ -77,7 +87,6 @@ mod tests {
         ctx.position = Some((3222, 3218, 0));
         let (shop, site) = pick_shop("shears", &ctx).expect("a shop sells shears");
         assert!(lifescape_gamedata::access::gates_at(site.0, site.1, site.2).is_empty(), "{shop} at {site:?}");
-        assert!(!lifescape_gamedata::danger::in_wilderness(site.0, site.1, site.2));
         assert_eq!(shop_at("shears", site).as_deref(), Some(shop.as_str()));
         assert!(pick_shop("no_such_item", &ctx).is_none());
     }
@@ -105,5 +114,26 @@ mod tests {
         assert!(pick_shop("rune_platebody", &ctx).is_none(), "Dragon Slayer not done");
         ctx.quests_done = vec!["dragon".to_string()];
         assert!(pick_shop("rune_platebody", &ctx).is_some());
+    }
+
+    /// User 2026-11-16: "le planner doit pouvoir aller à Karamja". The rum
+    /// sells only there: a bot with the boat's round trip buys it on the
+    /// island and the launch sails (`boat`); without the fare, no shop.
+    #[test]
+    fn karamja_keepers_sell_with_the_boat_fare() {
+        let mut ctx = ReadyCtx::blind(0.5);
+        ctx.combat = 20;
+        ctx.position = Some((3092, 3245, 0));
+        ctx.coins = 500;
+        let (shop, site) = pick_shop("karamja_rum", &ctx).expect("the Karamja pub sells rum");
+        assert!(lifescape_gamedata::access::behind_boat(site.0, site.1, site.2), "{shop} at {site:?}");
+        let mut node = crate::Node::new("rum", crate::NodeKind::ObtainItems { item: "karamja_rum".to_string(), count: 1 }, Vec::new(), 1);
+        node.site = Some(site);
+        node.boat = true;
+        let (script, args) = crate::mapping::map_method("shop:buy", &node, None).expect("shop maps");
+        assert_eq!(script, "market");
+        assert!(args.contains(&"boat".to_string()), "the launch sails: {args:?}");
+        ctx.coins = 0;
+        assert!(pick_shop("karamja_rum", &ctx).is_none(), "no fare, no boat");
     }
 }

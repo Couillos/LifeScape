@@ -142,9 +142,8 @@ impl Bot {
 
     /// NPC fare: talk, answer, pay from the pack, sail onto `expect`.
     fn exec_custom_fare(&mut self, edge: &CustomEdgeRef, expect: Tile, deadline: u64) -> Result<()> {
-        if !self.allow_paid {
-            return Err(Error::Travel(format!("custom {}: {} coins fare with paid paths off at {:?}", edge.name, edge.fare, self.position())));
-        }
+        // The boat is part of the map (user 2026-11-16): the pack's coins
+        // are its only gate, never the run's `allow_paid` (the toll's).
         let carried = self.pack_count(COINS_OBJ);
         if carried < edge.fare {
             return Err(Error::Travel(format!("custom {}: fare {} coins, pack carries {carried} at {:?}", edge.name, edge.fare, self.position())));
@@ -248,6 +247,8 @@ impl Bot {
             if last_pick.as_ref().is_some_and(|(text, tick)| *text == pick && self.world.ticks < tick + 3) {
                 continue;
             }
+            // The fare leaves the pack after this pick: a fee.
+            self.coin_context(super::coin_ledger::kind::FEE);
             self.chat_choose(&pick)?;
             last_pick = Some((pick, self.world.ticks));
         }

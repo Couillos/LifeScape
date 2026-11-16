@@ -1,0 +1,112 @@
+#![forbid(unsafe_code)]
+//! `orchestrator economy [hours]`: the world's money at a glance (audit
+//! 2026-11-15, chantier 10). Money supply now and its change per day
+//! (`holdings_hourly` coins, staff and the persisted exclusions left out
+//! at capture), the coin sources and sinks of the window by provenance
+//! (task report coin lines, labelled by the SDK coin ledger), and a
+//! Laspeyres price index of the window against the one before it, on the
+//! fills of player trades.
+
+use lifescape_store::{laspeyres, Store};
+
+const COINS_ID: i64 = 995;
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0)
+}
+
+/// Coins in the economy at or before `clock` (holdings snapshot).
+fn supply_at(store: &Store, clock: i64) -> Option<i64> {
+    let (_, items) = store.holdings_at_or_before(clock).ok()??;
+    items.iter().find(|(item, _)| *item == COINS_ID).map(|(_, count)| *count)
+}
+
+pub fn economy_cli(args: &[String]) -> i32 {
+    let hours: i64 = args.first().and_then(|raw| raw.parse().ok()).unwrap_or(24).max(1);
+    // `economy [hours] item <name>`: where one object came from and went.
+    if let Some(at) = args.iter().position(|arg| arg == "item") {
+        return item_cli(hours, &args[at + 1..].join(" "));
+    }
+    let store = match Store::open(&crate::market_service::db_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("economy: store: {error}");
+            return 1;
+        }
+    };
+    let now = now_secs();
+    let span = hours * 3600;
+    let since = now - span;
+    let excluded: Vec<String> = crate::economy_guard::excluded_accounts().into_iter().collect();
+    println!("== economy over the last {hours} h (staff and exclusions out) ==");
+    match (supply_at(&store, now), supply_at(&store, since)) {
+        (Some(current), Some(before)) => {
+            let delta = current - before;
+            println!("money supply: {current} coins (was {before}): {delta:+} over {hours} h, {:+.0} per day", delta as f64 * 24.0 / hours as f64);
+        }
+        (Some(current), None) => println!("money supply: {current} coins (no snapshot {hours} h ago)"),
+        _ => println!("money supply: no holdings snapshot yet"),
+    }
+    match store.coin_flows_between(since, 0, &excluded) {
+        Ok(flows) => {
+            println!("coin flows by provenance (traded = between players, a transfer):");
+            let mut created = 0i64;
+            for flow in &flows {
+                println!("  {:<14} {:>12} coins in {:>6} lines", flow.provenance, flow.coins, flow.lines);
+                if flow.provenance != "traded" {
+                    created += flow.coins;
+                }
+            }
+            println!("  net created or destroyed outside trades: {created:+}");
+        }
+        Err(error) => println!("coin flows: {error}"),
+    }
+    match (store.fills_between(since - span, since), store.fills_between(since, 0)) {
+        (Ok(base), Ok(current)) => {
+            let ones = current.iter().filter(|fills| fills.mean_price <= 1.0).count();
+            let volume: i64 = current.iter().map(|fills| fills.quantity).sum();
+            match laspeyres(&base, &current) {
+                Some(index) => println!("price index (window vs the one before): {:.3} ({:+.1} %)", index, (index - 1.0) * 100.0),
+                None => println!("price index: no item traded in both windows"),
+            }
+            println!("fills: {} items, {volume} units; {ones} items trade at 1 coin", current.len());
+        }
+        (Err(error), _) | (_, Err(error)) => println!("fills: {error}"),
+    }
+    0
+}
+
+/// Sources and sinks of one object (or every object when `name` is
+/// empty) over the last `hours`, by provenance (task report lines, the
+/// SDK item ledger's attribution).
+fn item_cli(hours: i64, name: &str) -> i32 {
+    let store = match Store::open(&crate::market_service::db_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("economy: store: {error}");
+            return 1;
+        }
+    };
+    let excluded: Vec<String> = crate::economy_guard::excluded_accounts().into_iter().collect();
+    let filter = (!name.is_empty()).then_some(name);
+    let flows = match store.item_flows_since(now_secs() - hours * 3600, &excluded, filter) {
+        Ok(flows) => flows,
+        Err(error) => {
+            eprintln!("economy: {error}");
+            return 1;
+        }
+    };
+    println!("== item flows over the last {hours} h{} (staff out): + entered a pack, - left it ==", if name.is_empty() { String::new() } else { format!(" for {name}") });
+    let mut shown = 0;
+    for (item, provenance, quantity, lines) in &flows {
+        if name.is_empty() && shown >= 60 {
+            break;
+        }
+        println!("  {item:<24} {provenance:<14} {quantity:>9} in {lines:>5} lines");
+        shown += 1;
+    }
+    if flows.is_empty() {
+        println!("  no flow recorded");
+    }
+    0
+}

@@ -87,6 +87,12 @@ fn work_job(bot: &mut Bot, job: &ProduceJob<'_>, what: &str) -> Result<bool, Scr
 pub fn run_pottery(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("pottery", &rest)?;
+    // Soft clay itself (`pottery:softclay`, water on clay in the pack):
+    // the mix alone, banked loads (live admin 2026-11-15: "no F2P
+    // pottery product softclay").
+    if resource.as_deref() == Some(SOFT) {
+        return run_softclay(bot, &spec);
+    }
     let (product_name, unfired_name, button) = shape_row(resource.as_deref().unwrap_or(PRODUCT)).ok_or_else(|| ScriptError::Usage(format!("no F2P pottery product {resource:?}")))?;
     let firing = fires(resource.as_deref(), unfired_name);
     let made_name = if firing { product_name } else { unfired_name };
@@ -153,6 +159,33 @@ pub fn run_pottery(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         bank_trip(step_bot, &bank, &keep, 0)?;
         Ok(state.load_done(step_bot, &format!("made {made} {made_name} (crafting={level})")))
+    })
+}
+
+/// Soft clay loads: clay and water vessels from the bank, mixed in the
+/// pack, banked, until the order's count or the clay runs out.
+fn run_softclay(bot: &mut Bot, spec: &crate::kit::cycle::TaskSpec) -> ScriptResult {
+    bot.allow_shop = spec.allow_shop;
+    let task_keep = resolve_keep(bot, spec)?;
+    wait_pack_streamed(bot)?;
+    check_events(bot)?;
+    let (clay, soft) = (obj_id(bot, CLAY)?, obj_id(bot, SOFT)?);
+    let vessels = water::vessel_ids(bot)?;
+    let bank = nearest_bank(bot)?;
+    let mut keep: Vec<u16> = vessels.iter().flat_map(|(empty, full)| [*empty, *full]).collect();
+    keep.push(clay);
+    keep.extend(task_keep.iter().copied());
+    run(bot, spec, |step_bot, state| {
+        check_events(step_bot)?;
+        if pack_total(step_bot, clay) == 0 {
+            load(step_bot, &bank, &keep, clay, &[], &vessels)?;
+        }
+        let mixed = water::mix_all(step_bot, clay, &vessels, soft, (bank.x as i32, bank.z as i32))?;
+        if mixed == 0 {
+            return Err(ScriptError::Failed(format!("no {SOFT} mixed at {:?}", step_bot.position())));
+        }
+        bank_trip(step_bot, &bank, &keep, 0)?;
+        Ok(state.load_done(step_bot, &format!("mixed {mixed} {SOFT}")))
     })
 }
 

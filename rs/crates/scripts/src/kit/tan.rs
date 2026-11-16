@@ -90,6 +90,7 @@ pub fn tan_carried(bot: &mut Bot, hide_name: &str, leather_name: &str, cost: u32
     let com = (bot.tables.com_id)(bucket)
         .ok_or_else(|| ScriptError::Usage(format!("{bucket} missing from component table at {:?}", bot.position())))?;
     let before = pack_total(bot, leather);
+    bot.coin_context(lifescape_sdk::client::coin_ledger::kind::FEE);
     bot.if_button(com)?;
     let target = bot.world.ticks + TANNER_UI_TICKS;
     while bot.world.ticks < target {
@@ -180,6 +181,43 @@ pub fn tan_run(bot: &mut Bot, product: &str) -> ScriptResult {
     };
     Ok(tan_carried(bot, hide_name, leather_name, cost, coms)? as i32)
 }
+
+/// Tanning only: banked hides to the Al-Kharid tanner and back, pack by
+/// pack, until `--want` leathers (soft, or `hard_leather`) are made or
+/// the hides run out.
+pub fn run_tanning(bot: &mut Bot, spec: &crate::kit::cycle::TaskSpec, hide_name: &str) -> ScriptResult {
+    let leather_name = spec.targets.want_item.clone().unwrap_or_else(|| "leather".to_string());
+    let (cost, coms) = if leather_name == "hard_leather" { (TAN_HARD_COST, TAN_HARD_COMS) } else { (TAN_SOFT_COST, TAN_SOFT_COMS) };
+    let want = spec.targets.want_count.unwrap_or(u32::MAX);
+    let hide = obj_id(bot, hide_name)?;
+    let coins = obj_id(bot, "coins")?;
+    let mut tanned = 0u32;
+    while tanned < want {
+        let bank = crate::kit::bank::nearest_bank(bot)?;
+        crate::kit::bank::bank_trip(bot, &bank, &[], 0)?;
+        let free = crate::kit::pack::free_slots(bot) as u32;
+        crate::kit::bank::bank_withdraw_items(bot, &bank, &[hide], free.saturating_sub(1).min(want - tanned))?;
+        let held = pack_total(bot, hide);
+        if held == 0 {
+            if tanned > 0 {
+                break;
+            }
+            return Err(ScriptError::Blocked { missing: vec![hide_name.to_string()] });
+        }
+        crate::kit::bank::bank_withdraw_items(bot, &bank, &[coins], held.saturating_mul(cost))?;
+        walk_to_tanner(bot)?;
+        let done = tan_carried(bot, hide_name, &leather_name, cost, coms)?;
+        if done == 0 {
+            return Err(ScriptError::Failed(format!("the tanner tanned no {hide_name} at {:?}", bot.position())));
+        }
+        tanned += done;
+        bot.log(&format!("ok tanned {done} {hide_name} into {leather_name} ({tanned} so far)"));
+    }
+    let bank = crate::kit::bank::nearest_bank(bot)?;
+    crate::kit::bank::bank_trip(bot, &bank, &[], 0)?;
+    Ok(0)
+}
+
 
 #[cfg(test)]
 mod tests {

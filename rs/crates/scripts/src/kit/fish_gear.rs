@@ -52,7 +52,7 @@ fn held_anywhere(bot: &Bot, name: &str) -> (u32, u32) {
 }
 
 /// Exact names the tier still lacks, counting pack and known bank: the
-/// tool, then the bait (fewer than `BAIT_MIN` anywhere).
+/// tool, then the bait (none anywhere).
 pub fn gear_missing(bot: &Bot, tier: &knowledge::fishing::FishTier) -> Vec<String> {
     let mut missing = Vec::new();
     let (tool_pack, tool_bank) = held_anywhere(bot, tier.tool);
@@ -60,8 +60,12 @@ pub fn gear_missing(bot: &Bot, tier: &knowledge::fishing::FishTier) -> Vec<Strin
         missing.push(tier.tool.to_string());
     }
     if let Some(bait) = tier.bait {
+        // Any bait fishes until it runs out (the load then blocks by
+        // name): the planner sizes the bait on the quota, one per catch,
+        // and a 10-fish order holds 10 feathers (live admin 2026-11-15:
+        // "missing feather" with the quota's own bait in the bank).
         let (bait_pack, bait_bank) = held_anywhere(bot, bait);
-        if bait_pack + bait_bank < BAIT_MIN {
+        if bait_pack + bait_bank == 0 {
             missing.push(bait.to_string());
         }
     }
@@ -142,8 +146,10 @@ pub fn ensure_gear(bot: &mut Bot, tier: &knowledge::fishing::FishTier, bank: &kn
     restock_bait(bot, tier, bank)
 }
 
-/// Bait back to `BAIT_WANT` from the bank only. True when at least
-/// `BAIT_MIN` is carried afterwards (always true for unbaited tiers).
+/// Bait back to `BAIT_WANT` from the bank only. True when any bait is
+/// carried afterwards (always true for unbaited tiers): a short stack
+/// fishes until it runs out, the next load blocks by name (live admin
+/// 2026-11-15: 4 bait carried, "missing fishing_bait").
 pub fn restock_bait(bot: &mut Bot, tier: &knowledge::fishing::FishTier, bank: &knowledge::banks::Bank) -> Result<bool, ScriptError> {
     let Some(bait) = tier.bait else { return Ok(true) };
     let bait_id = obj_id(bot, bait)?;
@@ -154,7 +160,7 @@ pub fn restock_bait(bot: &mut Bot, tier: &knowledge::fishing::FishTier, bank: &k
     if crate::kit::withdraw::bank_withdraw_items(bot, bank, &[bait_id], need)? > 0 {
         bot.log(&format!("ok {bait} withdrawn from bank"));
     }
-    Ok(pack_total(bot, bait_id) >= BAIT_MIN)
+    Ok(pack_total(bot, bait_id) > 0)
 }
 
 #[cfg(test)]

@@ -35,7 +35,7 @@ pub fn make_choice(bars_make: u32, wanted: u32) -> (u8, u32) {
 
 /// Anvil post of a run: the station at the brain's `--site` (any anvil,
 /// Doric's included: the brain checked the quest), else the plain anvil
-/// nearest (x, z) on that level outside the Wilderness.
+/// nearest (x, z) on that level (the Wilderness is open, user 2026-11-16).
 pub fn anvil_post(site: Option<(i32, i32, i32)>, x: i32, z: i32, level: i32) -> Option<knowledge::stations::Station> {
     let anvils = knowledge::stations::stations_of("anvil");
     let distance = |post: &knowledge::stations::Station, from_x: i32, from_z: i32| (post.x - i64::from(from_x)).abs() + (post.z - i64::from(from_z)).abs();
@@ -44,7 +44,7 @@ pub fn anvil_post(site: Option<(i32, i32, i32)>, x: i32, z: i32, level: i32) -> 
     }
     anvils
         .into_iter()
-        .filter(|post| post.level == i64::from(level) && knowledge::obtain::station_open(&post.loc, post.x, post.z) && !knowledge::danger::in_wilderness(post.x, post.z, post.level))
+        .filter(|post| post.level == i64::from(level) && knowledge::obtain::station_open(&post.loc, post.x, post.z))
         .min_by_key(|post| (distance(post, x, z), post.x, post.z))
 }
 

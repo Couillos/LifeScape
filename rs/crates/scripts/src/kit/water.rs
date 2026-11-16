@@ -34,6 +34,8 @@ pub const MISSING_WATER: &str = "bucket_water";
 /// Ticks d'attente d'un envoi de mélange (le serveur répond en 2 ticks),
 /// envois au plus (un envoi pendant un `p_delay` est jeté sans un mot).
 const MIX_TICKS: u64 = 6;
+/// Ticks the server's post-mix `p_delay(1)` holds the player.
+const MIX_SETTLE_TICKS: u32 = 2;
 const MIX_SENDS: u32 = 5;
 
 /// Ids (vide, plein) des récipients connus des tables.
@@ -117,6 +119,13 @@ pub fn refill(bot: &mut Bot, vessels: &[(u16, u16)], near: (i32, i32)) -> Result
 /// faits ; un mélange sans effet est une erreur typée.
 pub fn mix(bot: &mut Bot, input: u16, vessels: &[(u16, u16)], product: u16) -> Result<u32, ScriptError> {
     let start = pack_total(bot, product);
+    // The bank the load came from closes first: an open bank reads as an
+    // interface the mix opened (live admin2 2026-11-16, softclay right
+    // after the withdrawal; same as stringing).
+    if bot.world.modal.is_some() {
+        bot.close_modal()?;
+        bot.pump(2)?;
+    }
     while pack_total(bot, input) > 0 {
         let Some(full) = vessels.iter().map(|(_, full)| *full).find(|full| pack_total(bot, *full) > 0) else { break };
         let had = pack_total(bot, product);
@@ -143,7 +152,14 @@ pub fn mix(bot: &mut Bot, input: u16, vessels: &[(u16, u16)], product: u16) -> R
             return Err(ScriptError::Failed(format!("mixing with water made nothing in {MIX_SENDS} sends at {:?}", bot.position())));
         }
     }
-    Ok(pack_total(bot, product).saturating_sub(start))
+    let made = pack_total(bot, product).saturating_sub(start);
+    // The last mix's `p_delay(1)` (2 ticks) drops the next click without a
+    // word: settle before the caller banks (live admin 2026-11-16, the
+    // booth click right after the softclay mix was refused).
+    if made > 0 {
+        bot.pump(MIX_SETTLE_TICKS)?;
+    }
+    Ok(made)
 }
 
 /// Mélange tout l'intrant porté : eau portée d'abord, puis remplissages

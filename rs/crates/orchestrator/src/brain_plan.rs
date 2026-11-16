@@ -37,18 +37,9 @@ fn display_of(item_debug: &str) -> String {
 }
 
 fn shop_floor(item_debug: &str) -> i64 {
-    let mut floor = i64::MAX;
-    for shop in lifescape_gamedata::f2p::f2p_shops() {
-        for stock in &shop.stocks {
-            if stock.obj == item_debug {
-                // Static shop price lookup by debug name.
-                if let Some(entry) = lifescape_gamedata::objs_by_name(item_debug).into_iter().next() {
-                    floor = floor.min(entry.price.max(1));
-                }
-            }
-        }
-    }
-    if floor == i64::MAX { 1 } else { floor }
+    // The server formula (`calc_shop_value`, keeper multiplier included,
+    // Zaff's too): the price a bot pays at the cheapest F2P keeper.
+    lifescape_gamedata::obtain::merchant_price(item_debug).unwrap_or(1).max(1)
 }
 
 /// Rate bucket key of a planner method: reports key their yields by the
@@ -77,6 +68,7 @@ pub(crate) fn ready_ctx(life: &Life, node: &Node) -> ReadyCtx {
     let mut ctx = ReadyCtx::blind(life.profile.market_affinity);
     ctx.ironman = life.profile.ironman;
     ctx.trip_ticks = TRIP_TICKS;
+    ctx.quarantined = crate::method_health::quarantined();
     let (item_debug, band) = match &node.kind {
         NodeKind::ObtainItems { item, .. } => (item.clone(), 1),
         NodeKind::ReachLevel { level, .. } => (String::new(), crate::rates_service::level_band(i64::from(*level))),

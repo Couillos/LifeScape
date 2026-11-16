@@ -111,6 +111,19 @@ pub fn find_loc_from(bot: &mut Bot, names: &[&str], radius: i32, from: (i32, i32
             let Some((loc_id, _, _)) = loc else { continue };
             matches(tile.0, tile.1, tile.2, *loc_id, &mut best);
         }
+        // The served static map keeps one loc per tile: a wall on the
+        // same tile hides a station (live admin 2026-11-15: the body
+        // altar ruins at (3052,3444) read "no loc bodytemple_ruined" from
+        // the next tile). The station dump names them all.
+        if best.is_none() {
+            for station in gamedata::stations::all_stations() {
+                if let Ok(loc) = u16::try_from(station.loc_id) {
+                    if !bot.world.locs.contains_key(&(station.x as i32, station.z as i32, station.level as i32)) {
+                        matches(station.x as i32, station.z as i32, station.level as i32, loc, &mut best);
+                    }
+                }
+            }
+        }
         if let Some((_, x, z, level, loc)) = best {
             return Ok((x, z, level, loc));
         }

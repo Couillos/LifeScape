@@ -84,6 +84,7 @@ pub fn run_dialogue_buy(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         let before = pack_total(bot, item_id);
         bot.intend(&format!("buying {item} from {}", shop.npc));
+        bot.coin_context_for(lifescape_sdk::client::coin_ledger::kind::DIALOGUE, TALK_TICKS + lifescape_sdk::client::coin_ledger::CONTEXT_TICKS);
         crate::quests::common::talk_plain(bot, shop.npc, shop.answers, Some((spawn.0 as i32, spawn.1 as i32)), TALK_TICKS)?;
         let gained = pack_total(bot, item_id).saturating_sub(before);
         if gained == 0 {

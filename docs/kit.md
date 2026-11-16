@@ -441,3 +441,19 @@ l'arme du bot.
 - Tonte : un pré épuisé envoie le bot jusqu'à 2 autres prés (au-delà de
   30 cases) avant l'échec « no sheep ».
 
+
+## Bijoux, enfilage, cuir, ateliers PNJ (2026-11-15)
+
+- `smelt_jewelry` voie or : le four passe par la brique `produce`
+  (`furnace1`/`furnace2` exacts, `--site` du brain, côtés que
+  `forceapproach` accepte) avec l'adaptateur `ProduceUi::InvGrid` (objet du
+  slot pressé Make 10/5/1, slot vide = erreur nette). Avant : `find_loc`
+  par sous-chaîne cliquait le `furnace2` de Lumbridge du mauvais côté
+  (« I can't reach that! »), 0 sur 38. Testé live aux fours de Lumbridge,
+  Al Kharid et Falador.
+- `stringing` : un chargement apparie amulettes et pelotes (avant : une
+  seule pelote, une amulette par aller-retour).
+- `leatherwork` : la matière est celle de la recette (cuir dur pour le
+  corps en cuir dur) ; un fil par 5 pièces (`leather.rs2`), le fil s'empile.
+- `produce` atelier PNJ hors de vue : marche jusqu'à son apparition la plus
+  proche (dump) puis le cherche à nouveau (teinture chez Aggie).

@@ -5,7 +5,7 @@
 //! /errors /errors.js /api/errors/summary|list|dossier/<file> (web_errors)
 //! /hiscores /hiscores.js /api/hiscores (cached snapshot, hiscores_service)
 //! /map/<dir>/<file>.png /map/<dir>/manifest.json /mapscene/<sprite>.png
-//! /api/map /api/status /api/state/<account> /api/items /api/items/history
+//! /api/map /api/status /api/state/<account> /api/items /api/items/history|flows
 //! /api/rates/table /api/lives /api/life/<account> /api/brain/<account> /api/economy
 //! /api/market/<op>?… /api/scripts /api/accounts /api/logs/<account> +
 //! POST /api/open|run|unload|pause|resume|close + /ws pushing every 1 s.
@@ -319,6 +319,9 @@ pub(crate) fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Respon
         }
         if parts == ["api", "items", "history"] {
             return Ok(crate::web_items::items_history_api(query, &crate::paths::run_dir()));
+        }
+        if parts == ["api", "items", "flows"] {
+            return Ok(crate::web_items::items_flows_api(query, &crate::paths::run_dir()));
         }
         if parts == ["api", "items"] {
             return Ok(crate::web_items::items_list_api(dispatch));

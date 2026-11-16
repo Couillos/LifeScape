@@ -84,7 +84,20 @@ fn travel_failure(kind: TravelErrorKind) -> Error {
         expected: String::new(),
         observed: String::new(),
         dossier: None,
+        missing: Vec::new(),
     })
+}
+
+/// A NoRoute that lacks the boat's coins says so, typed (`coins:60`):
+/// the script walker fetches them and walks again (Karamja universal).
+#[test]
+fn a_fare_shortfall_reads_as_missing_coins() {
+    let mut error = travel_failure(TravelErrorKind::NoRoute);
+    assert_eq!(error.missing_coins(), None);
+    if let Error::TravelFailure(failure) = &mut error {
+        failure.missing = vec!["coins:30".to_string(), "coins:60".to_string()];
+    }
+    assert_eq!(error.missing_coins(), Some(60));
 }
 
 /// Spell-cast payloads lock the server decoder order (LostCity
@@ -239,8 +252,9 @@ fn withdraw_progress_never_reads_a_transient_overcount() {
 /// decided before the first click's partials arrived — 20 coins on the
 /// window, both sides waited 3000 ticks for an exact match, `mismatch`.
 /// Fake server: 25 coins in the pack, each offer click answered 8 ticks
-/// later (pack, trade pack, offer partials). Every click waits for its
-/// own answer: the window ends at exactly 16.
+/// later (pack, trade pack, offer partials). Since 2026-11-15 a part of a
+/// stack goes in one Offer-X (count dialog, the exact count): the window
+/// ends at exactly 16.
 #[test]
 fn trade_offer_never_clicks_past_the_owed_count() {
     use std::io::{Read, Write};
@@ -261,7 +275,11 @@ fn trade_offer_never_clicks_past_the_owed_count() {
         let mut outgoing = Isaac::new(server_seed);
         let mut incoming = Isaac::new(client_seed);
         let mut frame = |op: u8, body: &[u8]| -> Vec<u8> {
-            let mut bytes = vec![op.wrapping_add(outgoing.next_int() as u8), (body.len() >> 8) as u8, body.len() as u8];
+            // P_COUNTDIALOG (210) is fixed-size 0: no length header.
+            let mut bytes = vec![op.wrapping_add(outgoing.next_int() as u8)];
+            if op != 210 {
+                bytes.extend_from_slice(&[(body.len() >> 8) as u8, body.len() as u8]);
+            }
             bytes.extend_from_slice(body);
             bytes
         };
@@ -269,7 +287,9 @@ fn trade_offer_never_clicks_past_the_owed_count() {
             let obj = if count == 0 { 0 } else { COINS + 1 };
             vec![(com >> 8) as u8, com as u8, 0, (obj >> 8) as u8, obj as u8, count as u8]
         };
-        let sizes: Vec<(u8, usize, u32)> = [("NO_TIMEOUT", 0), ("INV_BUTTON1", 1), ("INV_BUTTON2", 5), ("INV_BUTTON3", 10), ("INV_BUTTON4", u32::MAX)]
+        // INV_BUTTON5 (Offer-X) opens the count dialog; the count answer
+        // (RESUME_P_COUNTDIALOG, amount 0 here: read from its body) moves.
+        let sizes: Vec<(u8, usize, u32)> = [("NO_TIMEOUT", 0), ("INV_BUTTON1", 1), ("INV_BUTTON2", 5), ("INV_BUTTON3", 10), ("INV_BUTTON4", u32::MAX), ("INV_BUTTON5", 0), ("RESUME_P_COUNTDIALOG", 0)]
             .iter()
             .map(|(name, amount)| {
                 let (op, size) = client_op(name).expect("known op");
@@ -278,6 +298,7 @@ fn trade_offer_never_clicks_past_the_owed_count() {
             .collect();
         let (mut carried, mut offered) = (25u32, 0u32);
         let mut pending: Vec<(u32, u32)> = Vec::new();
+        let mut ask_count = false;
         let mut inbox: Vec<u8> = Vec::new();
         let started = Instant::now();
         let mut tick = 0u32;
@@ -298,14 +319,25 @@ fn trade_offer_never_clicks_past_the_owed_count() {
                     break;
                 }
                 incoming.next_int();
+                let body: Vec<u8> = inbox[1..1 + size].to_vec();
                 inbox.drain(..1 + size);
-                if size > 0 {
+                let (x_op, _) = client_op("INV_BUTTON5").expect("known op");
+                let (count_op, _) = client_op("RESUME_P_COUNTDIALOG").expect("known op");
+                if op == x_op {
+                    ask_count = true;
+                } else if op == count_op {
+                    pending.push((tick + 8, u32::from_be_bytes([body[0], body[1], body[2], body[3]])));
+                } else if size > 0 {
                     pending.push((tick + 8, amount));
                 }
             }
             std::thread::sleep(Duration::from_millis(15));
             tick += 1;
             let mut out = frame(167, &[0x00, 0x00]);
+            if ask_count {
+                out.extend(frame(210, &[]));
+                ask_count = false;
+            }
             for (due, amount) in pending.iter().filter(|(due, _)| *due == tick) {
                 let _ = due;
                 let moved = (*amount).min(carried);

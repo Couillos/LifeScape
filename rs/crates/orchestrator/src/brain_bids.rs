@@ -370,6 +370,38 @@ pub fn planned_levels(life: &Life) -> Vec<(String, u8)> {
     out
 }
 
+/// `orchestrator bid-why <account> <item>`: every stage of the bid
+/// response for one bot and one object (`bid_response::explain`), read
+/// from the live book and the bot's own state.
+pub(crate) fn explain_for(account: &str, item: &str) -> Result<Vec<String>, String> {
+    let life = crate::brain::load_life(account).ok_or_else(|| format!("no life file for {account}"))?;
+    let live = crate::supervise::live_of(account).ok_or_else(|| format!("{account}: no live snapshot (not supervised, or busy)"))?;
+    if crate::market_service::shared().is_none() {
+        return Err("market service down".to_string());
+    }
+    let reader = MarketReader::live(account);
+    let rows = rate_rows();
+    Ok(with_bot_state(&life, &live, |state| {
+        let rate = coin_rate(&rows, state.level_of);
+        state.with_producer(&life, rate, |producer| {
+            let market = |name: &str| reader.view(name);
+            let view = reader.view(item).unwrap_or_default();
+            let mut lines = vec![format!("{account}: coin rate {rate:.2} coins/tick")];
+            // What sets that rate: the best money rows the bot's levels open.
+            let mut open: Vec<&(String, i64, f64)> = rows
+                .iter()
+                .filter(|(script, band, _)| lifescape_planner::market_fit::script_skill(script).is_some_and(|skill| i64::from((state.level_of)(skill).max(1)) >= *band))
+                .collect();
+            open.sort_by(|left, right| right.2.total_cmp(&left.2));
+            for (script, band, profit) in open.iter().take(3) {
+                lines.push(format!("  rate row: {script} band {band}: {profit:.0} coins per 6000 ticks"));
+            }
+            lines.extend(lifescape_planner::bid_response::explain(item, &view, &market, producer));
+            lines
+        })
+    }))
+}
+
 /// Pure choice: the lot this life makes now, if any (planner rules),
 /// with the bot's coin rate.
 pub fn choose(life: &Life, reader: &MarketReader, rows: &[(String, i64, f64)], state: &BotState) -> Option<(Opportunity, f64)> {

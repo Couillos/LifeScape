@@ -410,7 +410,11 @@ impl Bot {
             blockers,
         );
         let expected = format!("route ({},{},{}) -> ({},{},{})", from.x, from.z, from.level, dest.x, dest.z, dest.level);
-        self.fail(from, dest, options, None, None, &expected, &Error::Travel(observed))
+        let mut error = self.fail(from, dest, options, None, None, &expected, &Error::Travel(observed));
+        if let Error::TravelFailure(failure) = &mut error {
+            failure.missing = no.blocked_by_requirements.iter().flat_map(|(_, tags)| tags.iter().cloned()).collect();
+        }
+        error
     }
 
     /// Run the installed between-legs control, if any. `Continue` walks the
@@ -472,7 +476,7 @@ impl Bot {
     /// so the planner reports them instead of walking into a refusal.
     #[cfg(test)]
     pub(crate) fn nav_options(&self, tables: &Tables) -> NavOptions {
-        let carried = crate::client::aggregate(&self.world.inv);
+        let carried = self.pack_items();
         let coins = carried.get(&COINS_OBJ).copied().unwrap_or(0);
         let quest_points = self.world.varps.get(&QP_VARP).copied().unwrap_or(0);
         let mut wants: HashSet<&str> = HashSet::new();
@@ -515,7 +519,7 @@ impl Bot {
                 tags
             }
         };
-        let carried = crate::client::aggregate(&self.world.inv);
+        let carried = self.pack_items();
         let coins = carried.get(&COINS_OBJ).copied().unwrap_or(0);
         let quest_points = self.world.varps.get(&QP_VARP).copied().unwrap_or(0);
         Ok(NavOptions {
@@ -532,6 +536,21 @@ impl Bot {
             excluded_edges: HashSet::new(),
             danger: self.nav_danger.clone(),
         })
+    }
+
+    /// What the pack carries, per object: the fares and keys a route needs
+    /// are paid from the pack (`exec_custom_fare` reads `pack_count`), never
+    /// from the bank. Every streamed inventory summed (`aggregate`) counted
+    /// the last-seen bank: live admin 2026-11-16 planned the Karamja boat
+    /// with 401 764 banked coins and an empty pack, then "fare 30 coins,
+    /// pack carries 0" at the dock.
+    fn pack_items(&self) -> HashMap<u16, u32> {
+        let mut carried: HashMap<u16, u32> = HashMap::new();
+        for (_, (held, count)) in self.backpack().1 {
+            let total = carried.entry(held).or_insert(0);
+            *total = total.saturating_add(count);
+        }
+        carried
     }
 
     /// Tags the live state covers: coins, quest points, carried items.
@@ -1267,6 +1286,8 @@ impl Bot {
     /// wait, so a stuck dialog fails loud instead of wedging the leg.
     fn drain_toll_pick(&mut self, picked_from: &[(u16, String)]) -> Result<()> {
         let watched = self.world.ticks + TOLL_POST_PICK_WAIT;
+        // The toll leaves the pack during this drain: a fee.
+        self.coin_context_for(super::coin_ledger::kind::FEE, TOLL_POST_PICK_WAIT + super::coin_ledger::CONTEXT_TICKS);
         // The pick's answer lands a frame later: until then the spent
         // choice is still on screen and read as "a new choice", which
         // ended the drain before the chatplayer continue (live
@@ -1590,6 +1611,7 @@ impl Bot {
             expected: expected.to_string(),
             observed,
             dossier,
+            missing: Vec::new(),
         })
     }
 }
@@ -1823,6 +1845,25 @@ mod tests {
             lifescape_json::stringify(&encode_plan(&sync)),
             "service wraps plan(), never forks",
         );
+    }
+
+    /// Fares and keys come from the pack alone: banked coins never satisfy
+    /// the boat's `coins:60` (live admin 2026-11-16).
+    #[test]
+    fn banked_coins_never_pay_a_fare() {
+        let (_, tables) = test_nav_context();
+        let mut bot = offline_bot(3029, 3217);
+        bot.tables.com_id = |name| match name {
+            "inventory:inv" => Some(3214),
+            "bank_main:inv" => Some(5382),
+            _ => None,
+        };
+        let (pack_com, bank_com) = (3214u16, 5382u16);
+        bot.world.inv.insert(bank_com, [(0u8, (COINS_OBJ, 401_764u32))].into_iter().collect());
+        bot.world.inv.insert(pack_com, HashMap::new());
+        assert!(!bot.nav_options(&tables).satisfied.contains("coins:60"), "banked coins pay nothing");
+        bot.world.inv.insert(pack_com, [(0u8, (COINS_OBJ, 60u32))].into_iter().collect());
+        assert!(bot.nav_options(&tables).satisfied.contains("coins:60"), "the pack pays the round trip");
     }
 
     #[test]
@@ -2175,19 +2216,23 @@ mod tests {
 
     /// bb4v5d9m: from Lumbridge the Al-Kharid shrimp (behind the toll,
     /// no coins) used to plan to the swamp corner (3247,3190) and walk
-    /// there. A far substitute is NoRoute, nothing walks.
+    /// there. A far substitute is NoRoute, nothing walks. Al Kharid is
+    /// reachable round the north since the fallback prune keeps fence
+    /// detours (live admin walk 2026-11-16), so the far substitute is now
+    /// open sea south of Port Sarim (3060,3170): no walkable tile within
+    /// the 16 floor rings, the nearest shore (3035,3167) is 25 away.
     #[test]
     fn far_adjusted_plan_with_steps_is_no_route() {
         use lifescape_nav::service::{PlanClient, Service, Snapshot, test_socket};
         let (world, tables) = test_nav_context();
         let service = Service::start(Snapshot::new(world, tables, "test-far-adjust".to_string()), &test_socket("sdk-far-adjust"), 1)
             .expect("service starts");
-        let mut lumbridge = offline_bot(3222, 3218);
-        lumbridge.last_keepalive = Some(std::time::Instant::now());
-        lumbridge.last_send_tick = lumbridge.world.ticks;
-        lumbridge.plan_client = Some(PlanClient::new(service.socket_path(), "far-adjust"));
-        lumbridge.plan_data_version = Some("test-far-adjust".to_string());
-        match lumbridge.plan_travel(Tile { x: 3267, z: 3148, level: 0 }) {
+        let mut port_sarim = offline_bot(3016, 3216);
+        port_sarim.last_keepalive = Some(std::time::Instant::now());
+        port_sarim.last_send_tick = port_sarim.world.ticks;
+        port_sarim.plan_client = Some(PlanClient::new(service.socket_path(), "far-adjust"));
+        port_sarim.plan_data_version = Some("test-far-adjust".to_string());
+        match port_sarim.plan_travel(Tile { x: 3060, z: 3170, level: 0 }) {
             Ok((_, plan, _)) => panic!("an unreachable spot must not plan a walk, got {plan:?}"),
             Err(Error::TravelFailure(failure)) => {
                 assert_eq!(failure.kind, TravelErrorKind::NoRoute);

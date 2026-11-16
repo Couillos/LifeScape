@@ -1,13 +1,99 @@
-// Item holdings front: live item list plus the 24h / 6-month curve
+// Item holdings front: live item list plus the held-count curve over
+// 24h / 7 days (hourly points) or 30 days / 6 months (daily points)
 // (§6.5, D42, D48) drawn by the shared chart.js (D49). Read-only
-// dashboard page: bots never read it.
+// dashboard page: bots never read it. Under the curve of a selected
+// item, its sources and sinks by provenance over the same period
+// (`/api/items/flows`, task report lines, staff out).
+//
+// Pure helpers (ItemFlows.*) touch no DOM: `node --test items.test.js`.
+const ItemFlows = (() => {
+  'use strict';
+
+  // Readable provenance (SDK item ledger attribution): + entered a
+  // pack, - left it.
+  const LABELS = {
+    produced: 'produit',
+    loot: 'butin',
+    ground_spawn: 'ramassé au sol',
+    shop_bought: 'acheté au PNJ',
+    shop_sold: 'vendu au PNJ',
+    traded: 'échangé entre joueurs',
+    consumed: 'consommé',
+    lost: 'perdu',
+    death: 'mort',
+    fee: 'frais',
+    unattributed: 'non attribué',
+  };
+  // Flow window per chart period, in hours (24h / 7d / 30d / 6M).
+  const PERIOD_HOURS = { day: 24, week: 168, month: 720, half: 4380 };
+
+  function esc(text) {
+    return String(text === null || text === undefined ? '' : text)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function label(provenance) {
+    return LABELS[provenance] || String(provenance || '?');
+  }
+
+  function hoursFor(period) {
+    return PERIOD_HOURS[period] || 24;
+  }
+
+  function flowsUrl(itemId, period) {
+    return '/api/items/flows?item=' + encodeURIComponent(itemId) + '&hours=' + hoursFor(period);
+  }
+
+  // Signed quantity: green when it entered packs, red when it left.
+  function quantityCell(quantity) {
+    const amount = Number(quantity) || 0;
+    if (amount > 0) return '<span class="up">+' + amount + '</span>';
+    if (amount < 0) return '<span class="down">−' + Math.abs(amount) + '</span>';
+    return '<span class="muted">0</span>';
+  }
+
+  // Table body of one item's flows (payload of /api/items/flows).
+  function tableHtml(payload) {
+    const flows = (payload && payload.flows) || [];
+    if (!flows.length) return '<tr><td class="left muted">aucun flux enregistré sur la période</td></tr>';
+    let net = 0;
+    let lines = 0;
+    const rows = flows.map((flow) => {
+      net += Number(flow.quantity) || 0;
+      lines += Number(flow.lines) || 0;
+      return '<tr><td class="left" title="' + esc(flow.provenance) + '">' + esc(label(flow.provenance)) + '</td><td>'
+        + quantityCell(flow.quantity) + '</td><td>' + esc(flow.lines) + '</td></tr>';
+    });
+    return '<tr><th class="left">Provenance / destination</th><th>Quantité</th><th>Rapports</th></tr>'
+      + rows.join('')
+      + '<tr class="net"><td class="left">net</td><td>' + quantityCell(net) + '</td><td>' + lines + '</td></tr>';
+  }
+
+  // No flows to show (route missing, error, network): the table stays
+  // empty, no message.
+  function unavailableHtml() {
+    return '';
+  }
+
+  return { LABELS, PERIOD_HOURS, esc, label, hoursFor, flowsUrl, quantityCell, tableHtml, unavailableHtml };
+})();
+
 const PAGE_SIZE = 25;
 let list = null;
 let selected = null;
 let pageIndex = 0;
 let query = "";
-let res = "1h";
+// Chart periods: the API serves every retained point of a resolution
+// (hourly 8 days, daily 400 days); the slots pick the window shown.
+const PERIODS = {
+  day: { res: '1h', count: 24 },
+  week: { res: '1h', count: 168 },
+  month: { res: '1d', count: 30 },
+  half: { res: '1d', count: 183 },
+};
+let period = 'day';
 let curve = null;
+let flowsToken = 0;
 
 async function getJson(url) {
   const response = await fetch(url);
@@ -27,11 +113,34 @@ async function loadList() {
 
 async function loadCurve() {
   const key = selected === null ? '' : '&item=' + encodeURIComponent(selected);
+  const res = PERIODS[period].res;
   try {
     const payload = await getJson('/api/items/history?res=' + res + key);
     if (payload.ok) curve = payload;
   } catch (e) { /* daemon down: keep the last curve */ }
   draw();
+}
+
+// Flows of the selected item over the chart period; stale answers
+// (selection or period changed meanwhile) are dropped.
+async function loadFlows() {
+  const section = document.getElementById('flowsbox');
+  if (selected === null) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  const token = ++flowsToken;
+  let html;
+  try {
+    const response = await fetch(ItemFlows.flowsUrl(selected, period));
+    const payload = response.status === 404 ? null : await response.json();
+    html = payload && payload.ok ? ItemFlows.tableHtml(payload) : ItemFlows.unavailableHtml(response.status, payload && payload.error);
+  } catch (e) {
+    html = ItemFlows.unavailableHtml(0, null); /* daemon down or not JSON */
+  }
+  if (token !== flowsToken) return;
+  document.getElementById('flows').innerHTML = html;
 }
 
 function filtered() {
@@ -94,10 +203,12 @@ function renderList() {
 }
 
 // One listener on the stable <table>: rows are rebuilt on every render.
-document.getElementById('items').addEventListener('click', (event) => {
-  const row = event.target.closest('tr[data-id]');
-  if (row) pick(Number(row.getAttribute('data-id')));
-});
+if (typeof document !== 'undefined') {
+  document.getElementById('items').addEventListener('click', (event) => {
+    const row = event.target.closest('tr[data-id]');
+    if (row) pick(Number(row.getAttribute('data-id')));
+  });
+}
 
 function page(delta) {
   pageIndex += delta;
@@ -116,21 +227,24 @@ function pick(id) {
   selected = id;
   renderList();
   loadCurve();
+  loadFlows();
 }
 
-function setRes(next) {
-  res = next;
-  document.getElementById('res1h').className = res === '1h' ? 'cur' : '';
-  document.getElementById('res1d').className = res === '1d' ? 'cur' : '';
+function setPeriod(next) {
+  period = next;
+  for (const key of Object.keys(PERIODS)) {
+    document.getElementById('period-' + key).className = key === period ? 'cur' : '';
+  }
   loadCurve();
+  loadFlows();
 }
 
 function draw() {
   const canvas = document.getElementById('chart');
   document.getElementById('title').textContent = title();
   const live = liveCount();
+  const { res, count } = PERIODS[period];
   const width = res === '1h' ? 3600 : 86400;
-  const count = res === '1h' ? 24 : 183;
   const now = Math.floor(Date.now() / 1000);
   const from = Math.floor(now / width) * width - (count - 1) * width;
   const slots = LifeChart.slotStarts(from, width, count);
@@ -144,16 +258,19 @@ function draw() {
     live: true,
     emptyText: 'No point yet (the sampler records hourly).',
   });
-  document.getElementById('legend').textContent =
-    res === '1h' ? 'one point per hour, last 24h' : 'last measure of each day, last 6 months';
 }
 
 let resizeTimer = null;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (curve || list) draw(); }, 150);
-});
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = ItemFlows;
+} else {
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (curve || list) draw(); }, 150);
+  });
 
-loadList().then(loadCurve);
-setInterval(loadList, 60000);
-setInterval(loadCurve, 60000);
+  loadList().then(loadCurve).then(loadFlows);
+  setInterval(loadList, 60000);
+  setInterval(loadCurve, 60000);
+  setInterval(loadFlows, 60000);
+}

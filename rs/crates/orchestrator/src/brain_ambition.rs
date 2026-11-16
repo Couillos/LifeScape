@@ -26,7 +26,7 @@
 use std::sync::Mutex;
 
 use lifescape_json::Value;
-use lifescape_planner::ambition_catalog::{group_skills, primary_group, SPECS};
+use lifescape_planner::ambition_catalog::{group_skills, primary_group, specs};
 use lifescape_planner::{
     achieved, assign_fleet, coverage_gaps, coverage_repair, describe_ambition, draw_kind, extend_ambition, new_ambition, new_ambition_extended,
     on_goal_closed, optional_change, pinned, refresh, release_pin, revise, Ambition, BotNow, CloseOutcome, DemandItem, FleetBot, KindDemand, Life, Stamp, GROUPS,
@@ -205,7 +205,7 @@ struct DrawInputs {
 fn build(account: &str, bot: &FleetBot, now: &BotNow, first: (String, String), inputs: &DrawInputs, exclude: &[&str], stamp: Stamp) -> Option<(Ambition, String)> {
     let mut excluded: Vec<String> = exclude.iter().map(|kind| kind.to_string()).collect();
     let (mut kind, mut why) = first;
-    for _ in 0..=SPECS.len() {
+    for _ in 0..=specs().len() {
         let made = if why.starts_with("coverage:") {
             new_ambition_extended(&kind, &why, now, bot.seed, &inputs.items, stamp)
         } else {

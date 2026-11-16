@@ -53,11 +53,22 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
     check_events(bot)?;
     let level = learn_level(bot, CRAFTING_STAT, 1);
     let product_name = resource.as_deref().unwrap_or(DEFAULT_PRODUCT);
+    // `tan:<hide>` (the planner's tanning leg) names a hide, the leather
+    // in `--want` (live admin 2026-11-15: "no F2P leather recipe makes
+    // cow_hide", 0 of 56 tannings in a day).
+    if product_name.ends_with("_hide") {
+        return crate::kit::tan::run_tanning(bot, &spec, product_name);
+    }
     let recipe = leather_recipe(product_name).ok_or_else(|| ScriptError::Usage(format!("no F2P leather recipe makes {product_name:?} at {:?}", bot.position())))?;
     if level < recipe.level {
         return Err(crate::kit::cycle::blocked_level("crafting", i64::from(recipe.level)));
     }
-    let leather = obj_id(bot, LEATHER)?;
+    // The recipe's own material: hard leather for the hardleather body
+    // (`leather.rs2`: `[opheldu,hard_leather]`), plain leather otherwise.
+    // Live admin 2026-11-15: plain leather withdrawn for a hard body, the
+    // tan fallback then asked for cow hides.
+    let material = recipe.inputs.iter().map(|(name, _)| name.as_str()).find(|name| *name == "hard_leather" || *name == LEATHER).unwrap_or(LEATHER).to_string();
+    let leather = obj_id(bot, &material)?;
     let needle = obj_id(bot, NEEDLE)?;
     let thread = obj_id(bot, THREAD)?;
     let _ = obj_id(bot, product_name)?;
@@ -73,7 +84,7 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
         // no `bank_items` read here: the stream is empty after close.
         tan_from_bank(bot, &bank, &keep_sew, product_name, leather, thread)?;
         if pack_total(bot, leather) == 0 {
-            return Err(ScriptError::Blocked { missing: vec![LEATHER.to_string()] });
+            return Err(ScriptError::Blocked { missing: vec![material.clone()] });
         }
     }
     let outcome = run(bot, &spec, |step_bot, state| {
@@ -82,7 +93,7 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
             bank_trip(step_bot, &bank, &keep_sew, 0)?;
             fill_sew(step_bot, &bank, leather, thread)?;
             if pack_total(step_bot, leather) == 0 {
-                return Err(ScriptError::Blocked { missing: vec![LEATHER.to_string()] });
+                return Err(ScriptError::Blocked { missing: vec![material.clone()] });
             }
             if pack_total(step_bot, thread) == 0 {
                 return Err(ScriptError::Blocked { missing: vec![THREAD.to_string()] });
@@ -144,16 +155,31 @@ fn tan_from_bank(
     Ok(())
 }
 
-/// Top the pack up with banked leather and thread (nothing when the bank
-/// holds none or the booth is far: the caller reports `blocked`).
+/// Top the pack up with banked leather and thread, one thread per
+/// `THREAD_USES` pieces (`leather.rs2`: a thread goes after 5 uses;
+/// thread stacks), nothing when the bank holds none or the booth is far
+/// (the caller reports `blocked`).
 fn fill_sew(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, leather: u16, thread: u16) -> Result<(), ScriptError> {
     let free = free_slots(bot) as u32;
     if free <= 1 || !crate::kit::withdraw::reach_bank_for(bot, bank, &[leather, thread])? {
         return Ok(());
     }
-    bank_withdraw_items(bot, bank, &[leather], free - 1)?;
-    bank_withdraw_items(bot, bank, &[thread], 1)?;
+    // Thread stacks: one slot whatever the count.
+    let room = if pack_total(bot, thread) == 0 { free - 1 } else { free };
+    bank_withdraw_items(bot, bank, &[leather], room)?;
+    let threads = threads_for(pack_total(bot, leather)).saturating_sub(pack_total(bot, thread));
+    if threads > 0 {
+        bank_withdraw_items(bot, bank, &[thread], threads)?;
+    }
     Ok(())
+}
+
+/// Pieces one thread sews (`leather.rs2`: `%thread_used > 4`).
+const THREAD_USES: u32 = 5;
+
+/// Threads `pieces` need (one spare: the use count carries over).
+fn threads_for(pieces: u32) -> u32 {
+    pieces.div_ceil(THREAD_USES) + 1
 }
 
 /// x1 button of the verified `leather_crafting` grid (`tanner.rs2` style
@@ -243,6 +269,13 @@ mod tests {
     }
 
     /// Tools, hide, leather and tanners all resolve through live tables.
+    #[test]
+    fn one_thread_serves_five_pieces() {
+        assert_eq!(super::threads_for(26), 7);
+        assert_eq!(super::threads_for(5), 2);
+        assert_eq!(super::threads_for(0), 1);
+    }
+
     #[test]
     fn tanner_inputs_resolve() {
         let bot = offline_bot();

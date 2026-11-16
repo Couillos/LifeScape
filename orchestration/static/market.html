@@ -70,8 +70,10 @@
   <div id="detail">
     <h2 id="title">Pick an item</h2>
     <div id="views">
-      <button id="v-hour" class="cur" onclick="setView('hour')">24 h / hour</button>
-      <button id="v-day" onclick="setView('day')">6 months / day</button>
+      <button id="v-hour" class="cur" onclick="setView('hour')">24h / 1h</button>
+      <button id="v-week" onclick="setView('week')">7d / 1h</button>
+      <button id="v-month" onclick="setView('month')">30d / 1d</button>
+      <button id="v-day" onclick="setView('day')">6M / 1d</button>
       <span id="refline" class="muted"></span>
     </div>
     <canvas id="chart" width="720" height="340"></canvas>

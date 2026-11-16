@@ -4,7 +4,7 @@
 // hover and touch tooltip with crosshair, live end.
 // Series: `candles` (market OHLCV) and `line` (holdings curve).
 //
-// Pure helpers (slotStarts, liveSlots, fillSlots, carryFlat, candleColor, niceTicks, candleTooltip,
+// Pure helpers (slotStarts, liveSlots, fillSlots, carryFlat, candleColor, niceTicks, axisLabel, candleTooltip,
 // volumeSplit, volumeScaleMax, foldPrint) touch no
 // DOM, so `node --test chart.test.js` covers them; draw() needs a canvas.
 const LifeChart = (() => {
@@ -54,6 +54,32 @@ const LifeChart = (() => {
     return ticks;
   }
 
+  // Least pixels between two axis labels (time axis, value axes).
+  const LABEL_GAP_X = 14;
+  const LABEL_GAP_Y = 13;
+
+  // Slots between two time labels so `count` labels `labelW` wide fit
+  // in `plotW` with `LABEL_GAP_X` between them.
+  function labelEvery(count, plotW, labelW) {
+    if (count <= 0) return 1;
+    const fit = Math.max(1, Math.floor(plotW / (labelW + LABEL_GAP_X)));
+    return Math.max(1, Math.ceil(count / fit));
+  }
+
+  // Tick intervals a pane `height` px tall holds `spacing` px apart,
+  // between 1 and `max`.
+  function tickCount(height, spacing, max) {
+    return Math.max(1, Math.min(max, Math.floor(height / spacing)));
+  }
+
+  // True (and noted) when `y` sits at least `LABEL_GAP_Y` from every
+  // label already drawn on that side.
+  function spaced(taken, y) {
+    if (taken.some((other) => Math.abs(other - y) < LABEL_GAP_Y)) return false;
+    taken.push(y);
+    return true;
+  }
+
   function pad2(value) {
     return String(value).padStart(2, '0');
   }
@@ -67,6 +93,17 @@ const LifeChart = (() => {
     return pad2(open.getDate()) + '/' + pad2(open.getMonth() + 1) + ' ' +
       pad2(open.getHours()) + ':' + pad2(open.getMinutes()) + '–' +
       pad2(close.getHours()) + ':' + pad2(close.getMinutes());
+  }
+
+  // Time-axis label for one slot: `dd/mm` daily, `HH:MM` hourly within
+  // a day, `dd/mm HH:MM` hourly over several days (7-day view: bare
+  // hours would repeat across days).
+  function axisLabel(slotStart, width, slotCount) {
+    const date = new Date(slotStart * 1000);
+    const day = pad2(date.getDate()) + '/' + pad2(date.getMonth() + 1);
+    if (width >= 86400) return day;
+    const hour = pad2(date.getHours()) + ':' + pad2(date.getMinutes());
+    return slotCount * width > 86400 ? day + ' ' + hour : hour;
   }
 
   // Tooltip lines for one candle: period, O/H/L/C, volume, trade count
@@ -220,12 +257,14 @@ const LifeChart = (() => {
     if (volMax <= 0) volMax = 1;
     // Graduated ticks first: the scales stretch to their extremes so
     // gridlines never land outside the plot.
-    const priceTicks = niceTicks(lo, hi, 4);
+    // As many price intervals as the pane height holds labels apart.
+    const priceTicks = niceTicks(lo, hi, tickCount(priceH, LABEL_GAP_Y * 2, 4));
     lo = Math.min(lo, priceTicks[0]);
     hi = Math.max(hi, priceTicks[priceTicks.length - 1]);
     let volTicks = [];
     if (model.kind === 'candles') {
-      volTicks = niceTicks(0, volMax, 2);
+      // One interval when the half-pane holds no two labels apart.
+      volTicks = niceTicks(0, volMax, (plotY + plotH - volTop) / 2 >= LABEL_GAP_Y * 3 ? 2 : 1);
       volMax = Math.max(volMax, volTicks[volTicks.length - 1]);
     }
 
@@ -271,19 +310,25 @@ const LifeChart = (() => {
     ctx.lineWidth = 1;
     ctx.font = '10px monospace';
     ctx.strokeStyle = '#333';
+    // Labels never closer than `LABEL_GAP_Y` on one side (gridlines
+    // stay): the price scale's foot never collides with the volume pane.
+    const leftTaken = [];
     for (const tick of priceTicks) {
       const y = yOf(tick);
       ctx.beginPath(); ctx.moveTo(plotX, y); ctx.lineTo(plotX + plotW, y); ctx.stroke();
       ctx.fillStyle = '#888';
-      ctx.fillText(String(Math.round(tick * 100) / 100), 6, y + 3);
+      if (spaced(leftTaken, y)) ctx.fillText(String(Math.round(tick * 100) / 100), 6, y + 3);
     }
     if (model.kind === 'candles') {
       ctx.fillStyle = '#888';
       // Graduated both ways from the baseline (0 once, on it).
+      const rightTaken = [volTop];
       for (const tick of volTicks) {
         const label = String(Math.round(tick * 100) / 100);
         const marks = tick > 0 ? [volUp(tick), volDown(tick)] : [volBase];
-        for (const y of marks) ctx.fillText(label, plotX + plotW + 6, y + 3);
+        for (const y of marks) {
+          if (spaced(rightTaken, y)) ctx.fillText(label, plotX + plotW + 6, y + 3);
+        }
       }
     }
 
@@ -337,13 +382,18 @@ const LifeChart = (() => {
     // Time axis on fixed slots.
     ctx.fillStyle = '#888';
     ctx.font = '10px monospace';
-    const every = Math.max(1, Math.ceil(slots.length / 6));
+    // As many labels as fit side by side at their measured width, each
+    // centred on its slot and kept inside the plot.
+    const sample = slots.length ? ctx.measureText(axisLabel(slots[0], model.width, slots.length)).width : 0;
+    const every = labelEvery(slots.length, plotW, sample);
+    let lastRight = -Infinity;
     for (let i = 0; i < slots.length; i += every) {
-      const date = new Date(slots[i] * 1000);
-      const label = model.width >= 86400
-        ? pad2(date.getDate()) + '/' + pad2(date.getMonth() + 1)
-        : pad2(date.getHours()) + ':' + pad2(date.getMinutes());
-      ctx.fillText(label, xOf(i) - 12, plotY + plotH + 14);
+      const label = axisLabel(slots[i], model.width, slots.length);
+      const textW = ctx.measureText(label).width;
+      const left = Math.min(Math.max(xOf(i) - textW / 2, plotX), plotX + plotW - textW);
+      if (left < lastRight + LABEL_GAP_X) continue;
+      ctx.fillText(label, left, plotY + plotH + 14);
+      lastRight = left + textW;
     }
 
     // Axis titles, rotated.
@@ -401,11 +451,16 @@ const LifeChart = (() => {
     canvas._lifeGeometry = geometry;
     if (!canvas._lifeBound) {
       canvas._lifeBound = true;
+      // The listeners bind once: they read the geometry of the CURRENT
+      // draw (a period switch changes the slot count and width; the first
+      // draw's 24 slots made 7 d / 30 d / 6 months point past the plot).
       const showAt = (event, touch) => {
+        const current = canvas._lifeGeometry;
+        if (!current) return;
         const box = canvas.getBoundingClientRect();
         const point = touch || (event.touches && event.touches[0]) || event;
         if (!point || point.clientX === undefined) return;
-        drawOverlay(canvas, Math.round(((point.clientX - box.left) - geometry.plotX - geometry.slotW / 2) / geometry.slotW));
+        drawOverlay(canvas, Math.round(((point.clientX - box.left) - current.plotX - current.slotW / 2) / current.slotW));
         if (event.preventDefault && event.touches) event.preventDefault();
       };
       canvas.addEventListener('mousemove', (event) => showAt(event, event));
@@ -421,8 +476,12 @@ const LifeChart = (() => {
     const model = canvas._lifeModel, geometry = canvas._lifeGeometry;
     if (!model || !geometry) return;
     drawWithoutRebind(canvas, model, geometry);
+    if (index < 0 || index >= model.slots.length) return;
+    // Long views hold many empty slots (a short history): the nearest
+    // slot with data answers instead of a blank hover.
+    index = nearestFilled(model.rows, index);
     const row = model.rows[index];
-    if (index < 0 || index >= model.slots.length || row === null || row === undefined) return;
+    if (row === null || row === undefined) return;
     const ctx = canvas.getContext('2d');
     const ratio = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -461,6 +520,17 @@ const LifeChart = (() => {
     lines.forEach((line, i) => ctx.fillText(line, boxX + 8, boxY + 16 + i * 14));
   }
 
+  // Index of the slot with data nearest to `index` (itself when filled,
+  // -1 when every slot is empty).
+  function nearestFilled(rows, index) {
+    for (let step = 0; step < rows.length; step++) {
+      for (const at of [index - step, index + step]) {
+        if (at >= 0 && at < rows.length && rows[at] !== null && rows[at] !== undefined) return at;
+      }
+    }
+    return -1;
+  }
+
   function overlayRange(model) {
     let lo = Infinity, hi = -Infinity;
     for (const row of model.rows) {
@@ -484,7 +554,7 @@ const LifeChart = (() => {
   }
 
   return {
-    slotStarts, liveSlots, fillSlots, carryFlat, candleColor, niceTicks, periodLabel, candleTooltip, lineTooltip,
+    slotStarts, liveSlots, fillSlots, carryFlat, candleColor, niceTicks, periodLabel, axisLabel, candleTooltip, lineTooltip, nearestFilled, labelEvery, tickCount, spaced,
     volumeSplit, volumeScaleMax, foldPrint, draw, UP, DOWN, FLAT,
   };
 })();

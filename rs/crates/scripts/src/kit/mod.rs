@@ -52,6 +52,7 @@ pub mod mill;
 pub mod mine;
 pub mod observe;
 pub mod pack;
+pub mod npc_spawn;
 pub mod produce;
 pub mod progress;
 pub mod shop;

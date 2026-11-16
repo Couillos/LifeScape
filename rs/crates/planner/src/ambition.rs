@@ -534,22 +534,29 @@ fn insert_demand_milestone(ambition: &mut Ambition, now: &BotNow, demand: &[Dema
     }
     let Some(found) = spec(&ambition.kind) else { return };
     let mut best: Option<(&DemandItem, &str, u8)> = None;
+    // Every product the ladder's skills make within 10 levels of the bot
+    // (computed ladders show a few per rung; a bid weighs them all).
+    let mut skills: Vec<&'static str> = Vec::new();
     for rung in found.ladder {
-        let Then::Produce(items, _, skill) = rung.then else { continue };
-        for item in items {
+        if let Then::Produce(_, _, skill) = rung.then {
+            if !skills.contains(&skill) {
+                skills.push(skill);
+            }
+        }
+    }
+    for skill in skills {
+        let reach = level_of(skill).max(1).saturating_add(10);
+        for product in crate::ambition_ladder::products_of(skill).into_iter().filter(|product| product.level <= reach) {
             let Some(wanted) = demand.iter().find(|entry| {
-                entry.item == *item && entry.unmet > 0 && entry.weight > 0.0 && entry.margin.is_some_and(|margin| margin > 0.0)
+                entry.item == product.item && entry.unmet > 0 && entry.weight > 0.0 && entry.margin.is_some_and(|margin| margin > 0.0)
             }) else {
                 continue;
             };
-            if (now.held)(item) >= demand_quota(wanted.unmet) {
-                continue;
-            }
-            if rung.level > level_of(skill).max(1).saturating_add(10) {
+            if (now.held)(&product.item) >= demand_quota(wanted.unmet) {
                 continue;
             }
             if best.is_none_or(|(known, _, _)| wanted.weight > known.weight) {
-                best = Some((wanted, skill, rung.level));
+                best = Some((wanted, skill, product.level));
             }
         }
     }

@@ -168,6 +168,7 @@ impl Bot {
         timeout: u64,
     ) -> Result<ExchangeOutcome> {
         self.act(format!("trade_exchange with {partner}"));
+        self.coin_context(super::coin_ledger::kind::TRADE);
         let full_give = self.with_coins(give, coins_give);
         let full_want = self.with_coins(want, coins_want);
         for (obj, count) in &full_give {

@@ -16,9 +16,8 @@ use lifescape_sdk::Bot;
 use crate::kit::bank::{bank_trip, bank_withdraw_items, nearest_bank};
 use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::kit::pack::{free_slots, obj_id, pack_total};
-use crate::kit::produce::{self, Produce, ProduceJob, ProduceSite, ProduceUi, grid_button};
+use crate::kit::produce::{self, Produce, ProduceJob, ProduceSite, ProduceUi};
 use crate::kit::survival::{check_events, is_death_abort, learn_level, wait_pack_streamed};
-use crate::quests::common::{find_loc, inv_slot};
 use crate::{ScriptError, ScriptResult};
 
 pub const CRAFTING_STAT: u8 = 12;
@@ -88,10 +87,16 @@ pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
             let job = ProduceJob { spec: &SILVER, input: bar, input_name: SILVER_BAR, want: 0, products: vec![obj_id(step_bot, SILVER_PRODUCT)?], near: (bank.x as i32, bank.z as i32) };
             if cast_outcome(produce::run_job(step_bot, &job), step_bot)?.is_none() { return Ok(StepControl::Continue); }
         } else {
-            let (loc_x, loc_z, level, loc) = find_loc(step_bot, &["furnace"], 150)?;
-            step_bot.approach(loc_x, loc_z, level, 2, 3000)?;
+            // The furnace through the produce brick (exact `furnace1`/
+            // `furnace2`, the brain's `--site`, the sides `forceapproach`
+            // allows): live 2026-11-15 a substring `find_loc` clicked
+            // Lumbridge's `furnace2` tile from a side the server refuses
+            // ("I can't reach that!"), 0 casts in 38 launches.
+            let gold = Produce { verb: "casting", site: ProduceSite::Loc(&FURNACES), ui: ProduceUi::InvGrid { inv: inv_name, slot } };
+            let product = obj_id(step_bot, product_name)?;
             while pack_total(step_bot, bar) > 0 && gem.is_none_or(|id| pack_total(step_bot, id) > 0) {
-                if cast_outcome(jewel_one(step_bot, loc_x, loc_z, loc, bar, inv_name, slot), step_bot)?.is_none() { return Ok(StepControl::Continue); }
+                let job = ProduceJob { spec: &gold, input: bar, input_name: GOLD_BAR, want: 0, products: vec![product], near: (bank.x as i32, bank.z as i32) };
+                if cast_outcome(produce::run_job(step_bot, &job), step_bot)?.is_none() { return Ok(StepControl::Continue); }
             }
         }
         bank = nearest_bank(step_bot)?;
@@ -107,32 +112,6 @@ fn cast_outcome<Done>(result: Result<Done, ScriptError>, bot: &mut Bot) -> Resul
         Err(error) => Err(error),
         Ok(done) => Ok(Some(done)),
     }
-}
-
-/// One press of gold jewellery: bar on the furnace opens the grid, the
-/// live slot proves the mould and gem are there, Make 10/5/1 by
-/// remainder. A blind press never happens (empty slot fails loud).
-fn jewel_one(bot: &mut Bot, furnace_x: i32, furnace_z: i32, furnace: u16, bar: u16, inv_name: &str, slot: u8) -> Result<(), ScriptError> {
-    let had = pack_total(bot, bar);
-    if bot.world.modal.is_none() {
-        let (use_com, use_slot) = inv_slot(bot, bar)?;
-        bot.op_loc_u(furnace_x, furnace_z, furnace, bar, u16::from(use_slot), use_com)?;
-        let target = bot.world.ticks + 30;
-        while bot.world.modal.is_none() && bot.world.ticks < target { bot.pump(2)?; }
-        if bot.world.modal.is_none() {
-            return Err(ScriptError::Failed(format!("jewellery grid never opened at {:?}", bot.position())));
-        }
-    }
-    let com = grid_button(bot, inv_name)?;
-    let held = bot.world.inv.get(&com).and_then(|slots| slots.get(&slot)).map(|(held, _)| *held).ok_or_else(|| ScriptError::Usage(format!("jewellery slot {slot} empty: need the mould and gem at {:?}", bot.position())))?;
-    let (op, count) = if had >= 10 { (3u8, 10u64) } else if had >= 5 { (2, 5) } else { (1, 1) };
-    bot.inv_button(op, held, slot, com)?;
-    let target = bot.world.ticks + 20 + 12 * count;
-    while bot.world.ticks < target {
-        bot.pump(2)?;
-        if pack_total(bot, bar) < had { return Ok(()); }
-    }
-    Err(ScriptError::Failed(format!("jewellery never cast at {:?}", bot.position())))
 }
 
 /// Top the pack up: mould first (kept across loads), then bars and gems

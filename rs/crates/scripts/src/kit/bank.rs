@@ -163,6 +163,7 @@ pub fn cross_toll_gate(bot: &mut Bot) -> Result<bool, ScriptError> {
         }
         crate::quests::common::drain_dialog(bot, 60)?;
         if bot.world.modal.is_some() {
+            bot.coin_context(lifescape_sdk::client::coin_ledger::kind::FEE);
             let _ = bot.chat_choose("Yes, ok.");
             bot.pump(10)?;
             crate::quests::common::drain_dialog(bot, 30)?;
@@ -199,17 +200,20 @@ pub fn live_bank_booth(bot: &mut Bot, bank_x: i32, bank_z: i32) -> Option<(i32, 
     live_bank_booths(bot, bank_x, bank_z).into_iter().next()
 }
 
-/// True when a loc id is a bankbooth (open, closed or tutorial): the dump
-/// name carries `bankbooth`, read straight from the static row — no id set,
+/// True when a loc id is a usable bankbooth (open or tutorial): the dump
+/// name carries `bankbooth` and the loc has an op. `bankboothclosed`
+/// (2215) has none: live admin 2026-11-16, a refused Draynor click fell
+/// back to the closed booth at (3091,3244) and failed "not in the bank
+/// stand table". Read straight from the static row — no id set,
 /// no scan. `live_bank_booths` used to call `loc_name` (String alloc +
 /// lowercase per entry) for every live and static loc on every bank trip:
 /// past ~100k painted entries that silent scan outlasted the server's
 /// 100-tick silence reap (~6 s, no pump inside) and the session FIN-looped
 /// at the booth. The direct row read keeps the same predicate.
 fn is_bankbooth(loc_id: u16) -> bool {
-    knowledge::loc_by_id(usize::from(loc_id)).and_then(|entry| entry.name).is_some_and(|name| {
-        let label = name.to_lowercase();
-        label.contains("bankbooth") || label.contains("bank booth")
+    knowledge::loc_by_id(usize::from(loc_id)).is_some_and(|entry| {
+        let label = entry.name.unwrap_or("").to_lowercase();
+        (label.contains("bankbooth") || label.contains("bank booth")) && entry.ops.iter().any(Option::is_some)
     })
 }
 
@@ -382,17 +386,9 @@ pub fn bank_trip(
             keep.push(lamp);
         }
     }
-    // A paid run (`toll`) keeps the fare in the pack: the guard takes it
-    // from the inventory, never from the bank (`kit::toll`).
-    let mut withdraw_coins = withdraw_coins;
-    if bot.allow_paid {
-        if let Ok(coins) = obj_id(bot, "coins") {
-            if !keep.contains(&coins) {
-                keep.push(coins);
-            }
-            withdraw_coins = withdraw_coins.max(crate::kit::toll::reserve_short(bot, pack_total(bot, coins)));
-        }
-    }
+    // Fares come from the pack, never the bank: the coin reserve every
+    // bot carries (`kit::toll::reserve_at_bank`, Karamja universal).
+    let withdraw_coins = crate::kit::toll::reserve_at_bank(bot, &mut keep, withdraw_coins);
     let bank_x = bank.x as i32;
     let bank_z = bank.z as i32;
     let bank_level = bank.level as i32;
@@ -768,9 +764,9 @@ mod tests {
         bot.world.level = 0;
         bot.world.x = 3000;
         bot.world.z = 3000;
-        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins in dumps");
+        let logs = crate::kit::pack::obj_id(&bot, "logs").expect("logs in dumps");
         let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
-        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
+        bot.world.inv.insert(pack_com, [(0u8, (logs, 5u32))].into_iter().collect());
         let bank = lifescape_gamedata::banks::Bank {
             x: 3000,
             z: 3000,
@@ -781,7 +777,7 @@ mod tests {
         };
         let err = bank_trip(&mut bot, &bank, &[], 0).expect_err("pending deposit without booth");
         assert!(err.to_string().contains("bank unreachable"), "loud cause, got: {err}");
-        assert_eq!(crate::kit::pack::pack_total(&bot, coins), 5, "nothing deposited");
+        assert_eq!(crate::kit::pack::pack_total(&bot, logs), 5, "nothing deposited");
     }
 
     /// Far bank with a deposit pending and no socket: the transit approach
@@ -793,9 +789,9 @@ mod tests {
         bot.world.level = 0;
         bot.world.x = 3226;
         bot.world.z = 3223;
-        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins in dumps");
+        let logs = crate::kit::pack::obj_id(&bot, "logs").expect("logs in dumps");
         let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
-        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
+        bot.world.inv.insert(pack_com, [(0u8, (logs, 5u32))].into_iter().collect());
         let bank = lifescape_gamedata::banks::Bank {
             x: 3091,
             z: 3242,
@@ -845,9 +841,9 @@ mod tests {
         bot.world.level = 0;
         bot.world.x = 3226;
         bot.world.z = 3223;
-        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins in dumps");
+        let logs = crate::kit::pack::obj_id(&bot, "logs").expect("logs in dumps");
         let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
-        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
+        bot.world.inv.insert(pack_com, [(0u8, (logs, 5u32))].into_iter().collect());
         let mut bank = lifescape_gamedata::banks::Bank {
             x: 3226,
             z: 3223,
@@ -856,10 +852,10 @@ mod tests {
             name: "bankbooth".to_string(),
             members: false,
         };
-        let err = bank_trip_resilient(&mut bot, &mut bank, &[], 0, &[coins]).expect_err("load never deposited");
+        let err = bank_trip_resilient(&mut bot, &mut bank, &[], 0, &[logs]).expect_err("load never deposited");
         assert!(crate::kit::survival::is_walk_abort(&err), "dead socket surfaces typed, got: {err}");
         assert!((bank.x, bank.z) != (3226, 3223), "rediscovery ran before failing loud, got ({},{})", bank.x, bank.z);
-        assert_eq!(crate::kit::pack::pack_total(&bot, coins), 5, "load still in the pack");
+        assert_eq!(crate::kit::pack::pack_total(&bot, logs), 5, "load still in the pack");
     }
 
     /// Booths resolve from the live stream first, static template second
@@ -917,6 +913,7 @@ mod tests {
     #[test]
     fn booth_scan_ignores_non_booth_without_name_lookups() {
         assert!(is_bankbooth(2213), "booth id resolves");
+        assert!(!is_bankbooth(2215), "the closed booth has no op");
         let plain = (0u16..).find(|id| !is_bankbooth(*id)).expect("a non-booth id exists");
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);

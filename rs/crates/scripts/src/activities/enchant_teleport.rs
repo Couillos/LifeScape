@@ -20,13 +20,25 @@ use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
 pub const MAGIC_STAT: u8 = 6;
-/// F2P enchant ladder: spell, level, strung input, enchanted product.
-pub const ENCHANTS: [(&str, i64, &str, &str); 4] = [
-    ("enchant_lvl1", 7, "strung_sapphire_amulet", "amulet_of_magic"),
-    ("enchant_lvl2", 27, "strung_emerald_amulet", "amulet_of_defence"),
-    ("enchant_lvl3", 49, "strung_ruby_amulet", "amulet_of_strength"),
-    ("enchant_lvl4", 57, "strung_diamond_amulet", "amulet_of_power"),
-];
+/// F2P enchants from the server data (`magic_spells.dbrow` convertobj
+/// rows, `config_recipes` spell kind): spell, level, input, product.
+/// Only F2P spells whose product is no members object
+/// (`enchant.rs2`: `oc_members($final_obj) & map_members = false`
+/// refuses). Live admin 2026-11-15: a hand list of four amulets refused
+/// the sapphire necklace the server enchants into a games necklace.
+pub fn enchants() -> Vec<(String, i64, String, String)> {
+    knowledge::script_sources::config_recipes()
+        .iter()
+        .filter(|row| row.kind == "spell")
+        .filter_map(|row| {
+            let spell = row.spell.clone()?;
+            let entry = knowledge::spells::by_name(&spell).into_iter().next()?;
+            let input = row.inputs.first()?.clone();
+            let f2p = |name: &str| knowledge::objs_by_name(name).into_iter().next().is_some_and(|obj| obj.members == Some(false));
+            (!entry.members && f2p(&input) && f2p(&row.output)).then(|| (spell, entry.level, input, row.output.clone()))
+        })
+        .collect()
+}
 /// F2P teleports: spell and level (catalogue §5.10).
 pub const TELEPORTS: [(&str, i64); 3] =
     [("varrock_teleport", 25), ("lumbridge_teleport", 31), ("falador_teleport", 37)];
@@ -37,10 +49,11 @@ pub fn spell_runes(spell: &str) -> Vec<(String, i64)> {
     knowledge::spells::by_name(spell).into_iter().flat_map(|entry| entry.runes).collect()
 }
 
-/// Enchant row for a strung (or unstrung) amulet: spell, level, product.
-pub fn enchant_for(amulet: &str) -> Option<(&'static str, i64, &'static str)> {
-    let strung = amulet.strip_prefix("unstrung_").map(|rest| format!("strung_{rest}")).unwrap_or_else(|| amulet.to_string());
-    ENCHANTS.iter().find(|(_, _, input, _)| input.eq_ignore_ascii_case(&strung)).map(|(spell, level, _, product)| (*spell, *level, *product))
+/// Enchant row for a jewel (an unstrung amulet reads strung): spell,
+/// level, product.
+pub fn enchant_for(jewel: &str) -> Option<(String, i64, String)> {
+    let strung = strung_input(jewel);
+    enchants().into_iter().find(|(_, _, input, _)| input.eq_ignore_ascii_case(&strung)).map(|(spell, level, _, product)| (spell, level, product))
 }
 
 /// Strung input of an (un)strung amulet name, mirroring `enchant_for`.
@@ -74,7 +87,7 @@ pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let level = learn_level(bot, MAGIC_STAT, 1);
     let wanted = resource.as_deref().ok_or_else(|| ScriptError::Usage(format!("enchant_teleport <spell|amulet> [count], nothing named at {:?}", bot.position())))?;
     let (spell, need, input) = if let Some((spell, need, _)) = enchant_for(wanted) {
-        (spell.to_string(), need, strung_input(wanted))
+        (spell, need, strung_input(wanted))
     } else if let Some(need) = teleport_level(wanted) {
         (wanted.to_string(), need, String::new())
     } else if wanted.eq_ignore_ascii_case(BONES_TO_BANANAS) {
@@ -144,7 +157,7 @@ fn cast_one(bot: &mut Bot, spell: &str, target: Option<u16>) -> Result<(), Scrip
 
 #[cfg(test)]
 mod tests {
-    use super::{enchant_for, run_enchant_teleport, spell_runes, teleport_level, BONES_TO_BANANAS, CAST_TICKS, ENCHANTS, MAGIC_STAT, TELEPORTS};
+    use super::{enchant_for, enchants, run_enchant_teleport, spell_runes, teleport_level, BONES_TO_BANANAS, CAST_TICKS, MAGIC_STAT, TELEPORTS};
     use crate::kit::pack::{obj_id, pack_total};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
@@ -236,16 +249,19 @@ mod tests {
     /// rune counts and F2P flags.
     #[test]
     fn enchant_ladder_matches_the_spell_dump() {
-        assert_eq!(ENCHANTS.map(|(_, level, _, _)| level), [7, 27, 49, 57]);
-        for (spell, level, _, _) in ENCHANTS {
-            let rows = lifescape_gamedata::spells::by_name(spell);
+        let amulets: Vec<i64> = ["strung_sapphire_amulet", "strung_emerald_amulet", "strung_ruby_amulet", "strung_diamond_amulet"].iter().map(|amulet| enchant_for(amulet).expect(amulet).1).collect();
+        assert_eq!(amulets, vec![7, 27, 49, 57]);
+        for (spell, level, _, _) in enchants() {
+            let rows = lifescape_gamedata::spells::by_name(&spell);
             assert_eq!(rows.len(), 1, "{spell} resolves once");
             assert_eq!(rows[0].level, level, "{spell} level");
             assert!(!rows[0].members, "{spell} F2P");
-            assert!(spell_runes(spell).iter().any(|(name, _)| name == "cosmicrune"), "{spell} eats cosmic, got {:?}", spell_runes(spell));
+            assert!(spell_runes(&spell).iter().any(|(name, _)| name == "cosmicrune"), "{spell} eats cosmic, got {:?}", spell_runes(&spell));
         }
-        assert_eq!(enchant_for("strung_sapphire_amulet"), Some(("enchant_lvl1", 7, "amulet_of_magic")));
-        assert_eq!(enchant_for("unstrung_emerald_amulet"), Some(("enchant_lvl2", 27, "amulet_of_defence")), "unstrung maps too");
+        assert_eq!(enchant_for("strung_sapphire_amulet"), Some(("enchant_lvl1".to_string(), 7, "amulet_of_magic".to_string())));
+        assert_eq!(enchant_for("unstrung_emerald_amulet"), Some(("enchant_lvl2".to_string(), 27, "amulet_of_defence".to_string())), "unstrung maps too");
+        assert_eq!(enchant_for("sapphire_necklace").map(|row| row.2), Some("necklace_of_minigames_8".to_string()), "the server enchants it in F2P");
+        assert!(enchant_for("sapphire_ring").is_none(), "ring of recoil is members");
         assert!(enchant_for("strung_gold_amulet").is_none(), "gold never enchants");
         assert!(enchant_for("coins").is_none(), "junk never enchants");
     }
@@ -269,9 +285,9 @@ mod tests {
     /// Every enchant product exists in the object dump.
     #[test]
     fn enchant_products_exist() {
-        for (_, _, input, product) in ENCHANTS {
-            assert!(!lifescape_gamedata::objs_by_name(input).is_empty(), "{input} exists");
-            assert!(!lifescape_gamedata::objs_by_name(product).is_empty(), "{product} exists");
+        for (_, _, input, product) in enchants() {
+            assert!(!lifescape_gamedata::objs_by_name(&input).is_empty(), "{input} exists");
+            assert!(!lifescape_gamedata::objs_by_name(&product).is_empty(), "{product} exists");
         }
     }
 }

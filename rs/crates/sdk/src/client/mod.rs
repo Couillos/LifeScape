@@ -5,6 +5,8 @@
 
 pub mod actions;
 pub mod approach;
+pub mod coin_ledger;
+pub mod item_ledger;
 pub mod cost_cache;
 pub mod design;
 pub mod door_leaf;
@@ -173,6 +175,11 @@ pub struct Bot {
     pub trail: Vec<(u64, i32, i32, i32)>,
     /// Heartbeat hook, installed by the session worker (default: none).
     pub on_pump: Option<PumpHook>,
+    /// Coin flows of the session, attributed by action (`coin_ledger`).
+    pub coin_ledger: coin_ledger::CoinLedger,
+    /// Every carried object's flows, attributed the same way plus the
+    /// skill and death causes (`item_ledger`).
+    pub item_ledger: item_ledger::ItemLedger,
     /// Inline-pause gate, installed by the session worker (default: none).
     pub pause_gate: Option<PauseGate>,
     /// Pause ticks already billed to market pauses (and only those): the
@@ -243,6 +250,8 @@ impl Bot {
             cost_stats: cost_cache::CostStats::default(),
             trail: Vec::new(),
             on_pump: None,
+            coin_ledger: coin_ledger::CoinLedger::default(),
+            item_ledger: item_ledger::ItemLedger::default(),
             pause_gate: None,
             pause_ticks: 0,
             pause_since: None,
@@ -446,6 +455,40 @@ impl Bot {
 
     /// Pump `count` ticks: recv frames, feed the world, keep the session
     /// alive. Every game wait loops on this, never on wall-clock sleep.
+    /// Names what the next coin changes come from (`coin_ledger::kind`)
+    /// for `coin_ledger::CONTEXT_TICKS`.
+    pub fn coin_context(&mut self, kind: &'static str) {
+        let until = self.world.ticks + coin_ledger::CONTEXT_TICKS;
+        self.coin_ledger.set_context(kind, until);
+    }
+
+    /// `coin_context` for `ticks` (a long dialogue, a walk to the NPC).
+    pub fn coin_context_for(&mut self, kind: &'static str, ticks: u64) {
+        let until = self.world.ticks + ticks;
+        self.coin_ledger.set_context(kind, until);
+    }
+
+    /// Feeds the ledger the coins carried now (bank open: transfers).
+    fn observe_coins(&mut self) {
+        let (com, slots) = self.backpack();
+        if com.is_none() {
+            return;
+        }
+        let coins = (self.tables.find_obj_by_name)("coins").unwrap_or(995);
+        let carried: u32 = slots.iter().filter(|(_, (held, _))| *held == coins).map(|(_, (_, count))| *count).sum();
+        let bank_open = (self.tables.com_id)("bank_main:inv").is_some_and(|bank| self.world.inv.contains_key(&bank));
+        let tick = self.world.ticks;
+        self.coin_ledger.observe(carried, bank_open, tick);
+        let mut pack: std::collections::HashMap<u16, u32> = std::collections::HashMap::new();
+        for (_, (held, count)) in &slots {
+            *pack.entry(*held).or_insert(0) += *count;
+        }
+        let xp_total: i64 = self.world.stats.values().map(|(_, xp)| i64::from(*xp)).sum();
+        let dead = self.world.stats.get(&3).is_some_and(|(level, _)| *level == 0);
+        let context = self.coin_ledger.context();
+        self.item_ledger.observe(item_ledger::Seen { pack, bank_open, tick, xp_total, dead, context });
+    }
+
     pub fn pump(&mut self, count: u32) -> Result<Vec<Frame>> {
         let mut frames = Vec::new();
         for _ in 0..count {
@@ -463,6 +506,7 @@ impl Bot {
                 frames.push(frame);
             }
         }
+        self.observe_coins();
         if let Some(hook) = self.on_pump.clone() {
             if !hook(self) {
                 return Err(Error::Interrupted(format!("run stopped at {:?}", self.position())));

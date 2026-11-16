@@ -480,19 +480,11 @@ pub fn insert_gear_step(life: &mut Life, item: Option<&str>, style: &str) -> Vec
     if let Some(item) = item {
         let id = next_id(life);
         let mut obtain = Node::new(&id, NodeKind::ObtainItems { item: item.to_string(), count: 1 }, Vec::new(), 1);
-        // A piece only an NPC shop sells (D-A: no F2P production, no
-        // drop) goes to the shop, never to a bid nobody fills (live
-        // 2026-11-14: black_med_helm bid at 2 coins for 6000 ticks);
-        // every other piece is market only, except a kit axe (D-A
-        // exception, `kit_shop_route`): a covered ask first, else Bob's
-        // shop, never a bid nobody fills.
-        let methods: &[&str] = if lifescape_gamedata::obtain::merchant_route(item) {
-            &["shop:buy"]
-        } else if lifescape_gamedata::obtain::kit_shop_route(item) {
-            &["market:buy", "shop:buy"]
-        } else {
-            &["market:buy"]
-        };
+        // A piece a keeper stocks (user 2026-11-15: every F2P object may
+        // be bought from a merchant): a covered ask first, else the shop,
+        // never a bid nobody fills (live 2026-11-14: black_med_helm bid
+        // at 2 coins for 6000 ticks). No keeper: the market only.
+        let methods: &[&str] = if lifescape_gamedata::obtain::kit_shop_route(item) { &["market:buy", "shop:buy"] } else { &["market:buy"] };
         for method in methods {
             obtain.alternatives.push(crate::model::Alternative { method: method.to_string(), est_ticks: 0, est_coins: 0 });
         }

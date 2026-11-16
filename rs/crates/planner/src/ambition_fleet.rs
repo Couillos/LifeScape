@@ -5,7 +5,7 @@
 //! come in as plain values; the daemon reads the life files.
 
 use crate::ambition::{may_change, pinned, Ambition, GENERALIST};
-use crate::ambition_catalog::{fit, kind_for_group, primary_group, KindDemand, GROUPS, MERCHANT, SPECS};
+use crate::ambition_catalog::{fit, kind_for_group, primary_group, KindDemand, GROUPS, MERCHANT, specs};
 
 /// One bot as the fleet assignment sees it.
 #[derive(Debug, Clone, PartialEq)]
@@ -131,7 +131,7 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
         return (kind.to_string(), format!("coverage:{gap}"));
     }
     let mut weighted: Vec<(&str, f64, Option<String>)> = Vec::new();
-    for entry in SPECS.iter().filter(|entry| !crate::ambition::ladderless(entry.kind) && !exclude.contains(&entry.kind)) {
+    for entry in specs().iter().filter(|entry| !crate::ambition::ladderless(entry.kind) && !exclude.contains(&entry.kind)) {
         if entry.kind == MERCHANT && bot.ironman {
             continue;
         }

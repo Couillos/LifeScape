@@ -904,11 +904,14 @@ pub(crate) fn dijkstra(
         // Walk and door neighbours, eight directions in fixed order.
         for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
             let next = Tile { x: here.x + dx, z: here.z + dz, level: here.level };
-            // Blocked destination: the closest tile is the whole answer,
-            // so tiles far past the current best can never improve it.
-            // The true closest is never pruned: its distance stays under
-            // every best seen so far. Same plane only (`past_fallback`).
-            if !dest_walkable && crate::fallback::past_fallback(next, dest, best_rank.1) {
+            // Blocked destination with no floor in reach (`rank_floor`
+            // None): tiles far past the current best and the start are
+            // cut (`past_fallback`, `prune_reach`). With a floor the pop
+            // at its rank ends the search, so nothing is cut: a fence can
+            // make the only way to the floor walk 160 tiles off (live
+            // 2026-11-16, Al Kharid bank -> Lumbridge swamp adamantite
+            // round the north, admin "Disconnected" at the bank).
+            if !dest_walkable && floor.is_none() && crate::fallback::past_fallback(next, dest, crate::fallback::prune_reach(from, dest, best_rank.1)) {
                 continue;
             }
             if !search.in_bounds(next) {
@@ -1037,9 +1040,12 @@ pub(crate) fn dijkstra(
         }
         if let Some(edges) = customs.get(&l2_key) {
             for edge in edges {
-                // A fare edge is a paid path, like a toll gate; its landing
-                // obeys the search bounds, like a ride's.
-                if (search.tables.customs[edge.index].fare > 0 && !search.allow_paid) || !search.in_bounds(edge.dest) {
+                // A fare edge (the Karamja boat) is part of the map like any
+                // door (user 2026-11-16: "aller à Karamja de manière
+                // universelle"): its `requires` (the coins in the pack) gate
+                // it, never `allow_paid` (the toll alone). Its landing obeys
+                // the search bounds, like a ride's.
+                if !search.in_bounds(edge.dest) {
                     continue;
                 }
                 if !search.ignore_requires

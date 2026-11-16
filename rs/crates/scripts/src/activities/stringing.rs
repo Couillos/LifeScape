@@ -20,13 +20,16 @@ use crate::{ScriptError, ScriptResult};
 pub const CRAFTING_STAT: u8 = 12;
 pub const BALL: &str = "ball_of_wool";
 pub const STRING_LEVEL: i64 = 1;
-/// F2P amulets (catalogue §5.6): unstrung input and strung product.
-pub const AMULETS: [(&str, &str); 5] = [
+/// F2P amulets (catalogue §5.6) and the silver holy symbol: unstrung
+/// input and strung product (`stringing.rs2` strings `nostringstar` with
+/// the same ball-of-wool use as the amulets).
+pub const AMULETS: [(&str, &str); 6] = [
     ("unstrung_gold_amulet", "strung_gold_amulet"),
     ("unstrung_sapphire_amulet", "strung_sapphire_amulet"),
     ("unstrung_emerald_amulet", "strung_emerald_amulet"),
     ("unstrung_ruby_amulet", "strung_ruby_amulet"),
     ("unstrung_diamond_amulet", "strung_diamond_amulet"),
+    ("nostringstar", "stringstar"),
 ];
 
 /// Strung product of an unstrung amulet (`None` for anything else).
@@ -96,15 +99,36 @@ pub fn run_stringing(bot: &mut Bot, args: &[String]) -> ScriptResult {
     outcome
 }
 
-/// Top the pack up with banked amulets and wool (nothing when the bank
-/// holds none or the booth is far: the caller reports `blocked`).
+/// Top the pack up with banked amulets and wool, one ball per amulet
+/// (nothing when the bank holds none or the booth is far: the caller
+/// reports `blocked`). Live admin 2026-11-15: one ball per load strung
+/// one amulet per bank trip.
 fn fill_string(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, unstrung: u16, ball: u16) -> Result<(), ScriptError> {
-    let free = free_slots(bot) as u32;
-    if free > 1 && (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() <= 12 {
-        bank_withdraw_items(bot, bank, &[unstrung], free - 1)?;
-        bank_withdraw_items(bot, bank, &[ball], 1)?;
+    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+        return Ok(());
+    }
+    let (amulets, balls) = pair_load(free_slots(bot) as u32, pack_total(bot, unstrung), pack_total(bot, ball));
+    if amulets > 0 {
+        bank_withdraw_items(bot, bank, &[unstrung], amulets)?;
+    }
+    if balls > 0 {
+        bank_withdraw_items(bot, bank, &[ball], balls)?;
+    }
+    // The bank closes before the first string: an open bank reads as an
+    // unexpected interface (live admin 2026-11-15, "stringing opened an
+    // interface" right after the withdrawal).
+    if bot.world.modal.is_some() {
+        bot.close_modal()?;
+        bot.pump(2)?;
     }
     Ok(())
+}
+
+/// Amulets and balls to withdraw so the pack holds as many of each:
+/// `free` slots, `amulets`/`balls` already carried.
+fn pair_load(free: u32, amulets: u32, balls: u32) -> (u32, u32) {
+    let pairs = (free + amulets + balls) / 2;
+    (pairs.saturating_sub(amulets), pairs.saturating_sub(balls))
 }
 
 /// String one amulet: direct click, no dialogue. Any chat option or
@@ -142,8 +166,18 @@ mod tests {
 
     /// Catalogue §5.6: five F2P amulets string at level 1.
     #[test]
+    fn a_load_pairs_amulets_with_balls() {
+        assert_eq!(super::pair_load(27, 0, 0), (13, 13));
+        assert_eq!(super::pair_load(20, 2, 4), (11, 9));
+        assert_eq!(super::pair_load(0, 5, 5), (0, 0));
+    }
+
+    /// The five amulets and the holy symbol (live admin 2026-11-15:
+    /// `string:nostringstar` answered "no F2P stringing amulet").
+    #[test]
     fn five_amulets_string_at_level_one() {
-        assert_eq!(AMULETS.len(), 5);
+        assert_eq!(AMULETS.len(), 6);
+        assert_eq!(strung_for("nostringstar"), Some("stringstar"));
         assert_eq!(STRING_LEVEL, 1);
         assert_eq!(strung_for("unstrung_gold_amulet"), Some("strung_gold_amulet"));
         assert_eq!(strung_for("UNSTRUNG_DIAMOND_AMULET"), Some("strung_diamond_amulet"), "case-insensitive");

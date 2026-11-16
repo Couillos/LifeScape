@@ -54,7 +54,8 @@ fn a_trout_quota_needs_the_fly_rod_and_its_feathers() {
     let mut node = life.nodes[0].clone();
     resolve_ready(&mut node, &fisher(&["fly_fishing_rod"]));
     assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:feather".to_string() });
-    // The block files one feather per trout, from the market or chickens.
+    // The block files one feather per trout: market, chickens or a fishing
+    // shop (user 2026-11-15: merchants sell every stocked object).
     crate::lifecycle::record_block(&mut life, 0, &["feather".to_string()]);
     let feathers = life
         .nodes
@@ -63,8 +64,7 @@ fn a_trout_quota_needs_the_fly_rod_and_its_feathers() {
         .expect("feathers are planned");
     assert!(matches!(feathers.kind, NodeKind::ObtainItems { count: 100, .. }), "one feather per catch: {:?}", feathers.kind);
     let legs: Vec<&str> = feathers.alternatives.iter().map(|alt| alt.method.as_str()).collect();
-    assert!(legs.contains(&"market:buy") && legs.contains(&"farm:feather"), "market or chickens: {legs:?}");
-    assert!(!legs.contains(&"shop:buy"), "never a shop: {legs:?}");
+    assert!(legs.contains(&"market:buy") && legs.contains(&"farm:feather") && legs.contains(&"shop:buy"), "market, chickens or a shop: {legs:?}");
     // Rod and feathers held: the leg runs and names the trout.
     let mut node = quota("raw_trout", 100).nodes[0].clone();
     resolve_ready(&mut node, &fisher(&["fly_fishing_rod", "feather"]));

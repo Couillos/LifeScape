@@ -91,6 +91,18 @@ pub(crate) fn past_fallback(next: Tile, dest: Tile, best_chebyshev: i32) -> bool
     next.level == dest.level && on_plane_of(next, dest).chebyshev(dest) > best_chebyshev + FALLBACK_SLACK
 }
 
+/// Chebyshev the prune measures from (`past_fallback`): the best
+/// fallback so far, never less than the start's own distance to the
+/// target. A fence between start and target makes the way round walk
+/// away first: live 2026-11-16 (staff check, jug of water (3302,3170) in
+/// Al Kharid from Draynor), the toll fence put the best at 36, every
+/// tile past 100 was cut, the free way through Varrock (254 off the
+/// target) went with them and the plan ended adjusted at the gate.
+pub(crate) fn prune_reach(from: Tile, dest: Tile, best_chebyshev: i32) -> i32 {
+    let start = if from.level == dest.level { on_plane_of(from, dest).chebyshev(dest) } else { 0 };
+    best_chebyshev.max(start)
+}
+
 /// Rings scanned for the rank floor (bounded work per blocked search).
 const FLOOR_RINGS: i32 = 16;
 
@@ -184,5 +196,18 @@ mod tests {
         assert!(super::past_fallback(Tile { x: 3300, z: 3489, level: 0 }, booth, 36));
         assert!(super::past_fallback(Tile { x: 3300, z: 9889, level: 0 }, booth, 36));
         assert!(!super::past_fallback(Tile { x: 3300, z: 3489, level: 1 }, booth, 36), "other levels never prune");
+    }
+
+    /// Jug of water in Al Kharid from Draynor: the toll fence holds the
+    /// best at 36, the free way north through Varrock stays searched;
+    /// a start beside the target keeps the tight prune.
+    #[test]
+    fn a_fence_detour_stays_in_the_search() {
+        let jug = Tile { x: 3302, z: 3170, level: 0 };
+        let draynor = Tile { x: 3092, z: 3245, level: 0 };
+        let varrock = Tile { x: 3212, z: 3424, level: 0 };
+        assert!(!super::past_fallback(varrock, jug, super::prune_reach(draynor, jug, 36)));
+        let beside = Tile { x: 3300, z: 3172, level: 0 };
+        assert!(super::past_fallback(varrock, jug, super::prune_reach(beside, jug, 2)));
     }
 }

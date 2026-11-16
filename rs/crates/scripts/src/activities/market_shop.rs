@@ -12,7 +12,9 @@ use crate::{ScriptError, ScriptResult};
 
 /// One `market shopbuy` order as parsed: the item, its quantity, the
 /// planner's shop key (`--shop`, `gamedata::shops` name) and keeper site
-/// (`--site`), and whether the toll gate may be paid (`toll`).
+/// (`--site`), and whether the toll gate may be paid (`toll`) and the
+/// Karamja boat sailed (`boat`: a keeper on the island, the round trip
+/// budgeted by the brain).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShopOrder {
     pub item: String,
@@ -20,23 +22,28 @@ pub struct ShopOrder {
     pub shop: Option<String>,
     pub site: Option<(i32, i32, i32)>,
     pub toll: bool,
+    pub boat: bool,
     /// Uniform a guild keeper's door checks (`--wear`, worn before the walk).
     pub wear: Vec<String>,
 }
 
 /// Parse `market shopbuy <item> <qty> [--shop KEY] [--site x,z,level]
-/// [toll] [--node ID] [--budget-* N]` (no world access).
+/// [toll] [boat] [--node ID] [--budget-* N]` (no world access).
 pub fn parse_shopbuy(args: &[String]) -> Result<ShopOrder, ScriptError> {
-    const USAGE: &str = "market shopbuy <item> <qty> [--shop KEY] [--site x,z,level] [--wear ITEM]... [toll]";
+    const USAGE: &str = "market shopbuy <item> <qty> [--shop KEY] [--site x,z,level] [--wear ITEM]... [toll] [boat]";
     let usage = || ScriptError::Usage(USAGE.to_string());
     let mut positionals: Vec<String> = Vec::new();
-    let mut order = ShopOrder { item: String::new(), qty: 1, shop: None, site: None, toll: false, wear: Vec::new() };
+    let mut order = ShopOrder { item: String::new(), qty: 1, shop: None, site: None, toll: false, boat: false, wear: Vec::new() };
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
             "--budget-max" | "--budget-min" | "--node" => index += 2,
             "toll" => {
                 order.toll = true;
+                index += 1;
+            }
+            "boat" => {
+                order.boat = true;
                 index += 1;
             }
             "--shop" => {
@@ -75,8 +82,12 @@ pub fn parse_shopbuy(args: &[String]) -> Result<ShopOrder, ScriptError> {
 /// landed, 1 otherwise (the brain closes obtain nodes on holdings, never
 /// on this code alone).
 pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let ShopOrder { item, qty, shop, site, toll, wear } = parse_shopbuy(args)?;
-    if toll {
+    let ShopOrder { item, qty, shop, site, toll, boat, wear } = parse_shopbuy(args)?;
+    if boat {
+        // A Karamja keeper: the boat's round trip in the pack, paid
+        // crossings open (the toll too when the brain budgeted it).
+        crate::kit::toll::arm_fares(bot, toll, true)?;
+    } else if toll {
         bot.allow_paid = true;
     }
     let entry = lifescape_gamedata::objs_by_name(&item)

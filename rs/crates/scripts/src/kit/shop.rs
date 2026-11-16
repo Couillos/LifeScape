@@ -26,17 +26,15 @@ pub fn shop_stock_keeper(bot: &Bot, obj_name: &str) -> Option<(String, (i32, i32
     keeper_within(bot, obj_name, None)
 }
 
-/// Keepers a buy may walk to on its own: never in the Wilderness nor
-/// underground (z ≥ 6400) except on a floor the nav routes
+/// Keepers a buy may walk to on its own, Wilderness included (user
+/// 2026-11-16: open to every bot): never underground (z ≥ 6400) except
+/// on a floor the nav routes
 /// (`access::shop_floor_routed`: the Dwarven Mine, Nurmof's pickaxes),
 /// never across the toll fence `fence` (the brain passes `toll` when it
 /// funded the gate).
 pub fn reachable_keeper(spawn: (i64, i64, i64), bot: (i32, i32), fence: Option<i32>) -> bool {
     let (x, z, level) = spawn;
-    // The Wilderness test reads surface rows only (underground rows sit
-    // 6400 above their surface, `gamedata::access::gates_at`).
-    let surface = z < 6400 && !crate::kit::danger::in_wilderness(x, z, level);
-    let open = surface || knowledge::access::shop_floor_routed(x, z, level);
+    let open = z < 6400 || knowledge::access::shop_floor_routed(x, z, level);
     open && !crate::kit::bans::across_toll(bot, (x as i32, z as i32), fence)
 }
 
@@ -258,6 +256,12 @@ pub fn npc_at_spawn(bot: &mut Bot, name: &str, spawn: (i32, i32), walk_ticks: u6
 /// stream first (NPCs pop in after the walk, not on arrival): without this
 /// the two angle rounds burn on an empty view and the trade fails though
 /// the keeper stands there a few ticks later.
+/// A modal other than an overlay (the Wilderness level banner is an
+/// informational overlay, never the keeper's answer).
+fn blocking_modal(bot: &Bot) -> bool {
+    bot.world.modal.as_ref().is_some_and(|modal| modal.layer != "overlay")
+}
+
 fn trade_live_rounds(bot: &mut Bot, keeper: &str, main_com: u16, deadline: u64) -> Result<bool, ScriptError> {
     while bot.find_npc(keeper).is_none() && bot.world.ticks < deadline {
         bot.pump(5)?;
@@ -305,6 +309,10 @@ fn trade_live_rounds(bot: &mut Bot, keeper: &str, main_com: u16, deadline: u64) 
                 bot.log(&format!("trade with {keeper} failed: walk_to ({tile_x},{tile_z}) failed: {err}"));
                 continue;
             }
+            // Only this keeper's stock counts: a shop opened earlier in the
+            // session leaves its inventory behind (live admin 2026-11-16,
+            // Zambo's stock read as Fat Tony's: "no pizza_base in shop").
+            bot.world.inv.remove(&main_com);
             if let Err(err) = bot.op_npc(op, slot) {
                 if matches!(err, lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)) {
                     return Err(err.into());
@@ -313,15 +321,16 @@ fn trade_live_rounds(bot: &mut Bot, keeper: &str, main_com: u16, deadline: u64) 
                 continue;
             }
             // Short wait per angle: one blocked counter side must not eat
-            // the whole deadline before the other sides are tried.
+            // the whole deadline before the other sides are tried. The
+            // Wilderness level overlay is no answer to the trade.
             let end = bot.world.ticks + 50;
-            while bot.world.modal.is_none() && bot.world.ticks < end {
+            while !bot.world.inv.contains_key(&main_com) && !blocking_modal(bot) && bot.world.ticks < end {
                 bot.pump(5)?;
             }
             if bot.world.inv.contains_key(&main_com) {
                 return Ok(true);
             }
-            if bot.world.modal.is_some() {
+            if blocking_modal(bot) {
                 bot.log(&format!("trade with {keeper}: modal open without shop stock at {:?}, closing", bot.position()));
                 bot.close_modal()?;
                 bot.pump(5)?;
@@ -365,22 +374,20 @@ pub fn buy_stock_at(bot: &mut Bot, obj_name: &str, count: u32, shop: Option<&str
         bot.log(&format!("shop buys refused for this task, {obj_name} stays unbought"));
         return Ok(0);
     }
-    // D-A (PRD3): NPC purchases only for objects nobody makes or
-    // gathers in F2P. A producible object comes from the market or the
-    // bot's own work: blocked typed, so the brain files the obtain.
-    // Exception: the permanent kit's axes (`kit_shop_route`, user
-    // 2026-11-14), bought here only by the brain's kit step.
+    // Merchant purchases (user 2026-11-15): every F2P object a keeper
+    // stocks may be bought; a members object never (typed block, the
+    // brain files another way).
     if !knowledge::obtain::shop_buy_allowed(obj_name) {
-        bot.log(&format!("merchant purchase of {obj_name} forbidden: producible in F2P (market or craft it)"));
+        bot.log(&format!("merchant purchase of {obj_name} refused: no F2P merchant purchase"));
         return Err(ScriptError::Blocked { missing: vec![obj_name.to_string()] });
     }
     let main_com = (bot.tables.com_id)("shop_template:inv")
         .ok_or_else(|| ScriptError::Usage("shop_template:inv missing from component table".to_string()))?;
-    // Never past the toll fence, into the Wilderness or underground on
-    // the buy's own initiative: the brain passes `toll` when it funds it.
+    // Never past the toll fence or underground on the buy's own
+    // initiative: the brain passes `toll` when it funds it.
     let fence = if bot.allow_paid { None } else { crate::kit::bank::toll_gate_x(bot) };
     let Some((keeper, spawn)) = keeper_where(bot, obj_name, fence, shop) else {
-        bot.log(&format!("no reachable keeper of {} stocks {obj_name} (no wilderness, underground or toll)", shop.unwrap_or("any shop")));
+        bot.log(&format!("no reachable keeper of {} stocks {obj_name} (no underground or toll)", shop.unwrap_or("any shop")));
         return Ok(0);
     };
     if !trade_to_keeper(bot, &keeper, spawn)? {
@@ -488,34 +495,46 @@ mod tests {
         assert_eq!(buy_stock(&mut bot, "bronze_axe", 0).expect("count 0 stays Ok(0)"), 0);
     }
 
-    /// A buy never walks into the Wilderness, underground or across the
-    /// toll fence on its own (audit C10); `toll` lifts only the fence.
+    /// The Wilderness level overlay never reads as the keeper's answer; a
+    /// main or chat modal does (live admin 2026-11-16, Fat Tony).
+    #[test]
+    fn the_wilderness_overlay_is_no_trade_answer() {
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        assert!(!super::blocking_modal(&bot));
+        bot.world.modal = Some(lifescape_sdk::world::Modal { layer: "overlay".to_string(), interface_id: 197 });
+        assert!(!super::blocking_modal(&bot), "the level banner");
+        bot.world.modal = Some(lifescape_sdk::world::Modal { layer: "chat".to_string(), interface_id: 968 });
+        assert!(super::blocking_modal(&bot));
+    }
+
+    /// A buy never walks underground or across the toll fence on its own
+    /// (audit C10); `toll` lifts only the fence; the Wilderness is open
+    /// (user 2026-11-16).
     #[test]
     fn keepers_stay_on_reachable_ground() {
         assert!(super::reachable_keeper((3212, 3246, 0), (3222, 3218), Some(3268)), "Lumbridge store");
         assert!(!super::reachable_keeper((3315, 3180, 0), (3222, 3218), Some(3268)), "Al Kharid across the fence");
         assert!(super::reachable_keeper((3315, 3180, 0), (3222, 3218), None), "toll paid: fence lifted");
-        assert!(!super::reachable_keeper((3080, 3930, 0), (3222, 3218), None), "Wilderness never");
+        assert!(super::reachable_keeper((3080, 3930, 0), (3222, 3218), None), "the Wilderness is open");
         assert!(!super::reachable_keeper((3110, 9850, 0), (3222, 3218), None), "underground never");
         // 2026-11-14: Nurmof (the only F2P pickaxe upgrade seller) stands
         // on the Dwarven Mine floor the nav routes (Falador trapdoor).
         assert!(super::reachable_keeper((2998, 9844, 0), (3018, 9850), None), "routed shop floor");
     }
 
-    /// PRD3 D-A: a producible object (smithed bronze sword, stocked by
-    /// Varrock's sword shop) is never bought from a merchant; the refusal
-    /// is typed `Blocked` so the brain files an obtain (market or craft),
-    /// before any walk. The permanent kit's axes are the one exception
-    /// (`obtain::kit_shop_route`, user 2026-11-14).
+    /// User 2026-11-15: every F2P object a keeper stocks may be bought
+    /// (the producible bronze sword at Varrock's sword shop too); a
+    /// members object is refused typed `Blocked`, before any walk.
     #[test]
-    fn producible_objects_never_buy_from_merchants() {
+    fn members_objects_never_buy_from_merchants() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        match buy_stock(&mut bot, "bronze_sword", 1) {
-            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["bronze_sword".to_string()]),
-            other => panic!("producible sword must block, got {other:?}"),
+        match buy_stock(&mut bot, "abyssal_whip", 1) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["abyssal_whip".to_string()]),
+            other => panic!("a members object must block, got {other:?}"),
         }
-        assert!(lifescape_gamedata::obtain::shop_buy_allowed("bronze_axe"), "kit axe: the shop is allowed");
+        assert!(lifescape_gamedata::obtain::shop_buy_allowed("bronze_sword"), "producible and stocked: allowed");
+        assert!(lifescape_gamedata::obtain::shop_buy_allowed("bronze_axe"), "kit axe: allowed");
     }
 
     /// Shared loud guard: zero progress after a trade click is an error,

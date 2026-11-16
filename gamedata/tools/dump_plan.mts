@@ -381,10 +381,15 @@ for (let id = 0; id < NpcType.count; id++) {
     // inv -> gate sets of every path that opens it (an ungated path
     // makes the shop open without condition).
     const opens = new Map<string, Set<string>[]>();
-    const addOpen = (inv: string, gates: string[]) => {
+    // inv -> sell multiplier its `~openshop` call passes (Zaff: 1000).
+    const sells = new Map<string, number>();
+    const addOpen = (inv: string, gates: string[], sell: number | null = null) => {
         const paths = opens.get(inv) ?? [];
         paths.push(new Set(gates));
         opens.set(inv, paths);
+        if (sell !== null) {
+            sells.set(inv, sell);
+        }
     };
     let handlers = 0;
     // Per op, the NPC's own handler overrides its category handler (the
@@ -402,7 +407,7 @@ for (let id = 0; id < NpcType.count; id++) {
                         addOpen(ownedName, path_.gates);
                     }
                 } else {
-                    addOpen(path_.inv, path_.gates);
+                    addOpen(path_.inv, path_.gates, path_.sell);
                 }
             }
             break;
@@ -416,7 +421,7 @@ for (let id = 0; id < NpcType.count; id++) {
         .map(([inv, paths]) => {
             // Gates common to every path are the shop's requirement.
             const common = paths.reduce((acc, gates) => new Set([...acc].filter(gate => gates.has(gate))));
-            return { inv, gates: [...common].sort().map(varp => ({ varp, quest: varpQuest.get(varp) ?? null })) };
+            return { inv, sell_multiplier: sells.get(inv) ?? null, gates: [...common].sort().map(varp => ({ varp, quest: varpQuest.get(varp) ?? null })) };
         });
     access.push({ npc: name, npc_id: id, owned_shop: ownedName, handlers, f2p_opens: f2pOpens });
 }

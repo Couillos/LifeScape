@@ -995,3 +995,63 @@ manquantes sur le marché et à acheter les trucs pas chers ».
   sa distance (12 mineurs sur les 5 rocs de charbon de Barbarian Village :
   « no coal mined » 98 fois en 2 h). Les guildes restent prioritaires.
 
+
+## Santé des méthodes, connaissances corrigées (2026-11-15)
+
+Registre de santé (`orchestrator/src/method_health.rs`) : chaque rapport
+replié compte pour sa méthode du planner (fin de travail = ok ; échec,
+contrat, trajet = échec ; un blocage sur intrants ne compte pas). Sous
+10 % de réussite sur au moins 20 lancements, la méthode est mise en
+quarantaine (`run/method_health.json`) : le planner ne la résout plus
+(`ReadyCtx::quarantined`, `method_feasible`, choix de méthode
+d'entraînement), le log le dit une fois avec la dernière erreur, aucun
+substitut silencieux. Un `check-method` live réussi après la quarantaine
+la lève et remet les compteurs à zéro. Comptes staff hors registre.
+
+Connaissances corrigées après les tests live :
+- boutique : `source_flags` passe par `obtain::merchant_route` (une seule
+  source de vérité) ; invariant testé sur tous les objets F2P : une jambe
+  `shop:buy` a toujours un vendeur F2P au prix connu ; le multiplicateur
+  passé à `~openshop` (Zaff) est dumpé (`shop_access.json`
+  `sell_multiplier`).
+- pêche : la seconde prise d'un palier s'ouvre à son propre niveau
+  (hareng 10, saumon 30, thon 35 : `obtain::catch_level`) ; échelle
+  pêcheur palier 10 = crevettes, sardines.
+- cuisson composée : un composant que l'étape rend (`config_recipes`
+  leftover : le moule du gâteau cru) est un outil, pas un intrant
+  (`method_way::returned_by`) ; mélange du gâteau avec son moule.
+- enchantement : `method_way` connaît `enchant:<objet>` (lignes spell des
+  données serveur) ; le script dérive sa table des mêmes données (sort F2P,
+  produit non membres : le collier de saphir devient un collier de jeux).
+
+## Échelles d'ambition calculées (2026-11-15)
+
+Les échelles ne sont plus des listes écrites à la main
+(`planner/src/ambition_ladder.rs`, catalogue `ambition_catalog::specs()`) :
+- métier producteur (bûcheron, pêcheur, mineur, cuisinier, artisan,
+  forgeron, runier) : paliers tous les 10 niveaux jusqu'à 90 ; chaque
+  palier propose les produits que la compétence a ouverts dans les 15
+  derniers niveaux (sinon les meilleurs qu'elle fait), au plus 4, chacun
+  une jambe de production de cette compétence sans quête, sans ramassage,
+  sur un site F2P qu'un niveau de combat rend sûr (pas d'érable F2P, pas
+  de blurite) ; quota = actions pour monter 5 niveaux au palier (XP du
+  dump, médiane des produits), borné 10..200, arrondi à 5 ;
+- métier consommateur (allumeur, prêtre) et combattants (archer, mage) :
+  paliers de niveau, l'équipement un palier sur deux (prêtre : mêlée) ;
+  guerrier : attaque, force, défense + équipement de 20 à 90 ;
+- marchand : 5 000 → 1 000 000 pièces.
+La demande ouverte (jalon `demand:`) pèse tous les produits des
+compétences de l'échelle à 10 niveaux près, pas seulement les 4 montrés
+par palier. Invariants testés : chaque produit d'un palier est fait par la
+compétence du palier à ce niveau ; chaque quota a une jambe praticable.
+
+## Achats aux marchands (2026-11-15)
+
+Règle utilisateur, remplace D-A : tout objet F2P qu'un marchand F2P stocke
+peut lui être acheté (fabricable ou lâché par un monstre), la vente aux PNJ
+reste interdite (`obtain::merchant_buy_allowed`). À la résolution d'un
+obtain, la boutique passe d'abord quand elle ne coûte pas plus que l'offre
+du marché et que le portefeuille paie (`resolve_obtain`, étape 0, prix du
+serveur `merchant_price`) ; les étapes d'équipement prennent une offre
+couverte, sinon la boutique. Le prix du marchand plafonne ainsi le marché
+et retire des pièces du monde.

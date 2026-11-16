@@ -98,7 +98,7 @@ pub fn min_combat_for_method(method: &str) -> u8 {
     }
     let computed = match method_site_table(method) {
         // The least demanding site no gate makes impassable (Karamja water
-        // without a boat edge, dungeons, the Wilderness: never).
+        // without a boat edge, dungeons: never; the Wilderness is open).
         Some(table) => table.iter().filter(|row| row.open_ever).map(|row| row.required).min().unwrap_or(lifescape_gamedata::danger::NEVER),
         None => 3,
     };
@@ -255,9 +255,10 @@ pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
                 .map(|(x, z, level)| {
                     let (surface_x, surface_z, surface_level) = lifescape_gamedata::access::surface_of(x, z, level);
                     let gates = lifescape_gamedata::access::gates_at(x, z, level);
-                    // A Karamja site only for the scripts that sail.
-                    let sails = boat_capable(method) || !lifescape_gamedata::access::behind_boat(x, z, level);
-                    let open_ever = sails && !gates.iter().any(lifescape_gamedata::access::impassable);
+                    // Karamja is part of the map for every method (user
+                    // 2026-11-16): the boat is a fare like the toll, the
+                    // nav and the script walker pay it from the pack.
+                    let open_ever = !gates.iter().any(lifescape_gamedata::access::impassable);
                     SiteRow { site: (x, z, level), required: lifescape_gamedata::danger::site_requirement(surface_x, surface_z, surface_level), gates, open_ever }
                 })
                 .collect::<Vec<_>>(),
@@ -268,17 +269,10 @@ pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
     table
 }
 
-/// Methods whose scripts arm the boat fare (`kit::toll::arm_fares`):
-/// the gatherers and the fights. Any other method never takes a Karamja
-/// site (its script would not sail).
-pub fn boat_capable(method: &str) -> bool {
-    ["gather:fishing/", "gather:mining/", "gather:woodcut/", "fight:", "farm:"].iter().any(|family| method.starts_with(family))
-}
-
 /// Coins a trip to `site` takes from the pack: the Al Kharid toll when
 /// it crosses the fence (free after Prince Ali Rescue), the boat's round
 /// trip when the site is on Karamja.
-fn fare_need(site: (i64, i64, i64), position: Option<(i64, i64, i64)>, fare: Fare) -> i64 {
+pub(crate) fn fare_need(site: (i64, i64, i64), position: Option<(i64, i64, i64)>, fare: Fare) -> i64 {
     let across = position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, site));
     let toll = if across && !fare.free_pass { lifescape_gamedata::toll::FARE } else { 0 };
     let boat = if lifescape_gamedata::access::behind_boat(site.0, site.1, site.2) { 2 * lifescape_gamedata::services::BOAT_FARE_GP } else { 0 };

@@ -345,3 +345,17 @@ fn bank_seed_never_overrides_known_contents() {
     world.seed_closed_inv(2006, &other);
     assert!(world.inv_known(2006).expect("kept").values().any(|(obj, count)| *obj == 995 && *count == 427), "first truth kept");
 }
+
+/// A client-side close clears the modal like the server's IF_CLOSE
+/// (Client-TS `closeModal` resets its modal ids locally, the server
+/// echoes nothing): live admin 2026-11-16, the bank closed before a
+/// softclay mix still read "open" and the mix "opened an interface".
+#[test]
+fn a_local_close_clears_the_modal() {
+    let mut world = World::new();
+    world.modal = Some(super::Modal { layer: "main".to_string(), interface_id: 5292 });
+    world.texts.insert(1, "Bank".to_string());
+    world.close_interfaces();
+    assert!(world.modal.is_none());
+    assert!(world.texts.is_empty());
+}

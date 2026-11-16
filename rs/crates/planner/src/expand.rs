@@ -65,6 +65,11 @@ pub struct ReadyCtx {
     /// Sites the rest of the fleet works right now, with how many bots
     /// each (`combat::pick_site_crowded`): a crowded site reads farther.
     pub crowd: Vec<((i64, i64, i64), u32)>,
+    /// Methods the method health registry quarantined (brain,
+    /// `method_health`: under 10 % success over 20+ launches, until a
+    /// live `check-method` proves them again): never resolved, the
+    /// quarantine logged, no silent substitute.
+    pub quarantined: Vec<String>,
 }
 
 impl ReadyCtx {
@@ -92,6 +97,7 @@ impl ReadyCtx {
             quests_done: Vec::new(),
             training: None,
             crowd: Vec::new(),
+            quarantined: Vec::new(),
         }
     }
 }
@@ -105,20 +111,21 @@ impl ReadyCtx {
 pub(crate) fn source_flags(item: &str) -> (bool, bool) {
     use lifescape_gamedata::item_sources::ItemSource;
     let mut farm = false;
-    let mut shop = false;
     for source in lifescape_gamedata::item_sources::sources_for_name(item) {
         match source {
             ItemSource::Woodcut { .. }
             | ItemSource::Mine { .. }
             | ItemSource::Fish { .. }
             | ItemSource::Drop { .. } => farm = true,
-            ItemSource::Shop { .. } => shop = true,
             _ => {}
         }
     }
     // D-A (PRD3): an NPC shop leg only for objects nobody makes or
-    // gathers in F2P; producible objects come from the market or work.
-    (farm, shop && lifescape_gamedata::obtain::merchant_buy_allowed(item))
+    // gathers in F2P, and only where an F2P keeper stocks them
+    // (`obtain::merchant_route`, the one source of truth): the old index
+    // listed black_full_helm in a shop no F2P world opens (audit
+    // 2026-11-15: 1 646 doomed `shop:buy` launches).
+    (farm, lifescape_gamedata::obtain::merchant_route(item))
 }
 
 
@@ -432,13 +439,15 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     let fare = crate::combat::Fare::of(ctx);
     let pass = crate::combat::Pass::of(ctx);
     // A shop purchase walks to the nearest shop that stocks the object
-    // (the planner's shop, `--shop`), never a gated or Wilderness one.
+    // (the planner's shop, `--shop`), never a gated one.
     if locked == "shop:buy" {
         if let NodeKind::ObtainItems { item, .. } = &node.kind {
             node.site = crate::shop_site::pick_shop(item, ctx).map(|(_, site)| site);
-            // `pick_shop` keeps a keeper across the Al Kharid fence only
-            // with the fare covered: the launch then carries `toll`.
+            // `pick_shop` keeps a keeper across the Al Kharid fence or on
+            // Karamja only with the fares covered: the launch then carries
+            // `toll` / `boat`.
             node.toll = node.site.is_some_and(|site| ctx.position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, site)));
+            node.boat = node.site.is_some_and(|(x, z, level)| lifescape_gamedata::access::behind_boat(x, z, level));
         }
         return;
     }
@@ -573,7 +582,7 @@ fn lock_training_pick(node: &mut Node, ctx: &ReadyCtx) -> bool {
         return false;
     }
     let Some(pick) = ctx.training.as_ref() else { return false };
-    if crate::quests::missing_quest(&pick.method, None, ctx).is_some() {
+    if ctx.quarantined.contains(&pick.method) || crate::quests::missing_quest(&pick.method, None, ctx).is_some() {
         return false;
     }
     let mut missing: Vec<String> = Vec::new();

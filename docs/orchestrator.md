@@ -59,6 +59,18 @@ Registre : `src/registry.rs`, source unique `lifescape_scripts::names()`.
 statiques dans `orchestration/static/`, port via `LIFESCAPE_WEB_PORT`).
 Pages : `/` (bots), `/items`, `/market`, `/rates`, `/life`, `/economy`,
 `/hiscores`, `/errors`.
+Périodes des graphiques `/items` et `/market` (2026-11-15) : 24 h et
+7 jours en pas d'1 h (`res=1h`, 24/168 créneaux), 30 jours et 6 mois en
+pas d'1 jour (`res=1d`, 30/183 créneaux) ; tables `PERIODS` (`items.js`)
+et `VIEWS` (`market.js`), l'historique plus court s'affiche tel quel.
+Traçabilité `/items` (2026-11-15) : `GET /api/items/flows?item=<obj id |
+nom affiché>&hours=24` (`src/web_items.rs`, `Store::item_flows_since`,
+staff et `run/economy-excluded.txt` exclus ; sans `item`, les 60 plus
+gros flux tous objets ; même source que `orchestrator economy [h] item`)
+alimente sous le graphique de l'objet choisi le tableau « Provenance /
+destination » (provenance en clair, quantité signée + entrée / − sortie,
+rapports, ligne nette) sur la période des boutons (24/168/720/4380 h) ;
+sans données, le tableau reste vide (aucun message).
 Onglet « Cerveau » de la page Lives (`/life`, `brain.js`, 2026-11-13) :
 `GET /api/brain/<compte>` (`src/web_brain.rs`, lecture seule) agrège le
 fichier de vie (ambition passée telle quelle si présente, but + jalon

@@ -42,12 +42,9 @@ pub fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) ->
             if spawn.level != i64::from(anchor.2) {
                 continue;
             }
-            // Members land and the Wilderness are never hunting grounds:
-            // the bank-distance rank alone let a far camp (wild hill
-            // giants, Crandor hobgoblins) win when nothing nearer stood.
-            if !knowledge::free_zones::is_free(spawn.x, spawn.z)
-                || knowledge::melee_ladder::in_wilderness_any(spawn.x, spawn.z, spawn.level)
-            {
+            // Members land is never a hunting ground (Crandor hobgoblins);
+            // the Wilderness is (user 2026-11-16: open to every bot).
+            if !knowledge::free_zones::is_free(spawn.x, spawn.z) {
                 continue;
             }
             spawns.push((spawn.x, spawn.z));

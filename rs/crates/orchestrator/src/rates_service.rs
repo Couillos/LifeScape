@@ -411,6 +411,8 @@ pub struct Snapshot {
     inputs: BTreeMap<(String, String, i64), BucketStat>,
     pauses: BTreeMap<(String, i64), BucketStat>,
     pub(crate) trades: trading::TradeBook,
+    /// Each run's own flows (`rates_runs`): the profit prices one run.
+    pub(crate) runs: crate::rates_runs::Runs,
 }
 
 impl Snapshot {
@@ -455,6 +457,10 @@ impl Snapshot {
                     .or_default()
                     .add(per_window.abs());
             }
+        }
+        let flows: Vec<(String, String, i64)> = parsed.items.iter().map(|flow| (flow.name.clone(), flow.provenance.clone(), flow.quantity)).collect();
+        if let Some(run) = crate::rates_runs::run_of(&flows, work_ticks) {
+            self.runs.record(&parsed.method, parsed.band, run);
         }
         for gain in &parsed.xp {
             if let Some(per_window) = normalize_per_6000(gain.amount, work_ticks) {
@@ -658,10 +664,18 @@ fn global_snapshot() -> &'static Mutex<Snapshot> {
 
 fn load_snapshot_file() -> Snapshot {
     let path = snapshot_path();
-    match std::fs::read_to_string(&path) {
+    let mut snapshot = match std::fs::read_to_string(&path) {
         Ok(text) => snapshot_from_json(&text).unwrap_or_else(store_fallback),
         Err(_) => store_fallback(),
+    };
+    // Files written before per-run flows: rebuilt from the store reports.
+    if snapshot.runs.is_empty() {
+        if let Ok(store) = Store::open(&crate::paths::run_dir().join("lifescape.db")) {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+            snapshot.runs = crate::rates_runs::rebuild(&store, now);
+        }
     }
+    snapshot
 }
 
 /// File missing or corrupt: trading positions rebuild exactly from the
@@ -736,6 +750,7 @@ fn snapshot_to_value(snapshot: &Snapshot) -> Value {
         ("pauses", Value::Obj(pauses)),
         ("trades", trade_items),
         ("trade_last", trade_last),
+        ("runs", snapshot.runs.to_value()),
     ])
 }
 
@@ -826,6 +841,7 @@ pub(crate) fn snapshot_from_json(text: &str) -> Option<Snapshot> {
         }
     }
     snapshot.trades = trading::TradeBook::from_value(value.get("trades"), value.get("trade_last"));
+    snapshot.runs = crate::rates_runs::Runs::from_value(value.get("runs"));
     Some(snapshot)
 }
 

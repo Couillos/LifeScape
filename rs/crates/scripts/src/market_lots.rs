@@ -129,6 +129,9 @@ pub fn covered(groups: &[DealGroup], mut coins: u32, mut stock: BTreeMap<u16, u3
         .collect()
 }
 
+/// Coins the Al Kharid gate takes (`border_gate.rs2`).
+const TOLL_COINS: u32 = 10;
+
 fn open_bank_here(bot: &mut Bot) -> Result<bool, ScriptError> {
     let bank = nearest_bank(bot)?;
     if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
@@ -224,12 +227,25 @@ pub fn secure_lots(bot: &mut Bot, groups: &[DealGroup], coins: u16) -> Result<Op
         bot.log("handover: nearest bank did not open");
         return Ok(None);
     }
+    // Behind the Al Kharid toll the walk to Varrock west pays the gate:
+    // the toll stays in the pack (live 2026-11-15: 233 handovers banked
+    // every coin at Al Kharid, then `toll door loc 2883` refused the way).
+    let behind_toll = lifescape_gamedata::toll::behind(i64::from(bot.world.x), i64::from(bot.world.z), i64::from(bot.world.level));
     if let Some(side_com) = (bot.tables.com_id)("bank_side:inv") {
-        let keep = tool_ids(bot);
+        let mut keep = tool_ids(bot);
+        if behind_toll {
+            keep.push(coins);
+        }
         let _ = bot.bank_deposit_all(side_com, &keep, 300);
         bot.pump(2)?;
+        if behind_toll && crate::kit::pack::pack_total(bot, coins) < TOLL_COINS {
+            let _ = bot.bank_withdraw(coins, TOLL_COINS - crate::kit::pack::pack_total(bot, coins), 40);
+        }
     }
     let _ = bot.close_modal();
+    if behind_toll {
+        bot.allow_paid = true;
+    }
     // 2. Varrock west: the exact lots, a short safe walk from the square.
     let (stand_x, stand_z) = VARROCK_WEST_STAND;
     if let Err(error) = bot.travel_to(lifescape_sdk::plan::Tile { x: stand_x, z: stand_z, level: 0 }) {

@@ -42,6 +42,7 @@ pub fn run_devtool(name: &str, bot: &mut Bot, args: &[String]) -> ScriptResult {
     match name {
         "bank_deposit" => dev_bank_deposit(bot, args),
         "capture" => dev_capture(bot, args),
+        "check_dispose" => crate::devtools_dispose::dev_check_dispose(bot, args),
         "check_doors" => crate::devtools_check::dev_check_doors(bot, args),
         "check_routes" => crate::devtools_check::dev_check_routes(bot, args),
         "check_transitions" => crate::devtools_check::dev_check_transitions(bot, args),
@@ -78,14 +79,14 @@ pub(crate) fn impossible(why: &str) -> ScriptError {
 
 // -- shared helpers ----------------------------------------------------------
 
-/// Staff cheats only exist on the admin account; anywhere else they are
-/// refused instead of silently skipped.
+/// Staff cheats only exist on the staff accounts (admin, admin2);
+/// anywhere else they are refused instead of silently skipped.
 pub(crate) fn require_admin(bot: &Bot) -> Result<(), ScriptError> {
-    if bot.username == "admin" {
+    if ["admin", "admin2"].iter().any(|staff| bot.username.eq_ignore_ascii_case(staff)) {
         Ok(())
     } else {
         Err(ScriptError::Usage(format!(
-            "forbidden: staff cheat on non-staff account {:?} (admin only)",
+            "forbidden: staff cheat on non-staff account {:?} (admin, admin2 only)",
             bot.username
         )))
     }

@@ -49,7 +49,25 @@ avec lieux F2P, prérequis, coût ; `producible_f2p` / `merchant_buy_allowed`
 (D-A) ; raisons des inobtenables. CLI : `orchestrator obtain <objet>…`,
 `--shops` (inventaire marchand + verdict), `--unobtainable`. Boutiques
 F2P = ouvertes par un handler évalué en monde F2P (`shop_access`), stock
-members exclu (`f2p_stock`). Équipement : prérequis complets
+members exclu (`f2p_stock`). Une ligne à stock 0 (`.inv`, Grum, Drogo,
+Gerrant…) ne contient que ce que les joueurs revendent au PNJ : aucun bot
+ne vend aux PNJ, donc jamais une source d'achat ni un prix marchand
+(`shop_sources`, `merchant_price`, 2026-11-16 ; `shops.json` recorrigé :
+103 lignes lues 1 au lieu de 0). Zones fermées (`access::areas`) :
+`Gate::Quest` pour une porte de quête jamais ouverte par le planner
+(placard du manoir, arrière-boutique de Wydin), enclos d'argent et salle
+nord (four, moule d'amulette) de la Crafting Guild, rangée sud de la
+Champions' Guild (Scavvo, étage) ; `Gate::Sealed` pour des cases que nul
+n'atteint (présentoir du musée de Varrock : épée, jambières et plastron
+en fer, jamais ramassables). Wilderness ouverte à tous, toujours
+(utilisateur 2026-11-16) : plus de `Gate::Wilderness`, plus de `NEVER`
+de zone (`danger::site_requirement`, `melee_ladder`) ; ses chasseurs
+comptent comme les autres (`passive_from` = 2 × niveau + 1, ils attaquent
+toujours mais ce niveau les bat) ; seule la règle commune de distance à
+la banque (`BANK_TREK_LIMIT`) écarte le nord profond. Karamja :
+boutiques accessibles au planner (`shop_site::pick_shop`, aller-retour
+du bateau budgété, `boat` au lancement, `market shopbuy … boat` arme les
+fares), en plus de la récolte et des combats déjà routés. Équipement : prérequis complets
 (`requirements`, `quest`, `tier`, `rangebonus`) ; meilleur set par style
 et meilleurs outils : `gear::best_gear`, `gear::best_tool`. Nouveaux
 dumps (`dump_plan.mts`) : `drops.json` (+ `rate`, `qty_min/max`,

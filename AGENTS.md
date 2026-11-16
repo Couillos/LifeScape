@@ -33,6 +33,8 @@ cargo test --release --manifest-path rs/Cargo.toml --workspace
 ./rs/target/release/orchestrator status | show <compte> | see <compte> | logs <compte> [n] | unload <compte> | close <compte> | redeploy <compte> | shutdown
 ./rs/target/release/orchestrator route <x> <z> <niv> <x> <z> <niv> [--paid] [--ascii]
 ./rs/target/release/orchestrator replay-nav <dossier>
+./rs/target/release/orchestrator check-method <admin|admin2> <méthode>[@objet] [n] | check-method <staff> --list <fichier> [n] | check-method --print-all | check-method --plan <méthode>...
+./rs/target/release/orchestrator economy [heures] | bid-why <compte> <objet>
 ```
 
 Tout se compile en release (`--release`, build, tests, agents) : le daemon et les workers tournent depuis `rs/target/release/orchestrator`, jamais depuis `debug/`.
@@ -49,9 +51,9 @@ Tout se compile en release (`--release`, build, tests, agents) : le daemon et le
 8. Scripts minces et stateless : logique skill uniquement, réutilisable → SDK, données → gamedata, aucun état persisté.
 9. Protocole dans le SDK seulement : aucun script ne touche `Connection`, trames ni opcodes.
 10. Serveur = vérité : `../lostcity/engine` + `../lostcity/content` (rev 274) ; lecture/dump autorisés, modification seulement sur demande explicite. Client JS de référence (arbitrage protocole/contenu, lecture seule) : `../Client-TS` (branche 274, `src/client/Client.ts`, opcodes `src/io/ClientProt.ts|ServerProt.ts`) — le consulter en cas de doute paquet/modale/séquence, avant tout fix SDK.
-11. Comptes : `admin` pour les tests de dev, jamais `bite` (personnel) ; les 63 comptes nommés de la flotte = runs légitimes.
+11. Comptes : `admin` et `admin2` (staff) pour les tests de dev, exclus de toutes les mesures (holdings, hiscores, flotte) ; jamais `bite` (personnel) ; les 63 comptes nommés de la flotte = runs légitimes.
 12. Aucun cheat en code commité (`bot.cheat`, `::...`) hors outils dev autorisés (`give`, `goto`, `probe_*`, `debug_walk`, `check_*`).
-13. Économie propre : `admin` ne transmet jamais à un autre compte un objet ou de l'argent obtenu en trichant (`give`, `giveother`, échange, dépôt au sol, ordre au marché) ; ce qu'il triche reste chez lui, pour ses tests.
+13. Économie propre : `admin` et `admin2` peuvent tricher, mais uniquement entre eux deux (`give`, `giveother`/`teleother`/`setvarother` vers l'autre staff, échange entre eux) ; jamais vers un autre compte (échange, dépôt au sol, cheat `*other`), jamais d'ordre au marché : ce qu'ils trichent reste chez eux, pour leurs tests.
 
 ## 5. Protocole debug
 

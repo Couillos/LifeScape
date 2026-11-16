@@ -21,7 +21,9 @@ pub const DANGER_MARGIN: i64 = 1;
 /// Farthest a gather site may sit from its bank (Manhattan), shared by
 /// the planner's requirement and the scripts' pickers.
 pub const BANK_TREK_LIMIT: i64 = 150;
-/// Requirement of a place no combat level makes safe (Wilderness).
+/// Requirement of a place no combat level makes safe (no bank in reach).
+/// The Wilderness is never one (user 2026-11-16: "le wilderness doit être
+/// accessible à tous, toujours") : its hunters count like any other.
 pub const NEVER: u8 = u8::MAX;
 
 /// One aggressive spawn and the square where it hunts.
@@ -82,13 +84,12 @@ pub fn hunts(hunter: &Hunter, combat: Option<u8>) -> bool {
     hunter.wilderness || combat.is_none_or(|ours| i64::from(ours) <= hunter.vislevel * 2)
 }
 
-/// Combat level this hunter stops hunting at (`NEVER` in the Wilderness).
+/// Combat level from which this hunter is no lethal threat: past twice
+/// its level it turns passive on the surface; in the Wilderness it still
+/// attacks (`hunts`), and the same level beats it — the zone itself is
+/// never refused (user 2026-11-16).
 pub fn passive_from(hunter: &Hunter) -> u8 {
-    if hunter.wilderness {
-        NEVER
-    } else {
-        (hunter.vislevel * 2 + 1).clamp(3, i64::from(NEVER) - 1) as u8
-    }
+    (hunter.vislevel * 2 + 1).clamp(3, i64::from(NEVER) - 1) as u8
 }
 
 fn covers(hunter: &Hunter, x: i64, z: i64, level: i64) -> bool {
@@ -96,7 +97,7 @@ fn covers(hunter: &Hunter, x: i64, z: i64, level: i64) -> bool {
 }
 
 /// Lowest combat level at which no lethal hunter covers this tile (3 when
-/// none does, `NEVER` when a Wilderness hunter does).
+/// none does).
 pub fn required_combat_at(x: i64, z: i64, level: i64) -> u8 {
     hunters().iter().filter(|hunter| covers(hunter, x, z, level)).map(passive_from).max().unwrap_or(3)
 }
@@ -120,11 +121,8 @@ pub fn site_bank(x: i64, z: i64, level: i64) -> Option<crate::banks::Bank> {
 
 /// Combat a bot needs to work this site and bank its output: the site
 /// and its bank must both sit outside every hunter it would meet.
-/// `NEVER` without a reachable bank or inside the Wilderness.
+/// `NEVER` only without a reachable bank (the Wilderness is open).
 pub fn site_requirement(x: i64, z: i64, level: i64) -> u8 {
-    if in_wilderness(x, z, level) {
-        return NEVER;
-    }
     let Some(bank) = site_bank(x, z, level) else {
         return NEVER;
     };
@@ -193,7 +191,7 @@ mod tests {
         assert!(!skeleton.wilderness);
         assert_eq!(passive_from(skeleton), 45, "vislevel 22: passive from combat 45");
         let druid = hunters().iter().find(|hunter| hunter.name == "chaos_druid" && (hunter.x, hunter.z) == (3105, 9936)).expect("wild druid");
-        assert_eq!(passive_from(druid), NEVER);
+        assert_eq!(passive_from(druid), (druid.vislevel * 2 + 1) as u8, "beaten like any hunter, never a closed zone");
     }
 
     /// Computed, not written: the only toll-free shrimp water with a bank
@@ -203,7 +201,11 @@ mod tests {
         assert_eq!(required_combat_at(3085, 3230, 0), 15, "north Draynor spot under the wizards");
         let shrimp = method_requirement("fishing", "raw_shrimp").expect("shrimp sites exist");
         assert!(shrimp <= 15, "some shrimp water is safe from 15 on, got {shrimp}");
-        assert_eq!(site_requirement(3050, 3704, 0), NEVER, "Wilderness water is never safe");
+        assert!(in_wilderness(3090, 3540, 0));
+        assert!(site_requirement(3090, 3540, 0) < NEVER, "the Wilderness is open to every bot (user 2026-11-16)");
+        // Deep north: the bank trek (`BANK_TREK_LIMIT`), the same rule as
+        // anywhere else, not the zone.
+        assert_eq!(site_requirement(3050, 3704, 0), NEVER);
     }
 
     #[test]

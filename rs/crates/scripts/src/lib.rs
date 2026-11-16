@@ -7,6 +7,7 @@ pub mod activities;
 pub mod contract;
 pub mod devtools;
 pub mod devtools_check;
+pub mod devtools_dispose;
 pub mod devtools_probe;
 pub mod kit;
 pub mod legacy;
@@ -240,7 +241,7 @@ pub fn names() -> Vec<&'static str> {
         "quest_romeo_and_juliet", "quest_rune_mysteries", "quest_sheep_shearer",
         "quest_shield_of_arrav", "quest_vampire_slayer", "quest_witchs_potion",
         "rescue_maze", "rescue_mime", "rescue_cube", "rescue_down", "rescue_greet", "rescue_fallback",
-        "check_transitions", "check_doors", "check_routes", "goto", "walkto", "walktour",
+        "check_transitions", "check_doors", "check_routes", "check_dispose", "goto", "walkto", "walktour",
         "bank_deposit", "drop", "debug_walk", "trade_swap", "quest_reset", "reset_quests",
         "give", "hello", "probe_transitions",
     ]
@@ -321,6 +322,7 @@ fn runner(name: &str) -> Option<Runner> {
         "probe_transitions" => Some(|bot, args| devtools::run_devtool("probe_transitions", bot, args)),
         "check_doors" => Some(|bot, args| devtools::run_devtool("check_doors", bot, args)),
         "check_routes" => Some(|bot, args| devtools::run_devtool("check_routes", bot, args)),
+        "check_dispose" => Some(|bot, args| devtools::run_devtool("check_dispose", bot, args)),
         "walktour" => Some(|bot, args| devtools::run_devtool("walktour", bot, args)),
         "bank_deposit" => Some(|bot, args| devtools::run_devtool("bank_deposit", bot, args)),
         "drop" => Some(|bot, args| devtools::run_devtool("drop", bot, args)),
@@ -338,10 +340,11 @@ pub fn run(name: &str, bot: &mut Bot, args: &[String]) -> ScriptResult {
     match runner(name) {
         Some(execute) => {
             // A bot left on Karamja without the fare back earns it first
-            // (`kit::stranded`): every walk off the island needs it.
+            // (`kit::stranded`): every walk off the island needs it. The
+            // island is part of the map (user 2026-11-16): a run starting
+            // there works there, its walks sail when they must.
             if guards_the_fare(name) {
                 kit::stranded::earn_fare_if_stranded(bot)?;
-                kit::stranded::leave_island_unless_sailing(bot, args)?;
             }
             execute(bot, args)
         }
@@ -398,7 +401,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 75, "dialogue_buy joined the registry");
+        assert_eq!(names().len(), 76, "check_dispose joined the registry");
     }
 
     #[test]

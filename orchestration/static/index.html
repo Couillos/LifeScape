@@ -37,21 +37,29 @@
   #layout .block > h2 { height: var(--head); line-height: var(--head); margin: 0; }
   #layout .block + .block > h2 { margin-top: 10px; }
   #layout .block > .panel { margin-top: 6px; }
-  /* Right of the list: the top row (canvas, dialogue, inventory), then
-     info + log side by side, half of that width each. */
-  #main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
-  #top { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
-  #bottom { display: flex; gap: 16px; align-items: flex-start; }
-  #bottom > .block { flex: 1 1 50%; min-width: 0; }
-  #layout #bottom .panel { max-width: none; }
-  #layout #bottom .block > h2 { margin-top: 0; }
-  #bottom .infopanel { max-height: 260px; }
+  /* Right of the list: canvas (info + log under it), then the grid of
+     inventory | skills over messages | scenery up to the right edge. */
+  #main { flex: 1 1 0; min-width: 0; display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  .infopanel { max-height: 260px; }
+  /* Inventory and skills never scroll: every line is shown. */
+  #layout .panel.fullpanel { max-height: none; overflow: visible; }
+  /* One bordered box per block, its title centered inside (yellow), a
+     rule under it; the inner panel loses its own frame. The first box of
+     the inventory and messages columns starts level with the canvas. */
+  #layout .block.boxed { background: #0a0a0a; border: 1px solid #333; box-sizing: border-box; max-width: 560px; margin-top: 10px; }
+  #layout .block.boxed > h2 { height: auto; line-height: var(--head); margin: 0; text-align: center; border-bottom: 1px solid #333; }
+  #layout .block.boxed > .panel { margin-top: 0; border: 0; background: none; max-width: none; }
+  #layout .block.boxed #log { border: 0; background: none; }
+  /* Right of the canvas: inventory | skills on one row, same height, no
+     scroll; messages | scenery under them. Starts level with the canvas. */
+  #right { flex: 1 1 520px; min-width: 500px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: stretch; margin-top: calc(var(--head) + 6px); }
+  #right > .block.boxed { margin-top: 0; max-width: none; }
   /* Bot table: one row per bot, click = follow, header click = sort. */
   #playerswrap { overflow-x: auto; margin: 8px 0; }
-  #players { border-collapse: collapse; font-size: 12px; width: 100%; }
-  #players td, #players th { border: 1px solid #333; padding: 2px 8px; text-align: right; white-space: nowrap; }
-  #players th { color: #888; font-weight: normal; }
-  #players td.left, #players th.left { text-align: left; }
+  #players, #skills { border-collapse: collapse; font-size: 12px; width: 100%; }
+  #players td, #players th, #skills td, #skills th { border: 1px solid #333; padding: 2px 8px; text-align: right; white-space: nowrap; }
+  #players th, #skills th { color: #888; font-weight: normal; }
+  #players td.left, #players th.left, #skills td.left, #skills th.left { text-align: left; }
   #players tr[data-account] { cursor: pointer; }
   #players tr[data-account]:hover { background: #1a1a1a; }
   #players tr.cur { font-weight: bold; color: #ff0; }
@@ -61,14 +69,15 @@
     #list { margin-top: 0; position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; width: 560px; max-width: 95vw; flex: none; max-height: none; border-right: 1px solid #444; border-top: 0; border-bottom: 0; border-left: 0; }
     body.list-hidden #list { transform: translateX(-105%); }
     #toggle, #drawer-close { display: inline-block; }
-    /* Mobile block order: canvas, infotext, dialogue, message, inventory,
-       skills, scenery, log. Columns dissolve so blocks order directly. */
+    /* Mobile block order: canvas, infotext, message, inventory, skills,
+       scenery, log. Columns dissolve so blocks order directly. */
     #layout { flex-direction: column; }
-    #main, #top, #bottom, #center, #mid, #side { display: contents; }
+    #main, #center, #right { display: contents; }
     .block { width: 100%; max-width: none; }
-    .b-canvas { order: 1; } .b-info { order: 2; } .b-dialog { order: 3; }
-    .b-msg { order: 4; } .b-inv { order: 5; } .b-skills { order: 6; }
-    .b-scenery { order: 7; } .b-log { order: 8; }
+    .b-canvas { order: 1; } .b-info { order: 2; }
+    .b-msg { order: 3; } .b-inv { order: 4; } .b-skills { order: 5; }
+    .b-scenery { order: 6; } .b-log { order: 7; }
+    #right > .block.boxed { margin-top: 10px; }
   }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; background: #555; }
   .running { background: #46c46f; } .reconnecting, .busy, .starting { background: #d9a441; }
@@ -77,13 +86,11 @@
   .pill.running { background: #46c46f; color: #000; } .pill.crashed { background: #e05a5a; color: #000; }
   .pill.paused { background: #d9a441; color: #000; } .pill.stopped { background: #6b7280; color: #000; }
   .pill.empty { background: none; border: 1px solid #555; color: #888; }
-  #center { flex: 2 1 420px; min-width: 300px; max-width: 560px; }
-  #mid { flex: 1 1 260px; min-width: 240px; max-width: 420px; }
+  #center { flex: 3 1 360px; min-width: 300px; max-width: 560px; }
   #title { color: #888; height: var(--head); margin: 0 0 6px; display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; overflow: hidden; box-sizing: border-box; }
   #zonename { color: #ff0; margin-left: 8px; }
   canvas { background: #111; border: 1px solid #444; image-rendering: pixelated; width: 100%; max-width: 560px; aspect-ratio: 1; display: block; box-sizing: border-box; }
   #layout .panel { max-width: 560px; box-sizing: border-box; }
-  #side { flex: 1 1 260px; min-width: 240px; max-width: 420px; }
   .panel { background: #0a0a0a; border: 1px solid #333; padding: 6px; margin-top: 6px; max-height: 200px; overflow-y: auto; font-size: 12px; }
   .panel pre { white-space: pre-wrap; margin: 0; font-family: monospace; }
   .logpanel { background: none; border: 0; padding: 0; max-height: none; overflow: visible; }
@@ -91,8 +98,8 @@
   .muted { color: #888; }
   @media (max-width: 900px) {
     #layout { flex-direction: column; }
-    #top, #bottom { flex-direction: column; }
-    #center, #mid, #side, #bottom > .block { max-width: none; width: 100%; flex: 1 1 auto; }
+    #main { flex-direction: column; }
+    #center, #right { max-width: none; width: 100%; flex: 1 1 auto; }
   }
 </style>
 </head>
@@ -130,24 +137,16 @@
     <div id="playerswrap"><table id="players"><tr><td class="left muted">loading…</td></tr></table></div>
   </div>
   <div id="main">
-  <div id="top">
   <div id="center">
     <div class="block b-canvas"><div id="title" class="muted"><span id="titletext">Click a bot to follow it.</span><span id="scriptpill" class="pill" style="display:none"></span><span id="scriptname" class="pill empty" style="display:none"></span><span id="zonename"></span> <button id="btn-close" title="Cut the session: log out and drop the connection">close</button></div><canvas id="map" width="560" height="560"></canvas></div>
+    <div class="block boxed b-info"><h2>Info</h2><div class="panel infopanel"><pre id="infotext"></pre></div></div>
+    <div class="block boxed b-log"><h2>Log</h2><div class="panel logpanel"><pre id="log"></pre></div></div>
   </div>
-  <div id="mid">
-    <div class="block b-dialog"><h2>Dialogue / window</h2><div class="panel"><pre id="dialog"></pre></div></div>
-    <div class="block b-msg"><h2>Messages</h2><div class="panel"><pre id="chat"></pre></div></div>
-    <div class="block b-scenery"><h2>Scenery &amp; ground items</h2><div class="panel"><pre id="scenery"></pre></div></div>
-  </div>
-  <div id="side">
-    <div class="block b-inv"><h2 id="invtitle">Inventory</h2><div class="panel"><pre id="inv"></pre></div></div>
-    <div class="block b-skills"><h2>Skills</h2><div class="panel"><pre id="skills"></pre></div></div>
-  </div>
-  </div>
-  <!-- Under the canvas: info and log, half of the area right of the list each. -->
-  <div id="bottom">
-    <div class="block b-info"><h2>Info</h2><div class="panel infopanel"><pre id="infotext"></pre></div></div>
-    <div class="block b-log"><h2>Log</h2><div class="panel logpanel"><pre id="log"></pre></div></div>
+  <div id="right">
+    <div class="block boxed b-inv"><h2 id="invtitle">Inventory</h2><div class="panel fullpanel"><pre id="inv"></pre></div></div>
+    <div class="block boxed b-skills"><h2>Skills</h2><div class="panel fullpanel"><table id="skills"></table></div></div>
+    <div class="block boxed b-msg"><h2>Messages</h2><div class="panel"><pre id="chat"></pre></div></div>
+    <div class="block boxed b-scenery"><h2>Scenery &amp; ground items</h2><div class="panel"><pre id="scenery"></pre></div></div>
   </div>
   </div>
 </div>

@@ -156,7 +156,9 @@ fn shop_sources(name: &str, out: &mut Vec<ItemSource>) {
         if !is_purchasable(&shop) {
             continue;
         }
-        if f2p::f2p_stock(&shop).iter().any(|stock| stock.obj == name) {
+        // A line at 0 holds only what players sell the keeper; no bot
+        // sells to an NPC, so it never stocks (Grum's jewellery).
+        if f2p::f2p_stock(&shop).iter().any(|stock| stock.obj == name && stock.count > 0) {
             out.push(ItemSource::Shop { shop: shop.name });
         }
     }

@@ -616,7 +616,7 @@ mod tests {
         assert_eq!(ambition.kind, "smith");
         assert!(lifescape_planner::pinned(&ambition));
         assert_eq!(origin, "m1");
-        assert!(matches!(goal, GoalKind::MaxSkills { ref skills, level: 10 } if skills == &vec!["mining".to_string()]), "smith starts on mining 10: {goal:?}");
+        assert!(matches!(goal, GoalKind::MaxSkills { ref skills, level: 10 } if skills == &vec!["smithing".to_string()]), "smith starts on smithing 10 (computed ladder): {goal:?}");
         assert!(pinned_start("hitpoints", 99, 11).is_err());
     }
 

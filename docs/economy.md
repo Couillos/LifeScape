@@ -1021,3 +1021,85 @@ plus rentable gagne, sinon la moins chère par XP : un bot qui gagne
 mieux en farmant de l'argent achète les composants bon marché au lieu de
 les récolter.
 
+
+## Registre de pièces et mesure de l'économie (2026-11-15)
+
+Le classement des pièces par écart de stock avant/après (heuristique de
+`session_report`) attribuait 1,35 M de « ventes en boutique » en 24 h alors
+qu'aucun bot ne vend aux PNJ. Le SDK tient désormais un registre
+(`sdk/src/client/coin_ledger.rs`) : chaque variation des pièces du sac est
+un flux, attribué au contexte que l'action a nommé pour quelques ticks
+(`Bot::coin_context`) : `shop` (boutons de la grille ou du côté sac d'une
+boutique), `trade` (écrans d'échange), `fee` (péage, passeur, tanneur),
+`loot` (objet au sol ramassé), `alch` (sort sur un objet porté),
+`dialogue` (achat par dialogue). Une variation banque ouverte est un
+transfert, jamais un flux ; ce qu'aucun contexte n'explique reste
+`unattributed`. Le rapport de tâche lit ces flux (provenances `shop_sold`,
+`shop_bought`, `traded`, `fee` (nouvelle), `loot`, `produced`, reste
+`unattributed`/`lost`).
+
+`orchestrator economy [heures]` : masse monétaire (instantané
+`holdings_hourly`, staff et exclusions hors champ) et sa variation par jour,
+flux de pièces de la fenêtre par provenance (`traded` = transfert entre
+joueurs), indice de prix de Laspeyres de la fenêtre contre la précédente
+sur les exécutions réelles, nombre d'objets échangés à 1 pièce.
+
+## Remises : paiement Offer-X, banque pleine, péage (2026-11-15)
+
+Diagnostic sur 24 h (3 818 `timeout`, 1 027 `short`) :
+- 64 % des timeouts : l'acheteur payait en Offer-10, un clic par aller-
+  retour serveur, avec une pile de pièces plus grosse que le dû (le retrait
+  prend toute la pile) ; au-delà d'environ 2 100 pièces, les 300 ticks de
+  l'offre ne suffisaient jamais (aucun deal réglé au-dessus de 2 261
+  pièces). `trade_offer` paie désormais une partie de pile en un seul
+  Offer-X (`[inv_button5,tradeside:inv]` puis `p_countdialog`, réponse
+  `RESUME_P_COUNTDIALOG` au montant exact, séquence de Client-TS) ; une
+  pile exacte reste Offer-All. Les objets passent toujours en billets quand
+  ils en ont (`withdraw_lots`) : un gros volume = une case, un clic.
+- 96 % des shorts : banque F2P pleine (60 types). Le nettoyage D17
+  annulait bien les annonces mais ne pouvait rien retirer avec un sac plein
+  des objets refusés au dépôt (« still locked » trompeur) : il jette
+  maintenant le moins cher non protégé du sac avant chaque retrait.
+- 6 % : derrière le péage d'Al Kharid, la remise déposait toutes les pièces
+  puis ne pouvait plus passer la porte vers Varrock ouest : le péage reste
+  dans le sac (retiré au besoin), chemins payants ouverts pour ce trajet.
+Restent à traiter : étiqueter `short`/`no window` de l'échange autrement
+que `timeout` (sans les pénalités du `short` vendeur), le refus « I can't
+reach that! » à la banque la plus proche (7 %), l'arrêt d'un run pendant
+la remise (2 %).
+
+`orchestrator bid-why <compte> <objet>` (daemon : carnet en mémoire) rejoue
+pour un bot la réponse aux offres d'achat étape par étape
+(`bid_response::explain`) : tour de l'objet (répartition), recette, demande
+(meilleure offre, profondeur, part des ventes, alchimie), coût unitaire et
+plan, lot absorbé, charge d'entraînement, taux contre le plancher (taux
+propre × 1,25) et profit contre le minimum. Une offre ignorée dit pourquoi.
+
+## Taux propre d'un bot : profit par run (2026-11-15)
+
+`bid-why` a montré un taux propre de 70 pièces par tick (420 000 de
+l'heure) : la ligne de profit d'une méthode additionnait le rendement moyen
+de CHAQUE objet jamais vu dans son seau (cuisine niveau 16 : crevettes,
+viande, truite, sardines, anchois, une barre d'acier mal attribuée), comme
+si un run les produisait tous : 422 083 pièces par 6 000 ticks, et aucun
+lot ne battait jamais ce taux. `orchestrator/src/rates_runs.rs` garde les
+flux de chaque run (produits positifs, intrants négatifs, par 6 000 ticks,
+50 derniers par méthode et palier, persistés avec l'instantané des taux et
+reconstruits depuis les rapports en base au démarrage) ; le profit est la
+valeur nette du run médian aux prix du jour. Taux propres après correction :
+4 à 6,5 pièces par tick. Une récolte sans site F2P n'est plus une jambe
+(`obtain_legs` : pas d'érable F2P).
+
+## Registre d'objets : d'où vient et où part chaque objet (2026-11-15)
+
+Le registre de pièces s'étend à tout objet porté
+(`sdk/src/client/item_ledger.rs`) : chaque variation du sac est un flux
+attribué au contexte de l'action (boutique, échange, frais, ramassage,
+alchimie, achat par dialogue, objet jeté par `Bot::drop`), sinon à la
+compétence quand l'XP a bougé dans les 8 ticks (produit ou consommé par le
+travail), sinon à une mort ; banque ouverte = transfert. Le rapport de
+tâche prend ces provenances (`produced`, `consumed`, `shop_bought`,
+`shop_sold`, `traded`, `loot`/`ground_spawn`, `lost`, `death`) ; seul un
+reste que le registre n'explique pas garde la règle par différence.
+`orchestrator economy [heures] item <nom>` liste les entrées (+) et sorties
+(−) d'un objet par provenance ; sans nom, les principaux flux du monde.

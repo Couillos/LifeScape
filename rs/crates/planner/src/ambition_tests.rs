@@ -5,7 +5,7 @@ use super::{
     achieved, goal_for_milestone, mark_drawn, may_change, new_ambition, next_milestone, on_goal_closed, refresh, revise,
     BotNow, CloseOutcome, MilestoneStatus, Stamp, Target, AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS,
 };
-use crate::ambition_catalog::{fit, kind_weights, products, spec, DemandItem, Then, GROUPS, MERCHANT, SPECS};
+use crate::ambition_catalog::{fit, kind_weights, products, spec, DemandItem, Then, GROUPS, MERCHANT, specs};
 use crate::ambition_fleet::{assign_fleet, coverage_gaps, draw_kind, optional_change, FleetBot};
 use crate::model::{Archetype, GoalKind, Life, Profile};
 
@@ -111,7 +111,7 @@ fn melee_is_one_group() {
         assert!(!GROUPS.contains(&stat), "{stat} is not a group");
         assert_eq!(crate::ambition_catalog::group_of_skill(stat), Some("melee"));
     }
-    let warriors = SPECS.iter().filter(|entry| entry.groups.first() == Some(&"melee")).count();
+    let warriors = specs().iter().filter(|entry| entry.groups.first() == Some(&"melee")).count();
     assert_eq!(warriors, 1, "one melee ambition");
     assert!(coverage_gaps(&["warrior"]).iter().all(|gap| gap != "melee"));
     let warrior = spec("warrior").expect("warrior");
@@ -229,13 +229,12 @@ fn blocked_milestone_redraws_after_three_blocks() {
 fn banned_skills_are_skipped_and_goals_follow_milestones() {
     let mut life = life_with("smith");
     let ambition = life.ambition.as_ref().expect("smith");
+    // Computed smith ladder (user 2026-11-15): smithing rungs from 10.
     let first = next_milestone(ambition, &[]).expect("open");
-    assert!(matches!(&first.target, Target::Level { skill, level: 10 } if skill == "mining"), "{first:?}");
-    let banned = next_milestone(ambition, &["mining".to_string()]).expect("a smithing one");
-    assert!(banned.target.skills().iter().all(|skill| skill != "mining"));
-    assert!(next_milestone(ambition, &["mining".to_string(), "smithing".to_string()]).is_none());
+    assert!(matches!(&first.target, Target::Level { skill, level: 10 } if skill == "smithing"), "{first:?}");
+    assert!(next_milestone(ambition, &["smithing".to_string()]).is_none(), "every rung climbs smithing");
     let drawn = crate::goals::draw_goal_origin(&life, &|_| 1, &|_| 0).expect("a goal");
-    assert!(matches!(drawn.0, GoalKind::MaxSkills { ref skills, level: 10 } if skills == &vec!["mining".to_string()]));
+    assert!(matches!(drawn.0, GoalKind::MaxSkills { ref skills, level: 10 } if skills == &vec!["smithing".to_string()]));
     let produce = ambition.milestones.iter().find(|stone| stone.target.kind() == "produce").expect("a quota");
     assert!(matches!(goal_for_milestone(produce), GoalKind::Produce { .. }));
     life.ambition = None;
@@ -285,22 +284,22 @@ fn open_bids_become_demand_milestones() {
 }
 
 /// Every catalogue product maps to a production leg (made, never bought)
-/// and every rung's product is within its rung level.
+/// of the rung's skill at or under the rung level (computed ladders,
+/// user 2026-11-15).
 #[test]
 fn catalogue_products_are_producible() {
-    for entry in SPECS {
+    for entry in specs() {
         for rung in entry.ladder {
-            if let Then::Produce(items, count, _) = rung.then {
+            if let Then::Produce(items, count, skill) = rung.then {
                 assert!(count > 0);
                 for item in items {
                     let legs = crate::obtain_legs::produce_alternatives(item);
                     assert!(!legs.is_empty(), "{}: {item} has no production leg", entry.kind);
                     assert!(legs.iter().all(|leg| !leg.method.starts_with("market:") && !leg.method.starts_with("shop:")));
-                    for leg in crate::obtain_legs::production_legs(item) {
-                        if let Some((_, needed)) = leg.skill {
-                            assert!(rung.level == 0 || needed <= i64::from(rung.level), "{}: {item} needs {needed} > rung {}", entry.kind, rung.level);
-                        }
-                    }
+                    let reachable = crate::obtain_legs::production_legs(item)
+                        .iter()
+                        .any(|leg| leg.skill.as_ref().is_some_and(|(trained, needed)| trained == skill && *needed <= i64::from(rung.level)));
+                    assert!(rung.level == 0 || reachable, "{}: {item} not made by {skill} at rung {}", entry.kind, rung.level);
                 }
             }
         }
@@ -313,7 +312,7 @@ fn catalogue_products_are_producible() {
 /// Karamja fish, no maple).
 #[test]
 fn catalogue_products_are_plannable() {
-    for entry in SPECS {
+    for entry in specs() {
         for rung in entry.ladder {
             if let Then::Produce(items, _, _) = rung.then {
                 for item in items {

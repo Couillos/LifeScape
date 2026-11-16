@@ -28,16 +28,11 @@ fn ladder_climbs_one_tier_per_levels() {
     assert_eq!(step_item(&[("attack", 20), ("defence", 1)], &["steel_scimitar"]).as_deref(), Some("mithril_scimitar"));
     assert_eq!(step_item(&[("attack", 40), ("defence", 40)], &["bronze_scimitar"]).as_deref(), Some("iron_scimitar"), "never skips a tier");
     assert_eq!(step_item(&[("attack", 20), ("defence", 1)], &["black_scimitar"]).as_deref(), Some("mithril_scimitar"), "black ranks with steel");
-    // Black is never a step (no smithing recipe: D-A merchant item).
+    // Black is never a step (no smithing recipe).
     for levels in [[("attack", 10), ("defence", 10)], [("attack", 1), ("defence", 1)]] {
         let mut have: Vec<String> = Vec::new();
         while let Some(step) = next_gear_step(&levels, &have) {
             assert!(!step.item.starts_with("black_"), "{}", step.item);
-            assert!(
-                !lifescape_gamedata::obtain::merchant_buy_allowed(&step.item),
-                "D-A: {} is producible, never a shop purchase",
-                step.item
-            );
             have.push(step.item);
         }
         assert!(have.len() >= 5, "every slot climbs: {have:?}");
@@ -73,8 +68,9 @@ fn moves_follow_the_book_and_the_wallet() {
     assert_eq!(gear_move(Some(&step), None, 1, None, 1), GearMove::Obtain { item: "iron_scimitar".to_string() }, "too poor to bid: earn first");
 }
 
-/// The ladder obtain is market only (never a shop, D-A), buys a covered
-/// ask at once and blocks on the wallet whose share covers a dearer one.
+/// The ladder obtain takes a covered ask, else the keeper that stocks
+/// the piece (user 2026-11-15), and blocks on the wallet whose share
+/// covers a dearer ask.
 #[test]
 fn ladder_obtain_buys_within_its_share_or_earns() {
     let mut life = life_with(Vec::new());
@@ -82,18 +78,21 @@ fn ladder_obtain_buys_within_its_share_or_earns() {
     assert_eq!(ids.len(), 2);
     let obtain = life.nodes.iter().position(|node| node.id == ids[0]).expect("obtain");
     let methods: Vec<&str> = life.nodes[obtain].alternatives.iter().map(|alt| alt.method.as_str()).collect();
-    assert_eq!(methods, vec!["market:buy"], "market only, never shop:buy");
+    assert_eq!(methods, vec!["market:buy", "shop:buy"], "a covered ask first, else the sword shop");
     assert!(is_gear_obtain(&life, obtain));
     let mut ctx = ReadyCtx::blind(0.5);
     ctx.coin_share_pct = Some(GEAR_SHARE_PCT);
     ctx.coins = 100;
     ctx.price = 1;
     ctx.best_ask = Some(40);
+    // The sword shop sells dearer than the ask: the ask wins.
+    ctx.shop_price = 112;
     let mut node = life.nodes[obtain].clone();
     resolve_ready(&mut node, &ctx);
     assert_eq!(node.method.as_deref(), Some("market:buy"), "40 <= half of 100");
     assert_eq!(crate::resolve_obtain::bid_ceiling(&ctx, 1), 50);
     ctx.best_ask = Some(70);
+    // The sword shop asks more than the wallet holds: no shop either.
     let mut node = life.nodes[obtain].clone();
     resolve_ready(&mut node, &ctx);
     assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:coins:140".to_string() }, "a 70-coin ask needs 140 in the wallet");
@@ -239,7 +238,7 @@ fn a_pickaxe_step_buys_at_nurmof() {
     let ids = insert_gear_step(&mut life, Some("steel_pickaxe"), "melee");
     let obtain = life.nodes.iter().position(|node| node.id == ids[0]).expect("obtain");
     let methods: Vec<&str> = life.nodes[obtain].alternatives.iter().map(|alt| alt.method.as_str()).collect();
-    assert_eq!(methods, vec!["shop:buy"], "only Nurmof sells it");
+    assert_eq!(methods, vec!["market:buy", "shop:buy"], "a covered ask, else Nurmof");
     assert!(is_gear_obtain(&life, obtain));
     let mut ctx = ReadyCtx::blind(0.5);
     ctx.coin_share_pct = Some(GEAR_SHARE_PCT);

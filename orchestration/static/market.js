@@ -1,7 +1,8 @@
 // Market front: item list, OHLC candles over volume bars, book and last
 // trades. Canvas maison via the shared LifeChart module (chart.js).
-// Two views: 24 h of hourly candles (default, D42), or 6 months of daily
-// candles. Fixed time slots (24 or 183) ending on the live window; no gap
+// Four views: 24 h (default, D42) or 7 days of hourly candles, 30 days or
+// 6 months of daily candles. Fixed time slots (24, 168, 30 or 183) ending
+// on the live window; no gap
 // (user rule 2026-11-13): every candle opens at the previous close and a
 // trade-less slot is a flat grey candle at the last close (the server
 // history is already chained, `LifeChart.carryFlat` keeps the live tail
@@ -10,6 +11,13 @@
 const PAGE_SIZE = 25;
 let items = [];
 let selected = null;
+// Chart views: candle resolution, slot width and slot count.
+const VIEWS = {
+  hour: { res: '1h', width: 3600, count: 24 },
+  week: { res: '1h', width: 3600, count: 168 },
+  month: { res: '1d', width: 86400, count: 30 },
+  day: { res: '1d', width: 86400, count: 183 },
+};
 let view = 'hour';
 let candles = [];
 // Last trade price before the history window: the close the leading
@@ -47,14 +55,16 @@ async function loadList() {
 
 async function loadDetail() {
   if (selected === null) return;
-  const res = view === 'hour' ? '1h' : '1d';
+  const requested = view;
+  const res = VIEWS[view].res;
   // Same windows as the drawn slots: the server chains candles from the
   // first slot (opened by `prev_close`) up to the live one.
   const to = Math.floor(Date.now() / 1000);
   const from = currentSlots(to).slots[0];
   try {
     const payload = await getJson('/api/market/history?item=' + selected + '&res=' + res + '&from=' + from + '&to=' + to);
-    if (payload.ok) {
+    // A view switched mid-request keeps the newer view's candles.
+    if (payload.ok && requested === view) {
       candles = payload.candles;
       prevClose = payload.prev_close === undefined ? null : payload.prev_close;
       trades = payload.trades;
@@ -141,8 +151,9 @@ function pick(id) {
 
 function setView(next) {
   view = next;
-  document.getElementById('v-day').className = next === 'day' ? 'cur' : '';
-  document.getElementById('v-hour').className = next === 'hour' ? 'cur' : '';
+  for (const key of Object.keys(VIEWS)) {
+    document.getElementById('v-' + key).className = key === next ? 'cur' : '';
+  }
   loadDetail();
 }
 
@@ -256,16 +267,14 @@ async function loadRecent() {
   } catch (e) { /* keep the last frame */ }
 }
 
-// Fixed slots for the current view: 24 hourly or 183 daily windows,
+// Fixed slots for the current view: 24 or 168 hourly, 30 or 183 daily windows,
 // aligned on multiples of the width since epoch (same buckets as the
 // store candles), the last one holding `now`: the live candle. (It used
 // to end one window early, so the current hour never showed: live
 // 2026-11-13, Bronze axe's chart closed at 20 while its last trades read
 // 8, 8, 8, 6.)
 function currentSlots(now) {
-  const hourly = view === 'hour';
-  const width = hourly ? 3600 : 86400;
-  const count = hourly ? 24 : 183;
+  const { width, count } = VIEWS[view];
   const at = now === undefined ? Math.floor(Date.now() / 1000) : now;
   return { slots: LifeChart.liveSlots(at, width, count), width };
 }

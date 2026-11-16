@@ -16,7 +16,7 @@ fn nature_rune_only_drops_in_f2p() {
     assert!(wizard.rate.is_some_and(|rate| rate > 0.0) && !wizard.sites.is_empty(), "rated, with F2P sites");
     assert!(found.iter().any(|way| way.combat.is_some()), "monster level known");
     assert!(!producible_f2p("naturerune"));
-    assert!(!merchant_buy_allowed("naturerune"), "a combat spot drops it: market or farm, never a merchant");
+    assert!(!super::merchant_route("naturerune"), "no F2P keeper stocks it: market or farm");
 }
 
 #[test]
@@ -40,28 +40,24 @@ fn bronze_pickaxe_has_every_kind_of_way() {
     assert!(smith.inputs.iter().any(|(input, _)| input == "bronze_bar"), "from a bronze bar: {}", smith.describe());
     assert!(smith.tools.contains(&"hammer".to_string()));
     assert!(!smith.sites.is_empty(), "F2P anvils");
-    assert!(!merchant_buy_allowed("bronze_sword"));
+    assert!(merchant_buy_allowed("bronze_sword"), "user 2026-11-15: every F2P object may be bought");
 }
 
+/// User rule 2026-11-15 (replaces D-A): every F2P object may be bought
+/// from a keeper that stocks it, made, gathered or dropped alike; a shop
+/// route still needs that keeper. Members objects never.
 #[test]
-fn merchant_rule_follows_d_a() {
-    for producible in ["wool", "ball_of_wool", "logs", "copper_ore", "bronze_bar", "raw_shrimp", "leather", "bucket_water", "amulet_of_strength", "greendye", "airrune", "uncooked_stew"] {
-        assert!(producible_f2p(producible), "{producible} is made or gathered in F2P");
-        assert!(!merchant_buy_allowed(producible), "{producible}: no merchant purchase");
+fn merchants_sell_every_f2p_object_they_stock() {
+    for item in ["wool", "logs", "bronze_bar", "raw_shrimp", "feather", "naturerune", "air_talisman", "shears", "net", "amulet_mould"] {
+        assert!(merchant_buy_allowed(item), "{item}: a merchant purchase is allowed");
+        assert!(obtainable_f2p(item), "{item} obtainable");
     }
-    // Farmable drops left the merchant list (user rule 2026-11-13).
-    for farmed in ["feather", "naturerune", "air_talisman"] {
-        assert!(!producible_f2p(farmed), "{farmed} has no F2P production");
-        assert!(!merchant_buy_allowed(farmed), "{farmed}: a combat spot drops it, never a merchant");
-        assert!(obtainable_f2p(farmed), "{farmed} obtainable");
+    for stocked in ["feather", "fishing_bait", "amulet_mould", "shears", "net", "chisel", "bucket_empty", "hammer"] {
+        assert!(super::merchant_route(stocked), "{stocked}: an F2P keeper stocks it");
     }
-    for bought in ["shears", "net", "chisel", "needle", "bucket_empty"] {
-        assert!(!producible_f2p(bought), "{bought} has no F2P production");
-        assert!(merchant_buy_allowed(bought), "{bought}: merchant purchase allowed");
-        assert!(obtainable_f2p(bought), "{bought} obtainable");
-    }
-    assert!(!merchant_buy_allowed("rune_scimitar") || !producible_f2p("rune_scimitar"), "rule is the negation");
+    assert!(!super::merchant_route("naturerune"), "no F2P keeper stocks nature runes");
     assert!(!merchant_buy_allowed("abyssal_whip"), "members objects never");
+    assert!(producible_f2p("bronze_bar") && merchant_buy_allowed("bronze_bar"), "producible and buyable");
 }
 
 #[test]
@@ -109,7 +105,12 @@ const NO_F2P_SOURCE: &[&str] = &[
     "blackrobebottom",
     "blackrobetop",
     "charcoal",
+    // Scavvo's Rune Store only, upstairs in the Champions' Guild behind
+    // the 32 quest-point door (`champions_guild.inv`, live 2026-11-16).
+    "coif",
     "cooking_pot",
+    "dragon_vambraces",
+    "dragonhide_chaps",
     "halberd",
     "half_full_wine_jug",
     "javelin",
@@ -155,20 +156,6 @@ fn smelt_ways_carry_every_input_and_the_iron_odds() {
     assert_eq!(smith.tools, vec!["hammer".to_string()], "hammer carried, not consumed");
 }
 
-/// User rule 2026-11-13: an NPC shop sells a bot only what F2P offers no
-/// other way to get. Feathers drop from chickens, fishing bait from men
-/// (farmable spots): market or farm, never the shop. Nets, rods, shears
-/// and harpoons have no farmable F2P source: the shop stays.
-#[test]
-fn farmable_drops_never_come_from_a_merchant() {
-    assert!(!merchant_buy_allowed("feather"), "chickens drop feathers");
-    assert!(!merchant_buy_allowed("fishing_bait"), "men drop fishing bait");
-    assert!(!merchant_buy_allowed("bronze_arrow"), "goblins and men drop bronze arrows");
-    for shop_only in ["net", "fishing_rod", "fly_fishing_rod", "harpoon", "lobster_pot", "shears", "tinderbox", "chisel"] {
-        assert!(merchant_buy_allowed(shop_only), "{shop_only} has no farmable F2P source");
-    }
-}
-
 /// Bait is a consumed input of the fishing way (one per catch), and rune
 /// essence is mined only after Rune Mysteries (`essence_mine.rs2`).
 #[test]
@@ -182,6 +169,18 @@ fn fishing_bait_and_essence_quest_are_way_requirements() {
     assert!(shrimp.inputs.is_empty(), "nets burn no bait");
     let essence = ways("blankrune").into_iter().find(|way| way.kind == WayKind::Gather).expect("essence is mined");
     assert_eq!(essence.quest.as_deref(), Some("quest_runemysteries"));
+}
+
+/// The second catch of a tier opens at its own level (`fishing.rs2`):
+/// herring 10 behind sardine 5, salmon 30 behind trout 20, tuna 35.
+#[test]
+fn a_second_catch_opens_at_its_own_level() {
+    let level = |item: &str| ways(item).into_iter().find(|way| way.kind == WayKind::Gather).and_then(|way| way.skill).map(|(_, level)| level);
+    assert_eq!(level("raw_sardine"), Some(5));
+    assert_eq!(level("raw_herring"), Some(10));
+    assert_eq!(level("raw_trout"), Some(20));
+    assert_eq!(level("raw_salmon"), Some(30));
+    assert_eq!(level("raw_tuna"), Some(35));
 }
 
 /// Moulds and talismans are carried, never consumed (`jewellery.rs2`,
@@ -234,8 +233,13 @@ fn upgrade_pickaxes_come_from_nurmof_axes_from_players() {
         let cost = crate::objs_by_name(pickaxe)[0].price;
         assert_eq!(merchant_price(pickaxe), Some(cost.max(1)), "{pickaxe}: Nurmof sells at cost");
     }
-    for axe in ["iron_axe", "steel_axe", "mithril_axe", "adamant_axe", "rune_axe"] {
-        assert!(!merchant_route(axe), "{axe} is smithable: market, never the shop");
+    // User 2026-11-15: smithable axes sell at Bob's too; mithril and
+    // better have no F2P keeper.
+    for axe in ["iron_axe", "steel_axe"] {
+        assert!(merchant_route(axe), "{axe}: Bob sells it");
+    }
+    for axe in ["mithril_axe", "adamant_axe", "rune_axe"] {
+        assert!(!merchant_route(axe), "{axe}: no F2P keeper");
     }
     assert_eq!(merchant_price("dragon_platebody"), None, "no F2P keeper stocks it");
 }
@@ -249,7 +253,7 @@ fn kit_axes_have_a_shop_route_up_to_steel() {
     use super::{kit_axe, kit_shop_route, merchant_buy_allowed, merchant_price, shop_buy_allowed};
     for axe in ["bronze_axe", "iron_axe", "steel_axe"] {
         assert!(kit_shop_route(axe) && shop_buy_allowed(axe), "{axe}: Bob sells it");
-        assert!(!merchant_buy_allowed(axe), "{axe}: D-A unchanged for graph obtains");
+        assert!(merchant_buy_allowed(axe), "{axe}: graph obtains buy it too (user 2026-11-15)");
     }
     // Bob sells at cost (16, 200); the Wilderness bandit camp for less.
     assert!(merchant_price("bronze_axe").is_some_and(|price| price <= 16));
@@ -257,11 +261,11 @@ fn kit_axes_have_a_shop_route_up_to_steel() {
     for axe in ["mithril_axe", "adamant_axe", "rune_axe", "black_axe"] {
         assert!(!kit_shop_route(axe), "{axe}: no F2P shop, players only");
     }
-    assert!(!kit_axe("bronze_battleaxe") && !kit_shop_route("bronze_battleaxe"));
+    assert!(!kit_axe("bronze_battleaxe"), "a battleaxe is no woodcutting axe");
     for tool in ["hammer", "tinderbox", "bronze_pickaxe", "rune_pickaxe"] {
         assert!(kit_shop_route(tool), "{tool}: merchant route");
     }
-    assert!(!kit_shop_route("bronze_sword"), "not a kit tool");
+    assert!(kit_shop_route("bronze_sword"), "every stocked object has a merchant route (user 2026-11-15)");
 }
 
 /// Live 2026-11-15: 394 `shopbuy black_full_helm: no reachable shop`
@@ -283,4 +287,19 @@ fn only_server_pickables_pick() {
         assert!(!super::ways(item).iter().any(|way| way.detail.contains("pick") || way.detail.contains("field")), "{item}: {:?}", super::ways(item));
     }
     assert!(!super::ways("cabbage").is_empty());
+}
+
+/// A stock line at 0 (Grum's jewellery, Drogo's ores and bars, Gerrant's
+/// raw fish) only holds what players sell the keeper, and no bot sells
+/// to an NPC: never a purchase route, never a shop price. Live staff
+/// checks 2026-11-16: "trade gave no diamond_ring" at Grum's, every time.
+#[test]
+fn empty_stock_lines_are_no_merchant_route() {
+    for item in ["diamond_ring", "gold_ring", "strung_gold_amulet", "copper_ore", "iron_bar", "gold_bar"] {
+        assert!(!super::merchant_route(item), "{item} has no stocked keeper");
+        assert_eq!(super::merchant_price(item), None, "{item}");
+    }
+    for item in ["hammer", "bronze_pickaxe", "bronze_scimitar"] {
+        assert!(super::merchant_route(item), "{item} is stocked");
+    }
 }

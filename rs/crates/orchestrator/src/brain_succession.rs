@@ -287,20 +287,19 @@ mod tests {
         // Drawn now: the optional change stays throttled (no fleet read).
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
         smith.ambition = new_ambition("smith", "coverage:smithing", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: now }).ok();
-        // Mining 12, smithing 1: the mining 10 milestone is met at refresh.
+        // Computed smith ladder: smithing rungs from 10 (mining comes as
+        // the ore sub-tasks need it).
         let snapshot = live(&[(14, 12)]);
         let label = succeed_goal(&mut smith, &snapshot, false).expect("a goal");
-        assert_eq!(label, "smithing 10", "next open milestone after the met mining 10");
+        assert_eq!(label, "smithing 10", "the first rung");
         let origin = smith.goal_origin.clone().expect("linked");
         let ambition = smith.ambition.as_ref().expect("smith");
         assert_eq!(ambition.milestones.iter().find(|stone| stone.id == origin).map(|stone| stone.status), Some(MilestoneStatus::Active));
         assert!(smith.history.iter().any(|entry| entry.outcome == "next:smithing 10"));
-        let mining = ambition.milestones.iter().find(|stone| stone.label == "mining 10").expect("mining milestone");
-        assert_eq!((mining.status, mining.progress), (MilestoneStatus::Done, (10, 10)));
         // Skip to the quota: smithing 10 met, the bronze quota is drawn.
         let label = succeed_goal(&mut smith, &live(&[(14, 12), (13, 10)]), false).expect("the quota");
         assert!(label.starts_with("produce bronze_"), "got {label}");
-        assert!(matches!(smith.goal, GoalKind::Produce { count: 20, .. }));
+        assert!(matches!(smith.goal, GoalKind::Produce { count, .. } if count >= 10), "{:?}", smith.goal);
         let quota = smith.goal_origin.clone().expect("quota link");
         succeed_goal(&mut smith, &live(&[(14, 12), (13, 10)]), false).expect("next");
         let done = smith.ambition.as_ref().and_then(|ambition| ambition.milestones.iter().find(|stone| stone.id == quota).cloned()).expect("quota");

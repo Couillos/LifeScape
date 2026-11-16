@@ -108,6 +108,18 @@ pub struct TravelError {
     pub expected: String,
     pub observed: String,
     pub dossier: Option<std::path::PathBuf>,
+    /// Requirement tags a NoRoute diagnosis found missing (`coins:60` for
+    /// the Karamja boat): the caller may fetch them and walk again.
+    pub missing: Vec<String>,
+}
+
+impl Error {
+    /// Coins a travel failure lacks in the pack for a fare (`coins:N`
+    /// requirement of a NoRoute), if that is what blocked it.
+    pub fn missing_coins(&self) -> Option<u32> {
+        let Error::TravelFailure(failure) = self else { return None };
+        failure.missing.iter().filter_map(|tag| tag.strip_prefix("coins:")?.parse::<u32>().ok()).max()
+    }
 }
 
 impl std::fmt::Display for Error {

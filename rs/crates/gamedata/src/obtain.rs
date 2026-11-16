@@ -186,7 +186,7 @@ fn shop_site_open((x, z, level): (i64, i64, i64)) -> bool {
     // The Dwarven Mine keepers (Nurmof) are routed shop floors.
     let routed = crate::access::shop_floor_routed(x, z, level);
     crate::access::gates_at(x, z, level).iter().all(|gate| match gate {
-        crate::access::Gate::QuestPoints { .. } => false,
+        crate::access::Gate::QuestPoints { .. } | crate::access::Gate::Quest { .. } => false,
         crate::access::Gate::Underground => routed,
         other => !crate::access::impassable(other),
     })
@@ -383,7 +383,7 @@ fn way_of(item: &str, source: ItemSource) -> Option<Way> {
             // for sardines, herring and pike) is consumed one per catch
             // (`fishing.rs2` `inv_del(inv, $bait, 1)`): a real input, sized
             // with the quota like any other.
-            let mut way = gather_way("fishing", "fishing", item, level, vec![tool]);
+            let mut way = gather_way("fishing", "fishing", item, catch_level(item, level), vec![tool]);
             way.inputs = fish_bait(item, level).map(|bait| vec![(bait.to_string(), 1)]).unwrap_or_default();
             way
         }
@@ -501,6 +501,19 @@ fn way_of(item: &str, source: ItemSource) -> Option<Way> {
     Some(way)
 }
 
+/// Level `item` is caught at in the tier opening at `level`: the second
+/// catch of a tier opens later (`fishing.rs2` second level: herring 10
+/// on the sardine bait tier, salmon 30 on the trout fly tier, tuna 35 on
+/// the harpoon tier). Live admin 2026-11-15: herring planned at fishing
+/// 5, the server refused it under 10.
+fn catch_level(item: &str, level: i64) -> i64 {
+    crate::fishing::all_fish_tiers()
+        .into_iter()
+        .find(|tier| tier.level == level && tier.products.contains(&item))
+        .map(|tier| if tier.products.iter().position(|name| *name == item).unwrap_or(0) > 0 && tier.second_level > level { tier.second_level } else { level })
+        .unwrap_or(level)
+}
+
 /// Bait one catch of `item` burns at the tier opening at `level`.
 fn fish_bait(item: &str, level: i64) -> Option<&'static str> {
     crate::fishing::all_fish_tiers()
@@ -543,10 +556,6 @@ pub fn producible_f2p(item: &str) -> bool {
     })
 }
 
-/// D-A: NPC-shop purchases are reserved for F2P objects nobody can make,
-/// gather or farm in F2P (shears, nets, rods…). Producible objects and
-/// drops a bot can farm (feathers from chickens, bait from men: user
-/// rule 2026-11-13) come from players: the market, or the bot's own work.
 /// True when an NPC shop route exists for `item`: the D-A rule allows the
 /// purchase AND some shop actually stocks it (live 2026-11-14:
 /// black_full_helm passed D-A with no shop anywhere, `shopbuy` failed
@@ -564,8 +573,18 @@ pub fn merchant_price(item: &str) -> Option<i64> {
     let base = crate::objs_by_name(item).into_iter().next().map(|obj| obj.price)?;
     crate::shops::all_shops()
         .into_iter()
-        .filter(|shop| shop.members != Some(true) && shop.stocks.iter().any(|stock| stock.obj == item))
-        .flat_map(|shop| shop.keepers.into_iter().map(|keeper| keeper.sell_multiplier.unwrap_or(1000)))
+        .filter(|shop| shop.members != Some(true) && shop.stocks.iter().any(|stock| stock.obj == item && stock.count > 0))
+        .flat_map(|shop| {
+            // The keeper's param, else the multiplier its F2P opener
+            // passes to `~openshop` (Zaff's staffs: no keeper row).
+            let opened: Vec<i64> = crate::shop_access::all()
+                .iter()
+                .flat_map(|npc| npc.f2p_opens.iter())
+                .filter(|open| open.inv == shop.name)
+                .filter_map(|open| open.sell_multiplier)
+                .collect();
+            shop.keepers.into_iter().map(|keeper| keeper.sell_multiplier.unwrap_or(1000)).chain(opened).collect::<Vec<_>>()
+        })
         .map(|multiplier| (base * multiplier.max(100) / 1000).max(1))
         .min()
 }
@@ -595,10 +614,14 @@ pub fn shop_buy_allowed(item: &str) -> bool {
     merchant_buy_allowed(item) || kit_shop_route(item)
 }
 
+/// Merchant purchases (user rule 2026-11-15, replacing D-A of
+/// 2026-11-13: "autorise tous les achats aux marchands de tous les
+/// items, mais pas la vente"): any F2P object may be bought from a
+/// keeper that stocks it, producible or dropped alike, like a 2004
+/// player buying moulds in Al Kharid; selling to an NPC stays off. The
+/// shop's price then caps what a buyer pays on the market.
 pub fn merchant_buy_allowed(item: &str) -> bool {
     crate::objs_by_name(item).into_iter().next().is_some_and(|obj| obj.members == Some(false))
-        && !producible_f2p(item)
-        && crate::combat_spots::drop_spots(item).is_empty()
 }
 
 /// Why an F2P tradeable object has no F2P way at all (rev 274 truth):

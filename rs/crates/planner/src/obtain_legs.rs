@@ -106,6 +106,11 @@ fn compute_production_legs(item: &str) -> Vec<ProductionLeg> {
         if !way.is_production() && !farmable_drop && !pickup {
             continue;
         }
+        // A harvest with no F2P site is no way (maple: no F2P tree, live
+        // 2026-11-15 `farm:maple_logs` woodcut "produced nothing").
+        if way.kind == WayKind::Gather && way.sites.is_empty() {
+            continue;
+        }
         let Some(method) = method_for(item, way.kind, &way.detail, &way.inputs) else { continue };
         if crate::mapping::map_method(&method, &probe, None).is_none() {
             continue;
@@ -205,6 +210,27 @@ pub fn legs_for(item: &str, ironman: bool, produce: Option<&str>) -> Vec<Alterna
 
 #[cfg(test)]
 mod tests {
+
+    /// World invariant (audit 2026-11-15): a `shop:buy` leg exists only
+    /// where an F2P keeper stocks the object at a known price. Live:
+    /// black_full_helm planned as a shop buy no F2P world serves (1 646
+    /// doomed launches).
+    #[test]
+    fn every_shop_leg_has_an_f2p_keeper() {
+        let mut wrong = Vec::new();
+        for obj in lifescape_gamedata::all_objs() {
+            let Some(name) = obj.name else { continue };
+            if obj.members != Some(false) || name.starts_with("cert_") {
+                continue;
+            }
+            let shop_leg = super::obtain_alternatives(name, false).iter().any(|alt| alt.method == "shop:buy");
+            if shop_leg && lifescape_gamedata::obtain::merchant_price(name).is_none() {
+                wrong.push(name.to_string());
+            }
+        }
+        assert!(wrong.is_empty(), "shop legs without an F2P keeper: {wrong:?}");
+        assert!(!super::obtain_alternatives("black_full_helm", false).iter().any(|alt| alt.method == "shop:buy"));
+    }
     use super::{compute_production_legs, obtain_alternatives, produce_alternatives, production_legs};
 
     /// A production quota is made, never picked up (iron platelegs have a
@@ -218,6 +244,16 @@ mod tests {
         }
         assert!(produce_alternatives("iron_platelegs").iter().any(|leg| leg.method.starts_with("smith")), "smithing makes them");
         assert!(produce_alternatives("mindrune").iter().any(|leg| leg.method.starts_with("runecraft")), "the altar makes them");
+    }
+
+    /// Spawns behind a quest-locked door are never a pickup leg: the
+    /// Draynor Manor closet (rubber tube) and Wydin's back room (white
+    /// apron) — live admin 2026-11-15, DoorDidNotOpen on both.
+    #[test]
+    fn quest_locked_rooms_offer_no_pickup() {
+        for item in ["rubber_tube", "white_apron", "iron_platelegs", "iron_platebody", "iron_sword"] {
+            assert!(!methods(item).contains(&format!("ground:{item}")), "{item}: {:?}", methods(item));
+        }
     }
 
     fn methods(item: &str) -> Vec<String> {
@@ -290,7 +326,8 @@ mod tests {
         let wine = leg("wine_of_zamorak", "telegrab:wine_of_zamorak");
         assert_eq!(wine.skill, Some(("magic".to_string(), 33)));
         assert!(wine.inputs.iter().any(|(input, _)| input == "lawrune"));
-        // Ground spawns a bot may sweep: free, ungated, a bank in reach.
+        // Ground spawns a bot may sweep: free, ungated but for the Karamja
+        // boat (a fare, user 2026-11-16), a bank in reach.
         let swept: Vec<&str> = ["hammer", "tinderbox", "bucket_empty", "pot_empty", "jug_empty", "chisel", "bronze_pickaxe", "shears", "spade", "cabbage", "egg", "grain"]
             .into_iter()
             .filter(|item| methods(item).contains(&format!("ground:{item}")))
@@ -299,16 +336,22 @@ mod tests {
         for item in swept {
             let (_, way) = crate::method_way::method_way(&format!("ground:{item}")).expect("ground way");
             for (x, z, level) in way.sites {
-                assert!(lifescape_gamedata::access::gates_at(x, z, level).is_empty(), "{item} spawn ({x},{z},{level}) is gated");
+                assert!(lifescape_gamedata::access::gates_at(x, z, level).iter().all(lifescape_gamedata::access::fare_only), "{item} spawn ({x},{z},{level}) is gated");
             }
         }
     }
 
     #[test]
-    fn market_leads_and_shop_follows_d_a() {
+    fn a_harvest_without_an_f2p_site_is_no_leg() {
+        assert!(production_legs("maple_logs").is_empty(), "no F2P maple tree");
+        assert!(production_legs("yew_logs").iter().any(|leg| leg.method == "farm:yew_logs"));
+    }
+
+    #[test]
+    fn market_leads_and_shop_follows_the_keepers() {
         let sword: Vec<String> = obtain_alternatives("bronze_sword", false).into_iter().map(|alt| alt.method).collect();
         assert_eq!(sword.first().map(String::as_str), Some("market:buy"), "market first");
-        assert!(!sword.contains(&"shop:buy".to_string()), "producible: no merchant");
+        assert!(sword.contains(&"shop:buy".to_string()), "a keeper stocks it (user 2026-11-15)");
         let shears: Vec<String> = obtain_alternatives("shears", false).into_iter().map(|alt| alt.method).collect();
         assert!(shears.contains(&"shop:buy".to_string()));
         let iron: Vec<String> = obtain_alternatives("bronze_sword", true).into_iter().map(|alt| alt.method).collect();

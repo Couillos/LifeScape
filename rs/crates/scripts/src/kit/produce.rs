@@ -41,6 +41,11 @@ pub enum ProduceUi<'a> {
     /// input, then the server chains (spinning wheel `op2` Spin opens
     /// `skill_multi2`, PRD3 lot 7).
     Multi { op: u8, menu: &'a str, button: &'a str },
+    /// Item on the station opening an object grid (`crafting_jewelry`):
+    /// the live object in `slot` of the `inv` component (full com name)
+    /// is pressed with Make 10/5/1 by what is carried; an empty slot
+    /// (mould or gem missing) fails loud, never a blind press.
+    InvGrid { inv: &'a str, slot: u8 },
 }
 
 /// One produce declaration: what the activity owns, nothing else.
@@ -287,6 +292,29 @@ fn click_once(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, have: u32
             }
             Ok(())
         }
+        ProduceUi::InvGrid { inv, slot } => {
+            let com = grid_button(bot, inv)?;
+            let target = bot.world.ticks + UI_TICKS;
+            let seen = bot.world.messages.len();
+            let refused = |bot: &Bot| bot.world.messages.get(seen..).unwrap_or(&[]).iter().any(|message| message.to_lowercase().contains("can't reach"));
+            while bot.world.ticks < target && bot.world.modal.is_none() && !refused(bot) {
+                bot.pump(2)?;
+            }
+            if bot.world.modal.is_none() {
+                return Err(ScriptError::Failed(format!("grid {inv:?} never opened at {:?}", bot.position())));
+            }
+            let held = bot
+                .world
+                .inv
+                .get(&com)
+                .and_then(|slots| slots.get(slot))
+                .map(|(held, _)| *held)
+                .ok_or_else(|| ScriptError::Usage(format!("{inv} slot {slot} empty: the mould or gem is missing at {:?}", bot.position())))?;
+            let op = if have >= 10 { 3 } else if have >= 5 { 2 } else { 1 };
+            bot.inv_button(op, held, *slot, com)?;
+            bot.pump(5)?;
+            Ok(())
+        }
         ProduceUi::Grid { button } => {
             let com = grid_button(bot, button)?;
             let target = bot.world.ticks + UI_TICKS;
@@ -405,7 +433,7 @@ fn died(bot: &Bot, seen: &mut usize) -> bool {
 /// the server refuses reads as `NextStand` while nothing was consumed
 /// there, so the caller moves on instead of failing the job.
 fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u32, made_before: u32) -> Result<SiteDone, ScriptError> {
-    let single_shot = matches!(job.spec.ui, ProduceUi::Count | ProduceUi::Grid { .. } | ProduceUi::Multi { .. });
+    let single_shot = matches!(job.spec.ui, ProduceUi::Count | ProduceUi::Grid { .. } | ProduceUi::InvGrid { .. } | ProduceUi::Multi { .. });
     let mut consumed = 0u32;
     let mut seen_death = bot.world.messages.len();
     let mut retries = 0u32;
@@ -578,14 +606,11 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
             work_loc(bot, job, x, z, loc)?
         }
         ProduceSite::Npc(names) => {
-            let mut slot: Option<u16> = None;
-            for name in *names {
-                if let Some(found) = bot.find_npc(name) {
-                    slot = Some(found);
-                    bot.log(&format!("{} on {name} (slot {found})", job.spec.verb));
-                    break;
-                }
+            let slot = crate::kit::npc_spawn::find_or_walk(bot, names, job.spec.verb)?;
+            if let Some((found, name)) = &slot {
+                bot.log(&format!("{} on {name} (slot {found})", job.spec.verb));
             }
+            let slot = slot.map(|(found, _)| found);
             let Some(slot) = slot else {
                 return Err(ScriptError::Failed(format!("no produce NPC {names:?} near {:?}", bot.position())));
             };

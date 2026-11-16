@@ -11,20 +11,34 @@
 
 use std::collections::BTreeSet;
 
-/// Always excluded: staff and the owner's private account.
-const ALWAYS_EXCLUDED: [&str; 2] = ["admin", "bite"];
+/// Staff test accounts (AGENTS.md rules 11 and 13): they cheat, and
+/// what they cheat moves only between them.
+pub const STAFF: [&str; 2] = ["admin", "admin2"];
 
-/// Cheats that move an object from nowhere into another player's hands.
-const FORBIDDEN_CHEATS: [&str; 1] = ["giveother"];
+/// Always excluded: staff and the owner's private account.
+const ALWAYS_EXCLUDED: [&str; 3] = ["admin", "admin2", "bite"];
+
+/// True for a staff test account (case-insensitive).
+pub fn is_staff(account: &str) -> bool {
+    STAFF.iter().any(|name| name.eq_ignore_ascii_case(account))
+}
 
 /// Why `command` (with or without its `::`) is refused, or None when the
-/// cheat may run. Only the verb is read, case-insensitive.
+/// cheat may run. A cheat aimed at another player (`giveother`,
+/// `teleother`, `setvarother`…: the verb ends in `other`, its first
+/// argument names the target) runs only on a staff target: admin and
+/// admin2 cheat between themselves, never on the fleet.
 pub fn cheat_refusal(command: &str) -> Option<String> {
     let text = command.trim();
     let text = text.strip_prefix("::").unwrap_or(text);
-    let verb = text.split_whitespace().next().unwrap_or("").to_lowercase();
-    FORBIDDEN_CHEATS.contains(&verb.as_str()).then(|| {
-        format!("forbidden: cheat '{verb}' hands a cheated object to another account (AGENTS.md rule 13: admin's cheats stay with admin)")
+    let mut words = text.split_whitespace();
+    let verb = words.next().unwrap_or("").to_lowercase();
+    if !verb.ends_with("other") {
+        return None;
+    }
+    let target = words.next().unwrap_or("");
+    (!is_staff(target)).then(|| {
+        format!("forbidden: cheat '{verb}' aimed at {target:?}: staff cheats only between admin and admin2 (AGENTS.md rule 13)")
     })
 }
 
@@ -56,13 +70,12 @@ mod tests {
     use super::{cheat_refusal, parse_excluded};
 
     #[test]
-    fn giveother_is_refused_in_every_spelling() {
-        for command in ["giveother t03 coins 5000", "::giveother t99 coins 1000", "  GiveOther t01 net 1"] {
+    fn cheats_on_others_target_staff_only() {
+        for command in ["giveother t03 coins 5000", "::giveother t99 coins 1000", "  GiveOther t01 net 1", "teleother t40", "setvarother t40 qp 0"] {
             let refusal = cheat_refusal(command).expect("refused");
             assert!(refusal.contains("rule 13"), "{refusal}");
         }
-        // Admin's own tests keep their tools: nothing leaves admin.
-        for command in ["give coins 100", "tele 0,50,50,10,10", "teleother t40", "setvarother t40 qp 0"] {
+        for command in ["give coins 100", "tele 0,50,50,10,10", "giveother admin2 coins 500", "::teleother ADMIN", "setvarother admin2 qp 0"] {
             assert!(cheat_refusal(command).is_none(), "{command} stays allowed");
         }
     }
@@ -71,7 +84,7 @@ mod tests {
     fn exclusion_list_keeps_staff_and_reads_the_file() {
         let names = parse_excluded("# test accounts\nProof_A\n\nproof_c  # dev deals\n");
         let listed: Vec<&str> = names.iter().map(String::as_str).collect();
-        assert_eq!(listed, vec!["admin", "bite", "proof_a", "proof_c"]);
+        assert_eq!(listed, vec!["admin", "admin2", "bite", "proof_a", "proof_c"]);
         assert!(parse_excluded("").contains("admin"), "staff always excluded");
     }
 }
