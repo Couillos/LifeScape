@@ -51,7 +51,7 @@ fn without_demand_the_side_goal_makes_money() {
     assert_eq!(side_goal(&fresh, &avoid, &paying, &nothing_held, true).map(|(goal, _)| goal), Some(GoalKind::MakeMoney), "Iron: money only");
     let everything = banned(&["fishing", "woodcutting", "mining", "crafting", "strength"]);
     assert_eq!(side_goal(&fresh, &everything, &[], &nothing_held, true), None);
-    assert!(side_goal(&fresh, &everything, &[], &nothing_held, false).is_some(), "the flip leg needs no skill");
+    assert!(side_goal(&fresh, &everything, &[], &nothing_held, false).is_some(), "a non-Iron works through the ban (steer_for_work)");
 }
 
 /// Melee is one group: a strength ban bans every fight method.
@@ -60,7 +60,7 @@ fn bans_read_methods_by_skill_group() {
     assert!(method_banned("fight:melee/cows", &banned(&["strength"])));
     assert!(method_banned("gather:fishing/raw_shrimp", &banned(&["fishing"])));
     assert!(!method_banned("gather:fishing/raw_shrimp", &banned(&["woodcutting"])));
-    assert!(!method_banned("market:flip", &banned(&["fishing", "attack"])));
+    assert!(!method_banned("market:make", &banned(&["fishing", "attack"])), "the maker's post trains nothing");
 }
 
 /// A money node resolved onto a banned skill moves to the next ranked
@@ -68,15 +68,15 @@ fn bans_read_methods_by_skill_group() {
 #[test]
 fn money_resolution_steers_off_banned_skills() {
     let mut node = Node::new("n1", NodeKind::MakeMoney, Vec::new(), 0);
-    for method in ["gather:woodcut/logs", "market:flip"] {
+    for method in ["gather:woodcut/logs", "fight:melee/cows"] {
         node.alternatives.push(Alternative { method: method.to_string(), est_ticks: 6000, est_coins: 0 });
     }
     node.method = Some("gather:woodcut/logs".to_string());
     let ctx = ReadyCtx::blind(0.5);
     assert_eq!(steer_off_bans(&mut node, &ctx, &banned(&["fishing"])), Ok(false), "not banned: untouched");
     assert_eq!(steer_off_bans(&mut node, &ctx, &banned(&["woodcutting"])), Ok(true));
-    assert_eq!(node.method.as_deref(), Some("market:flip"));
-    node.alternatives.retain(|alt| alt.method != "market:flip");
+    assert_eq!(node.method.as_deref(), Some("fight:melee/cows"));
+    node.alternatives.retain(|alt| alt.method != "fight:melee/cows");
     node.method = Some("gather:woodcut/logs".to_string());
     assert!(steer_off_bans(&mut node, &ctx, &banned(&["woodcutting"])).is_err());
 }

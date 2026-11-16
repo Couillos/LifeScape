@@ -245,7 +245,7 @@ pub fn coin_cause(kind: &str, delta: i64, ctx: &RunCtx) -> &'static str {
 }
 
 /// The frozen D45 provenance the current aggregation reads, from a
-/// cause. Merchant runs keep `traded` for every non-food line (D45).
+/// cause. Trading runs keep `traded` for every non-food line (D45).
 pub fn legacy_provenance(cause_name: &str, delta: i64, trading: bool) -> &'static str {
     use lifescape_sdk::provenance::Provenance;
     if trading && cause_name != cause::FOOD {

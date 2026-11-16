@@ -245,8 +245,8 @@ fn task_start_parses_budget_node_and_method() {
     assert_eq!(node("tutorial", &["--node", "n2"]), Some(("tutorial".to_string(), 0, "n2".to_string(), "none")));
     assert_eq!(node("fishing", &["--level", "fishing", "--node", "n1"]), Some(("fishing".to_string(), 0, "n1".to_string(), "none")));
     assert_eq!(node("tutorial", &["--node"]), None, "a bare flag names no node");
-    let flip = task_start_for(&bot, "market", &args(&["flip", "--budget-max", "9000", "--node", "n3"]), None).expect("flip carries a start");
-    assert_eq!((flip.budget_max, flip.node_id.as_str()), (9000, "n3"));
+    let post = task_start_for(&bot, "market", &args(&["make", "--post", "3211,3427,0", "--budget-max", "9000", "--node", "n3"]), None).expect("a maker's post carries a start");
+    assert_eq!((post.budget_max, post.node_id.as_str()), (9000, "n3"));
     assert!(task_start_for(&bot, "market", &args(&["deliver", "1", "2", "3=1,1"]), None).is_none(), "deliver legs stay minimal");
 }
 

@@ -1,6 +1,8 @@
 //! Ambition catalogue: one entry per F2P skill group of rev 274 (melee
 //! counts as ONE group: attack, strength, defence, hitpoints), plus the
-//! merchant and the operator-only generalist. Each entry is a ladder of
+//! operator-only kinds: the generalist, the overall highscore and the
+//! market maker's coin ladder (plan marché Q6; the drawn merchant and its
+//! fleet coverage role were removed in wave 3). Each entry is a ladder of
 //! rungs (a level to reach, then a production quota, an equipment tier
 //! or a coin target) COMPUTED from the game data by `ambition_ladder`
 //! (user 2026-11-15): no product list is written by hand.
@@ -11,8 +13,6 @@
 /// The 12 F2P skill groups of rev 274 (fletching is members-only).
 pub const GROUPS: [&str; 12] =
     ["melee", "ranged", "prayer", "magic", "cooking", "woodcutting", "fishing", "firemaking", "crafting", "smithing", "mining", "runecraft"];
-/// The trading role every fleet holds at least once.
-pub const MERCHANT: &str = "merchant";
 
 /// What a rung asks once its level is reached.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -60,7 +60,7 @@ const META: &[Meta] = {
         ("smith", "forgeron : armes et armures de métal", &["smithing", "mining"], Producer("smithing")),
         ("miner", "mineur : fournisseur de minerai", &["mining"], Producer("mining")),
         ("runecrafter", "runier : essence et runes", &["runecraft", "mining"], Producer("runecraft")),
-        ("merchant", "marchand : achète bas, revend haut", &["merchant"], Coins),
+        ("market_maker", "teneur de marché : capital d'abord (argent), puis cotation à la fontaine", &[], Coins),
         ("generalist", "généraliste : compétence la plus basse", &[], Empty),
         ("overall", "premier au classement overall : total level puis XP", &[], Empty),
     ]
@@ -87,8 +87,8 @@ pub fn kind_for_group(group: &str) -> Option<&'static str> {
     specs().iter().find(|entry| entry.groups.first() == Some(&group)).map(|entry| entry.kind)
 }
 
-/// Primary group of a kind (`merchant` for the merchant, `None` for the
-/// generalist or an unknown kind).
+/// Primary group of a kind (`None` for the operator-only kinds or an
+/// unknown kind).
 pub fn primary_group(kind: &str) -> Option<&'static str> {
     spec(kind).and_then(|entry| entry.groups.first().copied())
 }
@@ -142,9 +142,6 @@ pub fn ladder_offers(kind: &str, item: &str) -> bool {
 /// woodcutter, 1 elsewhere). Fresh bots fit everything at 1.
 pub fn fit(kind: &str, level_of: &dyn Fn(&str) -> u8) -> f64 {
     let Some(group) = primary_group(kind) else { return 0.0 };
-    if group == MERCHANT {
-        return 1.0;
-    }
     // Hitpoints start at 10 and rise with any fight: never a lead.
     let best_in = |name: &str| {
         group_skills(name).iter().filter(|skill| **skill != "hitpoints").map(|skill| f64::from(level_of(skill).max(1))).fold(1.0, f64::max)

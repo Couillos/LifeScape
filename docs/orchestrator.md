@@ -243,3 +243,26 @@ Admission retirée (décision utilisateur 2026-11-15, « retire
 l'admission ») : plus d'enveloppe E1 ni de pas d'ouverture E10, tout
 `open` passe tout de suite ; seul l'avertissement disque D34 reste
 (`disk_guard.rs`, loggé, jamais un refus).
+
+## Teneurs de marché : déploiement (plan marché Q6, vague 3)
+
+`orchestrator create-user [pseudo] --role market_maker [--goal kind]
+[--no-tutorial]` (`src/create_user_cmd.rs`) : procédure documentée de
+création, pseudo naturel généré quand omis (`names.rs`), vie écrite
+(rôle, tranche = première libre, capital cible de la tranche), session
+ouverte, tutoriel par la porte du cerveau, puis la phase de jeu. Refus
+typés : `--iron` (un Iron n'échange jamais), rôle inconnu, toutes les
+tranches déjà tenues. Univers 575 objets, capacité 54 par compte :
+N = 11 comptes, à créer un par un (chaque création prend la tranche
+libre suivante, 0 à 10) :
+
+    for index in $(seq 11); do ./rs/target/release/orchestrator create-user --role market_maker; done
+
+Les 11 comptes rejoignent la flotte (nommés, hors staff : mesures,
+holdings et hiscores les comptent ; aucune triche, règle 13). Suivi :
+`orchestrator economy [h]` (section « market makers » : tranche, phase,
+cible, capital, P&L, écart moyen coté, part du carnet, stock) et la
+carte « Market makers » de `/economy` (`market_maker_report.rs`).
+Bascule : dans le journal, `brain <c>: market maker slice s/11: capital
+… >= target …, quoting for good` ; puis `launching market make --post
+x,z,0 …` et `market maker <c>: … refused` si un ordre est refusé.

@@ -735,6 +735,12 @@ Vague 3 : TENEURS DE MARCHE (remplace M8, décision Q6)
     baisse ; sans demande -> bid vers 1, surplus au magasin PNJ) ;
     informations publiques seulement (D22) ; règle 13 respectée.
   -> déploiement, live, mesure.
+  État 2026-11-16 : code et tests faits, sans live (decisions.md
+  « Teneurs de marché dédiés ») : univers 575 objets, N = 11 comptes
+  (`create-user --role market_maker`, docs/orchestrator.md), capital
+  cible 60 000 à 290 000 par tranche ; revente marchande supprimée.
+  Simulateur (Q3 pour tous les vendeurs) : part à deux côtés et écart
+  médian meilleurs qu'en vague 2 sur les 5 graines (decisions.md).
 
 Différés (dépendent de plan-rendements R2/R4) : M6 stock-cible
 (tranche en cours + suivante, Q5) et M7 découverte du prix (ancrage

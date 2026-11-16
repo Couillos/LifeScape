@@ -13,7 +13,8 @@ pub fn is_farm_provenance(provenance: &str) -> bool {
 }
 
 /// Trading methods (D44): never a yield, never XP. Bare `market` is
-/// today's flip script (the session reports the script name); `market:*`
+/// the market script (the session reports the script name: a maker's
+/// post, a buy, a sell, a cleanup); `market:*`
 /// and `shop:*` are the planner's finer legs. Bare `shop` is reserved
 /// for the symmetric script name. Coin P&L of these methods feeds the
 /// trading book instead of the rate buckets.

@@ -11,7 +11,7 @@ use lifescape_json::Value;
 use lifescape_planner::{draw_engagement_ticks, map_method, resolve_ready, Engagement, GraphState, Life, NodeKind, NodeStatus};
 
 use crate::brain::{cleanup_keep, load_life, maybe_insert_cleanup, push_history, save_life};
-use crate::brain_plan::{bank_types, carried_tools, holdings_count, live_combat, live_stacks, merge_keep, pick_flip_target, ready_ctx, worn_names};
+use crate::brain_plan::{bank_types, carried_tools, holdings_count, live_combat, live_stacks, merge_keep, ready_ctx, worn_names};
 use crate::brain_tutorial::{tutorial_gate, TutorialGate};
 use crate::daemon::Orchestrator;
 use crate::jobs::Job;
@@ -80,18 +80,26 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     };
     let Some(live) = live else { return };
     let mut dirty = false;
+    // A market maker at its capital target leaves every other activity
+    // for good and quotes its slice (plan marché Q6).
+    if crate::market_maker::maybe_switch(job, &mut life) {
+        dirty = true;
+    }
+    // A quoting maker has no ambition pass, no gear, tool or wish bid, no
+    // alchemy: its post, its quotes, its deals, its bank (Q6).
+    let quoting = lifescape_planner::quoting(&life);
     // Every life holds an ambition (2026-11-13): the first pass that
     // meets one without assigns the whole fleet (coverage first).
-    if crate::cpu_profile::timed("ambition.ensure", || crate::brain_ambition::ensure(orch, &mut life, &live)) {
+    if !quoting && crate::cpu_profile::timed("ambition.ensure", || crate::brain_ambition::ensure(orch, &mut life, &live)) {
         dirty = true;
     }
     // Coverage repair (review 2026-11-13): an uncovered group is logged
     // and a redundant bot past the change throttle takes it.
-    if crate::cpu_profile::timed("ambition.coverage", || crate::brain_ambition::coverage_pass(&mut life, &live)) {
+    if !quoting && crate::cpu_profile::timed("ambition.coverage", || crate::brain_ambition::coverage_pass(&mut life, &live)) {
         dirty = true;
     }
     // A revised catalogue ladder drops the stale quotas it no longer offers.
-    if crate::brain_ambition::sync_catalog(&mut life, &live) {
+    if !quoting && crate::brain_ambition::sync_catalog(&mut life, &live) {
         dirty = true;
     }
     // Space pressure (L8) precedes the terminal check: a full bank needs
@@ -211,26 +219,31 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // PRD3 lot 3: idle bots list their tradeable surplus on the market
     // (rate-limited, never an NPC sale).
     crate::cpu_profile::timed("sales.list_surplus", || crate::brain_sales::maybe_list_surplus(job, &life));
-    // PRD3 lot 5: upgrade wishes bid on the market, never blocking.
-    crate::cpu_profile::timed("wishlist.bid_wishes", || crate::brain_wishlist::maybe_bid_wishes(job, &life));
+    if quoting {
+        // Q6: the maker quotes its slice (rate-limited, public data).
+        crate::cpu_profile::timed("market_maker.quote_pass", || crate::market_maker::quote_pass(job, &life));
+    } else {
+        // PRD3 lot 5: upgrade wishes bid on the market, never blocking.
+        crate::cpu_profile::timed("wishlist.bid_wishes", || crate::brain_wishlist::maybe_bid_wishes(job, &life));
+        // Alchemy (2026-11-14): nature runes for the stock a caster alchs,
+        // asks under the alch floor bought to alch.
+        crate::cpu_profile::timed("alch.market_pass", || crate::brain_alch::market_pass(job, &life, &live));
+        // Permanent tool kit (2026-11-14): axe, pickaxe, hammer, tinderbox,
+        // the best tier the level opens, filed as gear steps (a shop, or a
+        // covered ask for an axe), never a market bid nobody fills. Before
+        // the gear plan: the cheap base kit first.
+        if crate::cpu_profile::timed("tool_shop_pass", || crate::brain_tool_shop::tool_shop_pass(job, &mut life, &live)) {
+            dirty = true;
+        }
+        // Gear plan (2026-11-14): the best affordable piece of every slot,
+        // standing bids that wait for a producer, steps for covered asks.
+        if crate::cpu_profile::timed("gear_pass", || crate::brain_gear::gear_pass(job, &mut life, &live)) {
+            dirty = true;
+        }
+    }
     // Persistent needs (plan marché M2): a need's bid outlives its fill
     // wait; it closes here once no open node wants its object.
     crate::cpu_profile::timed("market.orphan_needs", || crate::brain_market::release_orphan_needs(job, &life));
-    // Alchemy (2026-11-14): nature runes for the stock a caster alchs,
-    // asks under the alch floor bought to alch.
-    crate::cpu_profile::timed("alch.market_pass", || crate::brain_alch::market_pass(job, &life, &live));
-    // Permanent tool kit (2026-11-14): axe, pickaxe, hammer, tinderbox,
-    // the best tier the level opens, filed as gear steps (a shop, or a
-    // covered ask for an axe), never a market bid nobody fills. Before
-    // the gear plan: the cheap base kit first.
-    if crate::cpu_profile::timed("tool_shop_pass", || crate::brain_tool_shop::tool_shop_pass(job, &mut life, &live)) {
-        dirty = true;
-    }
-    // Gear plan (2026-11-14): the best affordable piece of every slot,
-    // standing bids that wait for a producer, steps for covered asks.
-    if crate::cpu_profile::timed("gear_pass", || crate::brain_gear::gear_pass(job, &mut life, &live)) {
-        dirty = true;
-    }
     // Market buys parked on the book settle every pass; the worker never
     // waits for them (no idle bot, 2026-11-13).
     let (settled, mut waiting) = crate::cpu_profile::timed("filler.settle_parked", || crate::brain_filler::settle_parked(job, &mut life));
@@ -583,25 +596,6 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             args.extend(crate::brain_loot::skip_args(&skip));
         }
     }
-    // D52: flip and cleanup never sell worn, work tools or graph items.
-    // The keep list carries the tools the bot works with
-    // (`brain_tools::kept_tools`), so the merchant never flips its net;
-    // other tools are surplus (tools sell, 2026-11-13).
-    // The flip leaves auto-pick only with no safe target (sans objet).
-    if method == "market:flip" {
-        let stacks = live_stacks(job);
-        let mut keep = cleanup_keep(&life);
-        let levels = crate::brain_tools::live_levels(&live);
-        keep.extend(crate::brain_tools::kept_tools(&life, &stacks, &crate::brain_tools::level_refs(&levels)));
-        let worn = worn_names(job);
-        if let Some((item, qty)) = pick_flip_target(&stacks, &keep, &worn) {
-            crate::logln!("brain {}: flip D52 target {item} x{qty}", job.account);
-            args.push(item);
-            args.push(qty.min(100).max(1).to_string());
-        } else {
-            crate::logln!("brain {}: flip D52 no safe stock, clock ends it", job.account);
-        }
-    }
     // Cleanup carries its keep-list (graph obtains, quest checks, the
     // permanent tool kit and the kept combat set: never sold nor dropped,
     // 2026-11-14) and the Iron flag (D2 direct, no carnet) to the worker;
@@ -613,6 +607,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         keep.extend(crate::brain_gear::ladder_keep(job, &life, &live));
         // A caster's alchemy stock and runes (2026-11-15).
         keep.extend(crate::brain_alch::alch_keep(&life, &live));
+        // A quoting maker's slice is its trade (Q6): never sold nor
+        // dropped by the janitor (its NPC dumps ride `--shopsell`).
+        keep.extend(crate::market_maker::slice_names(&life));
         for kept in merge_keep(keep, worn_names(job)) {
             args.push("--keep".to_string());
             args.push(kept);

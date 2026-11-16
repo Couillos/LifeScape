@@ -206,8 +206,8 @@ impl Store {
         }
     }
 
-    /// Item ids the account bought (newest non-failed buyer deals first,
-    /// distinct): a merchant's flip stock (2026-11-14).
+    /// Item ids the account bought (non-failed buyer deals, distinct,
+    /// by id).
     pub fn items_bought_by(&self, account: &str) -> Result<Vec<i64>, Error> {
         let mut statement = self.connection.prepare(
             "SELECT DISTINCT item_id FROM deals WHERE buyer = ?1 AND status != 'failed' ORDER BY item_id",
@@ -218,6 +218,40 @@ impl Store {
             items.push(row.get(0)?);
         }
         Ok(items)
+    }
+
+    /// The account's deals that did not fail (a failed handover is
+    /// refunded), as buyer or seller, created at or after `since_clock`,
+    /// oldest first: a market maker's own ledger (plan marché Q6).
+    pub fn own_deals_since(&self, account: &str, since_clock: i64) -> Result<Vec<Deal>, Error> {
+        let query = format!(
+            "SELECT {DEAL_COLUMNS} FROM deals \
+             WHERE (buyer = ?1 OR seller = ?1) AND status != 'failed' AND created_clock >= ?2 \
+             ORDER BY created_clock, deal_id"
+        );
+        let mut statement = self.connection.prepare(&query)?;
+        let mut found_rows = statement.query(rusqlite::params![account, since_clock])?;
+        let mut deals = Vec::new();
+        while let Some(row) = found_rows.next()? {
+            deals.push(map_deal(row)?);
+        }
+        Ok(deals)
+    }
+
+    /// Units bought per item since `since_clock` by every buyer but
+    /// `excluded` (non-failed deals, public prints): the demand a market
+    /// maker reads, its own purchases left out (plan marché Q6).
+    pub fn units_bought_since(&self, since_clock: i64, excluded: &str) -> Result<Vec<(i64, i64)>, Error> {
+        let mut statement = self.connection.prepare(
+            "SELECT item_id, SUM(quantity) FROM deals WHERE buyer != ?1 AND status != 'failed' AND created_clock >= ?2 \
+             GROUP BY item_id ORDER BY item_id",
+        )?;
+        let mut found_rows = statement.query(rusqlite::params![excluded, since_clock])?;
+        let mut units = Vec::new();
+        while let Some(row) = found_rows.next()? {
+            units.push((row.get(0)?, row.get(1)?));
+        }
+        Ok(units)
     }
 
     /// Latest deals first (newest `created_clock`, `deal_id` tiebreak),
@@ -353,6 +387,11 @@ mod deals_tests {
         assert_eq!(store.last_own_fill("nina", 1519, true)?, None);
         assert_eq!(store.items_bought_by("lara_lane")?, vec![1519]);
         assert!(store.items_bought_by("ryan_park")?.is_empty());
+        // A maker's own ledger and the others' demand (plan marché Q6).
+        let own: Vec<(i64, i64)> = store.own_deals_since("lara_lane", 150)?.iter().map(|deal| (deal.price, deal.created_clock)).collect();
+        assert_eq!(own, vec![(3, 300)], "the failed deal and the older one are out");
+        assert_eq!(store.units_bought_since(0, "lara_lane")?, vec![(1519, 10)], "bob's settled 10, never the failed 10 nor lara's own");
+        assert_eq!(store.units_bought_since(250, "nobody")?, vec![(1519, 10)]);
         Ok(())
     }
 

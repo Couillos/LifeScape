@@ -60,6 +60,18 @@ pub fn f2p_tradeable_objs() -> Vec<&'static Obj> {
     f2p_objs().into_iter().filter(|entry| entry.tradeable).collect()
 }
 
+/// Market-maker universe (plan marché Q6, wave 3): every object with a
+/// book of its own. The market catalogue is `f2p_tradeable_objs`, but a
+/// banknote (`cert_*`) trades in its base object's book
+/// (`market_audit::book_item`) and coins are the money, not a good:
+/// both leave. Sorted by id (the slice partition reads it in order).
+pub fn market_universe() -> Vec<&'static Obj> {
+    f2p_tradeable_objs()
+        .into_iter()
+        .filter(|entry| entry.name.is_some_and(|name| !name.starts_with("cert_") && name != "coins"))
+        .collect()
+}
+
 /// Craft recipes a non-member can use (no brew, no fletch: herblore and
 /// fletching are members-only, and every null-flag row is herblore).
 pub fn f2p_recipes() -> Vec<Recipe> {
@@ -223,6 +235,21 @@ mod tests {
         let wind = f2p_spells().into_iter().find(|entry| entry.spell == "wind_strike").expect("wind strike");
         assert!(!wind.members);
         assert!(f2p_drops().iter().any(|entry| entry.npc == "chicken" && entry.obj == "feather"));
+    }
+
+    /// Q6 universe: 1128 F2P tradeable rows = 575 objects + 552 notes +
+    /// coins; every object once, no note, no coins, all F2P tradeable.
+    #[test]
+    fn market_universe_is_every_f2p_book() {
+        let universe = super::market_universe();
+        assert_eq!(super::f2p_tradeable_objs().len(), 1128);
+        assert_eq!(universe.len(), 575, "objects with a book of their own");
+        assert!(universe.iter().all(|entry| entry.members == Some(false) && entry.tradeable));
+        assert!(universe.iter().all(|entry| entry.name.is_some_and(|name| !name.starts_with("cert_") && name != "coins")));
+        assert!(universe.windows(2).all(|pair| pair[0].obj_id < pair[1].obj_id), "sorted by id, no duplicate");
+        for name in ["feather", "iron_dagger", "rune_platebody", "naturerune", "gold_bar"] {
+            assert!(universe.iter().any(|entry| entry.name == Some(name)), "{name} is in the universe");
+        }
     }
 
     #[test]

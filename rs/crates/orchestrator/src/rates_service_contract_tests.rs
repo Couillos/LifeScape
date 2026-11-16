@@ -45,7 +45,7 @@ fn only_contract_two_feeds_the_estimator() {
     tutorial.method = "tutorial".to_string();
     assert!(snapshot.record(&tutorial, Some(&contract(100, 900)), 1).is_none(), "tutorial feeds nothing");
     let mut market = parsed_fishing(300, 6000, 8);
-    market.method = "market:flip".to_string();
+    market.method = "market:make".to_string();
     snapshot.record(&market, Some(&contract(100, 900)), 1);
     assert_eq!(snapshot.book().get(&exact()).map(|bucket| bucket.runs), Some(1), "trading feeds the book only");
 }

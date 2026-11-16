@@ -456,7 +456,6 @@ impl MarketService {
             "tick" => self.op_tick(request),
             "stats" => self.op_stats(),
             "seller_quote" => self.op_seller_quote(request),
-            "flip_quote" => self.op_flip_quote(request),
             other => object(vec![
                 ("ok", Value::Bool(false)),
                 ("error", str_value(&format!("unknown market op '{other}'"))),

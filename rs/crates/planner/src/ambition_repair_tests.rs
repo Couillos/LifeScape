@@ -6,7 +6,8 @@ use super::{
     achieved, ambition_from_value, ambition_to_value, extend, new_ambition, new_ambition_extended, open_count, refresh, AmbitionError, BotNow,
     MilestoneStatus, Stamp, Target, AMBITION_CHANGE_TICKS, GENERALIST, MAX_DONE_KEPT,
 };
-use crate::ambition_catalog::{DemandItem, MERCHANT};
+use crate::ambition_catalog::DemandItem;
+use crate::market_maker::MARKET_MAKER_KIND;
 use crate::ambition_fleet::{coverage_repair, FleetBot};
 
 const ZERO: Stamp = Stamp { tick: 0, secs: 0 };
@@ -111,22 +112,23 @@ fn a_draw_with_no_milestone_is_refused() {
     assert!(open_count(&extended) > 0 && !achieved(&extended), "{:?}", extended.milestones);
 }
 
-/// Finding 7: a rich bot's merchant ambition starts past the coins it
-/// already holds (no useless 5 000-coin GetRich first).
+/// Finding 7: a rich bot's coin ladder (the market maker's playing
+/// phase) starts past the coins it already holds (no useless 5 000-coin
+/// GetRich first).
 #[test]
-fn a_rich_merchant_starts_past_its_coins() {
-    let merchant = new_ambition(MERCHANT, "coverage:merchant", &now(&fresh, 30_000, &nothing_held), 1, &[], ZERO).expect("merchant");
+fn a_rich_coin_ladder_starts_past_its_coins() {
+    let merchant = new_ambition(MARKET_MAKER_KIND, "operator:market_maker", &now(&fresh, 30_000, &nothing_held), 1, &[], ZERO).expect("maker");
     let first = merchant.milestones.iter().find(|stone| stone.status != MilestoneStatus::Done).expect("open");
     assert_eq!(first.target, Target::Coins { amount: 50_000 });
 }
 
-/// Finding 3: the sole merchant past 1M (or any sole holder at the end
-/// of its ladder) extends its ladder instead of leaving the role.
+/// Finding 3: a coin ladder past 1M (or any sole holder at the end of
+/// its ladder) extends its ladder instead of leaving the role.
 #[test]
 fn an_exhausted_ladder_extends() {
     let rich = now(&fresh, 2_000_000, &nothing_held);
-    assert_eq!(new_ambition(MERCHANT, "coverage:merchant", &rich, 1, &[], ZERO).err(), Some(AmbitionError::NoMilestone(MERCHANT.to_string())));
-    let merchant = new_ambition_extended(MERCHANT, "coverage:merchant", &rich, 1, &[], ZERO).expect("extended");
+    assert_eq!(new_ambition(MARKET_MAKER_KIND, "operator:market_maker", &rich, 1, &[], ZERO).err(), Some(AmbitionError::NoMilestone(MARKET_MAKER_KIND.to_string())));
+    let merchant = new_ambition_extended(MARKET_MAKER_KIND, "operator:market_maker", &rich, 1, &[], ZERO).expect("extended");
     assert!(merchant.milestones.iter().any(|stone| stone.target == Target::Coins { amount: 4_000_000 }), "{:?}", merchant.milestones);
     let mut miner = new_ambition("miner", "random", &now(&fresh, 0, &nothing_held), 3, &[], ZERO).expect("miner");
     let maxed = |_: &str| 99u8;
@@ -169,7 +171,6 @@ fn fleet_bot(seed: u64) -> FleetBot {
         account: "b0".to_string(),
         levels: Vec::new(),
         ironman: false,
-        merchant_archetype: false,
         market_affinity: 0.5,
         seed,
         kind: Some("fisher".to_string()),

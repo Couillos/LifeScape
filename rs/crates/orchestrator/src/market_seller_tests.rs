@@ -1,5 +1,5 @@
 use super::*;
-use crate::brain_reserve::{CostSource, OwnLine, OwnReport};
+use crate::brain_reserve::CostSource;
 use lifescape_market::Reference;
 use lifescape_planner::market_fit::BookView;
 
@@ -93,18 +93,6 @@ fn stale_asks_above_the_opening_come_down() {
     assert_eq!(adoption(1644, 2, Some(1), 28, Some(16)), Adoption::Lower { price: 16, floor: 1 });
     assert_eq!(adoption(12, 2, Some(1), 28, Some(16)), Adoption::Walk { floor: 1 }, "under the opening: walks");
     assert_eq!(adoption(1, 500, Some(4), 1079, Some(2)), Adoption::Raise { price: 4, floor: 4 }, "the reserve still wins");
-}
-
-#[test]
-fn flip_margins_pay_the_merchants_time() {
-    let reports = vec![
-        OwnReport { method: "market".to_string(), ticks: 6000, lines: vec![OwnLine { item: "Feather".to_string(), provenance: "traded".to_string(), quantity: -300 }, OwnLine { item: "Coins".to_string(), provenance: "traded".to_string(), quantity: 600 }] },
-        OwnReport { method: "melee".to_string(), ticks: 1500, lines: vec![] },
-    ];
-    assert_eq!(flip_ticks_per_unit(&reports), Some(20.0));
-    assert_eq!(flip_margin(Some(20.0), 0.1), 2);
-    assert_eq!(flip_margin(None, 0.1), 6, "unmeasured: 6000 ticks over 100 units");
-    assert_eq!(flip_margin(Some(0.5), 0.01), 1, "at least one coin");
 }
 
 /// Live service: the seller's own fill is remembered with its speed, and

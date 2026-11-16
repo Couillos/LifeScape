@@ -10,11 +10,13 @@ pub mod concession;
 pub mod deals;
 pub mod error;
 pub mod guards;
+pub mod maker;
 pub mod outlets;
 pub mod price;
 pub mod sim;
 pub mod sim_demand;
 pub mod sim_lifecycle;
+pub mod sim_maker;
 pub mod sim_prd3;
 pub mod trends;
 pub mod zip;
@@ -27,10 +29,8 @@ pub use guards::{check_coverage, check_price};
 pub use outlets::{market_pays, npc_sale_beats_market, npc_sale_min_unit};
 pub use price::{bucketize, change_thousandths, current_price, impact_price, impact_size, median_price, vwap, Candle, LastFill, PricedFill, Reference, IMPACT_CAP, PRICE_FILLS};
 pub use trends::{compute_trend, TrendInput, TrendScores};
-pub use zip::{
-    demand_step, flip_quotes, found_open, opening_ask, undercut_step, opening_bid, remembered_bid, seller_open, step_toward, FlipQuote, MerchantCaps, OwnFill,
-    ZipQuote,
-};
+pub use maker::{capital_target, lot_units, maker_count, partition, quote as maker_quote, slice_capacity, Leg, MakerCaps, MakerInput, MakerQuote, Regime, MAKER_CAPS};
+pub use zip::{demand_step, found_open, opening_ask, undercut_step, opening_bid, remembered_bid, seller_open, step_toward, OwnFill, ZipQuote};
 
 #[cfg(test)]
 mod found_tests;

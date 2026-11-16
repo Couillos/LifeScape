@@ -20,8 +20,6 @@ use crate::daemon::Orchestrator;
 use crate::jobs::Job;
 pub use crate::brain_plan::{TRIP_TICKS, choose_money};
 
-/// Merchant share of `get_rich` draws (D18, calibrated in L5).
-pub const MERCHANT_SHARE_PCT: u64 = 10;
 /// Iron cap (D8): at most 20 Iron accounts, enforced at creation.
 pub const MAX_IRON: usize = 20;
 
@@ -128,8 +126,8 @@ fn remember_life(life: &Life, stamp: LifeStamp) {
 /// Accepted `--goal` shapes (besides the pin `ambition:<skill>:<level>`,
 /// `parse_pin`): `max:a,b:40`, `obtain:feather:2000`,
 /// `produce:bronze_platebody:20` (made, never bought),
-/// `money`, `quest:cook`, `equip:melee`, `area:karamja`, `rich[:merchant
-/// |:producer]`. Bare `rich` draws the archetype (10% merchant).
+/// `money`, `quest:cook`, `equip:melee`, `area:karamja`, `rich` (the
+/// producer money methods; the merchant variant was removed in wave 3).
 pub fn parse_goal(text: &str) -> Result<GoalKind, String> {
     let text = text.trim();
     if text.is_empty() || text == "money" {
@@ -173,14 +171,7 @@ pub fn parse_goal(text: &str) -> Result<GoalKind, String> {
         return Ok(GoalKind::AccessArea { area: area.to_string() });
     }
     if text == "rich" {
-        return Ok(GoalKind::GetRich { merchant: None });
-    }
-    if let Some(arch) = text.strip_prefix("rich:") {
-        return match arch {
-            "merchant" => Ok(GoalKind::GetRich { merchant: Some(true) }),
-            "producer" => Ok(GoalKind::GetRich { merchant: Some(false) }),
-            _ => Err("goal rich[:merchant|:producer]".to_string()),
-        };
+        return Ok(GoalKind::GetRich);
     }
     Err(format!("unknown goal {text:?} (max:|obtain:|produce:|money|quest:|equip:|area:|rich)"))
 }
@@ -240,17 +231,43 @@ pub fn generate_pseudo(iron: bool, seed: u64) -> String {
     crate::names::natural_name(iron, seed)
 }
 
-/// Profile draw from the seed: affinity and patience uniform in [0,1],
-/// merchant share 10% (never Iron, enforced by the caller too).
+/// Profile draw from the seed: affinity and patience uniform in [0,1];
+/// every drawn bot is a producer (the 10 % merchant draw was removed in
+/// wave 3, plan marché Q6: market makers are created on purpose,
+/// `create-user --role market_maker`).
 pub fn draw_profile(seed: u64, iron: bool) -> Profile {
     let affinity = (xorshift(seed, 101) % 1000) as f64 / 999.0;
     let patience = (xorshift(seed, 102) % 1000) as f64 / 999.0;
-    let archetype = if !iron && xorshift(seed, 103) % 100 < MERCHANT_SHARE_PCT {
-        Archetype::Merchant
-    } else {
-        Archetype::Producer
-    };
-    Profile::new(iron, affinity, patience, seed, archetype)
+    Profile::new(iron, affinity, patience, seed, Archetype::Producer)
+}
+
+/// `create-user --role <role>`: the one role an operator creates.
+pub const MARKET_MAKER_ROLE: &str = "market_maker";
+
+/// `--role`: true for a market maker; typed refusals for an Iron maker
+/// (an Iron never trades) and an unknown role.
+pub fn maker_flag(role: Option<&str>, iron: bool) -> Result<bool, String> {
+    match role {
+        None => Ok(false),
+        Some(MARKET_MAKER_ROLE) if iron => Err("an Iron never trades: no Iron market maker".to_string()),
+        Some(MARKET_MAKER_ROLE) => Ok(true),
+        Some(other) => Err(format!("unknown role {other:?} (known: {MARKET_MAKER_ROLE})")),
+    }
+}
+
+/// The market maker's start (plan marché Q6): its slice and capital
+/// target, its operator-only coin ladder (`market_maker` ambition, held
+/// for good) and that ladder's first goal (money, producer methods).
+fn maker_start(seed: u64, taken: &[u32]) -> Result<(Archetype, lifescape_planner::Ambition, GoalKind, String), String> {
+    let role = crate::market_maker::new_role(taken)?;
+    let level_of = |name: &str| if name == "hitpoints" { 10 } else { 1 };
+    let held = |_: &str| 0;
+    let now = lifescape_planner::BotNow { level_of: &level_of, coins: 0, held: &held };
+    let ambition = lifescape_planner::new_ambition(lifescape_planner::MARKET_MAKER_KIND, "operator:market_maker", &now, seed, &[], crate::brain_ambition::stamp_now()).map_err(|error| error.to_string())?;
+    let first = lifescape_planner::next_milestone(&ambition, &[]).ok_or("market maker ladder has no open milestone")?;
+    let goal = lifescape_planner::goal_for_milestone(first);
+    let origin = first.id.clone();
+    Ok((Archetype::MarketMaker(role), ambition, goal, origin))
 }
 
 fn iron_count() -> usize {
@@ -279,13 +296,16 @@ fn iron_count() -> usize {
 
 /// Create a life file (and its account name when omitted). Existing
 /// files load untouched: creation never rewrites a running brain.
-pub fn ensure_life(account: &str, iron: bool, goal_text: &str) -> Result<Life, String> {
+/// `role`: `Some("market_maker")` makes a dedicated market maker (plan
+/// marché Q6): next free slice, its capital target, its coin ladder.
+pub fn ensure_life(account: &str, iron: bool, goal_text: &str, role: Option<&str>) -> Result<Life, String> {
     if let Some(life) = load_life(account) {
         return Ok(life);
     }
     if iron && !iron_allowed(iron_count()) {
         return Err(format!("iron cap reached ({MAX_IRON}): no new Ironman"));
     }
+    let maker = maker_flag(role, iron)?;
     let overall = goal_text.trim() == OVERALL_GOAL;
     let pin = if overall { None } else { parse_pin(goal_text)? };
     let goal = match &pin {
@@ -293,19 +313,19 @@ pub fn ensure_life(account: &str, iron: bool, goal_text: &str) -> Result<Life, S
         None if overall => GoalKind::MakeMoney,
         None => parse_goal(goal_text)?,
     };
-    if iron {
-        if let GoalKind::GetRich { merchant: Some(true) } = goal {
-            return Err("iron never merchants".to_string());
-        }
-    }
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|span| span.as_nanos() as u64)
         .unwrap_or(1)
         ^ (std::process::id() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    let profile = draw_profile(seed, iron);
+    let mut profile = draw_profile(seed, iron);
     // A pin starts on its ambition's first milestone, linked (`m1`).
     let (goal, ambition, origin) = match pin {
+        _ if maker => {
+            let (archetype, ambition, goal, origin) = maker_start(seed, &crate::market_maker::taken_slices())?;
+            profile.archetype = archetype;
+            (goal, Some(ambition), Some(origin))
+        }
         Some((skill, level)) => {
             let (ambition, goal, origin) = pinned_start(&skill, level, seed)?;
             (goal, Some(ambition), Some(origin))
@@ -340,10 +360,11 @@ pub fn ensure_life(account: &str, iron: bool, goal_text: &str) -> Result<Life, S
     Ok(life)
 }
 
-/// `create-user [pseudo] [--iron] [--goal kind]`: pseudo generated when
-/// omitted, life file written, then the CLI opens the session and runs
-/// the tutorial (tutorial first, brain takes over whenever idle after).
-pub fn create_user(account_opt: Option<String>, iron: bool, goal: Option<String>) -> Result<String, String> {
+/// `create-user [pseudo] [--iron] [--goal kind] [--role market_maker]`:
+/// pseudo generated when omitted, life file written, then the CLI opens
+/// the session and runs the tutorial (tutorial first, brain takes over
+/// whenever idle after).
+pub fn create_user(account_opt: Option<String>, iron: bool, goal: Option<String>, role: Option<String>) -> Result<String, String> {
     let account = match account_opt {
         Some(name) if !name.is_empty() => name,
         _ => {
@@ -356,7 +377,7 @@ pub fn create_user(account_opt: Option<String>, iron: bool, goal: Option<String>
             (0..64u64).map(|attempt| generate_pseudo(iron, seed.wrapping_add(attempt))).find(|name| !taken(name)).ok_or("no free account name after 64 draws")?
         }
     };
-    ensure_life(&account, iron, goal.as_deref().unwrap_or("max:fishing:40"))?;
+    ensure_life(&account, iron, goal.as_deref().unwrap_or("max:fishing:40"), role.as_deref())?;
     Ok(account)
 }
 
@@ -644,8 +665,8 @@ mod tests {
         assert!(parse_goal("max:fishing").is_err(), "level required");
         assert!(matches!(parse_goal("quest:cook"), Ok(GoalKind::CompleteQuest { .. })));
         assert!(matches!(parse_goal("produce:bronze_platebody:20"), Ok(GoalKind::Produce { count: 20, .. })));
-        assert!(matches!(parse_goal("rich:merchant"), Ok(GoalKind::GetRich { merchant: Some(true) })));
-        assert!(parse_goal("rich:ever").is_err(), "archetype closed");
+        assert!(matches!(parse_goal("rich"), Ok(GoalKind::GetRich)));
+        assert!(parse_goal(&["rich:", "merchant"].concat()).is_err(), "the merchant role is gone (wave 3)");
         assert!(parse_goal("nope").is_err(), "unknown goals fail loud");
     }
 
@@ -658,16 +679,26 @@ mod tests {
         assert_ne!(generate_pseudo(false, 1), generate_pseudo(false, 2), "names vary");
     }
 
+    /// Wave 3 (plan marché Q6): no drawn merchant any more; a market
+    /// maker is created on purpose, on the first free slice, with its
+    /// coin ladder held for good; never an Iron.
     #[test]
-    fn merchant_share_and_iron_rule() {
-        let mut merchants = 0;
-        for seed in 0..100 {
-            if draw_profile(seed, false).archetype == lifescape_planner::Archetype::Merchant {
-                merchants += 1;
-            }
-            assert_eq!(draw_profile(seed, true).archetype, lifescape_planner::Archetype::Producer, "iron never merchants");
+    fn every_drawn_bot_is_a_producer_and_makers_are_created() {
+        for seed in 0..200 {
+            assert_eq!(draw_profile(seed, false).archetype, lifescape_planner::Archetype::Producer);
         }
-        assert!((5..=20).contains(&merchants), "merchant share ~10%, got {merchants}/100");
+        let (archetype, ambition, goal, origin) = super::maker_start(7, &[0, 1]).expect("slice 2 free");
+        let lifescape_planner::Archetype::MarketMaker(role) = archetype else { panic!("a maker") };
+        assert_eq!((role.slice, role.slices), (2, 11));
+        assert_eq!(role.capital_target, crate::market_maker::capital_target(2));
+        assert_eq!(ambition.kind, lifescape_planner::MARKET_MAKER_KIND);
+        assert!(lifescape_planner::pinned(&ambition));
+        assert_eq!((goal, origin.as_str()), (GoalKind::GetRich, "m1"), "money first (producer methods)");
+        assert!(super::maker_start(7, &(0..11).collect::<Vec<u32>>()).is_err(), "every slice taken");
+        assert_eq!(super::maker_flag(Some(super::MARKET_MAKER_ROLE), false), Ok(true));
+        assert_eq!(super::maker_flag(None, true), Ok(false));
+        assert!(super::maker_flag(Some(super::MARKET_MAKER_ROLE), true).is_err(), "never an Iron maker");
+        assert!(super::maker_flag(Some("merchant"), false).is_err(), "unknown role");
     }
 
 
@@ -811,7 +842,7 @@ mod tests {
             "runecraft:airrune", "pick:grain", "mill:pot_flour", "fill:jug_water",
             "essence:blankrune",
             "fight:melee/cows", "fight:ranged/cows", "fight:magic/cows",
-            "farm:feather", "market:buy", "shop:buy", "market:flip", "space:cleanup",
+            "farm:feather", "market:buy", "shop:buy", "space:cleanup",
             "equip:melee", "quest:cook", "access:varrock",
         ] {
             let node = if method.starts_with("gather:") || method.starts_with("smelt:") || method.starts_with("cook/") {
@@ -823,6 +854,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("{method} maps"));
             assert!(crate::registry::script_known(&script), "{method} -> {script}: not registered");
         }
+        // The maker's post maps on its site (plan Q6).
+        let mut post = Node::new("n8", NodeKind::MakeMoney, Vec::new(), 0);
+        post.site = Some(lifescape_planner::MAKER_POSTS[0]);
+        let (script, _) = lifescape_planner::map_method(lifescape_planner::MAKE_METHOD, &post, None).expect("the post maps");
+        assert!(crate::registry::script_known(&script));
     }
 
     /// P3.6: a method without script is a contract error: abandoned at

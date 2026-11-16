@@ -15,19 +15,27 @@ pub enum GoalKind {
     CompleteQuest { quest: String },
     EquipBest { style: String },
     AccessArea { area: String },
-    GetRich { merchant: Option<bool> },
+    /// Coins by the producer money methods (salmon, coal…; the merchant
+    /// variant was removed in wave 3, Q6).
+    GetRich,
+    /// Market maker's post (plan marché Q6, wave 3): quote the slice at
+    /// the Varrock fountain, one `market:make` window at a time.
+    MakeMarket,
     /// Make `count` of `item` by production only (an ambition milestone:
     /// the product is never bought; inputs may be). Once the obtain node
     /// is done, the brain's default selling lists the surplus.
     Produce { item: String, count: i64 },
 }
 
-/// Producer or merchant for the `get_rich` goal (D18). Drawn once at
-/// creation (`merchant_share` 10%), never Iron.
+/// Role of one account: a producer (every fleet bot), or a dedicated
+/// market maker (plan marché Q6, `create-user --role market_maker`):
+/// its slice and capital target, playing first then quoting
+/// (`market_maker`). The drawn merchant archetype (D18, 10 %) was
+/// removed in wave 3: such files load as producers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Archetype {
     Producer,
-    Merchant,
+    MarketMaker(crate::market_maker::MakerRole),
 }
 
 /// Stable per-bot profile, drawn once from the seed (D15, D8 aside).
@@ -264,17 +272,8 @@ fn goal_to_value(goal: &GoalKind) -> Value {
             ("kind", str_value("access_area")),
             ("area", str_value(area)),
         ]),
-        GoalKind::GetRich { merchant } => object(vec![
-            ("kind", str_value("get_rich")),
-            (
-                "merchant",
-                match merchant {
-                    Some(true) => Value::Bool(true),
-                    Some(false) => Value::Bool(false),
-                    None => Value::Null,
-                },
-            ),
-        ]),
+        GoalKind::GetRich => object(vec![("kind", str_value("get_rich"))]),
+        GoalKind::MakeMarket => object(vec![("kind", str_value("make_market"))]),
         GoalKind::Produce { item, count } => object(vec![
             ("kind", str_value("produce")),
             ("item", str_value(item)),
@@ -312,12 +311,9 @@ fn goal_from_value(value: &Value) -> Option<GoalKind> {
             item: value.get("item").as_str().unwrap_or("").to_string(),
             count: value.get("count").as_i64().unwrap_or(1).max(1),
         }),
-        "get_rich" => Some(GoalKind::GetRich {
-            merchant: match &value.get("merchant") {
-                Value::Bool(flag) => Some(*flag),
-                _ => None,
-            },
-        }),
+        // Wave 3: a merchant `get_rich` (role removed) is a producer one.
+        "get_rich" => Some(GoalKind::GetRich),
+        "make_market" => Some(GoalKind::MakeMarket),
         _ => None,
     }
 }
@@ -507,10 +503,11 @@ pub fn life_to_value(life: &Life) -> Value {
                 (
                     "archetype",
                     str_value(match life.profile.archetype {
-                        Archetype::Merchant => "merchant",
+                        Archetype::MarketMaker(_) => "market_maker",
                         Archetype::Producer => "producer",
                     }),
                 ),
+                ("maker", crate::market_maker::role_to_value(&life.profile.archetype)),
             ]),
         ),
         ("goal", goal_to_value(&life.goal)),
@@ -552,7 +549,7 @@ pub fn life_from_value(value: &Value) -> Option<Life> {
     for row in value.get("nodes").as_arr().cloned().unwrap_or_default() {
         nodes.push(node_from_value(&row)?);
     }
-    Some(Life {
+    let mut life = Life {
         schema: LIFE_SCHEMA,
         account: value.get("account").as_str().unwrap_or("").to_string(),
         created_at: value.get("created_at").as_i64().unwrap_or(0),
@@ -562,10 +559,8 @@ pub fn life_from_value(value: &Value) -> Option<Life> {
             profile.get("market_affinity").as_f64().unwrap_or(0.5),
             profile.get("price_patience").as_f64().unwrap_or(0.5),
             value.get("seed").as_i64().unwrap_or(0) as u64,
-            match profile.get("archetype").as_str().unwrap_or("producer") {
-                "merchant" => Archetype::Merchant,
-                _ => Archetype::Producer,
-            },
+            // `merchant` (removed in wave 3) and unknown names: producer.
+            crate::market_maker::archetype_from_value(&profile),
         ),
         goal: goal_from_value(&value.get("goal"))?,
         nodes,
@@ -599,7 +594,9 @@ pub fn life_from_value(value: &Value) -> Option<Life> {
         // Absent before the memory (2026-11-14): default, the first
         // retirement infers the floor and prunes what accumulated.
         memory: crate::life_memory::memory_from_value(&value.get("memory")),
-    })
+    };
+    crate::market_maker::migrate_merchant(&mut life);
+    Some(life)
 }
 
 #[cfg(test)]

@@ -204,8 +204,7 @@ fn spare_tools(life: &Life, stacks: &[(String, i64)], kept: &[String], listed: &
 }
 
 /// Re-adopts the account's resting listings that walk no more (placed
-/// before a daemon restart, or before these rules), merchants included
-/// (2026-11-14: no dumping flip stock either): a listing under the
+/// before a daemon restart, or before these rules): a listing under the
 /// bot's own reserve is amended up to it, one over the demand lot or
 /// without a known own cost is withdrawn (its stock back in the bank,
 /// the next pass lists a lot), the rest walks down to the reserve.
@@ -301,17 +300,17 @@ fn spare_gear(stacks: &[(String, i64)], gear: &[String], whole: &[String], liste
 /// (`market_seller::undersized`; live frank_lane 2026-11-14: 1 iron
 /// dagger listed at 628, 40 banked and never listed): withdrawn so the
 /// stack lists as one lot. Only surplus items (not kept), open rows,
-/// never a merchant's flip stock. Returns the order ids withdrawn.
+/// never a quoting market maker's slice. Returns the order ids withdrawn.
 fn regroup_slivers(
     service: &crate::market_service::MarketService,
     account: &str,
     selling: &[lifescape_store::Order],
     free: &[(String, i64)],
     keep: &[String],
-    flip_stock: &HashSet<i64>,
+    quoted: &HashSet<i64>,
 ) -> Vec<i64> {
     let mut withdrawn = Vec::new();
-    for row in selling.iter().filter(|row| row.status == lifescape_store::OrderStatus::Open && !flip_stock.contains(&row.item_id)) {
+    for row in selling.iter().filter(|row| row.status == lifescape_store::OrderStatus::Open && !quoted.contains(&crate::market_audit::book_item(row.item_id))) {
         let Some(name) = lifescape_gamedata::obj_by_id(usize::try_from(crate::market_audit::base_of(row.item_id)).unwrap_or(0)).and_then(|obj| obj.name) else { continue };
         if crate::brain_plan::sale_blocked(name, keep, &[]) {
             continue;
@@ -411,6 +410,8 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
             row.side == lifescape_store::OrderSide::Sell
                 && matches!(row.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched)
                 && row.remaining > 0
+                // A market maker's quotes belong to its own pass (Q6).
+                && row.motive != crate::market_lineage::MARKET_MAKE
         })
         .collect();
     // A listing of the last free copy of a work tool is withdrawn; every
@@ -420,19 +421,18 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         let still = withdraw_tool_listings(&service, &job.account, &locking);
         selling.retain(|row| !locking.iter().any(|(order, _)| *order == row.order_id) || still.contains(&row.order_id));
     }
-    // A merchant's flip stock (what it bought) is priced by its flips
-    // only (`flip_quote`), never relisted here (ryan_park held 81 % of
-    // the sell side at 1 coin, 2026-11-14).
-    let flip_stock: HashSet<i64> = if life.profile.archetype == lifescape_planner::Archetype::Merchant {
-        service.lock_store().items_bought_by(&job.account).unwrap_or_default().into_iter().collect()
-    } else {
-        HashSet::new()
+    // A quoting market maker's slice is priced by its own quotes only
+    // (`market_maker::quote_pass`, plan Q6), never listed here; the rest
+    // of its stock (kept from its playing phase) sells like any bot's.
+    let quoted: HashSet<i64> = match lifescape_planner::maker_role(life) {
+        Some(role) if role.phase == lifescape_planner::MakerPhase::Quoting => crate::market_maker::slice_items(role.slice).into_iter().collect(),
+        _ => HashSet::new(),
     };
     let mut locks = crate::brain_locks::locked_items(&job.account);
     let mut free = lifescape_planner::withhold_reserved(&free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name)), &reserved);
     // A sliver listed out of a big stack is withdrawn and the whole
     // stack lists as one lot in this same pass.
-    let regrouped = regroup_slivers(&service, &job.account, &selling, &free, &keep, &flip_stock);
+    let regrouped = regroup_slivers(&service, &job.account, &selling, &free, &keep, &quoted);
     if !regrouped.is_empty() {
         selling.retain(|row| !regrouped.contains(&row.order_id));
         locks = crate::brain_locks::locked_items(&job.account);
@@ -463,7 +463,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     // Q3: what an F2P shop pays more for than the market goes to the shop.
     let mut shop_candidates: Vec<crate::brain_npc_sale::Candidate> = Vec::new();
     for (name, item, qty) in offers {
-        if flip_stock.contains(&item) {
+        if quoted.contains(&crate::market_audit::book_item(item)) {
             continue;
         }
         // Q4: a lot withdrawn at its horizon with no buyer stays banked
@@ -518,6 +518,8 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
             crate::logln!("brain {}: listing {lot} {name} refused, holding: {:?}", job.account, reply.get("error").as_str());
         }
     }
+    // A maker's slice stock nobody buys goes to the shop too (Q6).
+    shop_candidates.extend(crate::market_maker::take_dumps(&job.account));
     // Q3: one shop trip when it pays more than its ticks at the bot's
     // own rate; the janitor node carries it (`brain_npc_sale`).
     let min_gain = (crate::brain_npc_sale::SHOP_TRIP_TICKS * costs.coins_per_tick).ceil() as i64;

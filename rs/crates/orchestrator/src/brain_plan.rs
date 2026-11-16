@@ -92,6 +92,8 @@ pub(crate) fn ready_ctx(life: &Life, node: &Node, live: &Value) -> ReadyCtx {
     ctx.ironman = life.profile.ironman;
     ctx.trip_ticks = TRIP_TICKS;
     ctx.quarantined = crate::method_health::quarantined();
+    // A market maker's post (plan Q6): its slice's tile by the fountain.
+    ctx.maker_post = lifescape_planner::maker_role(life).map(|role| lifescape_planner::maker_post(&role));
     let item_debug = match &node.kind {
         NodeKind::ObtainItems { item, .. } => item.clone(),
         _ => String::new(),
@@ -226,32 +228,6 @@ pub fn merge_keep(graph: Vec<String>, worn: Vec<String>) -> Vec<String> {
     keep
 }
 
-/// D52 flip pick: richest F2P tradeable stack outside the sale gate.
-/// `None` means engagement sans objet (the clock ends it, no doomed order).
-pub fn pick_flip_target(
-    stacks: &[(String, i64)],
-    keep: &[String],
-    worn: &[String],
-) -> Option<(String, i64)> {
-    let mut best: Option<(String, i64, i64)> = None;
-    for (name, qty) in stacks {
-        if *qty <= 0 || sale_blocked(name, keep, worn) {
-            continue;
-        }
-        let Some(entry) = lifescape_gamedata::objs_by_name(name).into_iter().next() else {
-            continue;
-        };
-        if !entry.tradeable || entry.members == Some(true) {
-            continue;
-        }
-        let value = entry.price.max(1).saturating_mul(*qty);
-        if best.as_ref().is_none_or(|(_, _, top)| value > *top) {
-            best = Some((name.clone(), *qty, value));
-        }
-    }
-    best.map(|(name, qty, _)| (name, qty))
-}
-
 /// Debug name of one live stack. The snapshot carries display names
 /// ("Small fishing net") plus the obj id; the planner, the tool gate and
 /// `--keep` speak debug names (`net`), so the id decides. A bare string
@@ -318,7 +294,7 @@ fn live_entries(job: &Job, key: &str) -> Vec<(String, i64)> {
     out
 }
 
-/// Live carried + banked stacks (debug name, summed quantity) for the flip pick.
+/// Live carried + banked stacks (debug name, summed quantity).
 pub(crate) fn live_stacks(job: &Job) -> Vec<(String, i64)> {
     let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
     let mut totals: std::collections::HashMap<String, (String, i64)> = std::collections::HashMap::new();
@@ -417,7 +393,7 @@ pub fn fold_travel_failure(node: &mut Node, method: &str) -> TravelFold {
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_money, live_combat, merge_keep, pick_flip_target, rank_money_diverse, rescue_replan_cause, sale_blocked};
+    use super::{choose_money, live_combat, merge_keep, rank_money_diverse, rescue_replan_cause, sale_blocked};
     use lifescape_json::{object, str_value};
     use lifescape_planner::{Node, NodeKind, NodeStatus};
 
@@ -461,8 +437,8 @@ mod tests {
 
     /// D52: worn, graph items (kept work tools included) never sell; a
     /// tool outside the keep list is ordinary surplus (user rule
-    /// 2026-11-13: tools sell). The L11 flip sold its own net: the net now
-    /// reaches the gate through the keep list (`brain_tools`).
+    /// 2026-11-13: tools sell). L11: a merchant sold its own net; the
+    /// net now reaches the gate through the keep list (`brain_tools`).
     #[test]
     fn sale_gate_blocks_worn_and_graph_but_tools_sell() {
         let keep = vec!["feather".to_string(), "net".to_string()];
@@ -482,21 +458,6 @@ mod tests {
         assert_eq!(merged.len(), 2, "dedup is case-insensitive, got {merged:?}");
         assert!(merged.contains(&"feather".to_string()));
         assert!(merged.contains(&"Iron_Sword".to_string()));
-    }
-
-    #[test]
-    fn flip_pick_skips_the_gate_and_takes_the_richest() {
-        let stacks = vec![
-            ("net".to_string(), 1),
-            ("coins".to_string(), 5000),
-            ("feather".to_string(), 2000),
-            ("yew_logs".to_string(), 400),
-        ];
-        let keep = vec!["feather".to_string(), "net".to_string()];
-        let picked = pick_flip_target(&stacks, &keep, &[]).expect("surplus lists");
-        assert_eq!(picked.0, "yew_logs", "kept tools, coins and graph items never win, got {picked:?}");
-        assert!(pick_flip_target(&[("net".to_string(), 1)], &keep, &[]).is_none(), "kept tool alone means no target");
-        assert!(pick_flip_target(&[], &[], &[]).is_none(), "empty stock means engagement sans objet");
     }
 
     /// P1.6 reprise: `on_supervise` folds a typed `RescueBudget`

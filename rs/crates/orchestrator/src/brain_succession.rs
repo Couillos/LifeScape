@@ -42,7 +42,7 @@ fn goal_label(goal: &GoalKind) -> String {
         GoalKind::MaxSkills { skills, level } => format!("{} {level}", skills.join(",")),
         GoalKind::Produce { item, count } => format!("produce {item} {count}"),
         GoalKind::EquipBest { style } => format!("equip {style}"),
-        GoalKind::GetRich { merchant: Some(true) } => "rich merchant".to_string(),
+        GoalKind::MakeMarket => "market maker".to_string(),
         other => format!("{other:?}"),
     }
 }
@@ -149,12 +149,17 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     // The previous lot's claim on the order board ends with its goal.
     crate::market_claims::release(&life.account);
     note_expired_bans(life);
-    crate::brain_ambition::before_draw(life, live);
+    // A quoting market maker keeps its post (plan Q6): no ambition pass,
+    // no bid answered, no alchemy, the draw returns `MakeMarket`.
+    let quoting = lifescape_planner::quoting(life);
+    if !quoting {
+        crate::brain_ambition::before_draw(life, live);
+    }
     let level_of = |skill: &str| live_level(live, skill);
     // Producers respond to bids (point 7): a public bid this bot can make
     // at a profit worth twice its time preempts the milestone, the
     // ambition untouched (`brain_bids`, `planner::bid_response`).
-    let answered = crate::brain_bids::bid_goal_for(life, live)
+    let answered = (!quoting).then(|| crate::brain_bids::bid_goal_for(life, live)).flatten()
         // Alchemy (2026-11-14): a stock that alchs for more than it sells,
         // runes in hand, worth the bot's time like a bid.
         .or_else(|| crate::brain_alch::alch_goal_for(life, live))
@@ -366,9 +371,9 @@ mod tests {
 
     #[test]
     fn money_goals_restart_their_engagement() {
-        let mut rich = life_with(GoalKind::GetRich { merchant: Some(true) });
+        let mut rich = life_with(GoalKind::GetRich);
         succeed_goal(&mut rich, &live(&[]), false).expect("money goes on");
-        assert!(matches!(rich.goal, GoalKind::GetRich { merchant: Some(true) }));
+        assert!(matches!(rich.goal, GoalKind::GetRich));
     }
 
     /// The 12 idle bots (`graph: final`, every skill in an old

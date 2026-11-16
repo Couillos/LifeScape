@@ -258,7 +258,7 @@ fn actions_and_alerts() {
 fn legacy_provenance_keeps_the_aggregation() {
     assert_eq!(legacy_provenance(cause::PRODUCT, 5, false), "produced");
     assert_eq!(legacy_provenance(cause::AMMO, -5, false), "consumed");
-    assert_eq!(legacy_provenance(cause::FOOD, -1, true), "consumed", "lunch on a flip stays consumed");
+    assert_eq!(legacy_provenance(cause::FOOD, -1, true), "consumed", "lunch at the maker's post stays consumed");
     assert_eq!(legacy_provenance(cause::SHOP_BOUGHT, 1, true), "traded", "merchant legs read traded (D45)");
     assert_eq!(legacy_provenance(cause::DISCARDED, -2, false), "lost");
     assert_eq!(legacy_provenance(cause::UNATTRIBUTED, 3, false), "unattributed");

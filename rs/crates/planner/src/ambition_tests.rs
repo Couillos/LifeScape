@@ -5,7 +5,8 @@ use super::{
     achieved, goal_for_milestone, mark_drawn, may_change, new_ambition, next_milestone, on_goal_closed, refresh, revise,
     BotNow, CloseOutcome, MilestoneStatus, Stamp, Target, AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS,
 };
-use crate::ambition_catalog::{fit, kind_weights, products, spec, DemandItem, Then, GROUPS, MERCHANT, specs};
+use crate::ambition_catalog::{fit, kind_weights, products, spec, DemandItem, Then, GROUPS, specs};
+use crate::market_maker::MARKET_MAKER_KIND;
 use crate::ambition_fleet::{assign_fleet, coverage_gaps, draw_kind, optional_change, FleetBot};
 use crate::model::{Archetype, GoalKind, Life, Profile};
 
@@ -16,7 +17,6 @@ fn bot(account: &str, seed: u64, levels: &[(&str, u8)]) -> FleetBot {
         account: account.to_string(),
         levels: levels.iter().map(|(skill, level)| (skill.to_string(), *level)).collect(),
         ironman: false,
-        merchant_archetype: false,
         market_affinity: 0.5,
         seed,
         kind: None,
@@ -45,23 +45,25 @@ fn life_with(kind: &str) -> Life {
     }
 }
 
-/// 25 fresh bots: the 12 groups and the merchant are covered, each by a
-/// dedicated bot, and the 12 others draw random ambitions.
+/// 25 fresh bots: the 12 groups are covered, each by a dedicated bot,
+/// and the 13 others draw random ambitions (never an operator-only kind:
+/// the merchant role was removed in wave 3).
 #[test]
-fn coverage_for_25_bots_covers_every_group_and_a_merchant() {
+fn coverage_for_25_bots_covers_every_group() {
     let bots: Vec<FleetBot> = (0..25).map(|index| bot(&format!("b{index:02}"), 1000 + index as u64 * 7919, &[])).collect();
     let assigned = assign_fleet(&bots, &[]);
     assert_eq!(assigned.len(), 25, "every bot gets one");
     let kinds: Vec<&str> = assigned.iter().map(|row| row.kind.as_str()).collect();
     assert!(coverage_gaps(&kinds).is_empty(), "no gap left: {kinds:?}");
     let coverage = assigned.iter().filter(|row| row.why.starts_with("coverage:")).count();
-    assert_eq!(coverage, GROUPS.len() + 1, "12 groups + merchant by coverage");
+    assert_eq!(coverage, GROUPS.len(), "12 groups by coverage");
     let random: Vec<&str> = assigned.iter().filter(|row| !row.why.starts_with("coverage:")).map(|row| row.why.as_str()).collect();
-    assert_eq!(random.len(), 12);
+    assert_eq!(random.len(), 13);
+    assert!(!kinds.contains(&MARKET_MAKER_KIND) && !kinds.contains(&"merchant"), "{kinds:?}");
     assert!(random.iter().all(|why| *why == "random"), "no demand: plain random, got {random:?}");
     assert!(!kinds.contains(&GENERALIST), "the generalist is never drawn");
     let distinct: std::collections::BTreeSet<&str> = kinds.iter().copied().collect();
-    assert!(distinct.len() >= GROUPS.len() + 1, "varied: {distinct:?}");
+    assert!(distinct.len() >= GROUPS.len(), "varied: {distinct:?}");
 }
 
 /// Beyond coverage, the draw is random (seeded), tilted by demand.
@@ -153,9 +155,10 @@ fn existing_levels_tilt_but_never_fix_the_draw() {
     assert!(matches!(&first.target, Target::Produce { item, .. } if item == "yew_logs" || item == "willow_logs"), "{first:?}");
 }
 
-/// Held ambitions count as coverage; Iron never merchants.
+/// Held ambitions count as coverage; nobody ever draws the market
+/// maker's operator-only ladder.
 #[test]
-fn held_ambitions_cover_and_iron_never_merchants() {
+fn held_ambitions_cover_and_nobody_draws_the_maker() {
     let mut fleet: Vec<FleetBot> = GROUPS.iter().enumerate().map(|(index, _)| bot(&format!("h{index}"), index as u64, &[])).collect();
     for (row, group) in fleet.iter_mut().zip(GROUPS.iter()) {
         row.kind = crate::ambition_catalog::kind_for_group(group).map(str::to_string);
@@ -163,17 +166,12 @@ fn held_ambitions_cover_and_iron_never_merchants() {
     let mut iron = bot("Ironabc", 3, &[]);
     iron.ironman = true;
     fleet.push(iron);
-    let mut trader = bot("trader", 4, &[]);
-    trader.merchant_archetype = true;
-    fleet.push(trader);
+    fleet.push(bot("trader", 4, &[]));
     let assigned = assign_fleet(&fleet, &[]);
     assert_eq!(assigned.len(), 2, "held ambitions are never reassigned");
-    let trader_row = assigned.iter().find(|row| row.account == "trader").expect("trader");
-    assert_eq!((trader_row.kind.as_str(), trader_row.why.as_str()), (MERCHANT, "coverage:merchant"));
-    for seed in 0..100u64 {
-        let mut iron = bot("Iron", seed, &[]);
-        iron.ironman = true;
-        assert_ne!(draw_kind(&iron, &["merchant".to_string()], &[], &[]).0, MERCHANT);
+    for seed in 0..200u64 {
+        let drawn = draw_kind(&bot("any", seed, &[]), &[], &[], &[]).0;
+        assert!(drawn != MARKET_MAKER_KIND && drawn != "merchant", "{drawn}");
     }
 }
 
@@ -259,9 +257,10 @@ fn refresh_materializes_and_achieves() {
         }
     }
     assert!(achieved(&ambition));
-    let mut merchant = new_ambition(MERCHANT, "coverage:merchant", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 1, &[], ZERO).expect("merchant");
+    let mut merchant = new_ambition(MARKET_MAKER_KIND, "operator:market_maker", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 1, &[], ZERO).expect("maker");
     assert!(matches!(merchant.milestones[0].target, Target::Coins { amount: 5_000 }));
-    assert!(matches!(goal_for_milestone(&merchant.milestones[0]), GoalKind::GetRich { merchant: Some(true) }));
+    assert!(matches!(goal_for_milestone(&merchant.milestones[0]), GoalKind::GetRich));
+    assert!(super::pinned(&merchant), "the maker's playing phase is held for good");
     refresh(&mut merchant, &BotNow { level_of: &|_| 1, coins: 30_000, held: &|_| 0 }, 1, &[]);
     assert_eq!(merchant.milestones[0].status, MilestoneStatus::Done);
     assert_eq!(merchant.milestones[1].progress, (20_000, 20_000));

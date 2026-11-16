@@ -400,6 +400,25 @@ fn rederive_legs(node: &mut Node, ironman: bool, style: &str, produce: Option<&s
     node.alternatives.push(crate::model::Alternative { method, est_ticks: 0, est_coins: 0 });
 }
 
+/// Role change (plan marché Q6: a market maker past its capital target
+/// leaves every other activity for good): every open node is abandoned
+/// with `cause`, the lock and the engagement released. Returns the ids
+/// abandoned. The new goal's nodes come after (`goals::append_goal`).
+pub fn abandon_for_role(life: &mut Life, cause: &str) -> Vec<String> {
+    let mut abandoned = Vec::new();
+    for node in &mut life.nodes {
+        if matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned) {
+            continue;
+        }
+        node.status = NodeStatus::Abandoned;
+        node.last_error = cause.to_string();
+        abandoned.push(node.id.clone());
+    }
+    life.active = None;
+    life.engagement = None;
+    abandoned
+}
+
 /// Mark `index` launched: the only way a node becomes active.
 pub fn mark_launched(life: &mut Life, index: usize) {
     life.nodes[index].status = NodeStatus::Active;

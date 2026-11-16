@@ -1,0 +1,419 @@
+#![forbid(unsafe_code)]
+//! Dedicated market makers, daemon side (plan marché Q6, wave 3).
+//!
+//! - Universe: every F2P object with a book of its own
+//!   (`gamedata::f2p::market_universe`, 575 objects: the market catalogue
+//!   minus banknotes and coins), split over `lifescape_market::maker_count`
+//!   slices (slice capacity 54: F2P bank 60 + pack 28 minus 20 kept
+//!   slots, 80 % fill) by `lifescape_market::partition` (deterministic,
+//!   stable). Each maker account owns one slice for life.
+//! - Capital target of a slice: `lifescape_market::capital_target` over
+//!   its objects' public anchors (shop value): what one bid lot on every
+//!   object costs, each capped at 10 % of the capital.
+//! - Switch (`maybe_switch`): a playing maker whose coins reach the
+//!   target cancels its open buys and its listings of slice objects,
+//!   then quotes for good (`lifescape_planner::become_quoting`).
+//! - Quote pass (`quote_pass`, every `MAKER_PASS_TICKS`): per slice
+//!   object, `lifescape_market::maker_quote` from public data (current
+//!   price, the others' book, the others' purchases over the demand
+//!   lookback) and the maker's own stock, cost and equity; its one bid
+//!   and one ask (motive `market_make`, fixed price: no concession curve)
+//!   are kept, amended, placed or cancelled; units nobody buys go to the
+//!   NPC shop (Q3) through the sales pass (`take_dumps`).
+//!
+//! Information: public prints, the public book, the maker's own deals and
+//! holdings only (D22). No cheat (rule 13): the stock comes from deals.
+
+use std::collections::{BTreeMap, HashMap};
+
+use lifescape_json::{object, str_value, Value};
+use lifescape_market::{Leg, MakerInput, MAKER_CAPS};
+use lifescape_planner::{Life, MakerRole};
+
+use crate::jobs::Job;
+
+/// Ticks between two quote passes of one maker (60 s at 60 ms).
+pub const MAKER_PASS_TICKS: u64 = 1000;
+/// Slice objects a maker holds at once: strictly under the bank's
+/// janitor line (`lifescape_planner::BANK_TYPE_LIMIT`, 55 types) with
+/// coins and the standing kit (axe, pickaxe, hammer, tinderbox) banked:
+/// 55 - 1 - 4 - 1 = 49. No bid opens a new type past it, so the janitor
+/// never fires on the maker's own stock.
+pub const MAX_HELD_TYPES: usize = lifescape_planner::BANK_TYPE_LIMIT - 1 - 4 - 1;
+/// Cancel reason of a maker's own requote (`orchestrator economy`).
+pub const REQUOTE_REASON: &str = "market_make";
+/// Cancel reason of the orders a role switch withdraws.
+pub const ROLE_REASON: &str = "role";
+
+/// One object of the universe: id, debug name, public anchor (shop
+/// value) and what an F2P shop pays for it (Q3), if any.
+#[derive(Clone, Debug)]
+pub struct UniverseItem {
+    pub id: i64,
+    pub name: &'static str,
+    pub anchor: i64,
+    pub outside: Option<i64>,
+}
+
+/// The universe, from the dumps, once.
+pub fn universe() -> &'static [UniverseItem] {
+    static ALL: std::sync::OnceLock<Vec<UniverseItem>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        lifescape_gamedata::f2p::market_universe()
+            .into_iter()
+            .filter_map(|obj| {
+                let name = obj.name?;
+                Some(UniverseItem { id: obj.obj_id as i64, name, anchor: obj.price.max(1), outside: lifescape_gamedata::shop_sale::npc_sale_value(name) })
+            })
+            .collect()
+    })
+}
+
+/// The slices (object ids), once.
+pub fn slices() -> &'static [Vec<i64>] {
+    static ALL: std::sync::OnceLock<Vec<Vec<i64>>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        let ids: Vec<i64> = universe().iter().map(|item| item.id).collect();
+        lifescape_market::partition(&ids, lifescape_market::maker_count(ids.len()))
+    })
+}
+
+/// Objects of one slice (empty past the last slice).
+pub fn slice_items(slice: u32) -> Vec<i64> {
+    slices().get(slice as usize).cloned().unwrap_or_default()
+}
+
+fn item_of(id: i64) -> Option<&'static UniverseItem> {
+    universe().iter().find(|item| item.id == id)
+}
+
+/// Capital target of one slice (its objects' anchors).
+pub fn capital_target(slice: u32) -> i64 {
+    let anchors: Vec<i64> = slice_items(slice).iter().filter_map(|id| item_of(*id)).map(|item| item.anchor).collect();
+    lifescape_market::capital_target(&MAKER_CAPS, &anchors)
+}
+
+/// First slice no maker holds yet.
+pub fn first_free_slice(taken: &[u32], slices: usize) -> Option<u32> {
+    (0..slices as u32).find(|slice| !taken.contains(slice))
+}
+
+/// Slices the maker lives on disk hold (`create-user` only: a cheap scan).
+pub fn taken_slices() -> Vec<u32> {
+    let mut taken = Vec::new();
+    let Ok(entries) = std::fs::read_dir(crate::brain::lives_dir()) else { return taken };
+    for entry in entries.flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+        let Ok(value) = lifescape_json::parse(&text) else { continue };
+        if let lifescape_planner::Archetype::MarketMaker(role) = lifescape_planner::market_maker::archetype_from_value(&value.get("profile")) {
+            taken.push(role.slice);
+        }
+    }
+    taken
+}
+
+/// The role of a new maker account: the first free slice and its target.
+/// A typed refusal when every slice has its maker.
+pub fn new_role(taken: &[u32]) -> Result<MakerRole, String> {
+    let count = slices().len();
+    let slice = first_free_slice(taken, count).ok_or_else(|| format!("every slice already has its market maker ({count} slices)"))?;
+    Ok(MakerRole::new(slice, count as u32, capital_target(slice)))
+}
+
+/// One object position of a maker from its own deals (average cost).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Position {
+    pub units: i64,
+    /// Cost of the units held (average cost carried out on sales).
+    pub cost: i64,
+    pub bought_units: i64,
+    pub bought_coins: i64,
+    pub sold_units: i64,
+    pub sold_coins: i64,
+}
+
+impl Position {
+    /// Realized coins: sales minus purchases.
+    pub fn cash(&self) -> i64 {
+        self.sold_coins - self.bought_coins
+    }
+}
+
+/// Positions of `account` from its non-failed deals, oldest first. A sale
+/// of units it never bought as a maker (stock from its playing phase)
+/// carries no cost.
+pub fn positions(account: &str, deals: &[lifescape_store::Deal]) -> BTreeMap<i64, Position> {
+    let mut out: BTreeMap<i64, Position> = BTreeMap::new();
+    for deal in deals {
+        let value = deal.price.saturating_mul(deal.quantity);
+        let position = out.entry(crate::market_audit::book_item(deal.item_id)).or_default();
+        if deal.buyer == account {
+            position.units += deal.quantity;
+            position.cost += value;
+            position.bought_units += deal.quantity;
+            position.bought_coins += value;
+        } else if deal.seller == account {
+            if position.units > 0 {
+                position.cost -= position.cost * deal.quantity.min(position.units) / position.units;
+            }
+            position.units = (position.units - deal.quantity).max(0);
+            position.sold_units += deal.quantity;
+            position.sold_coins += value;
+        }
+    }
+    out
+}
+
+/// One move of the reconcile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Move {
+    Cancel(i64),
+    Amend(i64, i64),
+    Place(Leg),
+}
+
+/// Moves that bring one side of one object to `leg` from the maker's
+/// resting rows `(order, price, remaining)`: no leg cancels them; one row
+/// holding at least half the lot keeps it (amended when the price moved);
+/// otherwise the rows go and the lot is placed again.
+pub fn reconcile(leg: Option<Leg>, resting: &[(i64, i64, i64)]) -> Vec<Move> {
+    let Some(leg) = leg else { return resting.iter().map(|(order, _, _)| Move::Cancel(*order)).collect() };
+    let mut moves = Vec::new();
+    let keep = resting.iter().find(|(_, _, remaining)| *remaining * 2 >= leg.qty).copied();
+    for (order, _, _) in resting {
+        if keep.is_none_or(|(kept, _, _)| kept != *order) {
+            moves.push(Move::Cancel(*order));
+        }
+    }
+    match keep {
+        Some((order, price, _)) if price != leg.price => moves.push(Move::Amend(order, leg.price)),
+        Some(_) => {}
+        None => moves.push(Move::Place(leg)),
+    }
+    moves
+}
+
+/// Units the maker's sales pass hands to the NPC shop (Q3): `(name,
+/// units, what the market pays)` per account, refreshed each quote pass.
+fn dumps() -> &'static std::sync::Mutex<HashMap<String, Vec<(String, i64, i64)>>> {
+    static TABLE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Vec<(String, i64, i64)>>>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(Default::default)
+}
+
+/// The maker's pending NPC shop lots (`brain_sales` plans the trip).
+pub fn take_dumps(account: &str) -> Vec<(String, i64, i64)> {
+    dumps().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(account).unwrap_or_default()
+}
+
+fn last_pass() -> &'static std::sync::Mutex<HashMap<String, f64>> {
+    static TABLE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, f64>>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(Default::default)
+}
+
+fn wall_now() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs_f64()).unwrap_or(0.0)
+}
+
+fn ticks_as_secs(ticks: u64) -> f64 {
+    ticks as f64 * crate::market_eta::live_tick_ms().max(1) as f64 / 1000.0
+}
+
+/// Live stock by base object id (pack and bank, notes folded).
+fn live_stock(job: &Job) -> HashMap<i64, i64> {
+    let mut stock = HashMap::new();
+    for (name, qty) in crate::brain_plan::live_stacks(job) {
+        let Some(obj) = lifescape_gamedata::objs_by_name(&name).into_iter().next() else { continue };
+        *stock.entry(crate::market_audit::base_of(obj.obj_id as i64)).or_insert(0) += qty;
+    }
+    stock
+}
+
+fn cancel(service: &crate::market_service::MarketService, account: &str, order: i64, reason: &str) -> bool {
+    let reply = service.handle(&object(vec![
+        ("op", str_value("cancel")),
+        ("account", str_value(account)),
+        ("order", Value::Int(order)),
+        ("reason", str_value(reason)),
+    ]));
+    reply.get("ok").as_bool() == Some(true)
+}
+
+/// The switch of a playing maker at its capital target: open buys and
+/// listings of its slice withdrawn (reason `role`), every other node
+/// abandoned, goal `MakeMarket`. True when the life changed (save it).
+pub(crate) fn maybe_switch(job: &Job, life: &mut Life) -> bool {
+    let Some(role) = lifescape_planner::maker_role(life) else { return false };
+    let coins = crate::brain_plan::holdings_count(job, "coins");
+    if !lifescape_planner::switch_due(&role, coins) {
+        return false;
+    }
+    let slice = slice_items(role.slice);
+    if let Some(service) = crate::market_service::shared() {
+        let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
+        for row in rows.iter().filter(|row| matches!(row.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched) && row.remaining > 0) {
+            let buy = row.side == lifescape_store::OrderSide::Buy;
+            if buy || slice.contains(&crate::market_audit::book_item(row.item_id)) {
+                cancel(&service, &job.account, row.order_id, ROLE_REASON);
+            }
+        }
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+    let abandoned = lifescape_planner::become_quoting(life, coins, now);
+    crate::brain::push_history(life, "goal", &format!("role:market_maker quoting slice {}/{} ({coins} coins >= {})", role.slice, role.slices, role.capital_target));
+    crate::logln!(
+        "brain {}: market maker slice {}/{}: capital {coins} >= target {}, quoting for good ({} nodes abandoned)",
+        job.account,
+        role.slice,
+        role.slices,
+        role.capital_target,
+        abandoned.len()
+    );
+    true
+}
+
+/// One quote pass of a quoting maker (rate-limited): returns the moves
+/// made (placed, amended, cancelled).
+pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
+    let Some(role) = lifescape_planner::maker_role(life).filter(|role| role.phase == lifescape_planner::MakerPhase::Quoting) else { return 0 };
+    let wall = wall_now();
+    {
+        let mut table = last_pass().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if table.get(&job.account).is_some_and(|last| wall - last < ticks_as_secs(MAKER_PASS_TICKS)) {
+            return 0;
+        }
+        table.insert(job.account.clone(), wall);
+    }
+    let Some(service) = crate::market_service::shared() else { return 0 };
+    let account = job.account.as_str();
+    let coins = crate::brain_plan::holdings_count(job, "coins");
+    let stock = live_stock(job);
+    let lookback = ticks_as_secs(lifescape_market::maker::DEMAND_LOOKBACK_TICKS) as i64;
+    let now_clock = crate::market_service::MarketService::now_clock();
+    let (deals, bought, rows) = {
+        let store = service.lock_store();
+        (
+            store.own_deals_since(account, role.switched_at).unwrap_or_default(),
+            store.units_bought_since(now_clock - lookback, account).unwrap_or_default(),
+            store.account_orders(account).unwrap_or_default(),
+        )
+    };
+    let held = positions(account, &deals);
+    let demand: HashMap<i64, i64> = bought.into_iter().collect();
+    let items = slice_items(role.slice);
+    let references: HashMap<i64, lifescape_market::Reference> = items.iter().map(|id| (*id, service.reference(*id))).collect();
+    let equity = coins + items.iter().map(|id| stock.get(id).copied().unwrap_or(0) * references[id].price.max(1)).sum::<i64>();
+    let held_types = items.iter().filter(|id| stock.get(id).copied().unwrap_or(0) > 0).count();
+    let mut moves = 0;
+    let mut npc = Vec::new();
+    for id in &items {
+        let Some(item) = item_of(*id) else { continue };
+        let resting = |side: lifescape_store::OrderSide| -> Vec<(i64, i64, i64)> {
+            rows.iter()
+                .filter(|row| row.side == side && row.motive == crate::market_lineage::MARKET_MAKE && crate::market_audit::book_item(row.item_id) == *id)
+                .filter(|row| matches!(row.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched) && row.remaining > 0)
+                .map(|row| (row.order_id, row.price, row.remaining))
+                .collect()
+        };
+        let (bids, asks) = (resting(lifescape_store::OrderSide::Buy), resting(lifescape_store::OrderSide::Sell));
+        let (others_bid, others_ask, bid_depth, ask_depth) = others_book(&service, *id, account);
+        let units = stock.get(id).copied().unwrap_or(0);
+        let input = MakerInput {
+            reference: references[id],
+            best_bid: others_bid,
+            best_ask: others_ask,
+            bid_depth,
+            ask_depth,
+            recent_buys: demand.get(id).copied().unwrap_or(0),
+            anchor: item.anchor,
+            outside: item.outside,
+            stock: units,
+            stock_cost: held.get(id).map(|position| position.cost).unwrap_or(0),
+            capital: equity,
+            own_bid: bids.first().map(|(_, price, _)| *price),
+        };
+        let quote = lifescape_market::maker_quote(&MAKER_CAPS, &input);
+        let bid = quote.bid.filter(|_| may_bid(held_types, units));
+        for (side, leg, rows_now) in [("buy", bid, &bids), ("sell", quote.ask, &asks)] {
+            for planned in reconcile(leg, rows_now) {
+                moves += apply(&service, account, *id, side, planned, item.name);
+            }
+        }
+        if quote.npc_dump > 0 {
+            npc.push((item.name.to_string(), quote.npc_dump, lifescape_market::market_pays(others_bid, references[id])));
+        }
+    }
+    let mut table = dumps().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if npc.is_empty() {
+        table.remove(account);
+    } else {
+        table.insert(account.to_string(), npc);
+    }
+    moves
+}
+
+/// Others' best bid, best ask and resting units per side on one book
+/// (the maker's own orders left out: public data).
+fn others_book(service: &crate::market_service::MarketService, item: i64, account: &str) -> (Option<i64>, Option<i64>, i64, i64) {
+    let engine = service.lock_engine();
+    let Some(book) = engine.books.get(&item) else { return (None, None, 0, 0) };
+    let (mut bid, mut ask, mut bid_depth, mut ask_depth) = (None::<i64>, None::<i64>, 0, 0);
+    for order in book.orders().into_iter().filter(|order| order.account != account && order.remaining > 0) {
+        if order.side == lifescape_market::Side::Buy {
+            bid = Some(bid.map_or(order.price, |best| best.max(order.price)));
+            bid_depth += order.remaining;
+        } else {
+            ask = Some(ask.map_or(order.price, |best| best.min(order.price)));
+            ask_depth += order.remaining;
+        }
+    }
+    (bid, ask, bid_depth, ask_depth)
+}
+
+fn apply(service: &crate::market_service::MarketService, account: &str, item: i64, side: &str, planned: Move, name: &str) -> usize {
+    let reply = match planned {
+        Move::Cancel(order) => return usize::from(cancel(service, account, order, REQUOTE_REASON)),
+        Move::Amend(order, price) => {
+            service.handle(&object(vec![("op", str_value("amend")), ("account", str_value(account)), ("order", Value::Int(order)), ("price", Value::Int(price))]))
+        }
+        Move::Place(leg) => service.handle(&object(vec![
+            ("op", str_value("place")),
+            ("account", str_value(account)),
+            ("side", str_value(side)),
+            ("item", Value::Int(item)),
+            ("qty", Value::Int(leg.qty)),
+            ("price", Value::Int(leg.price)),
+            ("motive", str_value(crate::market_lineage::MARKET_MAKE)),
+        ])),
+    };
+    if reply.get("ok").as_bool() == Some(true) {
+        return 1;
+    }
+    crate::logln!("market maker {account}: {side} {name} {planned:?} refused: {}", reply.get("error").as_str().unwrap_or("?"));
+    0
+}
+
+/// A bid may open a new held type only under `MAX_HELD_TYPES`; a bid on
+/// an object already held always may.
+pub fn may_bid(held_types: usize, stock: i64) -> bool {
+    stock > 0 || held_types < MAX_HELD_TYPES
+}
+
+/// Debug names of a quoting maker's slice (the janitor's keep list).
+pub fn slice_names(life: &Life) -> Vec<String> {
+    match lifescape_planner::maker_role(life) {
+        Some(role) if role.phase == lifescape_planner::MakerPhase::Quoting => slice_items(role.slice).iter().filter_map(|id| item_of(*id)).map(|item| item.name.to_string()).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// True when `item` (base id) belongs to the quoting maker's slice: its
+/// stock is quoted by `quote_pass` only, never listed by the sales pass.
+pub fn quoted_by_maker(life: &Life, item: i64) -> bool {
+    lifescape_planner::maker_role(life)
+        .filter(|role| role.phase == lifescape_planner::MakerPhase::Quoting)
+        .is_some_and(|role| slice_items(role.slice).contains(&crate::market_audit::book_item(item)))
+}
+
+#[cfg(test)]
+#[path = "market_maker_tests.rs"]
+mod tests;

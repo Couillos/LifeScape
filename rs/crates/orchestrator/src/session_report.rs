@@ -238,13 +238,13 @@ fn node_start_for(bot: &Bot, script: &str, args: &[String], meta: RunMeta) -> Op
     Some(TaskStart { script: script.to_string(), budget_max: 0, node_id, holdings: snapshot_holdings(bot), pause_ticks: bot.pause_ticks, meta })
 }
 
-/// Flip engagements are time-boxed orders; buy/sell/shopbuy legs carry
+/// Market-maker posts are time-boxed orders; buy/sell/shopbuy legs carry
 /// the same budget/node flags for the session report. Their CLI is
 /// orders, not cycle targets, so the flags are read straight off the
 /// market CLI.
 fn market_start_for(bot: &Bot, args: &[String], meta: RunMeta) -> Option<TaskStart> {
     match args.first().map(String::as_str) {
-        Some("flip") | Some("buy") | Some("sell") | Some("shopbuy") | Some("cleanup") => {}
+        Some("make") | Some("buy") | Some("sell") | Some("shopbuy") | Some("cleanup") => {}
         _ => return None,
     }
     let mut budget_max = 0u64;

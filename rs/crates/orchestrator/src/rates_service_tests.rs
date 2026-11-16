@@ -89,10 +89,10 @@ fn parse_rejects_unknown_provenance() {
 }
 
 /// D44 trading book: one buy run plus one sell run books the realized
-/// coin P&L per 6000 ticks on the flipped item, with settled counts and
+/// coin P&L per 6000 ticks on the traded item, with settled counts and
 /// the residual stock valued at the estimated price.
 #[test]
-fn flip_books_profit_per_item() -> Result<(), lifescape_store::Error> {
+fn market_windows_book_profit_per_item() -> Result<(), lifescape_store::Error> {
     let store = Store::open_in_memory()?;
     store.upsert_item(&lifescape_store::Item {
         item_id: 314,
@@ -102,17 +102,17 @@ fn flip_books_profit_per_item() -> Result<(), lifescape_store::Error> {
     })?;
     let mut snapshot = Snapshot::new();
     record_parsed(&mut snapshot, &market_report(
-        "market:flip",
+        "market:make",
         "budget_exhausted",
         vec![("Feather", "traded", 100), ("Coins", "traded", -200)],
     ));
     record_parsed(&mut snapshot, &market_report(
-        "market:flip",
+        "market:make",
         "budget_exhausted",
         vec![("Feather", "traded", -100), ("Coins", "traded", 260)],
     ));
     let rows = super::trading::trading_rows(&store, &snapshot.trades);
-    assert_eq!(rows.len(), 1, "one flipped item, got {}", rows.len());
+    assert_eq!(rows.len(), 1, "one traded item, got {}", rows.len());
     assert_eq!(rows[0].item, "Feather");
     assert!((rows[0].profit_per_6000 - 30.0).abs() < 0.001, "got {}", rows[0].profit_per_6000);
     assert_eq!(rows[0].deals_settled, 2);
@@ -171,7 +171,7 @@ fn trading_positions_rebuild_from_store() -> Result<(), lifescape_store::Error> 
     let report_id = store.record_task_report(&lifescape_store::NewTaskReport {
         account: "t01".to_string(),
         node_id: "n3".to_string(),
-        method: "market:flip".to_string(),
+        method: "market:make".to_string(),
         script: "market".to_string(),
         ticks: 6000,
         stop: "budget_exhausted".to_string(),

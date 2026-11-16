@@ -6,7 +6,7 @@
 //!
 //! - `ensure`: the first pass that meets a life without ambition runs the
 //!   fleet assignment over EVERY life file (coverage of the 12 F2P groups
-//!   and a merchant first, then random weighted by demand and levels),
+//!   first, then random weighted by demand and levels),
 //!   writes each one and logs `brain <acct>: ambition <kind> (<why>) —
 //!   milestones …`.
 //! - `before_draw`: milestones read the live levels, coins and stock, a
@@ -86,7 +86,6 @@ fn fleet_bot(life: &Life, levels: Vec<(String, u8)>) -> FleetBot {
         account: life.account.clone(),
         levels,
         ironman: life.profile.ironman,
-        merchant_archetype: life.profile.archetype == lifescape_planner::Archetype::Merchant,
         market_affinity: life.profile.market_affinity,
         seed: life.seed,
         kind: life.ambition.as_ref().map(|ambition| ambition.kind.clone()),
@@ -457,7 +456,7 @@ pub(crate) fn coverage_pass(life: &mut Life, live: &Value) -> bool {
         let mut logged = last_gaps().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if *logged != gaps {
             if gaps.is_empty() {
-                crate::logln!("brain: fleet coverage complete (every F2P group and a merchant held)");
+                crate::logln!("brain: fleet coverage complete (every F2P group held)");
             } else {
                 crate::logln!(
                     "brain: fleet coverage gap: {} held by no running bot; a bot whose group another also holds takes it once its last change is {} ticks old",

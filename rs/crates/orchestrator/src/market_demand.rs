@@ -58,10 +58,12 @@ pub struct ChainProfit {
     pub profit_per_6000: f64,
 }
 
-/// Pure aggregation of resting orders (buy side, remaining > 0).
+/// Pure aggregation of resting orders (buy side, remaining > 0). A market
+/// maker's bid (plan Q6, motive `market_make`) is liquidity, not
+/// consumption: it never reads as demand (ambitions, bid responses).
 pub fn signals_from(orders: &[Order], now_secs: i64, name_of: &dyn Fn(i64) -> Option<String>, to_ticks: &dyn Fn(i64) -> u64) -> Vec<DemandSignal> {
     let mut by_item: BTreeMap<i64, Vec<&Order>> = BTreeMap::new();
-    for order in orders.iter().filter(|order| order.side == OrderSide::Buy && order.remaining > 0) {
+    for order in orders.iter().filter(|order| order.side == OrderSide::Buy && order.remaining > 0 && order.motive != crate::market_lineage::MARKET_MAKE) {
         by_item.entry(order.item_id).or_default().push(order);
     }
     let mut out = Vec::new();
@@ -252,6 +254,17 @@ mod tests {
         let found = signals_from(&[walked], now, &name, &ticks);
         assert_eq!(found[0].oldest_age_secs, 6 * 3600);
         assert!((found[0].weight - 26.0 * 1.0 * 6.0).abs() < 1e-9, "age factor capped at x6: {}", found[0].weight);
+    }
+
+    /// Q6: a maker's bid on every object never turns into demand.
+    #[test]
+    fn a_market_makers_bid_is_no_demand() {
+        let mut quote = bid("maker_one", 1, 500, 2, 0);
+        quote.motive = crate::market_lineage::MARKET_MAKE.to_string();
+        let name = |id: i64| Some(format!("item{id}"));
+        let ticks = |secs: i64| secs as u64;
+        assert!(signals_from(&[quote.clone()], 10, &name, &ticks).is_empty());
+        assert_eq!(signals_from(&[quote, bid("fisher", 1, 5, 3, 0)], 10, &name, &ticks)[0].unmet_qty, 5, "the consumer's bid only");
     }
 
     #[test]

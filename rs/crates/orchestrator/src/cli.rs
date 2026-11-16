@@ -754,57 +754,7 @@ pub fn cli(argv: &[String]) -> i32 {
         })
     };
     match command {
-        "create-user" => {
-            let mut iron = false;
-            let mut no_tutorial = false;
-            let mut goal: Option<String> = None;
-            // argv[2] already holds the account (or the first flag when
-            // the pseudo is generated).
-            let explicit = !account.starts_with("--") && !account.is_empty();
-            let mut index = if explicit { 3 } else { 2 };
-            while index < argv.len() {
-                match argv[index].as_str() {
-                    "--iron" => {
-                        iron = true;
-                    }
-                    "--no-tutorial" => {
-                        no_tutorial = true;
-                    }
-                    "--goal" => {
-                        goal = argv.get(index + 1).cloned();
-                        index += 1;
-                    }
-                    other => {
-                        eprintln!("create-user: unknown flag {other:?} (usage: create-user [pseudo] [--iron] [--goal kind] [--no-tutorial])");
-                        return 2;
-                    }
-                }
-                index += 1;
-            }
-            let name = match crate::brain::create_user(if explicit { Some(account) } else { None }, iron, goal) {
-                Ok(name) => name,
-                Err(error) => {
-                    eprintln!("create-user: {error}");
-                    return 1;
-                }
-            };
-            println!("created {name}");
-            if no_tutorial {
-                return 0;
-            }
-            // Open only: the brain's tutorial gate launches the tutorial
-            // as a graph node (reported, failure-bounded) at the first
-            // idle pass with a live position. One path, no race with a
-            // CLI-side `run` that nothing would report.
-            let reply = send(object(vec![("cmd", str_value("open")), ("account", str_value(&name))]));
-            println!("{}", json::stringify_pretty(&reply));
-            if reply.get("ok").as_bool() == Some(true) {
-                println!("{name}: the brain starts the tutorial (gate) then the goal");
-                0
-            } else {
-                1
-            }
-        }
+        "create-user" => crate::create_user_cmd::create_user_cli(argv.get(2..).unwrap_or(&[]), &send),
         "open" | "close" | "redeploy" => {
             // close waits the worker out (20 s logout + 8 s TERM grace);
             // redeploy adds the reopen and its relogin window.

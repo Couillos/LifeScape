@@ -23,6 +23,9 @@ use crate::price::{current_price, median_price, LastFill, Reference};
 use crate::sim::FixedRng;
 use crate::zip::{demand_step, found_open, opening_bid, seller_open, PATIENCE_TICKS};
 
+pub use crate::sim_maker::{BookSample, MakerOutcome, MakerRun, SimMaker};
+use crate::sim_maker::{MakerState, SAMPLE_TICKS};
+
 const ITEM: i64 = 1;
 /// Simulated time per round: windows land on their own phase inside it.
 pub const ROUND_TICKS: u64 = 100;
@@ -69,6 +72,8 @@ pub struct LifecycleRun {
     pub fills: Vec<SimFill>,
     pub amends: usize,
     pub withdrawn: usize,
+    /// Units sellers took to the NPC shop (Q3 outlet, `run_with_outlet`).
+    pub npc_units: i64,
     /// Lowest price any ask rested or any print traded at.
     pub lowest_quote: i64,
 }
@@ -93,6 +98,20 @@ struct Engine {
     next_id: u64,
     live: Vec<Live>,
     run: LifecycleRun,
+    /// Wave 3: the market maker quoting this object, if any.
+    maker: Option<MakerState>,
+    /// Q3: what an NPC shop pays per unit; a seller the market pays less
+    /// sells there instead (`outlets::npc_sale_beats_market`).
+    outlet: Option<i64>,
+}
+
+impl Engine {
+    /// Q3 (wave 2 rule): the shop beats what the market pays the seller
+    /// `owner` (others' best bid, the traded current price).
+    fn shop_takes(&self, traders: &[Trader], owner: usize) -> bool {
+        let Some(paid) = self.outlet else { return false };
+        traders[owner].sell && crate::outlets::npc_sale_beats_market(paid, self.best_other(traders, owner, Side::Buy), self.reference())
+    }
 }
 
 impl Engine {
@@ -111,6 +130,9 @@ impl Engine {
 
     fn record(&mut self, tick: u64, fills: Vec<Fill>) {
         for fill in fills {
+            if let Some(maker) = self.maker.as_mut() {
+                maker.settle(tick, &fill);
+            }
             self.prints.push(LastFill { price: fill.price, quantity: fill.quantity });
             self.run.lowest_quote = self.run.lowest_quote.min(fill.price);
             self.run.fills.push(SimFill { tick, price: fill.price, quantity: fill.quantity, buyer: fill.buyer, seller: fill.seller, seller_took: fill.taker == Side::Sell });
@@ -154,7 +176,33 @@ fn old_found_open(reference: Reference, best_bid: Option<i64>, best_ask: Option<
 
 /// Runs `traders` on one book until `end_tick`.
 pub fn run_lifecycle(traders: &[Trader], model: Model, end_tick: u64) -> LifecycleRun {
-    let mut engine = Engine { book: Book::new(), prints: Vec::new(), next_id: 1, live: Vec::new(), run: LifecycleRun { lowest_quote: i64::MAX, ..LifecycleRun::default() } };
+    run_with_maker(traders, model, end_tick, None).run
+}
+
+/// Runs `traders` on one book until `end_tick`, with a wave-3 market
+/// maker quoting the object when `maker` is set (same arrivals, same
+/// book code); the book's best bid and ask are sampled every
+/// `SAMPLE_TICKS` from the first arrival.
+pub fn run_with_maker(traders: &[Trader], model: Model, end_tick: u64, maker: Option<SimMaker>) -> MakerRun {
+    run_with_outlet(traders, model, end_tick, maker, None)
+}
+
+/// `run_with_maker` where every seller also has the Q3 outlet: a shop
+/// paying `outlet` per unit takes its stock whenever the market pays
+/// less (checked at placement and at each of its windows, like
+/// `brain_sales`).
+pub fn run_with_outlet(traders: &[Trader], model: Model, end_tick: u64, maker: Option<SimMaker>, outlet: Option<i64>) -> MakerRun {
+    let mut engine = Engine {
+        book: Book::new(),
+        prints: Vec::new(),
+        next_id: 1,
+        live: Vec::new(),
+        run: LifecycleRun { lowest_quote: i64::MAX, ..LifecycleRun::default() },
+        maker: maker.map(MakerState::new),
+        outlet,
+    };
+    let first_arrival = traders.iter().map(|trader| trader.arrives).min().unwrap_or(0);
+    let mut samples = Vec::new();
     let mut placed = vec![false; traders.len()];
     let mut tick = 0;
     while tick <= end_tick {
@@ -165,14 +213,24 @@ pub fn run_lifecycle(traders: &[Trader], model: Model, end_tick: u64) -> Lifecyc
             placed[owner] = true;
             place(&mut engine, traders, owner, model, tick);
         }
+        requote_maker(&mut engine, tick);
         reprice(&mut engine, traders, model, tick);
+        if tick >= first_arrival && tick % SAMPLE_TICKS == 0 {
+            let (bid, ask) = engine.book.best();
+            samples.push(BookSample { tick, bid, ask });
+        }
         tick += ROUND_TICKS;
     }
-    engine.run
+    let maker = engine.maker.take().map(|state| state.outcome(engine.reference().price));
+    MakerRun { run: engine.run, samples, maker }
 }
 
 fn place(engine: &mut Engine, traders: &[Trader], owner: usize, model: Model, tick: u64) {
     let trader = &traders[owner];
+    if engine.shop_takes(traders, owner) {
+        engine.run.npc_units += trader.units;
+        return;
+    }
     let price = opening(engine, traders, owner, model).max(1);
     let id = engine.next_id;
     engine.next_id += 1;
@@ -218,6 +276,11 @@ fn reprice(engine: &mut Engine, traders: &[Trader], model: Model, tick: u64) {
             continue;
         }
         let trader = &traders[live.trader];
+        if engine.shop_takes(traders, live.trader) {
+            let _ = engine.book.cancel(live.id);
+            engine.run.npc_units += left;
+            continue;
+        }
         let filled = left < live.seen_remaining;
         live.seen_remaining = left;
         let next = match model {
@@ -275,6 +338,47 @@ fn reprice(engine: &mut Engine, traders: &[Trader], model: Model, tick: u64) {
         }
     }
     engine.live = kept;
+}
+
+/// The maker's pass (every `SimMaker::window_ticks`): its two orders are
+/// withdrawn and quoted again from public data and its own stock
+/// (`maker::quote`), the NPC shop takes what nobody buys (Q3).
+fn requote_maker(engine: &mut Engine, tick: u64) {
+    let Some(state) = engine.maker.as_ref() else { return };
+    if tick % state.spec.window_ticks.max(ROUND_TICKS) != 0 {
+        return;
+    }
+    let name = state.spec.name.clone();
+    for id in [state.bid_id, state.ask_id].into_iter().flatten() {
+        let _ = engine.book.cancel(id);
+    }
+    let reference = engine.reference();
+    let others = |side: Side| engine.book.orders().into_iter().filter(|order| order.side == side && order.remaining > 0 && order.account != name).collect::<Vec<_>>();
+    let (bids, asks) = (others(Side::Buy), others(Side::Sell));
+    let state = engine.maker.as_mut().expect("maker checked above");
+    let input = state.input(tick, reference, &bids, &asks);
+    let quote = crate::maker::quote(&state.spec.caps, &input);
+    state.own_bid = quote.bid.map(|leg| leg.price);
+    state.bid_id = None;
+    state.ask_id = None;
+    state.dump(quote.npc_dump);
+    let affordable = |leg: crate::maker::Leg, coins: i64| crate::maker::Leg { qty: leg.qty.min(coins / leg.price.max(1)), ..leg };
+    let bid = quote.bid.map(|leg| affordable(leg, state.coins)).filter(|leg| leg.qty > 0);
+    for (side, leg) in [(Side::Buy, bid), (Side::Sell, quote.ask)] {
+        let Some(leg) = leg else { continue };
+        let id = engine.next_id;
+        engine.next_id += 1;
+        let Ok((fills, rests)) = engine.book.place(id, &name, ITEM, side, leg.qty, leg.price) else { continue };
+        engine.record(tick, fills);
+        if rests {
+            let state = engine.maker.as_mut().expect("maker checked above");
+            if side == Side::Buy {
+                state.bid_id = Some(id);
+            } else {
+                state.ask_id = Some(id);
+            }
+        }
+    }
 }
 
 /// Compatible unit pairs of a market (max matching: buyers by limit
@@ -368,3 +472,6 @@ pub fn units_of(run: &LifecycleRun, name: &str) -> i64 {
 #[cfg(test)]
 #[path = "sim_lifecycle_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "sim_maker_tests.rs"]
+mod maker_tests;

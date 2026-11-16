@@ -321,7 +321,7 @@ Site, stands et trajets (2026-11-13, erreurs du lot de 21h19) :
 
 Lecture des ordres : `contract::check_order` lit une ligne de lancement
 avec le parseur PROPRE du script (`cycle::parse_order` pour les
-activités, `market::parse_order` → `parse_side`/`parse_shopbuy`/flip/
+activités, `market::parse_order` → `parse_side`/`parse_shopbuy`/`parse_make`/
 cleanup/deliver, `parse_style` pour `equip`, coordonnées pour `walkto`,
 quêtes sans argument). `contract_tests.rs` traduit chaque famille de
 `planner::mapping` (récolte, ferme, cuisson, `bake:` pain/repas, postes,
@@ -346,7 +346,7 @@ clé inconnue ou sans ce stock = Usage). `superheat <barre>` vise le
 minerai de la barre (`ore_for` : `steel_bar` → `iron_ore`, charbon porté)
 et s'arrête sur `--want`/`--level`/budget comme `alchemy` et
 `enchant_teleport` (`poll_stop`). `mill_grain` prend la trémie la plus
-proche du `--site`. Les ordres `market buy|sell|flip|cleanup` ne portent
+proche du `--site`. Les ordres `market buy|sell|make|cleanup` ne portent
 plus `--site` ni `toll` (seul `shopbuy` marche vers un marchand).
 
 ## Banque pleine (2026-11-14)

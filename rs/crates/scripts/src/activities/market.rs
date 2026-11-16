@@ -15,11 +15,11 @@ pub fn run_market(bot: &mut Bot, args: &[String]) -> ScriptResult {
     match args.first().map(String::as_str) {
         Some("sell") => place_side(bot, args, false),
         Some("buy") => place_side(bot, args, true),
-        Some("flip") => super::market_flip::run_flip(bot, args),
+        Some("make") => super::market_make::run_make(bot, args),
         Some("cleanup") => super::market_cleanup::run_cleanup(bot, args),
         Some("shopbuy") => super::market_shop::run_shopbuy(bot, args),
         Some("deliver") => super::market_deliver::run_deliver(bot, args),
-        _ => Err(ScriptError::Usage("market <sell|buy|flip|shopbuy|deliver|cleanup> ...".to_string())),
+        _ => Err(ScriptError::Usage("market <sell|buy|make|shopbuy|deliver|cleanup> ...".to_string())),
     }
 }
 
@@ -102,11 +102,11 @@ pub fn parse_side(args: &[String]) -> Result<SideOrder, ScriptError> {
 pub fn parse_order(args: &[String]) -> Result<(), ScriptError> {
     match args.first().map(String::as_str) {
         Some("sell") | Some("buy") => parse_side(args).map(drop),
-        Some("flip") => super::market_flip::parse_flip(args).map(drop),
+        Some("make") => super::market_make::parse_make(args).map(drop),
         Some("cleanup") => super::market_cleanup::parse_args(args).map(drop),
         Some("shopbuy") => super::market_shop::parse_shopbuy(args).map(drop),
         Some("deliver") => crate::market_handover::parse_deliver_args(args).map(drop),
-        _ => Err(ScriptError::Usage("market <sell|buy|flip|shopbuy|deliver|cleanup> ...".to_string())),
+        _ => Err(ScriptError::Usage("market <sell|buy|make|shopbuy|deliver|cleanup> ...".to_string())),
     }
 }
 
