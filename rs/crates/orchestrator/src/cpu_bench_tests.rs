@@ -81,9 +81,9 @@ fn cpu_bench() {
         timed("bid_goal_for", 10, || crate::brain_bids::bid_goal_for(&life, &live));
         let obtain = lifescape_planner::Node::new("bench", lifescape_planner::NodeKind::ObtainItems { item: "iron_bar".to_string(), count: 28 }, Vec::new(), 1);
         let money = lifescape_planner::Node::new("bench-money", lifescape_planner::NodeKind::MakeMoney, Vec::new(), 1);
-        timed("ready_ctx(obtain iron_bar)", 5, || crate::brain_plan::ready_ctx(&life, &obtain));
-        timed("ready_ctx(money)", 5, || crate::brain_plan::ready_ctx(&life, &money));
-        let mut ctx = crate::brain_plan::ready_ctx(&life, &money);
+        timed("ready_ctx(obtain iron_bar)", 5, || crate::brain_plan::ready_ctx(&life, &obtain, &lifescape_json::Value::Null));
+        timed("ready_ctx(money)", 5, || crate::brain_plan::ready_ctx(&life, &money, &lifescape_json::Value::Null));
+        let mut ctx = crate::brain_plan::ready_ctx(&life, &money, &lifescape_json::Value::Null);
         timed("fill_ctx(money)", 5, || crate::brain_market::fill_ctx(&mut ctx, &money, &live));
         timed("market_service locks_for(1)", 5, || service.locks_for(&[account.to_string()]));
         for item_id in [1511i64, 2349, 440] {

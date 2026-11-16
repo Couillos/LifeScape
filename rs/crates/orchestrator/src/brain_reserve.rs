@@ -22,7 +22,7 @@
 //!   Unmeasured: the planner's estimate of the way that makes it (the
 //!   `est_ticks` of a farm alternative of an obtain node of the bot's
 //!   graph, per unit), else the planner's cold-start rate of the
-//!   gathering script (`rates_service::prior_for`). Nothing at all: no
+//!   gathering leg (`method_rate`, the game prior). Nothing at all: no
 //!   time cost.
 //! - coins per tick: the best of the bot's own methods, measured as
 //!   (coins looted or shop-sold + units it farmed x its OWN last sale
@@ -269,16 +269,23 @@ pub fn planned_ticks_per_unit(life: &Life, item: &str) -> Option<f64> {
     best
 }
 
-/// Planner cold-start estimate of the gathering script that makes
-/// `display` (a combat prior is loot: found, no time cost).
+/// Game prior of the gathering leg that makes `display` (fishing,
+/// woodcutting, mining: `method_rate`, at the leg's skill gate, the site
+/// nearest a bank, the base tool), the fastest leg first. A combat drop
+/// is loot (found, no time cost); an uncomputable prior is no figure.
 pub fn prior_ticks_per_unit(display: &str) -> Option<f64> {
-    ["fishing", "woodcut", "mining"]
-        .iter()
-        .filter_map(|script| crate::rates_service::prior_for(script, display))
-        .map(|(per_6000, _)| per_6000)
-        .filter(|per_6000| *per_6000 > 0.0)
-        .map(|per_6000| crate::rates_service::NORMALIZE_TICKS / per_6000)
-        .next()
+    let item = crate::rates_names::debug_of(display);
+    lifescape_planner::obtain_legs::production_legs(&item)
+        .into_iter()
+        .filter(|leg| leg.skill.as_ref().is_some_and(|(skill, _)| matches!(skill.as_str(), "fishing" | "woodcutting" | "mining")))
+        .filter_map(|leg| {
+            let level = leg.skill.as_ref().map(|(_, level)| (*level).clamp(1, 99) as u8).unwrap_or(1);
+            let query = lifescape_planner::method_rate::PriorQuery { method: leg.method.clone(), level, ..Default::default() };
+            let prior = crate::rates_read::cached_prior(&query).ok()?;
+            let gained: f64 = prior.flows.iter().filter(|(name, _, qty)| *name == item && *qty > 0.0).map(|(_, _, qty)| qty).sum();
+            (gained > 0.0).then(|| crate::rates_service::NORMALIZE_TICKS / gained)
+        })
+        .min_by(|left, right| left.total_cmp(right))
 }
 
 /// Coins per unit of `ticks_per_unit` at `coins_per_tick` plus the

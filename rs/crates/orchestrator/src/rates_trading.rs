@@ -20,7 +20,12 @@ use std::collections::BTreeMap;
 use lifescape_json::{object, str_value, Value};
 use lifescape_store::{Store, YieldAggregate};
 
-use super::{aggregate, price_estimate, ParsedReport, NORMALIZE_TICKS};
+use super::{price_estimate, ParsedReport, NORMALIZE_TICKS};
+
+/// Mean of the per-window profit samples, 0.0 when empty.
+fn mean(samples: &[f64]) -> f64 {
+    if samples.is_empty() { 0.0 } else { samples.iter().sum::<f64>() / samples.len() as f64 }
+}
 
 /// Window exits that count a flip engagement as settled: the clock ran
 /// out or the goal landed. `failed`/`stopped` are attempts, not deals.
@@ -216,7 +221,7 @@ pub fn trading_rows(store: &Store, book: &TradeBook) -> Vec<TradingRow> {
         let (price, _) = price_estimate(store, item);
         rows.push(TradingRow {
             item: item.clone(),
-            profit_per_6000: aggregate(&stat.profits, None).mean,
+            profit_per_6000: mean(&stat.profits),
             deals_settled: stat.settled as i64,
             fill_rate: if stat.reports == 0 { 0.0 } else { stat.settled as f64 / stat.reports as f64 },
             stock_value: ((stat.bought_raw - stat.sold_raw) as f64 * price).round() as i64,
@@ -236,7 +241,7 @@ pub fn trading_rows_without_store(book: &TradeBook) -> Vec<TradingRow> {
         }
         rows.push(TradingRow {
             item: item.clone(),
-            profit_per_6000: aggregate(&stat.profits, None).mean,
+            profit_per_6000: mean(&stat.profits),
             deals_settled: stat.settled as i64,
             fill_rate: if stat.reports == 0 { 0.0 } else { stat.settled as f64 / stat.reports as f64 },
             stock_value: stat.bought_raw - stat.sold_raw,

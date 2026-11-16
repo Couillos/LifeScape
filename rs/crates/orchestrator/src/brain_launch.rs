@@ -323,7 +323,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     let ctx_phase = crate::cpu_profile::phase("ctx.build");
     let mut ctx = {
         let node = life.nodes[position].clone();
-        ready_ctx(&life, &node)
+        ready_ctx(&life, &node, &live)
     };
     ctx.quests_done = quests_done;
     // Own wallet gates the market leg (same coverage rule as the

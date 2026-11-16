@@ -42,37 +42,58 @@ fn shop_floor(item_debug: &str) -> i64 {
     lifescape_gamedata::obtain::merchant_price(item_debug).unwrap_or(1).max(1)
 }
 
-/// Rate bucket key of a planner method: reports key their yields by the
-/// script that ran (`melee`, `fishing`…), never by the planner method
-/// (`farm:feather`), so the lookup translates through the same mapping
-/// the brain dispatches with. `None` when the method maps to no script.
-pub(crate) fn rate_key(method: &str, node: &Node) -> Option<String> {
-    lifescape_planner::map_method(method, node, None).map(|(script, _)| script)
+/// Rate key of a planner method: contract-2 reports key their yields
+/// by the planner method itself (plan rendements R2), so the brain asks
+/// with the method it launches. `None` for an empty method.
+pub(crate) fn rate_key(method: &str, _node: &Node) -> Option<String> {
+    (!method.is_empty()).then(|| method.to_string())
 }
 
-/// Yield per 6000 ticks of `method` for `display`: the measured bucket
-/// at `band`, else the best-measured band of that script, else the
-/// cold-start prior, else 200 (blind).
-pub(crate) fn farm_yield(snapshot: &crate::rates_service::Snapshot, method: &str, node: &Node, display: &str, band: i64) -> f64 {
-    let script = rate_key(method, node).unwrap_or_default();
-    crate::rates_service::measured_yield(snapshot, &script, display, band)
-        .or_else(|| crate::rates_service::measured_yield_any_band(snapshot, &script, display))
-        .or_else(|| crate::rates_service::prior_for(&script, &display.to_lowercase()).map(|(yield_per, _)| yield_per))
-        .or_else(|| crate::rates_service::prior_for(method, &display.to_lowercase()).map(|(yield_per, _)| yield_per))
-        .unwrap_or(200.0)
+/// Debug names of everything the live bot owns (pack, bank, worn).
+pub(crate) fn live_owned(live: &Value) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for key in ["inv", "bank", "worn"] {
+        for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
+            let shown = match &entry {
+                Value::Obj(_) => entry.get("name").as_str().unwrap_or("").to_string(),
+                Value::Str(name) => name.clone(),
+                _ => String::new(),
+            };
+            if !shown.is_empty() {
+                names.push(crate::rates_names::debug_of(&shown));
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Units of `display` per 6000 ticks of `method` for this bot: its live
+/// level in the method's skill, its best tool tier of the method's
+/// family (`rates_read`: n >= 3 blended with the game prior, else the
+/// prior). A method nothing estimates is a typed error (logged by the
+/// caller), never a blind figure.
+pub(crate) fn farm_yield(snapshot: &crate::rates_service::Snapshot, method: &str, display: &str, live: &Value) -> Result<f64, crate::rates_read::RateError> {
+    let level = match crate::rates_measure::band_skill(method, "") {
+        Some(skill) => crate::brain_succession::live_level(live, &skill),
+        None => 1,
+    };
+    let tool = crate::report_meta::best_tools(method, &live_owned(live)).join("+");
+    crate::rates_read::gained_per_6000(snapshot.book(), method, display, level, &tool)
 }
 
 /// Public-data planning context for one node: market reference (or shop
-/// fallback), published yields (or cold-start priors), trend score.
-pub(crate) fn ready_ctx(life: &Life, node: &Node) -> ReadyCtx {
+/// fallback), the published yield of its production legs for this bot
+/// (live level and tool), trend score.
+pub(crate) fn ready_ctx(life: &Life, node: &Node, live: &Value) -> ReadyCtx {
     let mut ctx = ReadyCtx::blind(life.profile.market_affinity);
     ctx.ironman = life.profile.ironman;
     ctx.trip_ticks = TRIP_TICKS;
     ctx.quarantined = crate::method_health::quarantined();
-    let (item_debug, band) = match &node.kind {
-        NodeKind::ObtainItems { item, .. } => (item.clone(), 1),
-        NodeKind::ReachLevel { level, .. } => (String::new(), crate::rates_service::level_band(i64::from(*level))),
-        _ => (String::new(), 1),
+    let item_debug = match &node.kind {
+        NodeKind::ObtainItems { item, .. } => item.clone(),
+        _ => String::new(),
     };
     let snapshot = crate::rates_service::live_snapshot();
     if let Ok(store) = lifescape_store::Store::open(&crate::market_service::db_path()) {
@@ -89,15 +110,29 @@ pub(crate) fn ready_ctx(life: &Life, node: &Node) -> ReadyCtx {
             let (price, _) = crate::rates_service::price_estimate(&store, &display);
             ctx.price = price.max(1.0) as i64;
             ctx.shop_price = shop_floor(&item_debug);
-            let farm_method = format!("farm:{item_debug}");
-            ctx.yield_per_6000 = farm_yield(&snapshot, &farm_method, node, &display, band);
-        } else if matches!(&node.kind, NodeKind::MakeMoney) {
-            // Money leaves price the best published profit; the flip leg
-            // stays a flat engagement (measured once merchants report).
-            let _ = &snapshot;
+            ctx.yield_per_6000 = obtain_yield(&snapshot, node, &item_debug, &display, live);
         }
     }
     ctx
+}
+
+/// Yield of an obtain node: its first production leg the rates estimate
+/// for this bot (gather, recipe, drop farm), 0 (unpriceable: the farm
+/// leg costs `cost_farm`'s maximum) when none can, each error logged.
+fn obtain_yield(snapshot: &crate::rates_service::Snapshot, node: &Node, item_debug: &str, display: &str, live: &Value) -> f64 {
+    let trade = ["market:", "shop:", "dialogue:"];
+    let mut methods: Vec<String> = node.alternatives.iter().map(|alt| alt.method.clone()).filter(|method| !trade.iter().any(|prefix| method.starts_with(prefix))).collect();
+    if methods.is_empty() {
+        methods = lifescape_planner::obtain_legs::production_legs(item_debug).into_iter().map(|leg| leg.method).collect();
+    }
+    for method in methods {
+        match farm_yield(snapshot, &method, display, live) {
+            Ok(rate) if rate > 0.0 => return rate,
+            Ok(_) => {}
+            Err(error) => crate::rates_read::log_rate_error(&error),
+        }
+    }
+    0.0
 }
 
 /// Units of `item_debug` the bot holds AND may use (pack, bank, worn):
@@ -404,18 +439,22 @@ mod tests {
         assert_eq!(choose_money(&flip, 0.1).as_deref(), Some("gather:woodcut/yew_logs"), "trend flips the money call");
     }
 
-    /// PRD3 lot 0: rates are keyed by the script that ran; the planner
-    /// asks with its own method. The lookup must translate, or every
-    /// obtain node prices on the blind 200/6000 default.
+    /// Rendements R2: the brain asks with the planner method, at the
+    /// bot's live level; an empty estimator serves the game prior, a
+    /// method nothing estimates is an error, never the old blind 200.
     #[test]
-    fn farm_yield_reads_script_keyed_rates() {
+    fn farm_yield_reads_planner_keyed_rates() {
         use super::{farm_yield, rate_key};
         let node = Node::new("n1", NodeKind::ObtainItems { item: "raw_shrimp".to_string(), count: 100 }, Vec::new(), 100);
-        assert_eq!(rate_key("farm:raw_shrimp", &node).as_deref(), Some("fishing"));
-        assert_eq!(rate_key("farm:logs", &node).as_deref(), Some("woodcut"));
+        assert_eq!(rate_key("farm:raw_shrimp", &node).as_deref(), Some("farm:raw_shrimp"));
         let empty = crate::rates_service::Snapshot::new();
-        assert_eq!(farm_yield(&empty, "farm:raw_shrimp", &node, "Raw shrimps", 1), 400.0, "fishing prior reached through the script key");
-        assert_eq!(farm_yield(&empty, "farm:nothing_known", &node, "Nothing", 1), 200.0, "blind default only when nothing matches");
+        let live = lifescape_json::parse(r#"{"skills":[{"id":8,"level":1}]}"#).expect("live");
+        let low = farm_yield(&empty, "gather:woodcut/logs", "Logs", &live).expect("prior");
+        assert!(low > 0.0);
+        let skilled = lifescape_json::parse(r#"{"skills":[{"id":8,"level":40}]}"#).expect("live");
+        let high = farm_yield(&empty, "gather:woodcut/logs", "Logs", &skilled).expect("prior");
+        assert!(high > low, "read at the bot's real level: {high} vs {low}");
+        assert!(farm_yield(&empty, "mill:pot_flour", "Pot of flour", &live).is_err(), "no blind default");
     }
 
     /// D52: worn, graph items (kept work tools included) never sell; a

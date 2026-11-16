@@ -484,7 +484,10 @@ pub fn ingest_report_persisted(report: &Value) -> Result<(), String> {
         match lifescape_store::Store::open(&rates_db_path()) {
             Ok(store) => {
                 let parsed = ingest_report_into(&store, report)?;
-                crate::rates_service::record_snapshot(&parsed)?;
+                // Contract 2 feeds the estimator (parsed and validated
+                // above, before any write); contract 1 never does.
+                let contract = crate::report_contract::parse_contract(report)?;
+                crate::rates_service::record_snapshot(&parsed, contract.as_ref(), crate::rates_service::now_secs())?;
                 return Ok(());
             }
             Err(error) => {

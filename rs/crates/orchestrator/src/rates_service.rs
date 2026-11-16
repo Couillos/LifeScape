@@ -1,418 +1,75 @@
 #![forbid(unsafe_code)]
-//! Yield rates (lot rendements): from one finished task engagement to a
-//! published per-6000-ticks figure the planner can compare.
+//! Yield rates (plan rendements R2/R3): from one finished task engagement
+//! to a published per-6000-ticks figure the planner and the page read.
 //!
-//! Pipeline: the worker pushes a `TaskReport` JSON value (see
-//! `session_report::report_value`); `jobs::ingest_report_into` stores the
-//! raw rows in `lifescape-store` (`task_reports` + `task_yields`, never
-//! edited here) and hands the parsed report to `Snapshot::record` below.
-//! The snapshot is the aggregate state: one bucket per
-//! (method, item, level-band) plus one per (method, skill, level-band)
-//! for XP, plus the merchant book (`trading`) for `market`/`shop`
-//! methods. It lives in memory, is rewritten atomically to
-//! `run/rates-snapshot.json` at most once per minute when dirty
-//! (`rates_flush`, plus a flush at graceful shutdown), and reloads from that file
-//! when the daemon restarts (schema 1 files load with an empty book), so
-//! no measured yield is lost with the process. When the file is missing
-//! or corrupt, trading positions rebuild from the store log
-//! (`rebuild_from_store`); yields and XP do not (no per-report ticks in
-//! the store read API) and restart from priors. The store rows stay the
-//! durable raw log (re-cuttable later).
+//! Pipeline: the worker pushes a `TaskReport` JSON value (contract 2,
+//! `report_contract`); `jobs::ingest_report_into` stores the raw rows in
+//! `lifescape-store` (never edited here), then `record_snapshot` folds it
+//! into the live `Snapshot`:
+//! - contract-2 reports feed the yield estimator (`rates_measure` admits
+//!   them, `rates_estimator` keeps decayed sums per D2 key, `rates_read`
+//!   serves estimates, priors and the derived XP); contract-1 reports
+//!   (method = script) are never aggregated any more;
+//! - trading methods (`market`, `market:*`, `shop:*`, D44) feed the
+//!   merchant book (`trading`) and never a yield;
+//! - the tutorial feeds nothing.
 //!
-//! Rules applied here, all measured or explicitly marked:
-//! - Only farm flows count (D16): `produced`, `loot` and `ground_spawn`.
-//!   Trading methods (`market`, `market:*`, `shop:*`, D44) never enter a
-//!   yield or XP rate: their coin P&L feeds the trading book instead.
-//!   Shop and trade flows (`shop_bought`, `shop_sold`, `traded`),
-//!   `consumed` inputs, `lost`, `death` and `unattributed` never enter a
-//!   yield rate either; `consumed` lines feed the input-cost side of
-//!   profitability instead. Provenances validate against the frozen ten
-//!   at parse time (`picked` is retired, D45): unknown labels fail loud.
-//! - Normalisation per 6000 ticks of engagement, levels in bands of 5,
-//!   per bucket: report count, mean, population standard deviation and
-//!   an exponential moving average (alpha 0.3, arrival order).
-//! - Cold start: `prior_for` estimates (gamedata tier tables for the XP
-//!   side, era practice notes for the quantities) are served flagged
-//!   `prior: true` while a bucket holds fewer than 3 measured reports,
-//!   then replaced by the measured aggregate.
-//! - Profitability of one (method, band): revenue at the estimated sale
-//!   price (`price_estimate`: current price = median of the last five
-//!   fills clamped by the book, else the book, else 1 coin) minus input cost (consumed lines at shop price) minus the
-//!   market-pause friction (paused ticks measured per report, priced at
-//!   the activity's own revenue rate: paused time earns nothing) plus a
-//!   trend bonus (public trend score times revenue times a small weight).
-//! - shortcut: friction currently prices at the own-rate opportunity
-//!   cost; a coin-denominated fee model lands when deal fees exist.
-//! - shortcut: the pause column has no home in the v1 store schema, so
-//!   pauses accumulate in the snapshot only; a store migration will
-//!   persist them per report in a later lot.
+//! The snapshot lives in memory behind an `Arc` (a reader takes the
+//! `Arc`, never a copy), is rewritten to `run/rates-snapshot.json` at
+//! most once per minute when dirty (`rates_flush`, plus a flush at
+//! graceful shutdown), reloads at restart, and rebuilds from the store's
+//! contract-2 reports when the file is missing, corrupt or of an older
+//! schema (`rates_snapshot_io`). Its size is bounded by the number of
+//! keys (`rates_estimator::MAX_BUCKETS`), never by the number of runs.
 
-use std::collections::BTreeMap;
-use std::sync::{Mutex, OnceLock};
-
-use lifescape_json::{object, str_value, Value};
-use lifescape_store::Store;
+use std::sync::Arc;
 
 #[path = "rates_trading.rs"]
 mod trading;
 #[path = "web_rates.rs"]
 mod web_rates;
+#[path = "rates_parse.rs"]
+mod parse;
+#[path = "rates_snapshot_io.rs"]
+mod snapshot_io;
+
+pub use parse::*;
+pub use snapshot_io::snapshot_path;
+pub(crate) use snapshot_io::write_snapshot_file;
+#[cfg(test)]
+pub(crate) use snapshot_io::snapshot_from_json;
+pub use web_rates::{rates_api, rates_payload};
+use snapshot_io::global_snapshot;
+
+use crate::rates_estimator::YieldBook;
+use crate::rates_measure::{admit, xp_gaps, Admission};
+use crate::report_contract::ParsedContract;
 
 /// Ticks of one normalised engagement window (one in-game hour in prod).
 pub const NORMALIZE_TICKS: f64 = 6000.0;
 /// Width of a level band: bands are 1-5, 6-10, ...
 pub const LEVEL_BAND: i64 = 5;
-/// Measured reports from which a prior is dropped for the measurement.
+/// Runs from which a measure counts (page AND brain, one threshold).
 pub const MIN_MEASURED_REPORTS: usize = 3;
-/// Smoothing of the moving average, in arrival order.
-pub const EMA_ALPHA: f64 = 0.3;
 /// Weight of the public trend bonus inside profitability.
 pub const TREND_WEIGHT: f64 = 0.1;
-/// Snapshot schema, bumped when the file layout changes: 1 is the
-/// pre-trading layout (loads with an empty book), 2 adds it.
-const SNAPSHOT_SCHEMA: i64 = 2;
 
-/// Provenances that count as farm output. `picked` is retired (D45): the
-/// SDK no longer emits or parses it, so it never rates.
-pub fn is_farm_provenance(provenance: &str) -> bool {
-    matches!(provenance, "produced" | "loot" | "ground_spawn")
-}
-
-/// Trading methods (D44): never a yield, never XP. Bare `market` is
-/// today's flip script (the session reports the script name); `market:*`
-/// and `shop:*` are the planner's finer legs. Bare `shop` is reserved
-/// for the symmetric script name. Coin P&L of these methods feeds the
-/// trading book instead of the rate buckets.
-/// Activities that never feed the rates: the tutorial's kit, XP and
-/// drops say nothing about any activity a bot can choose (user rule).
-pub fn is_unrated_method(method: &str) -> bool {
-    method.eq_ignore_ascii_case("tutorial")
-}
-
-pub fn is_trading_method(method: &str) -> bool {
-    method == "market" || method == "shop" || method.starts_with("market:") || method.starts_with("shop:")
-}
-
-/// Provenances that count as an engagement input cost (bait, food).
-pub fn is_input_provenance(provenance: &str) -> bool {
-    matches!(provenance, "consumed")
-}
-
-/// First level of the band holding `level`: 1-5 -> 1, 6-10 -> 6.
-/// Levels below 1 clamp to the first band.
-pub fn level_band(level: i64) -> i64 {
-    if level <= 1 {
-        return 1;
-    }
-    ((level - 1) / LEVEL_BAND) * LEVEL_BAND + 1
-}
-
-/// Quantity of one report scaled to a full window. Non-positive tick
-/// budgets carry no rate: the caller skips the line loudly.
-pub fn normalize_per_6000(quantity: i64, work_ticks: i64) -> Option<f64> {
-    if work_ticks <= 0 {
-        return None;
-    }
-    Some(quantity as f64 * NORMALIZE_TICKS / work_ticks as f64)
-}
-
-/// Mean of the samples, 0.0 when empty.
-pub fn mean(samples: &[f64]) -> f64 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    samples.iter().sum::<f64>() / samples.len() as f64
-}
-
-/// Population standard deviation, 0.0 below two samples.
-pub fn stddev(samples: &[f64]) -> f64 {
-    if samples.len() < 2 {
-        return 0.0;
-    }
-    let average = mean(samples);
-    let variance = samples.iter().map(|sample| (sample - average) * (sample - average)).sum::<f64>()
-        / samples.len() as f64;
-    variance.sqrt()
-}
-
-/// Exponential moving average in slice order, alpha 0.3: the first
-/// sample seeds it. Empty slices read 0.0.
-pub fn moving_average(samples: &[f64], alpha: f64) -> f64 {
-    let mut ema = 0.0;
-    let mut first = true;
-    for sample in samples {
-        if first {
-            ema = *sample;
-            first = false;
-        } else {
-            ema = alpha * sample + (1.0 - alpha) * ema;
-        }
-    }
-    ema
-}
-
-/// Cold-start estimate for one (method, item) pair, per 6000 ticks with
-/// its XP twin. Quantities come from era practice (which activity pays
-/// at low level), XP from the gamedata tier tables (raw tenths per
-/// product). Served flagged `prior` until 3 measured reports land.
-pub fn prior_for(method: &str, item: &str) -> Option<(f64, f64)> {
-    let key = (method.to_lowercase(), item.to_lowercase());
-    match (key.0.as_str(), key.1.as_str()) {
-        ("fishing", "raw shrimps") => Some((400.0, 4000.0)),
-        ("fishing", "raw anchovies") => Some((120.0, 2400.0)),
-        ("fishing", "raw sardine") => Some((150.0, 3000.0)),
-        ("fishing", "raw trout") => Some((100.0, 5000.0)),
-        ("fishing", "raw lobster") => Some((60.0, 5400.0)),
-        ("woodcut", "logs") => Some((250.0, 3000.0)),
-        ("woodcut", "oak logs") => Some((150.0, 4500.0)),
-        ("woodcut", "willow logs") => Some((180.0, 5400.0)),
-        ("mining", "copper ore") => Some((150.0, 2500.0)),
-        ("mining", "tin ore") => Some((150.0, 2500.0)),
-        ("mining", "iron ore") => Some((120.0, 4200.0)),
-        ("mining", "coal") => Some((80.0, 4000.0)),
-        ("melee", "bones") => Some((60.0, 2500.0)),
-        _ => None,
-    }
-}
-
-/// One parsed engagement, straight from the pushed report JSON. `ticks`
-/// is the wall budget, `pause_ticks` the market-pause slice inside it;
-/// rates divide by their difference (work ticks).
-#[derive(Clone, Debug)]
-pub struct ParsedReport {
-    pub account: String,
-    pub node_id: String,
+/// One gained object of a method band, per 6000 ticks of work.
+#[derive(Clone, Debug, PartialEq)]
+pub struct YieldRow {
     pub method: String,
-    pub script: String,
-    pub wall_ticks: i64,
-    pub pause_ticks: i64,
-    pub stop: String,
-    pub level: i64,
+    pub item: String,
     pub band: i64,
-    pub items: Vec<ParsedItem>,
-    pub xp: Vec<ParsedXp>,
-}
-
-/// One reported item flow.
-#[derive(Clone, Debug)]
-pub struct ParsedItem {
-    pub name: String,
-    pub provenance: String,
-    pub quantity: i64,
-}
-
-/// One reported XP gain.
-#[derive(Clone, Debug)]
-pub struct ParsedXp {
-    pub skill: String,
-    pub amount: i64,
-}
-
-fn text_field(report: &Value, key: &str) -> String {
-    report.get(key).as_str().unwrap_or("").to_string()
-}
-
-/// Main-skill level at engagement start: the level beside the first XP
-/// skill when present, else the first band level seen, else 1.
-fn context_level(report: &Value) -> i64 {
-    let xp_skill_stat = report
-        .get("xp")
-        .as_arr()
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("stat").as_i64());
-    let bands = report.get("levels_before");
-    let level_for = |stat: i64| {
-        bands.as_arr().and_then(|rows| {
-            rows.iter().find(|row| row.get("stat").as_i64() == Some(stat)).and_then(|row| row.get("level").as_i64())
-        })
-    };
-    if let Some(stat) = xp_skill_stat {
-        if let Some(level) = level_for(stat) {
-            return level.max(1);
-        }
-    }
-    if let Some(rows) = bands.as_arr() {
-        if let Some(row) = rows.first() {
-            return row.get("level").as_i64().unwrap_or(1).max(1);
-        }
-    }
-    1
-}
-
-/// Parses the pushed report JSON into store + snapshot rows. `method`
-/// falls back to `activity` (today's contract reports carry the activity
-/// only; finer `gather:skill/resource` methods land with the planner).
-/// Empty account or method is a caller bug, reported loudly.
-pub fn parse_report(report: &Value) -> Result<ParsedReport, String> {
-    let account = text_field(report, "account");
-    if account.is_empty() {
-        return Err("rates: report account is empty".to_string());
-    }
-    let activity = text_field(report, "activity");
-    let explicit = text_field(report, "method");
-    let method = if explicit.is_empty() { activity.clone() } else { explicit };
-    if method.is_empty() {
-        return Err("rates: report method/activity is empty".to_string());
-    }
-    let script = {
-        let named = text_field(report, "script");
-        if named.is_empty() { activity.clone() } else { named }
-    };
-    let wall_ticks = report.get("ticks").as_i64().unwrap_or(0);
-    let pause_ticks = report.get("market_pause_ticks").as_i64().unwrap_or(0).max(0);
-    let mut items = Vec::new();
-    if let Some(rows) = report.get("items").as_arr() {
-        for row in rows {
-            let provenance = row.get("provenance").as_str().unwrap_or("").to_string();
-            if provenance.is_empty() {
-                return Err(format!("rates: item '{}' has no provenance", row.get("name").as_str().unwrap_or("?")));
-            }
-            if lifescape_sdk::provenance::Provenance::parse(&provenance).is_none() {
-                return Err(format!(
-                    "rates: item '{}' has unknown provenance '{provenance}'",
-                    row.get("name").as_str().unwrap_or("?")
-                ));
-            }
-            items.push(ParsedItem {
-                name: row.get("name").as_str().unwrap_or("").to_string(),
-                provenance,
-                quantity: row.get("qty").as_i64().unwrap_or(0),
-            });
-        }
-    }
-    let mut xp = Vec::new();
-    if let Some(rows) = report.get("xp").as_arr() {
-        for row in rows {
-            let skill = row.get("skill").as_str().unwrap_or("").to_string();
-            let amount = row.get("xp").as_i64().unwrap_or(0);
-            if skill.is_empty() || amount == 0 {
-                continue;
-            }
-            xp.push(ParsedXp { skill, amount });
-        }
-    }
-    Ok(ParsedReport {
-        account,
-        node_id: text_field(report, "node_id"),
-        method,
-        script,
-        wall_ticks,
-        pause_ticks,
-        stop: text_field(report, "stop"),
-        level: context_level(report),
-        band: level_band(context_level(report)),
-        items,
-        xp,
-    })
-}
-
-/// Aggregate of one bucket: measured count plus mean, population
-/// standard deviation and moving average, all per 6000 ticks. `prior`
-/// marks a cold-start estimate (fewer than 3 reports with a known
-/// prior); measured values replace it from 3 reports on.
-#[derive(Clone, Debug)]
-pub struct Aggregate {
-    pub count: usize,
+    pub count: u64,
     pub mean: f64,
-    pub stddev: f64,
-    pub ema: f64,
     pub prior: bool,
 }
 
-/// Builds one aggregate from ordered samples with an optional prior.
-pub fn aggregate(samples: &[f64], prior: Option<f64>) -> Aggregate {
-    if samples.len() >= MIN_MEASURED_REPORTS {
-        return Aggregate {
-            count: samples.len(),
-            mean: mean(samples),
-            stddev: stddev(samples),
-            ema: moving_average(samples, EMA_ALPHA),
-            prior: false,
-        };
-    }
-    if let Some(estimate) = prior {
-        return Aggregate {
-            count: samples.len(),
-            mean: estimate,
-            stddev: stddev(samples),
-            ema: if samples.is_empty() { estimate } else { moving_average(samples, EMA_ALPHA) },
-            prior: true,
-        };
-    }
-    Aggregate {
-        count: samples.len(),
-        mean: mean(samples),
-        stddev: stddev(samples),
-        ema: moving_average(samples, EMA_ALPHA),
-        prior: false,
-    }
-}
-
-/// Profitability of one activity band, in coins per 6000 ticks:
-/// revenue at estimated sale price, minus input cost, minus the pause
-/// friction (paused ticks at the activity's own revenue rate), plus the
-/// public-trend bonus (score times revenue times weight).
-pub fn profit_per_6000(
-    revenue_items: &[(f64, f64)],
-    input_cost: f64,
-    pause_ticks_per_6000: f64,
-    trend_score: f64,
-    trend_weight: f64,
-) -> f64 {
-    let revenue: f64 = revenue_items.iter().map(|(yield_per, price)| yield_per * price).sum();
-    let revenue_rate = revenue / NORMALIZE_TICKS;
-    let friction = pause_ticks_per_6000 * revenue_rate;
-    revenue - input_cost - friction + trend_score * revenue * trend_weight
-}
-
-/// Running aggregate of one (method, item-or-skill, band) bucket.
-#[derive(Clone, Debug, Default)]
-struct BucketStat {
-    count: usize,
-    sum: f64,
-    sum_squares: f64,
-    ema: f64,
-    ordered: Vec<f64>,
-}
-
-impl BucketStat {
-    fn add(&mut self, sample: f64) {
-        if self.count == 0 {
-            self.ema = sample;
-        } else {
-            self.ema = EMA_ALPHA * sample + (1.0 - EMA_ALPHA) * self.ema;
-        }
-        self.count += 1;
-        self.sum += sample;
-        self.sum_squares += sample * sample;
-        self.ordered.push(sample);
-    }
-
-    fn aggregate(&self, prior: Option<f64>) -> Aggregate {
-        aggregate(&self.ordered, prior)
-    }
-
-    fn mean(&self) -> f64 {
-        if self.count == 0 {
-            0.0
-        } else {
-            self.sum / self.count as f64
-        }
-    }
-}
-
-/// Whole rates state: farm yields, XP and input costs per bucket, plus
-/// measured market pauses per (method, band) for the friction term, plus
-/// the merchant book for trading methods (D44, never rated).
+/// Whole rates state: the yield estimator and the merchant book.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
-    yields: BTreeMap<(String, String, i64), BucketStat>,
-    xp: BTreeMap<(String, String, i64), BucketStat>,
-    inputs: BTreeMap<(String, String, i64), BucketStat>,
-    pauses: BTreeMap<(String, i64), BucketStat>,
+    pub(crate) book: YieldBook,
     pub(crate) trades: trading::TradeBook,
-    /// Each run's own flows (`rates_runs`): the profit prices one run.
-    pub(crate) runs: crate::rates_runs::Runs,
 }
 
 impl Snapshot {
@@ -420,513 +77,106 @@ impl Snapshot {
         Snapshot::default()
     }
 
-    /// Folds one parsed engagement into the buckets. Trading methods
-    /// feed the merchant book only (D44: no yields, no XP); lines that
-    /// carry no rate (zero tick budget, non-farm provenance) are
-    /// skipped; the raw store rows keep them.
-    pub fn record(&mut self, parsed: &ParsedReport) {
+    /// The yield estimator's buckets.
+    pub fn book(&self) -> &YieldBook {
+        &self.book
+    }
+
+    /// Folds one report in: trading runs into the book, contract-2 runs
+    /// into the estimator (admission logged), contract-1 runs nowhere.
+    /// Returns what the estimator did with it.
+    pub fn record(&mut self, parsed: &ParsedReport, contract: Option<&ParsedContract>, clock: i64) -> Option<Admission> {
         if is_trading_method(&parsed.method) {
             self.trades.record_trade(parsed);
-            return;
+            return None;
         }
         if is_unrated_method(&parsed.method) {
-            return;
+            return None;
         }
-        let work_ticks = parsed.wall_ticks.saturating_sub(parsed.pause_ticks);
-        if work_ticks <= 0 {
-            return;
-        }
-        let band_key = (parsed.method.clone(), parsed.band);
-        if let Some(pause_per) = normalize_per_6000(parsed.pause_ticks, work_ticks) {
-            self.pauses.entry(band_key).or_default().add(pause_per);
-        }
-        for flow in &parsed.items {
-            let Some(per_window) = normalize_per_6000(flow.quantity, work_ticks) else {
-                continue;
-            };
-            if is_farm_provenance(&flow.provenance) {
-                self.yields
-                    .entry((parsed.method.clone(), flow.name.clone(), parsed.band))
-                    .or_default()
-                    .add(per_window);
-            } else if is_input_provenance(&flow.provenance) {
-                // Consumed quantities are negative flows: cost counts
-                // the absolute depletion per window.
-                self.inputs
-                    .entry((parsed.method.clone(), flow.name.clone(), parsed.band))
-                    .or_default()
-                    .add(per_window.abs());
+        let Some(contract) = contract else {
+            crate::logln!("rates: {} report of {} is contract 1, never aggregated", parsed.account, parsed.method);
+            return None;
+        };
+        let admission = admit(contract, &parsed.stop, clock);
+        self.apply(&admission, &parsed.account);
+        if matches!(admission, Admission::Rated(_, _)) {
+            let observed: Vec<(String, i64)> = parsed.xp.iter().map(|gain| (gain.skill.clone(), gain.amount)).collect();
+            for gap in xp_gaps(contract, &observed) {
+                crate::logln!(
+                    "rates: xp coherence {} {} {}: derived {:.1} observed {:.1} (alert above {:.0} %)",
+                    parsed.account,
+                    contract.planner_method,
+                    gap.skill,
+                    gap.derived,
+                    gap.observed,
+                    crate::rates_measure::XP_GAP_ALERT * 100.0
+                );
             }
         }
-        let flows: Vec<(String, String, i64)> = parsed.items.iter().map(|flow| (flow.name.clone(), flow.provenance.clone(), flow.quantity)).collect();
-        if let Some(run) = crate::rates_runs::run_of(&flows, work_ticks) {
-            self.runs.record(&parsed.method, parsed.band, run);
-        }
-        for gain in &parsed.xp {
-            if let Some(per_window) = normalize_per_6000(gain.amount, work_ticks) {
-                self.xp
-                    .entry((parsed.method.clone(), gain.skill.clone(), parsed.band))
-                    .or_default()
-                    .add(per_window);
-            }
-        }
+        Some(admission)
     }
 
-    /// Yield rows with their aggregates, priors applied below 3 reports.
+    /// Gained objects per 6000 ticks of every (method, style, band)
+    /// roll-up (every site and tool), as the brain's coin rates read
+    /// them: products, loot, pickups (n ≥ 3 blended, else the prior).
     pub fn yield_rows(&self) -> Vec<YieldRow> {
+        let now = now_secs();
         let mut rows = Vec::new();
-        for ((method, item, band), stat) in &self.yields {
-            let prior = prior_for(method, item).map(|(yield_per, _)| yield_per);
-            let aggregate = stat.aggregate(prior);
-            rows.push(YieldRow {
-                method: method.clone(),
-                item: item.clone(),
-                band: *band,
-                count: aggregate.count,
-                mean: aggregate.mean,
-                stddev: aggregate.stddev,
-                ema: aggregate.ema,
-                prior: aggregate.prior,
-            });
+        for key in self.book.buckets.keys().filter(|key| key.site == crate::rates_estimator::ANY && key.tool == crate::rates_estimator::ANY) {
+            let Ok(estimate) = crate::rates_read::estimate_key(&self.book, key, now) else { continue };
+            for (item, cause, rate) in &estimate.flows {
+                if *rate > 0.0 && matches!(cause.as_str(), "product" | "loot" | "ground_spawn") {
+                    rows.push(YieldRow { method: key.method.clone(), item: item.clone(), band: key.band, count: estimate.confidence.runs, mean: *rate, prior: estimate.prior });
+                }
+            }
         }
-        rows.sort_by(|left, right| {
-            (left.method.clone(), left.item.clone(), left.band).cmp(&(right.method.clone(), right.item.clone(), right.band))
-        });
         rows
     }
 
-    /// XP rows with their aggregates, same banding and priors.
-    pub fn xp_rows(&self) -> Vec<XpRow> {
-        let mut rows = Vec::new();
-        for ((method, skill, band), stat) in &self.xp {
-            let prior = self.xp_prior(method, skill);
-            let aggregate = stat.aggregate(prior);
-            rows.push(XpRow {
-                method: method.clone(),
-                skill: skill.clone(),
-                band: *band,
-                count: aggregate.count,
-                mean: aggregate.mean,
-                stddev: aggregate.stddev,
-                ema: aggregate.ema,
-                prior: aggregate.prior,
-            });
+    /// Applies an admission to the estimator (rebuild and live share it).
+    pub(crate) fn apply(&mut self, admission: &Admission, account: &str) {
+        match admission {
+            Admission::Rated(key, sample) => self.book.record(key, sample),
+            Admission::Failed(key, ticks) => self.book.record_failure(key, *ticks),
+            Admission::Rejected(key, reason) => {
+                crate::logln!("rates: {account} {} sample rejected above the physical ceiling: {reason}", key.method);
+                self.book.record_rejected(key);
+            }
+            Admission::Skipped(reason) => crate::logln!("rates: {account} report not aggregated: {reason}"),
         }
-        rows.sort_by(|left, right| {
-            (left.method.clone(), left.skill.clone(), left.band).cmp(&(right.method.clone(), right.skill.clone(), right.band))
-        });
-        rows
-    }
-
-    fn xp_prior(&self, method: &str, skill: &str) -> Option<f64> {
-        // XP priors ride beside the item priors of the same method.
-        xp_prior_for(method, skill)
-    }
-
-    /// Mean pause ticks per window for one (method, band).
-    pub fn pause_per_6000(&self, method: &str, band: i64) -> f64 {
-        self.pauses.get(&(method.to_string(), band)).map(|stat| stat.mean()).unwrap_or(0.0)
-    }
-
-    fn bucket_mean(&self, buckets: &BTreeMap<(String, String, i64), BucketStat>, method: &str, name: &str, band: i64) -> Option<f64> {
-        buckets.get(&(method.to_string(), name.to_string(), band)).filter(|stat| stat.count > 0).map(|stat| stat.mean())
     }
 }
 
-/// Live snapshot clone for the brain (read-only planning input: public
-/// yields only, never another bot's state).
-pub fn live_snapshot() -> Snapshot {
+/// Wall clock in seconds (bucket ages).
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0)
+}
+
+/// The live snapshot, shared (an `Arc` clone, never a copy of the
+/// buckets): read-only planning input, public yields only.
+pub fn live_snapshot() -> Arc<Snapshot> {
     global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
-}
-
-/// Measured mean yield per 6000 for one (method, item, band) bucket.
-pub fn measured_yield(snapshot: &Snapshot, method: &str, item: &str, band: i64) -> Option<f64> {
-    snapshot.bucket_mean(&snapshot.yields, method, item, band)
-}
-
-/// Measured mean yield per 6000 for one (script, item) pair when the
-/// caller knows no level band (an obtain node): the bucket with the most
-/// samples wins, so a thin band never outvotes a well-measured one.
-pub fn measured_yield_any_band(snapshot: &Snapshot, method: &str, item: &str) -> Option<f64> {
-    snapshot
-        .yields
-        .iter()
-        .filter(|((bucket_method, bucket_item, _), stat)| bucket_method == method && bucket_item == item && stat.count > 0)
-        .max_by_key(|(_, stat)| stat.count)
-        .map(|(_, stat)| stat.mean())
-}
-
-/// Measured mean XP per 6000 for one (method, skill, band) bucket.
-pub fn measured_xp(snapshot: &Snapshot, method: &str, skill: &str, band: i64) -> Option<f64> {
-    snapshot.bucket_mean(&snapshot.xp, method, skill, band)
-}
-
-/// Cold-start XP estimate per (method, skill), twin of `prior_for`.
-pub fn xp_prior_for(method: &str, skill: &str) -> Option<f64> {
-    match (method.to_lowercase().as_str(), skill.to_lowercase().as_str()) {
-        ("fishing", "fishing") => Some(4000.0),
-        ("woodcut", "woodcutting") => Some(3500.0),
-        ("mining", "mining") => Some(3000.0),
-        ("melee", "attack") => Some(2000.0),
-        ("melee", "strength") => Some(2000.0),
-        ("melee", "defence") => Some(2000.0),
-        ("melee", "hitpoints") => Some(1500.0),
-        _ => None,
-    }
-}
-
-/// One published yield row, per 6000 ticks.
-#[derive(Clone, Debug)]
-pub struct YieldRow {
-    pub method: String,
-    pub item: String,
-    pub band: i64,
-    pub count: usize,
-    pub mean: f64,
-    pub stddev: f64,
-    pub ema: f64,
-    pub prior: bool,
-}
-
-/// One published XP row, per 6000 ticks.
-#[derive(Clone, Debug)]
-pub struct XpRow {
-    pub method: String,
-    pub skill: String,
-    pub band: i64,
-    pub count: usize,
-    pub mean: f64,
-    pub stddev: f64,
-    pub ema: f64,
-    pub prior: bool,
-}
-
-fn yield_value(row: &YieldRow) -> Value {
-    object(vec![
-        ("method", str_value(&row.method)),
-        ("item", str_value(&row.item)),
-        ("band", Value::Int(row.band)),
-        ("count", Value::Int(row.count as i64)),
-        ("mean", Value::Float(row.mean)),
-        ("stddev", Value::Float(row.stddev)),
-        ("ema", Value::Float(row.ema)),
-        ("prior", Value::Bool(row.prior)),
-    ])
-}
-
-fn xp_value(row: &XpRow) -> Value {
-    object(vec![
-        ("method", str_value(&row.method)),
-        ("skill", str_value(&row.skill)),
-        ("band", Value::Int(row.band)),
-        ("count", Value::Int(row.count as i64)),
-        ("mean", Value::Float(row.mean)),
-        ("stddev", Value::Float(row.stddev)),
-        ("ema", Value::Float(row.ema)),
-        ("prior", Value::Bool(row.prior)),
-    ])
 }
 
 pub use crate::rates_price::price_estimate;
 
 #[path = "rates_profit.rs"]
 mod profit;
-pub use profit::{cached_profit_rows, profit_rows, trend_score, ProfitRow, PROFIT_TTL};
+pub use profit::{cached_profit_rows, profit_per_6000, profit_rows, trend_score, ProfitRow, PROFIT_TTL};
 
-fn profit_value(row: &ProfitRow) -> Value {
-    object(vec![
-        ("method", str_value(&row.method)),
-        ("band", Value::Int(row.band)),
-        ("revenue", Value::Float(row.revenue)),
-        ("input_cost", Value::Float(row.input_cost)),
-        ("friction", Value::Float(row.friction)),
-        ("trend_bonus", Value::Float(row.trend_bonus)),
-        ("profit", Value::Float(row.profit)),
-        ("price_prior", Value::Bool(row.price_prior)),
-    ])
-}
-
-/// Snapshot file beside the staging log: rewritten by `rates_flush`,
-/// reloaded when the daemon restarts.
-pub fn snapshot_path() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("LIFESCAPE_RATES_PATH") {
-        if !dir.is_empty() {
-            return std::path::PathBuf::from(dir);
-        }
-    }
-    crate::paths::run_dir().join("rates-snapshot.json")
-}
-
-fn global_snapshot() -> &'static Mutex<Snapshot> {
-    static SNAPSHOT: OnceLock<Mutex<Snapshot>> = OnceLock::new();
-    SNAPSHOT.get_or_init(|| Mutex::new(load_snapshot_file()))
-}
-
-fn load_snapshot_file() -> Snapshot {
-    let path = snapshot_path();
-    let mut snapshot = match std::fs::read_to_string(&path) {
-        Ok(text) => snapshot_from_json(&text).unwrap_or_else(store_fallback),
-        Err(_) => store_fallback(),
-    };
-    // Files written before per-run flows: rebuilt from the store reports.
-    if snapshot.runs.is_empty() {
-        if let Ok(store) = Store::open(&crate::paths::store_db()) {
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
-            snapshot.runs = crate::rates_runs::rebuild(&store, now);
-        }
-    }
-    snapshot
-}
-
-/// File missing or corrupt: trading positions rebuild exactly from the
-/// store log; yields and XP restart empty (priors cover the cold start).
-fn store_fallback() -> Snapshot {
-    let database = crate::paths::store_db();
-    let Ok(store) = Store::open(&database) else {
-        return Snapshot::new();
-    };
-    trading::rebuild_from_store(&store).unwrap_or_default()
-}
-
-fn snapshot_to_value(snapshot: &Snapshot) -> Value {
-    let mut yields = BTreeMap::new();
-    for ((method, item, band), stat) in &snapshot.yields {
-        yields.insert(
-            format!("{method}\u{1f}{item}\u{1f}{band}"),
-            object(vec![
-                ("count", Value::Int(stat.count as i64)),
-                ("sum", Value::Float(stat.sum)),
-                ("sum_squares", Value::Float(stat.sum_squares)),
-                ("ema", Value::Float(stat.ema)),
-                ("ordered", Value::Arr(stat.ordered.iter().map(|sample| Value::Float(*sample)).collect())),
-            ]),
-        );
-    }
-    let mut xp = BTreeMap::new();
-    for ((method, skill, band), stat) in &snapshot.xp {
-        xp.insert(
-            format!("{method}\u{1f}{skill}\u{1f}{band}"),
-            object(vec![
-                ("count", Value::Int(stat.count as i64)),
-                ("sum", Value::Float(stat.sum)),
-                ("sum_squares", Value::Float(stat.sum_squares)),
-                ("ema", Value::Float(stat.ema)),
-                ("ordered", Value::Arr(stat.ordered.iter().map(|sample| Value::Float(*sample)).collect())),
-            ]),
-        );
-    }
-    let mut inputs = BTreeMap::new();
-    for ((method, item, band), stat) in &snapshot.inputs {
-        inputs.insert(
-            format!("{method}\u{1f}{item}\u{1f}{band}"),
-            object(vec![
-                ("count", Value::Int(stat.count as i64)),
-                ("sum", Value::Float(stat.sum)),
-                ("sum_squares", Value::Float(stat.sum_squares)),
-                ("ema", Value::Float(stat.ema)),
-                ("ordered", Value::Arr(stat.ordered.iter().map(|sample| Value::Float(*sample)).collect())),
-            ]),
-        );
-    }
-    let mut pauses = BTreeMap::new();
-    for ((method, band), stat) in &snapshot.pauses {
-        pauses.insert(
-            format!("{method}\u{1f}{band}"),
-            object(vec![
-                ("count", Value::Int(stat.count as i64)),
-                ("sum", Value::Float(stat.sum)),
-                ("sum_squares", Value::Float(stat.sum_squares)),
-                ("ema", Value::Float(stat.ema)),
-                ("ordered", Value::Arr(stat.ordered.iter().map(|sample| Value::Float(*sample)).collect())),
-            ]),
-        );
-    }
-    let (trade_items, trade_last) = snapshot.trades.to_value();
-    object(vec![
-        ("schema", Value::Int(SNAPSHOT_SCHEMA)),
-        ("yields", Value::Obj(yields)),
-        ("xp", Value::Obj(xp)),
-        ("inputs", Value::Obj(inputs)),
-        ("pauses", Value::Obj(pauses)),
-        ("trades", trade_items),
-        ("trade_last", trade_last),
-        ("runs", snapshot.runs.to_value()),
-    ])
-}
-
-fn read_bucket(value: &Value) -> BucketStat {
-    let floats = |key: &str| {
-        value.get(key).as_arr().map(|rows| rows.iter().filter_map(|row| row.as_f64()).collect::<Vec<f64>>()).unwrap_or_default()
-    };
-    let ordered = floats("ordered");
-    let (count, sum, sum_squares, ema) = if ordered.is_empty() {
-        (
-            value.get("count").as_i64().unwrap_or(0).max(0) as usize,
-            value.get("sum").as_f64().unwrap_or(0.0),
-            value.get("sum_squares").as_f64().unwrap_or(0.0),
-            value.get("ema").as_f64().unwrap_or(0.0),
-        )
-    } else {
-        let sum: f64 = ordered.iter().sum();
-        let sum_squares: f64 = ordered.iter().map(|sample| sample * sample).sum();
-        (ordered.len(), sum, sum_squares, moving_average(&ordered, EMA_ALPHA))
-    };
-    BucketStat { count, sum, sum_squares, ema, ordered }
-}
-
-fn split_three(key: &str) -> Option<(String, String, i64)> {
-    let mut parts = key.split('\u{1f}');
-    let first = parts.next()?.to_string();
-    let second = parts.next()?.to_string();
-    let third: i64 = parts.next()?.parse().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some((first, second, third))
-}
-
-pub(crate) fn snapshot_from_json(text: &str) -> Option<Snapshot> {
-    let value = lifescape_json::parse(text).ok()?;
-    if value.get("schema").as_i64() != Some(1) && value.get("schema").as_i64() != Some(SNAPSHOT_SCHEMA) {
-        return None;
-    }
-    let mut snapshot = Snapshot::new();
-    if let Some(map) = value.get("yields").as_obj() {
-        for (key, entry) in map {
-            if let Some((method, item, band)) = split_three(key) {
-                // Pre-P1.4 files stored trading methods as yield rows;
-                // `record` never does (D44, book only): drop them on load.
-                if is_trading_method(&method) || is_unrated_method(&method) {
-                    continue;
-                }
-                snapshot.yields.insert((method, item, band), read_bucket(entry));
-            }
-        }
-    }
-    if let Some(map) = value.get("xp").as_obj() {
-        for (key, entry) in map {
-            if let Some((method, skill, band)) = split_three(key) {
-                if is_trading_method(&method) || is_unrated_method(&method) {
-                    continue;
-                }
-                snapshot.xp.insert((method, skill, band), read_bucket(entry));
-            }
-        }
-    }
-    if let Some(map) = value.get("inputs").as_obj() {
-        for (key, entry) in map {
-            if let Some((method, item, band)) = split_three(key) {
-                if is_trading_method(&method) || is_unrated_method(&method) {
-                    continue;
-                }
-                snapshot.inputs.insert((method, item, band), read_bucket(entry));
-            }
-        }
-    }
-    if let Some(map) = value.get("pauses").as_obj() {
-        for (key, entry) in map {
-            let mut parts = key.split('\u{1f}');
-            let (Some(method), Some(band)) = (parts.next(), parts.next()) else {
-                continue;
-            };
-            if parts.next().is_some() {
-                continue;
-            }
-            if is_trading_method(method) || is_unrated_method(method) {
-                continue;
-            }
-            if let Ok(band) = band.parse::<i64>() {
-                snapshot.pauses.insert((method.to_string(), band), read_bucket(entry));
-            }
-        }
-    }
-    snapshot.trades = trading::TradeBook::from_value(value.get("trades"), value.get("trade_last"));
-    snapshot.runs = crate::rates_runs::Runs::from_value(value.get("runs"));
-    Some(snapshot)
-}
-
-/// Records one parsed report in the live snapshot and marks it dirty:
-/// the `rates-flush` thread persists it at most once per
+/// Records one report in the live snapshot and marks it dirty: the
+/// `rates-flush` thread persists it at most once per
 /// `rates_flush::FLUSH_PERIOD`, the daemon's graceful exit flushes the
 /// rest (crash/SIGTERM loses at most that window, see `rates_flush`).
-pub fn record_snapshot(parsed: &ParsedReport) -> Result<(), String> {
-    global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).record(parsed);
+/// Copy on write: a reader holding the previous `Arc` keeps it.
+pub fn record_snapshot(parsed: &ParsedReport, contract: Option<&ParsedContract>, clock: i64) -> Result<(), String> {
+    {
+        let mut guard = global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::make_mut(&mut guard).record(parsed, contract, clock);
+    }
     profit::invalidate();
     crate::rates_flush::mark_dirty();
     Ok(())
-}
-
-/// Writes the live snapshot atomically (tmp + rename); returns the bytes
-/// written. Loud error, never a silent drop: the flusher logs and retries.
-pub(crate) fn write_snapshot_file() -> Result<usize, String> {
-    let value = {
-        let guard = global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        snapshot_to_value(&guard)
-    };
-    let path = snapshot_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| format!("rates snapshot dir: {error}"))?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    let text = lifescape_json::stringify(&value);
-    std::fs::write(&tmp, &text).map_err(|error| format!("rates snapshot write: {error}"))?;
-    std::fs::rename(&tmp, &path).map_err(|error| format!("rates snapshot rename: {error}"))?;
-    Ok(text.len())
-}
-
-/// Dashboard payload: opens the daemon store, serves yield rows, XP
-/// rows and profitability, plus engaged counts per script counted from
-/// the status list. Counts are operator eyes only (this page and API),
-/// never read by bots.
-pub fn rates_api(call: &dyn Fn(Value) -> Value) -> Value {
-    let store = match Store::open(&crate::paths::store_db()) {
-        Ok(store) => store,
-        Err(error) => {
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value(&format!("rates store: {error}"))),
-            ])
-        }
-    };
-    let mut engaged: BTreeMap<String, i64> = BTreeMap::new();
-    let status = call(object(vec![("cmd", str_value("status"))]));
-    for job in status.get("jobs").as_arr().cloned().unwrap_or_default() {
-        if job.get("phase").as_str() != Some("running") {
-            continue;
-        }
-        let script = job.get("script").as_str().unwrap_or("").to_string();
-        if script.is_empty() {
-            continue;
-        }
-        *engaged.entry(script).or_insert(0) += 1;
-    }
-    let guard = global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let payload = rates_payload(&store, &guard, engaged);
-    drop(guard);
-    payload
-}
-
-/// Full rates payload for the dashboard: yield rows, XP rows,
-/// profitability (priced through the store), the trading table and
-/// engaged counts supplied by the caller (operator eyes only, never read
-/// by bots).
-pub fn rates_payload(store: &Store, snapshot: &Snapshot, engaged: BTreeMap<String, i64>) -> Value {
-    let yields: Vec<Value> = snapshot.yield_rows().iter().map(yield_value).collect();
-    let xp: Vec<Value> = snapshot.xp_rows().iter().map(xp_value).collect();
-    let profits: Vec<Value> = profit_rows(store, snapshot).iter().map(profit_value).collect();
-    let trading: Vec<Value> = web_rates::trading_values(store, snapshot);
-    let mut engaged_map = BTreeMap::new();
-    for (script, count) in engaged {
-        engaged_map.insert(script, Value::Int(count));
-    }
-    object(vec![
-        ("ok", Value::Bool(true)),
-        ("rates", Value::Arr(yields)),
-        ("xp", Value::Arr(xp)),
-        ("profit", Value::Arr(profits)),
-        ("trading", Value::Arr(trading)),
-        ("engaged", Value::Obj(engaged_map)),
-    ])
 }
 
 #[cfg(test)]

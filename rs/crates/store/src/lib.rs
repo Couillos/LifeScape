@@ -39,7 +39,7 @@ pub use errors::{ErrorFilter, ErrorRecord, FailedDeal, TaskOutcome};
 pub use items::Item;
 pub use lineage::{LineageLink, LineageRow, AMEND_WINDOW_SECS};
 pub use market_criteria::MarketCriteria;
-pub use measures::{PurgeCounts, ReportMeasure};
+pub use measures::{PurgeCounts, ReportMeasure, StoredMeasure};
 pub use orders::{NewOrder, Order, OrderSide, OrderStatus, AMENDED_REASON};
 pub use reports::{NewTaskReport, NewTaskYield, TaskReport, TaskYield, YieldAggregate};
 

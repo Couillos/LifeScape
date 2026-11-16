@@ -289,8 +289,8 @@ poussé par la session à chaque fin de tâche :
 
 Les champs v1 (`activity`, `items` aux provenances D45, `ticks`,
 `market_pause_ticks`) restent, dérivés des causes (`legacy_provenance` :
-product → produced, consommables → consumed, discarded → lost…) : la clé
-de l'agrégation actuelle reste le script jusqu'à R2.
+product → produced, consommables → consumed, discarded → lost…) : ils
+servent le store v1 et le carnet marchand, plus aucun rendement (R2).
 
 Registre SDK : sac et équipement porté observés ensemble (porter ne sort
 rien, une flèche tirée sort du carquois), à chaque frontière de tick
@@ -318,22 +318,67 @@ v1 de `task_reports`/`task_yields` et `run/rates-snapshot.json`).
 Ingestion : la session pousse le rapport, le superviseur du daemon le
 verse dans le store (`jobs::ingest_report_into` : lignes v1 + mesure du
 contrat 2) puis dans l'agrégat persisté (`rates_service`,
-`run/rates-snapshot.json`, rechargé au redémarrage). Écriture différée
-(`rates_flush.rs`) : au plus une réécriture par minute, plus l'arrêt
-propre.
+`run/rates-snapshot.json` schéma 3, rechargé au redémarrage ; fichier
+absent, corrompu ou d'un schéma plus ancien : reconstruit depuis les
+rapports contrat 2 du store, rejoués par la même admission). Écriture
+différée (`rates_flush.rs`) : au plus une réécriture par minute, plus
+l'arrêt propre. Un lecteur prend un `Arc` du snapshot, jamais une copie.
 
-Agrégation actuelle (remplacée en R2) : par (script, objet, tranche de 5),
-n, moyenne de ratios, écart-type, EMA ; mêmes seaux pour l'XP mesurée.
-Constat de l'audit du 2026-11-16 : cette XP mesurée n'a aucun lecteur, les
-montées de niveau se dimensionnent sur des constantes (`training.rs`,
-`sizing.rs`) ; elle ne dimensionnait rien (R3 la dérive des rendements).
+Estimateur (R2, `rates_estimator`, `rates_measure`, `rates_read`) :
+- seul le contrat 2 l'alimente ; un rapport sans méthode du
+  planificateur (`method_source = none`), un marchand, le tutoriel ou une
+  méthode sans voie du jeu (equip, quest, space…) n'est jamais agrégé
+  (loggé, rien de deviné) ;
+- clé D2 = (méthode fine, style de combat, site, palier d'outil, tranche
+  de 5 niveaux du skill de la méthode ; 0 sans skill) ; chaque run
+  alimente aussi deux cumuls « tous sites » et « tous sites et outils » ;
+- seau = sommes déclinées, jamais d'échantillons (mémoire bornée,
+  `MAX_BUCKETS` seaux au plus) : flux signés par (objet, cause), unités
+  porteuses, ticks de travail et de pause ; taux = Σ quantités /
+  Σ work_ticks × 6000 ; avant chaque run de t ticks, tout est multiplié
+  par 0,5^(t / 60 000) (D7) ; run < 300 ticks pondéré t / 300 ;
+- `failed` / `blocked` : hors taux, taux d'échec du seau ; échantillon
+  au-dessus du plafond physique (ticks d'action du serveur, succès
+  certain, une action de marge) : rejeté et loggé ;
+- lecture : clé exacte, sinon tous sites, sinon tous sites et outils
+  (repli loggé) ; seuil unique n ≥ 3 (page ET cerveau), puis mélange
+  avec le prior (le prior pèse 6000 ticks de travail) ; sous le seuil, le
+  prior seul (marqué) ; ni mesure ni prior calculable = `RateError`
+  typée, jamais un chiffre par défaut ; le cerveau lit à sa tranche
+  réelle (niveau live, meilleur outil possédé) ;
+- confiance : n, âge, dispersion du taux d'unités par run, taux
+  d'échec, rejets.
 
-Rentabilité d'une activité et d'une tranche : Σ rendement × prix courant
-(médiane des 5 derniers fills bornée par le carnet, `rates_price` ;
-sinon le carnet, sinon 1 pièce — jamais un VWAP 24 h) − intrants
-consommés − friction des pauses market (valorisées au taux de l'activité)
-+ bonus de tendance (score public × chiffre × 0,1). Page `rates` :
-information pour l'opérateur, jamais lue par les bots.
+Priors (R2, `planner::method_rate`) calculés du jeu pour chaque famille :
+6000 / (ticks d'une tentative + (aller-retour banque + ops de banque) /
+tentatives par sac) × flux par tentative. Ticks d'action relus dans les
+scripts serveur (boucles p_op : roll toutes les N + 1 ticks, `p_delay(n)`
+répété toutes les n + 2) ; succès `stat_random` au niveau
+(`gamedata::action_odds`, dump `action_odds.json` : roches, pioches,
+arbres par hache, poissons, cuisson feu/fourneau, runes par essence) ;
+combat : `melee_math` (mêlée), modèle `sizing` (distance, magie). Familles
+sans timing (moulin, combinaisons de préparation) : `PriorError`.
+
+XP dérivée (R3.1/R3.2, `planner::unit_xp`) : XP/6000 par skill = Σ unités
+porteuses × XP de l'unité (dump / 10) : produit (récolte, cuisson,
+forge, artisanat, enchantement, superheat Magic + Smithing, telegrab),
+intrant (bûche brûlée, os enterré — dans tout run, combat compris —,
+essence, objet alché), lancer (téléport, malédiction, bananes, base d'un
+sort de combat), dégâts (×4 au skill du style, contrôlé ×1,33 à chacun
+des trois, distance ×4, magie ×2, PV ×1,33). Les seaux d'XP mesurée sont
+supprimés ; l'XP observée sert au contrôle D4 à l'ingestion (écart > 5 %
+loggé `rates: xp coherence`).
+
+Rentabilité d'une (méthode, style, tranche), cumul tous sites et outils :
+Σ flux positifs × prix courant (médiane des 5 derniers fills bornée par
+le carnet, `rates_price` ; sinon le carnet, sinon 1 pièce — jamais un
+VWAP 24 h) − Σ flux négatifs × prix (intrants, runes, munitions, appât,
+nourriture, péages, pertes : le bilan signé, §8 ; échanges et
+`unattributed` exclus) − friction des pauses market (valorisées au taux
+de l'activité) + bonus de tendance (score public × chiffre × 0,1). Page
+`rates` : par clé, rendements et consommation, unités, XP/6000 dérivée,
+confiance, prior ou mesuré ; information pour l'opérateur, les bots
+lisent les mêmes estimations par `rates_read`.
 
 ## Tendances et marchands
 
