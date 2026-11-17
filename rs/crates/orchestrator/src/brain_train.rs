@@ -75,6 +75,25 @@ pub(crate) struct Climb<'a> {
     pub food: Option<&'a dyn Fn(&str) -> Option<String>>,
 }
 
+/// Levels of the skill one `reach_combat` launch reads its line for (its
+/// consumables are sized on that tranche; the node re-resolves after).
+pub(crate) const COMBAT_TRANCHE_LEVELS: u8 = 5;
+
+/// The skill a `reach_combat` node climbs on the training guide (R7
+/// suite, 2026-11-17: the measured lines, never the static chickens of
+/// `combat::training_method`): its style's own skill (the static method
+/// names it: ranged, magic), melee the lowest of attack, strength and
+/// defence (the combat level rises the most evenly; attack on a tie).
+pub(crate) fn combat_climb_skill(static_method: &str, level_of: &dyn Fn(&str) -> u8) -> &'static str {
+    if static_method.starts_with("fight:ranged/") {
+        return "ranged";
+    }
+    if static_method.starts_with("fight:magic/") {
+        return "magic";
+    }
+    ["attack", "strength", "defence"].into_iter().min_by_key(|skill| level_of(skill)).unwrap_or("attack")
+}
+
 /// True for a guide line a `skill` level climb can launch (module doc).
 fn launchable(row: &TrainingRow, skill: &str) -> bool {
     if row.method.starts_with("quest:") || row.skill != skill {
@@ -181,10 +200,22 @@ pub(crate) fn pick_from_guide(set: &GuideSet, climb: &Climb, life: &Life, bot: &
 /// Fills `ctx.training` for a climb about to resolve (module doc),
 /// logging the pick with its numbers.
 pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value) {
-    let NodeKind::ReachLevel { skill, level: target } = &node.kind else { return };
     if node.method.is_some() {
         return;
     }
+    let (skill, target): (String, u8) = match &node.kind {
+        NodeKind::ReachLevel { skill, level } => (skill.clone(), *level),
+        // A combat level climbs one of its skills on the guide (R7
+        // suite): the next tranche of it, the node re-resolves after.
+        NodeKind::ReachCombat { .. } => {
+            let static_method = node.alternatives.first().map(|alt| alt.method.as_str()).unwrap_or("");
+            let skill = combat_climb_skill(static_method, &|name: &str| crate::brain_succession::live_level(live, name));
+            let level = crate::brain_succession::live_level(live, skill);
+            (skill.to_string(), level.saturating_add(COMBAT_TRANCHE_LEVELS).min(99))
+        }
+        _ => return,
+    };
+    let (skill, target) = (skill.as_str(), &target);
     let level = crate::brain_succession::live_level(live, skill);
     if level >= *target {
         return;

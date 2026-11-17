@@ -70,6 +70,9 @@ pub(crate) fn resolve_from_guide(node: &mut Node, ctx: &ReadyCtx) -> bool {
         }
     };
     let line = lines[chosen];
+    // A recipe on its own stock runs its lot (`stock_lot`, `--use`); a
+    // trade lot sets its own (`trade_craft::lock`).
+    node.batch = line.lot.max(0);
     let mut ranked: Vec<(u8, Alternative)> = lines
         .iter()
         .zip(&classes)

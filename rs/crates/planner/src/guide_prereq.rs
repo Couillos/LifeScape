@@ -6,18 +6,21 @@
 
 use crate::guide_model::{GuideFilter, Prereqs, ShopNeed};
 
-/// The prerequisites of `method` (with `style`) at the band starting at
-/// `band_level`, its tool tier `tool`.
-pub fn prereqs_of(method: &str, style: &str, band_level: u8, tool: &str) -> Prereqs {
-    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(String, String, u8, String), Prereqs>>> = std::sync::OnceLock::new();
-    crate::guide_methods::memo(&MEMO, (method.to_string(), style.to_string(), band_level, tool.to_string()), || compute_prereqs(method, style, band_level, tool))
+/// The prerequisites of `method` (with `style`) read in the band of
+/// `_band_level`, its tool tier `tool`. The level condition of the band
+/// skill is the activity's GATE, never the band's level (live 2026-11-17,
+/// R7: a band view is built at its last level, `attack 75` asked of a bot
+/// at 72 left every climb inside a band without a line): a bot of the
+/// band works the row at the band's rates (`guides_store` docs).
+pub fn prereqs_of(method: &str, style: &str, _band_level: u8, tool: &str) -> Prereqs {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(String, String, String), Prereqs>>> = std::sync::OnceLock::new();
+    crate::guide_methods::memo(&MEMO, (method.to_string(), style.to_string(), tool.to_string()), || compute_prereqs(method, style, tool))
 }
 
-fn compute_prereqs(method: &str, style: &str, band_level: u8, tool: &str) -> Prereqs {
+fn compute_prereqs(method: &str, style: &str, tool: &str) -> Prereqs {
     let mut levels: Vec<(String, u8)> = Vec::new();
     if let Some(skill) = crate::activity::band_skill(method, style) {
-        let gate = crate::guide_methods::gate_level(method).max(band_level);
-        levels.push((skill, gate));
+        levels.push((skill, crate::guide_methods::gate_level(method)));
     }
     // Superheat pays Smithing beside Magic: the smelt's own gate.
     if let Some(bar) = method.strip_prefix("superheat:") {
@@ -125,7 +128,7 @@ mod tests {
         filter.quests_done.push("runemysteries".to_string());
         assert!(passes(&essence, &filter));
         let steel = prereqs_of("smelt:steel_bar", "", 31, "");
-        assert_eq!(steel.levels, vec![("smithing".to_string(), 31)]);
+        assert_eq!(steel.levels, vec![("smithing".to_string(), 30)], "the smelt's gate, never the band's level");
         assert!(!passes(&steel, &GuideFilter { level: Some(29), ..GuideFilter::default() }));
         let heat = prereqs_of("superheat:steel_bar", "", 43, "");
         assert!(heat.levels.contains(&("smithing".to_string(), 30)), "{heat:?}");

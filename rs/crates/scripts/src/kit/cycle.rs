@@ -42,13 +42,17 @@ pub struct TaskTargets {
     /// of the item are held (pack plus known bank) than at its start.
     pub want_item: Option<String>,
     pub want_count: Option<u32>,
+    /// Stock use targets (`--use <item> N`, repeatable, `kit::stock_use`):
+    /// the run ends once N units of one item are used, or a step blocks
+    /// with one of them spent.
+    pub uses: Vec<(String, u32)>,
 }
 
 impl TaskTargets {
     /// True when the run has an objective the brain can check (XP,
     /// level, quantity, item, quest).
     pub fn any(&self) -> bool {
-        self.xp_amount.is_some() || self.level.is_some() || self.count.is_some() || self.quest.is_some() || self.want_count.is_some()
+        self.xp_amount.is_some() || self.level.is_some() || self.count.is_some() || self.quest.is_some() || self.want_count.is_some() || !self.uses.is_empty()
     }
 }
 
@@ -188,7 +192,7 @@ pub fn parse_order(script: &'static str, args: &[String]) -> Result<TaskSpec, Sc
 pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, ScriptError> {
     let usage = || {
         ScriptError::Usage(format!(
-            "{activity} [count|spot...] [toll] [boat] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--want ITEM N] [--spell SPELL] [--wear ITEM]... [--skip-loot NAME]... [--allow-market] [--no-shop]"
+            "{activity} [count|spot...] [toll] [boat] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--want ITEM N] [--use ITEM N]... [--spell SPELL] [--wear ITEM]... [--skip-loot NAME]... [--allow-market] [--no-shop]"
         ))
     };
     let mut spec = TaskSpec::named(activity);
@@ -303,6 +307,12 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
                 spec.targets.want_count = Some(count);
                 index += 3;
             }
+            "--use" => {
+                let item = args.get(index + 1).cloned().filter(|item| !item.is_empty() && !item.starts_with("--")).ok_or_else(usage)?;
+                let count = args.get(index + 2).and_then(|arg| arg.parse::<u32>().ok()).ok_or_else(usage)?;
+                spec.targets.uses.push((item, count));
+                index += 3;
+            }
             "--node" => {
                 let node = args.get(index + 1).cloned().filter(|node| !node.is_empty()).ok_or_else(usage)?;
                 spec.node_id = node;
@@ -414,6 +424,8 @@ pub struct CycleState {
     units: u32,
     /// Held count of the `--want` item at start (pack + known bank).
     want_base: Option<u32>,
+    /// Held counts of the `--use` items at start (`kit::stock_use`).
+    use_base: Vec<u32>,
     /// Silent-loop guard (`kit::progress`), observed after every step of
     /// `run`; `load_done` reads it to tell an `ok load` from an empty one.
     progress: crate::kit::progress::ProgressGuard,
@@ -427,6 +439,7 @@ impl CycleState {
             start_xp: bot.world.stats.clone(),
             units: 0,
             want_base: None,
+            use_base: Vec::new(),
             progress: crate::kit::progress::ProgressGuard::start("run", &crate::kit::progress::mark(bot)),
         }
     }
@@ -465,6 +478,12 @@ impl CycleState {
     /// Record the `--want` baseline (call once at run start).
     pub fn note_want_base(&mut self, bot: &Bot, spec: &TaskSpec) {
         self.want_base = spec.targets.want_item.as_deref().map(|item| held_total(bot, item));
+        self.use_base = crate::kit::stock_use::bases(bot, spec);
+    }
+
+    /// Held counts of the `--use` items at the start of the run.
+    pub fn use_bases(&self) -> &[u32] {
+        &self.use_base
     }
 
     /// The `--want` goal for the load driver (`LoadCfg::until`): the
@@ -528,7 +547,8 @@ pub fn goal_met(bot: &Bot, state: &CycleState, spec: &TaskSpec) -> bool {
 /// when inconsistent; `max == 0` means unbounded.
 pub fn poll_stop(bot: &Bot, state: &CycleState, spec: &TaskSpec) -> Option<StopReason> {
     let elapsed = state.work_ticks(bot);
-    if goal_met(bot, state, spec) {
+    // Every target (want, count, XP, level) and the stock lot (`--use`).
+    if goal_met(bot, state, spec) || state.use_met(bot, spec) {
         return Some(StopReason::GoalReached);
     }
     let budget = spec.budget_max_ticks.max(spec.budget_min_ticks);
@@ -581,7 +601,8 @@ pub fn blocked_access(area: &str) -> ScriptError {
 
 /// Drive one activity until its stop conditions: checks the spec, runs
 /// one unit, repeat. Goal and budget end the run with their exit codes;
-/// every other error propagates (blocked included).
+/// every other error propagates (blocked included, except a block once
+/// the `--use` stock is spent: the lot is done, `kit::stock_use`).
 pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut CycleState) -> Result<StepControl, ScriptError>) -> crate::ScriptResult {
     bot.assigned_site = spec.site;
     // A guild site: the uniform goes on before any step walks to the door.
@@ -596,7 +617,16 @@ pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut C
         if let Some(stop) = poll_stop(bot, &state, spec) {
             return exit_code(stop);
         }
-        let unit = match step(bot, &mut state)? {
+        let control = match step(bot, &mut state) {
+            Ok(control) => control,
+            // The lot's stock is spent (`kit::stock_use`): the order is done.
+            Err(ScriptError::Blocked { missing }) if state.stock_spent(bot, spec) => {
+                bot.log(&format!("stock used up after {} loads (blocked on {}): lot done", state.units, missing.join(", ")));
+                return Ok(0);
+            }
+            Err(error) => return Err(error),
+        };
+        let unit = match control {
             StepControl::Continue => false,
             StepControl::UnitDone => {
                 state.note_unit();

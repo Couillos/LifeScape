@@ -20,7 +20,7 @@ fn jim() -> ReadyCtx {
 }
 
 fn line(method: &str, profit: f64, runs: u64, feasible: bool) -> GuideLine {
-    GuideLine { method: method.to_string(), family: "farm".to_string(), profit_6000: profit, weight: profit, runs, feasible }
+    GuideLine { method: method.to_string(), family: "farm".to_string(), profit_6000: profit, weight: profit, runs, feasible, lot: 0 }
 }
 
 fn money_with(ctx: &ReadyCtx, counter: u64) -> (Node, Option<crate::guide_pick::Choice>) {
@@ -112,4 +112,29 @@ fn an_unmeasured_line_is_explored_now_and_then() {
     ctx.money_guide = vec![line("gather:woodcut/yew_logs", 1000.0, 9, true), line("fight:melee/cows", 300.0, 0, true)];
     let explored = (0..2000).filter(|counter| money_with(&ctx, *counter).1.is_some_and(|choice| choice.drawn.explored && choice.method == "fight:melee/cows")).count();
     assert!((60..=140).contains(&explored), "{explored} of 2000");
+}
+
+/// A bot holding 200 raw trout (R7, recipes on stock beyond alchemy):
+/// the line "cook:trout on its stock" draws with its lot, the node runs
+/// it as a lot of 200 (`--use raw_trout 200`: the cook stops once its
+/// stock is used, `goal_reached`), no level, no quantity of product.
+#[test]
+fn a_recipe_on_its_stock_runs_its_lot() {
+    let mut ctx = jim();
+    ctx.money_guide = vec![GuideLine { family: "recipe".to_string(), lot: 200, ..line("cook:trout", 4000.0, 9, true) }];
+    let (node, drawn) = money_with(&ctx, 0);
+    assert_eq!(node.method.as_deref(), Some("cook:trout"), "{:?}", node.alternatives);
+    assert_eq!(node.batch, 200);
+    assert_eq!(drawn.map(|choice| choice.class), Some(0));
+    let (script, args) = crate::map_method("cook:trout", &node, Some((6000, 12000))).expect("cook maps");
+    assert_eq!(script, "cook");
+    assert!(args.windows(3).any(|window| window == ["--use", "raw_trout", "200"]), "{args:?}");
+    assert!(!args.iter().any(|arg| arg == "--want" || arg == "--level"), "{args:?}");
+    // A farm line drawn next leaves no lot behind.
+    ctx.money_guide = vec![line("gather:woodcut/yew_logs", 1000.0, 9, true)];
+    let mut again = node.clone();
+    crate::resolve_obtain::resolve_money(&mut again, &ctx);
+    assert_eq!(again.batch, 0);
+    let (_, args) = crate::map_method("gather:woodcut/yew_logs", &again, None).expect("woodcut maps");
+    assert!(!args.iter().any(|arg| arg == "--use"), "{args:?}");
 }

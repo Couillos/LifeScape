@@ -166,6 +166,7 @@ fn live_check() {
             position,
             planned: crate::brain_bids::planned_levels(&life),
             caster,
+            rate: &lifescape_planner::work_rate::prior_rate,
         };
         let rate = lifescape_planner::market_fit::coin_rate(&rows, state.level_of);
         // Every valued lot (spread ignored), best rate first; `*` preempts.

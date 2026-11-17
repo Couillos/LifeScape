@@ -592,3 +592,25 @@ fn reach_tranches_carry_their_yield_duration() {
         start = level;
     }
 }
+
+/// R7 suite (2026-11-17): a `reach_combat` node reads its fight on the
+/// training guide like any climb (the measured lines), never the static
+/// chickens alone: the brain's pick locks it; without a pick the static
+/// training method still resolves.
+#[test]
+fn a_combat_level_climb_locks_the_guides_pick() {
+    use crate::model::{Alternative, NodeStatus};
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.combat = 40;
+    ctx.training = Some(crate::training::TrainPick { method: "fight:melee/cows".to_string(), batch: 0, missing: Vec::new(), cost_per_xp: 0.0, xp_per_tick: 1.0, profit_per_tick: 0.1 });
+    let mut node = Node::new("n7", NodeKind::ReachCombat { level: 45 }, Vec::new(), 45);
+    node.alternatives.push(Alternative { method: "fight:melee/chickens".to_string(), est_ticks: 0, est_coins: 0 });
+    node.status = NodeStatus::Ready;
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some("fight:melee/cows"), "{:?}", node.status);
+    ctx.training = None;
+    node.method = None;
+    node.status = NodeStatus::Ready;
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some("fight:melee/chickens"), "the static training without a pick");
+}

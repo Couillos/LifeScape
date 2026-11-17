@@ -68,6 +68,7 @@ pub mod shop_site;
 pub mod side_goal;
 pub mod skeleton_deps;
 pub mod sizing;
+pub mod stock_lot;
 pub mod stock_target;
 pub mod space;
 pub mod tool_kit;

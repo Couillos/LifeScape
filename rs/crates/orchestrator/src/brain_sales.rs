@@ -54,9 +54,16 @@ const INPUT_NAMED: [&str; 7] = ["cook/", "cook:", "fire:", "string:", "enchant:"
 /// ambition's open milestones are kept by `brain::cleanup_keep`
 /// (`market_fit::own_use_items`), never twice here.
 pub fn planned_methods(life: &Life) -> Vec<String> {
+    planned_methods_except(life, None)
+}
+
+/// `planned_methods` without the node `skip` (a money node judging the
+/// stock it may transform: its own candidates never reserve that stock
+/// from it, R7 recipes on stock).
+pub fn planned_methods_except(life: &Life, skip: Option<&str>) -> Vec<String> {
     let mut methods: Vec<String> = Vec::new();
     for node in &life.nodes {
-        if matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned) {
+        if matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned) || skip == Some(node.id.as_str()) {
             continue;
         }
         if !matches!(node.kind, NodeKind::ReachLevel { .. } | NodeKind::MakeMoney) {
@@ -139,9 +146,15 @@ fn method_inputs(method: &str, keep: &mut Vec<String>) -> Option<String> {
 /// product is SOLD (2026-11-13: producers sell what they make, bars,
 /// smithed and crafted goods) unless another open method consumes it.
 pub fn working_keep(life: &Life, wished: &[String]) -> Vec<String> {
+    working_keep_except(life, wished, None)
+}
+
+/// `working_keep` without the methods of the node `skip`
+/// (`planned_methods_except`).
+pub fn working_keep_except(life: &Life, wished: &[String], skip: Option<&str>) -> Vec<String> {
     let mut keep = crate::brain::cleanup_keep(life);
     let mut products: Vec<String> = Vec::new();
-    for method in planned_methods(life) {
+    for method in planned_methods_except(life, skip) {
         if let Some(product) = method_inputs(&method, &mut keep) {
             products.push(product);
         }

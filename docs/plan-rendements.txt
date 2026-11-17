@@ -271,6 +271,11 @@ R7  Choix des bots.
     et squelette sans dépôt statique quand le guide choisira ; jitter ±2 %
     et `pick_offer` supprimés ; choix loggés et section « bot choices »
     d'`orchestrator economy`.
+    Suite 2026-11-17 (decisions.md « Suite R7 ») : toute recette sur le
+    stock propre en argent (lot = stock libre, `--use`), entraînement des
+    bids et `reach_combat` sur la mesure, rapide ↔ économe hors argent ;
+    correctif live : condition de niveau d'une ligne = porte de
+    l'activité (plus la fin de bande).
 
 R8  Dashboard : pages "money making" et "training" (filtres skill,
     tranche, famille, prérequis ; confiance visible) ; docs à jour.

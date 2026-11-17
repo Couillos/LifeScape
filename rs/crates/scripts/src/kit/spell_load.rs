@@ -256,7 +256,7 @@ pub fn stock_for(bot: &mut Bot, load: &SpellLoad, keep: &[u16], wanted: u32) -> 
 /// True when the order names no goal (manual "do all I hold" runs).
 fn goalless(spec: &TaskSpec) -> bool {
     let targets = &spec.targets;
-    targets.count.is_none() && targets.want_item.is_none() && targets.xp_skill.is_none() && targets.level_skill.is_none()
+    targets.count.is_none() && targets.want_item.is_none() && targets.xp_skill.is_none() && targets.level_skill.is_none() && targets.uses.is_empty()
 }
 
 /// Casts the order still asks for (count left, `--want` left), `u32::MAX`
@@ -296,6 +296,11 @@ pub fn run_casts(
                 if state.units() > 0 && goalless(&spec) {
                     bot.log(&format!("{} ran dry after {} casts (pack and bank): {}", load.spell, state.units(), missing.join(", ")));
                     return Ok((state.units(), None));
+                }
+                // The lot's stock is spent (`kit::stock_use`): done.
+                if state.stock_spent(bot, &spec) {
+                    bot.log(&format!("{} used up its stock after {} casts: {}", load.spell, state.units(), missing.join(", ")));
+                    return Ok((state.units(), Some(StopReason::GoalReached)));
                 }
                 return Err(ScriptError::Blocked { missing });
             }

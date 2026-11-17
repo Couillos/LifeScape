@@ -87,6 +87,10 @@ pub struct GuideLine {
     /// state): feasible now, else within reach once a tool is obtained
     /// or a lot's coins earned.
     pub feasible: bool,
+    /// A recipe on the bot's own stock (`stock_lot`): the actions its free
+    /// stock covers, the lot the node runs (`node.batch`, `--use`); 0 for
+    /// every other line.
+    pub lot: i64,
 }
 
 /// What one resolve chose from a guide (logged and recorded by the

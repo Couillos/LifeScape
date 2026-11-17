@@ -188,7 +188,10 @@ pub fn tan_run(bot: &mut Bot, product: &str) -> ScriptResult {
 pub fn run_tanning(bot: &mut Bot, spec: &crate::kit::cycle::TaskSpec, hide_name: &str) -> ScriptResult {
     let leather_name = spec.targets.want_item.clone().unwrap_or_else(|| "leather".to_string());
     let (cost, coms) = if leather_name == "hard_leather" { (TAN_HARD_COST, TAN_HARD_COMS) } else { (TAN_SOFT_COST, TAN_SOFT_COMS) };
-    let want = spec.targets.want_count.unwrap_or(u32::MAX);
+    // A money lot on the bot's hides (`--use <hide> N`, `kit::stock_use`):
+    // one leather per hide, the lot bounds the tanning like `--want`.
+    let lot = spec.targets.uses.iter().find(|(item, _)| item == hide_name).map(|(_, count)| *count);
+    let want = spec.targets.want_count.or(lot).unwrap_or(u32::MAX);
     let hide = obj_id(bot, hide_name)?;
     let coins = obj_id(bot, "coins")?;
     let mut tanned = 0u32;

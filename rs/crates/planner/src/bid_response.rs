@@ -112,6 +112,11 @@ pub struct Producer<'a> {
     /// (`alchemy::Caster::net`; the casting time is charged here at the
     /// coin rate), `None` when it does not cast.
     pub alch_net: &'a dyn Fn(&str) -> Option<f64>,
+    /// The planner's rate reader (`plan_read::PlanRead::rate`, R7): the
+    /// brain's MEASURED yields (n >= 3 blended with the game prior, else
+    /// the prior), `work_rate::prior_rate` offline. The training a lot
+    /// carries is sized on it (actions, inputs burnt).
+    pub rate: crate::work_rate::RateReader<'a>,
 }
 
 /// No plan: the default of a bot whose ambition climbs nothing.
@@ -416,7 +421,7 @@ pub fn training_rows(train: &[(String, u8, u8)], market: &dyn Fn(&str) -> Option
     let mut out = Vec::new();
     for (skill, from, to) in train {
         let method = crate::tranches::reach_method(skill, *from);
-        let actions = crate::sizing::tranche_actions(&method, *from, *to)?;
+        let actions = crate::sizing::tranche_actions_with(bot.rate, &method, *from, *to)?;
         let product = crate::method_way::method_way(&method).map(|(item, _)| item).unwrap_or_default();
         let rate = (bot.units_per_6000)(&method, &product);
         if !rate.is_finite() || rate <= 0.0 {
@@ -424,7 +429,7 @@ pub fn training_rows(train: &[(String, u8, u8)], market: &dyn Fn(&str) -> Option
         }
         let mut row = TrainingRow { skill: skill.clone(), to: *to, coins: 0.0, ticks: actions as f64 * 6000.0 / rate, products_value: 0.0 };
         let shop = Step { depth: 1, train: false, dest: VARROCK_FOUNTAIN };
-        for (input, units) in crate::sizing::tranche_consumption(&method, *from, *to) {
+        for (input, units) in crate::sizing::tranche_consumption_with(bot.rate, &method, *from, *to) {
             let sub = cost_at(&input, units.max(1), market, bot, shop)?;
             row.coins += units as f64 * sub.coins;
             row.ticks += units as f64 * sub.ticks;
