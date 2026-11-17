@@ -24,7 +24,8 @@
 //! `janitor` (bank cleanup budget, chunks, whole-stack drops), `progress`
 //! (silent-loop guard of every `cycle::run`: no output, bank churn), `mill`
 //! (windmill hopper, lever and flour bin clicked from side stands), `want`
-//! (the run's `--want` goal read inside a load: stands, chains, items).
+//! (the run's `--want` goal read inside a load: stands, chains, items),
+//! `stock_use` (the run's `--use` goal: a money lot on the bot's own stock).
 
 #![forbid(unsafe_code)]
 
@@ -64,6 +65,7 @@ pub mod progress;
 pub mod shop;
 pub mod site;
 pub mod spell_load;
+pub mod stock_use;
 pub mod spots;
 pub mod stranded;
 pub mod strike;
