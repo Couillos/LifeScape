@@ -324,3 +324,19 @@ tarif_karamja_alkharid | 2924,3178,0 | 3270,3167,0 | paid,f2p,has=coins:30,has=c
 # un plancher (Tables::load).
 pont_port_sarim | 3032,3214,1 | 3029,3217,0 | f2p | reachable ; uses_custom=gangplank_port_sarim_dock ; levels=1>0
 pont_port_sarim_banque | 3032,3214,1 | 3092,3243,0 | f2p | reachable ; uses_custom=gangplank_port_sarim_dock
+
+# Forteresse des Chevaliers noirs (2026-11-17, ~60 dossiers/h, 9 comptes :
+# cuisson visant grandfireplace_oldbrick (3030,3514), dans la salle du
+# banquet). quest_blackknight.rs2 : 73/74 inaclefayeunopenabledoorl/r
+# (3007,3516)/(3007,3515) et 2340 inacbkfortressdoor (3028,3510) ne
+# disent que « You can't open this door. » / « It's locked. » ; 2337
+# bkfortressdoor1 (3016,3514, mur nord) ne laisse entrer depuis le sud
+# (z = 3514, check_axis) qu'avec bronze_med_helm + iron_chainbody portes
+# (sinon le garde), sortir par le nord est libre ; 2338 bkfortressdoor2
+# (3020,3515, mur ouest) n'ouvre librement que depuis l'est (banquet).
+# Dedans : sortie par 2337 (stand nord (3016,3515), jamais 73/74).
+forteresse_noire_sortie | 3016,3515,0 | 3094,3491,0 | f2p | reachable ; uses_loc=2337 ; stand=3016,3515 ; doors<=1 ; avoids=3008,3515 ; avoids=3008,3516
+forteresse_noire_banquet_sortie | 3029,3515,0 | 3094,3491,0 | f2p | reachable ; uses_loc=2338 ; uses_loc=2337 ; stand=3016,3515 ; doors<=2
+# Dehors : la salle du banquet (et le corridor ouest) ne s'atteint pas.
+forteresse_noire_entree_refusee | 3031,3516,0 | 3029,3515,0 | f2p | unreachable=Disconnected
+forteresse_noire_corridor_refuse | 3094,3489,0 | 3016,3515,0 | f2p | unreachable=Disconnected

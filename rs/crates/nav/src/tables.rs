@@ -75,10 +75,12 @@ pub struct OneWay {
 }
 
 /// North/south/east/west side of a door tile, plus the negated north
-/// side: the haunted manor doors refuse by `coordz` alone (server opens
-/// from any stand level with the door, never from north of it), which
-/// no strict side expresses (the live entry stand sits level with the
-/// door tile).
+/// and west sides: the haunted manor doors refuse by `coordz` alone
+/// (server opens from any stand level with the door, never from north
+/// of it), which no strict side expresses (the live entry stand sits
+/// level with the door tile). Same for `check_axis` doors on a west
+/// wall (Black Knights' banquet door 2338): the stands on the door's own
+/// column (x = door x, north or south of the tile) read "inside".
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Side {
     North,
@@ -86,6 +88,7 @@ pub enum Side {
     East,
     West,
     NotNorth,
+    NotWest,
 }
 
 impl Side {
@@ -96,6 +99,7 @@ impl Side {
             "east" => Some(Side::East),
             "west" => Some(Side::West),
             "not-north" => Some(Side::NotNorth),
+            "not-west" => Some(Side::NotWest),
             _ => None,
         }
     }
@@ -108,6 +112,7 @@ impl Side {
             Side::East => stand.x > door.x,
             Side::West => stand.x < door.x,
             Side::NotNorth => stand.z <= door.z,
+            Side::NotWest => stand.x >= door.x,
         }
     }
 }

@@ -102,7 +102,7 @@ impl Tile {
     }
 }
 
-fn unkey(key: u64) -> Tile {
+pub(crate) fn unkey(key: u64) -> Tile {
     Tile {
         level: ((key >> 42) & 0xFF) as i32,
         z: (((key >> 21) & 0x1F_FFFF) as i32) - 8192,

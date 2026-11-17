@@ -2,7 +2,21 @@
   "blocked_locs": [
     {"loc": 131, "reason": "closet_door (Draynor Manor, (3107,3367,0)): quest_haunted.rs2 [oploc1,closet_door] only says 'The door is locked.'; it opens on [oplocu] with the closet key (Ernest the Chicken) alone; live admin 2026-11-15 ground:rubber_tube DoorDidNotOpen", "verified": "2026-11-16"},
     {"loc": 2069, "reason": "wydindoor (Port Sarim food store back room, (3012,3204,0)): food_store.rs2 [oploc1,wydindoor] turns away anyone not employed for Pirate's Treasure (hunt_store_employed) or not wearing the white apron while Wydin stands within 10 tiles; live admin 2026-11-15 ground:white_apron DoorDidNotOpen", "verified": "2026-11-16"},
-    {"loc": 1591, "reason": "lockeddoor1 (name Door, op1 Open): locked_doors.rs2 [oploc1,lockeddoor1] only says 'You try and open the door...' then 'The door is locked tight, I can't open it.', never swings; live bct5rxpg-14906 (3268,3435) DoorDidNotOpen", "verified": "2026-11-13"}
+    {"loc": 1591, "reason": "lockeddoor1 (name Door, op1 Open): locked_doors.rs2 [oploc1,lockeddoor1] only says 'You try and open the door...' then 'The door is locked tight, I can't open it.', never swings; live bct5rxpg-14906 (3268,3435) DoorDidNotOpen", "verified": "2026-11-13"},
+    {"loc": 73, "reason": "inaclefayeunopenabledoorl (Large door, Black Knights' Fortress west gate (3007,3516,0)): quest_blackknight.rs2 [oploc1,inaclefayeunopenabledoorl] only says 'You can't open this door.', no other handler; live 2026-11-17 james_mason/lucy_rhodes/hill_eric... ~60 DoorDidNotOpen/h", "verified": "2026-11-17"},
+    {"loc": 74, "reason": "inaclefayeunopenabledoorr (Large door, Black Knights' Fortress west gate (3007,3515,0)): quest_blackknight.rs2 [oploc1,inaclefayeunopenabledoorr] only says 'You can't open this door.', no other handler; live 2026-11-17 DoorDidNotOpen", "verified": "2026-11-17"},
+    {"loc": 2340, "reason": "inacbkfortressdoor (Sturdy door, Black Knights' Fortress (3028,3510,0)): quest_blackknight.rs2 [oploc1,inacbkfortressdoor] only says 'It's locked.', no other handler", "verified": "2026-11-17"},
+    {"loc": 2534, "reason": "loc_2534 (door, op1 Open): quest_elena doors.rs2 [oploc1,loc_2534] only says 'This door is locked.', no other handler", "verified": "2026-11-17"},
+    {"loc": 4631, "reason": "posh_doubledoor_locked_l: game_gamesroom boardgames.rs2 [oploc1,posh_doubledoor_locked_l] only says 'This door is locked.', no other handler", "verified": "2026-11-17"},
+    {"loc": 4632, "reason": "posh_doubledoor_locked_r: game_gamesroom boardgames.rs2 [oploc1,posh_doubledoor_locked_r] only says 'This door is locked.', no other handler", "verified": "2026-11-17"},
+    {"loc": 4640, "reason": "elfdoor_locked: game_gamesroom boardgames.rs2 [oploc1,elfdoor_locked] only says 'This door is locked.', no other handler", "verified": "2026-11-17"},
+    {"loc": 170, "reason": "muddy_chestclosed (chest, op1 Open, blockwalk): area_wilderness [oploc1,muddy_chestclosed] only says 'The chest is locked.'; a chest is never a passage (same rule as the chest_closed category)", "verified": "2026-11-17"},
+    {"loc": 172, "reason": "crystal_chestclosed (chest, op1 Open, blockwalk): area_taverly [oploc1,crystal_chestclosed] only says 'This chest is securely locked shut.'; a chest is never a passage", "verified": "2026-11-17"},
+    {"loc": 377, "reason": "shuttwistedchest (chest, op1 Open, blockwalk): area_yanille [oploc1,shuttwistedchest] only says 'The chest is locked.'; a chest is never a passage", "verified": "2026-11-17"},
+    {"loc": 2079, "reason": "piratechest (chest, op1 Open, blockwalk): quest_hunt [oploc1,piratechest] only says 'The chest is locked.'; a chest is never a passage", "verified": "2026-11-17"},
+    {"loc": 2361, "reason": "digchestclosed (chest, op1 Open, blockwalk): quest_itexam [oploc1,digchestclosed] only says 'The chest is locked.'; a chest is never a passage", "verified": "2026-11-17"},
+    {"loc": 2572, "reason": "loc_2572 (looted chest, op1 Open, blockwalk): skill_thieving [oploc1,loc_2572] only says 'It looks like this chest has already been looted.'; a chest is never a passage", "verified": "2026-11-17"},
+    {"loc": 2856, "reason": "carnilleanshutchest (chest, op1 Open, blockwalk): quest_hazeelcult [oploc1,carnilleanshutchest] only says 'This chest is locked shut.'; a chest is never a passage", "verified": "2026-11-17"}
   ],
   "custom_edges": [
     {"name": "boat_port_sarim_to_karamja", "kind": "npc_fare", "requires": ["coins:60"], "requires_reason": "the way out also needs the 30-coin fare back (customs_officer.rs2): a bot that sails with only 30 coins is stranded on Karamja (james_mason, leo_king, tom_king 2026-11-15)", "npcs": ["captain_tobias", "seaman_lorris", "seaman_thresnor"], "op": 1, "choices": ["Yes please."], "fare": 30, "stand": [3027, 3218, 0], "to": [2956, 3143, 1], "reason": "sailors.rs2 [opnpc1,_sailor]: p_choice2 'Yes please.' takes 30 coins from the inventory (inv_total(inv, coins) < 30 refuses) then ~set_sail onto the ship deck 1_46_49_12_7; sailors spawn (3026..3028, 3216..3221) on the Port Sarim dock", "verified": "2026-11-13"},
@@ -51,6 +65,20 @@
       "passable_from": "not-north",
       "reason": "haunteddoorr: same as haunteddoorl, double door, entry south-only",
       "verified": "2026-11-08"
+    },
+    {
+      "loc": 2337,
+      "at": [3016, 3514, 0],
+      "passable_from": "north",
+      "reason": "bkfortressdoor1 (Black Knights' Fortress front door, wall north of (3016,3514)): quest_blackknight.rs2 [oploc1,bkfortressdoor1] reads the clicker on the door row (check_axis: z = 3514, outside) and then needs bronze_med_helm + iron_chainbody worn, else the fortress guard turns it away (or nothing at all); from the north (inside) ~open_and_close_door always lets out onto (3016,3514). Live 2026-11-17: ~60 DoorDidNotOpen/h from (3017,3514), 9 accounts cooking at the banquet fireplace (3030,3514). The quest script walks in itself with the uniform",
+      "verified": "2026-11-17"
+    },
+    {
+      "loc": 2338,
+      "at": [3020, 3515, 0],
+      "passable_from": "not-west",
+      "reason": "bkfortressdoor2 (Black Knights' Fortress banquet hall door, wall west of (3020,3515)): quest_blackknight.rs2 [oploc1,bkfortressdoor2] opens freely only from the hall side (check_axis: stand on the door column x = 3020, i.e. the tile itself or its north/south neighbours); from the west (x = 3019) the guard dialog must be answered 'I'm going in anyway' and the knights aggro, or nothing happens without a guard",
+      "verified": "2026-11-17"
     }
   ],
   "requirements": [
