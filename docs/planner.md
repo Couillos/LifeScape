@@ -1188,3 +1188,21 @@ que la compétence de sa propre méthode (`banned_scope`). Les buts d'appoint
 et les réponses aux offres ne sont tirés que si une jambe de production
 n'est ni en quarantaine ni refroidie (`side_goal_with`, `goal_feasible`, taux
 0 dans `brain_bids`). Capacité de site et guildes : voir décisions D2/D4.
+
+## Stock futur (plan marché M6, 2026-11-17)
+
+`planner::stock_target` (pur) lit dans la vie les tranches de travail
+du stock futur (Q5 : la courante et la suivante, `STOCK_SLICES`) :
+nœuds ouverts `reach_level` (l'actif d'abord ; départ au niveau live
+ou à la cible de la tranche ouverte précédente du même skill ; méthode
+du nœud, sinon sa première alternative, sinon `tranches::reach_method`
+du niveau de départ), `make_money` (engagement tiré, sinon moyenne
+du tirage [6000, 18000]) et `have_coins` (une fenêtre de 6000). Durée
+d'une tranche = `sizing::xp_between` ÷ XP /6000 de la méthode × 6000 ;
+consommation = flux sortants des causes consommables du rendement
+publié. `orchestrator::brain_stock` lit les rendements (`rates_read`),
+le carnet et le portefeuille et pose les bids `stock` (voir
+`economy.md` § Stock futur). `brain_sales::working_keep` garde l'appât
+d'une récolte planifiée (plumes, appât de pêche :
+`tools::required_tool(...).consumables`).
+

@@ -101,7 +101,13 @@ fn method_inputs(method: &str, keep: &mut Vec<String>) -> Option<String> {
         keep.extend(lifescape_planner::sizing::tranche_consumption(method, 1, 2).into_iter().map(|(ammo, _)| ammo));
         return None;
     }
-    if method.starts_with("gather:") || method.starts_with("fight:") || method.starts_with("market:") {
+    // A gather burns its bait (feathers, fishing bait: plan marché M6,
+    // bought ahead), never sold.
+    if method.starts_with("gather:") {
+        keep.extend(lifescape_planner::tools::required_tool(method).map(|need| need.consumables).unwrap_or_default());
+        return None;
+    }
+    if method.starts_with("fight:") || method.starts_with("market:") {
         return None;
     }
     let named = method_product(method)?;
@@ -390,6 +396,8 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     gear.extend(worn.iter().cloned());
     // A caster keeps what alchs for more than it sells (2026-11-14).
     wished.extend(crate::brain_alch::alch_keep(life, &live));
+    // Stock bought ahead for the next work slices (plan marché M6).
+    wished.extend(crate::brain_stock::kept(&job.account));
     let stacks = crate::brain_plan::live_stacks(job);
     let levels = crate::brain_tools::live_levels(&live);
     let tools = crate::brain_tools::kept_tools(life, &stacks, &crate::brain_tools::level_refs(&levels));
@@ -722,6 +730,16 @@ pub(crate) mod tests {
         let stacks = vec![("bronze_arrow".to_string(), 838), ("iron_dagger".to_string(), 41)];
         let names: Vec<String> = surplus(&stacks, &fighter, &[], &HashSet::new()).into_iter().map(|(name, _, _)| name).collect();
         assert_eq!(names, vec!["bronze_arrow".to_string(), "iron_dagger".to_string()]);
+    }
+
+    /// Plan marché M6: a fly fisher's feathers (bought ahead) are its
+    /// bait, never surplus; a woodcutter keeps no bait.
+    #[test]
+    fn a_fisher_keeps_its_bait() {
+        let fisher = super::working_keep(&life_training(&[("fishing", "gather:fishing/raw_trout")]), &[]);
+        assert!(fisher.contains(&"feather".to_string()), "{fisher:?}");
+        let woodcutter = super::working_keep(&life_training(&[("woodcutting", "gather:woodcut/oak_logs")]), &[]);
+        assert!(!woodcutter.contains(&"feather".to_string()), "{woodcutter:?}");
     }
 
     #[test]

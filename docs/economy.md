@@ -146,6 +146,31 @@ fois, `market_absent.rs`) ; compte staff/privé, ouverture refusée ou
 absence > 3000 ticks → `no_show`, ordres de l'absent annulés, côté
 honnête replacé avec sa priorité.
 
+### Stock futur (plan marché M6, Q5, 2026-11-17)
+
+Chaque bot (non Iron, hors teneur qui cote) pose à l'avance des bids
+PATIENTS (motif `stock`, horizon 72 000 ticks, β 0,5) pour les intrants
+et consommables de sa tranche en cours et de la suivante
+(`planner::stock_target`, `orchestrator::brain_stock`, passe de 600 s
+après l'alchimie, `decisions.md` 2026-11-17). Cible d'un objet = Σ
+consommation /6000 (flux sortants input, ammo, rune, bait, supply, food
+du rendement publié de la méthode au niveau et à l'outil du bot ;
+nourriture convertie en PV puis en la nourriture qu'il s'offre) × durée
+de la tranche (XP de la tranche ÷ XP dérivée /6000), × part d'affinité
+`(affinité − 0,25) / 0,75` (sous 0,25 : rien, le bot farme). Bid quand
+le détenu libre + en vol tombe sous la moitié de la cible, pour le
+reste de la cible ; gardé au repos sinon (marche continue) ; retiré à
+la cible (`need_met`) ou quand l'objet quitte le plan (`need_gone`).
+Plafond unitaire : prix courant échangé, sinon meilleur ask, jamais
+au-dessus du marchand F2P le moins cher, au moins le plancher public ;
+budget 50 % du portefeuille libre, la tranche en cours d'abord. Un
+objet déjà enchéri par un autre motif reste à ce bid ; les objets du
+stock ne sont jamais listés ; les bids `stock` de l'alchimie
+(`brain_alch::claimed`) ne sont jamais retirés par cette passe.
+Exemples : pêcheur mouche 20-25 → plumes (≈ une par prise de la
+tranche) ; firemaker → bûches ; mage → runes du sort ; combattant →
+nourriture adaptée à ses PV, s'il en mange.
+
 ### Section marché d'`orchestrator economy` (critères du plan marché §6)
 
 Sur la fenêtre `[maintenant − heures, maintenant)`, staff exclu

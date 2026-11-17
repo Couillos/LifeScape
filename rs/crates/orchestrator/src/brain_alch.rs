@@ -292,6 +292,23 @@ pub(crate) fn cheap_asks(mage: &Caster, account: &str) -> Vec<(String, i64, f64)
     out
 }
 
+fn claims() -> &'static Mutex<HashMap<String, std::collections::BTreeSet<i64>>> {
+    static TABLE: OnceLock<Mutex<HashMap<String, std::collections::BTreeSet<i64>>>> = OnceLock::new();
+    TABLE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn claim(account: &str, item: i64) {
+    claims().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).entry(account.to_string()).or_default().insert(item);
+}
+
+/// Objects whose `stock` bids belong to this pass for `account` since the
+/// daemon started (nature runes of a caster, objects bought to alch):
+/// the future-stock pass (`brain_stock`, plan marché M6) shares the
+/// `stock` motive and never withdraws them.
+pub(crate) fn claimed(account: &str) -> std::collections::BTreeSet<i64> {
+    claims().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(account).cloned().unwrap_or_default()
+}
+
 /// One alchemy market pass for an idle, non-Iron caster: nature runes
 /// for the stock it alchs, and an ask under the alch floor bought to
 /// alch it. Returns the bids placed or kept.
@@ -309,6 +326,9 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
     }
     let Some(service) = crate::market_service::shared() else { return 0 };
     let Some(mage) = caster_for(live) else { return 0 };
+    if let Some(id) = obj_id(NATURE_RUNE) {
+        claim(&job.account, id);
+    }
     let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
     let own_rate = lifescape_planner::market_fit::coin_rate(&crate::brain_bids::rate_rows(), &level_of);
     let coins = crate::brain_gear::free_coins(job, None);
@@ -342,6 +362,7 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
             if qty < 1 {
                 continue;
             }
+            claim(&job.account, id);
             if let Ok(crate::market_reprice::StandingBid::Placed { price, .. }) = crate::market_reprice::keep_bid(&service, &job.account, id, qty, ceiling, crate::market_lineage::STOCK) {
                 crate::logln!("brain {}: buys {qty} {item} @ {price} to alch (ask {ask}, alch floor {ceiling}, profit {} each)", job.account, ceiling - ask);
             }

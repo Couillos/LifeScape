@@ -747,3 +747,10 @@ Vague 3 : TENEURS DE MARCHE (remplace M8, décision Q6)
 Différés (dépendent de plan-rendements R2/R4) : M6 stock-cible
 (tranche en cours + suivante, Q5) et M7 découverte du prix (ancrage
 coût de guide).
+  État 2026-11-17 : M6 code et tests faits, sans live (decisions.md
+  « Stock futur ») : `planner::stock_target` + `orchestrator::
+  brain_stock`, bids `stock` pour les deux prochaines tranches,
+  consommation /6000 des rendements R2 × durée de tranche, part
+  d'affinité (rien sous 0,25), réappro sous la moitié de la cible,
+  budget 50 % du portefeuille libre, retrait `need_gone`/`need_met`.
+  Live à faire : offres de plumes, appâts, runes, bûches au carnet.

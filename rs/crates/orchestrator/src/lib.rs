@@ -52,6 +52,7 @@ pub mod brain_plan;
 pub mod brain_quest_gate;
 pub mod brain_rescue;
 pub mod brain_sales;
+pub mod brain_stock;
 pub mod brain_reserve;
 pub mod brain_wishlist;
 pub mod brain_succession;

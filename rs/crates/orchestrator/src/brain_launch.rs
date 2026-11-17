@@ -251,6 +251,10 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         // Alchemy (2026-11-14): nature runes for the stock a caster alchs,
         // asks under the alch floor bought to alch.
         crate::cpu_profile::timed("alch.market_pass", || crate::brain_alch::market_pass(job, &life, &live));
+        // Future stock (plan marché M6, Q5): patient bids for what the
+        // current work slice and the next will burn, after the alchemy
+        // pass (its own `stock` bids are claimed first).
+        crate::cpu_profile::timed("stock.future_pass", || crate::brain_stock::stock_pass(job, &life, &live));
         // Permanent tool kit (2026-11-14): axe, pickaxe, hammer, tinderbox,
         // the best tier the level opens, filed as gear steps (a shop, or a
         // covered ask for an axe), never a market bid nobody fills. Before

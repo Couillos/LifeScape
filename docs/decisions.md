@@ -1207,3 +1207,54 @@ Source : `docs/plan-erreurs.txt` (causes R01-R18, plan P1-P18).
    prochain resolve choisit un autre site.
 Rejeté : priorité de guilde soumise à capacité (D2 a) ; levée manuelle seule
 (D1 c) ; contention comptée comme échec avec seuil plus haut (D4).
+
+## 2026-11-17 — Stock futur : offres patientes des deux prochaines tranches (plan marché M6, Q5)
+
+Décision Q5 (2026-11-16) appliquée : chaque bot (non Iron, hors teneur de
+marché qui cote) pose à l'avance des bids patients, motif `stock`
+(horizon 72 000 ticks, β 0,5), pour ce que sa tranche en cours ET la
+suivante vont consommer (`planner::stock_target`, pur ;
+`orchestrator::brain_stock`, passe de 600 s après l'alchimie).
+- Tranches de travail : nœuds ouverts `reach_level` (la courante démarre
+  au niveau live, la suivante où finit la précédente du même skill),
+  `make_money` (engagement tiré, sinon la moyenne du tirage, 12 000) et
+  `have_coins` (sa fenêtre de 6000) ; l'active d'abord, puis l'ordre du
+  graphe ; 2 au plus. `reach_combat` exclu (pas de cible par skill).
+- Quantité : consommation /6000 (flux signés sortants input, ammo, rune,
+  bait, supply, food du rendement publié de la méthode au niveau et à
+  l'outil du bot, `rates_read::estimate` : mesure n ≥ 3 mélangée au
+  prior, sinon le prior) × durée de la tranche (XP de la tranche ÷ XP
+  dérivée /6000 × 6000) ; nourriture mangée convertie en PV puis en la
+  nourriture que le bot s'offre (`affordable_food` sur `food_to_ask` de
+  ses PV, la même règle que la porte de nourriture) ; cible × part
+  d'affinité ; moins le détenu libre (sac + banque hors annonces et
+  ventes en vol) et les achats en vol.
+- Affinité (D13) : part achetée = (affinité − 0,25) / 0,75 bornée
+  [0, 1] : sous 0,25 aucun bid (le bot farme : ses obtentions de tranche
+  le font), 1 = toute la cible.
+- Réapprovisionnement (s, S) : sous la moitié de la cible, un bid pour
+  le reste de la cible ; au-dessus, attente ; à la cible, le bid au
+  repos est retiré (`need_met`). Un bid au repos est gardé (sa marche
+  continue, son plafond suit) : jamais d'annulation-repose.
+- Prix limite : prix courant échangé, sinon meilleur ask, jamais
+  au-dessus du marchand F2P le moins cher (au-delà, la boutique) ;
+  aucun prix public ou sous le plancher public (§3.6) = aucun bid.
+- Budget : 50 % du portefeuille libre (pièces − achats au repos − deals
+  en vol), la tranche en cours servie d'abord.
+- Un objet qu'un autre motif enchérit déjà (besoin, équipement, outil)
+  reste à ce bid ; les objets du stock ne sont jamais mis en vente
+  (`brain_stock::kept`, et l'appât d'une récolte planifiée, plumes
+  comprises, est gardé par `working_keep`).
+- Retrait : un bid `stock` dont l'objet a quitté le plan (méthode
+  changée, besoin disparu, affinité nulle) est annulé `need_gone` ; ceux
+  de l'alchimie (`brain_alch::claimed` : runes de nature d'un lanceur,
+  objets achetés pour alcher) et un objet qu'un nœud d'obtention ouvert
+  veut (son besoin reprend la lignée) ne sont jamais touchés.
+Lecture seule des rendements (prior mémoïsé, deux estimations par
+passe), jamais un guide reconstruit.
+Rejeté : tout le plan de l'ambition (Q5 c) ; une part continue dès
+l'affinité 0 (un autarcique ne pose rien) ; le seuil de réappro en
+urgence « normale » (le motif reste `stock`, un nœud d'obtention prêt
+reprend la lignée en besoin) ; budget = tout le portefeuille libre
+(péages et boutiques restent payables).
+Défauts à calibrer en live : 0,25, 0,5, 50 %.
