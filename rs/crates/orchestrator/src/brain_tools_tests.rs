@@ -1,4 +1,4 @@
-use super::{kept_tools, listing_locks_needed_tool, spare_tool_units};
+use super::{kept_tools, kept_usable_tools, listing_locks_needed_tool, spare_tool_units};
 use lifescape_planner::{Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
 
 fn life_with(methods: &[&str]) -> Life {
@@ -108,4 +108,19 @@ fn only_a_listing_of_the_last_needed_copy_is_withdrawn() {
     assert!(listing_locks_needed_tool("hammer", 1, &stacks(&[("hammer", 1)]), &kept));
     assert!(!listing_locks_needed_tool("hammer", 1, &stacks(&[("hammer", 2)]), &kept), "a spare copy may sell");
     assert!(!listing_locks_needed_tool("net", 1, &stacks(&[("net", 1)]), &kept), "a tool it does not need sells");
+}
+
+/// Plan P5 red test (live 2026-11-17, luke_hill): the steel axe is locked
+/// by the bot's own listing, the iron axe is its only usable one: the
+/// iron axe is kept, never offered as surplus.
+#[test]
+fn a_locked_best_tool_keeps_the_best_free_one() {
+    let life = life_with(&["gather:woodcut/logs"]);
+    let held = stacks(&[("steel_axe", 1), ("iron_axe", 1)]);
+    let free = stacks(&[("iron_axe", 1)]);
+    let levels = [("woodcutting", 15)];
+    assert!(!kept_tools(&life, &held, &levels).contains(&"iron_axe".to_string()), "the raw keep picks the locked steel axe");
+    let kept = kept_usable_tools(&life, &held, &free, &levels);
+    assert!(kept.contains(&"iron_axe".to_string()), "the usable axe stays: {kept:?}");
+    assert!(kept.contains(&"steel_axe".to_string()), "the locked best one too (its listing is withdrawn): {kept:?}");
 }

@@ -395,7 +395,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     let tools = crate::brain_tools::kept_tools(life, &stacks, &crate::brain_tools::level_refs(&levels));
     wished.extend(tools.iter().cloned());
     let whole = working_keep(life, &wished);
-    let keep = crate::brain_plan::merge_keep(whole.clone(), gear.clone());
+    let mut keep = crate::brain_plan::merge_keep(whole.clone(), gear.clone());
     // An open quest keeps its objects (2026-11-14, bh99tw2f: its own
     // listings locked every banked air talisman): a listing that locks
     // them is cut first, and they are never offered below.
@@ -438,6 +438,12 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         locks = crate::brain_locks::locked_items(&job.account);
         free = lifescape_planner::withhold_reserved(&free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name)), &reserved);
     }
+    // A family whose best tool stays locked (its listing could not be
+    // withdrawn) keeps its best FREE member (plan P5): one usable copy
+    // never sells as surplus.
+    let free_tools = crate::brain_tools::kept_usable_tools(life, &stacks, &free, &crate::brain_tools::level_refs(&levels));
+    keep = crate::brain_plan::merge_keep(keep, free_tools.clone());
+    let tools = free_tools;
     // Withdrawn lots stay out this pass (still in `selling`): their stock
     // is banked again and the next pass lists a demand lot.
     let listed: HashSet<i64> = selling.iter().map(|row| crate::market_audit::book_item(row.item_id)).collect();
@@ -499,6 +505,14 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         } else {
             crate::market_lineage::SURPLUS
         };
+        // The market's own escrow view caps the lot (plan P5: 3 423
+        // "seller holds N, needs M" refusals in 10 h): never more than it
+        // sees free, nothing when it sees none.
+        let (escrow_free, _) = service.free_coverage(&job.account, lifescape_store::OrderSide::Sell, item);
+        if escrow_free <= 0 {
+            continue;
+        }
+        let lot = lot.min(escrow_free);
         let reply = service.handle(&object(vec![
             ("op", str_value("place")),
             ("account", str_value(&job.account)),
