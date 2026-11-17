@@ -54,6 +54,24 @@ fn without_demand_the_side_goal_makes_money() {
     assert!(side_goal(&fresh, &everything, &[], &nothing_held, false).is_some(), "a non-Iron works through the ban (steer_for_work)");
 }
 
+/// Plan P2 (live 2026-11-17, R01): an open leather demand whose only
+/// production legs are quarantined is never drawn; the next feasible
+/// demand is.
+#[test]
+fn a_demand_whose_every_leg_is_sick_is_never_drawn() {
+    let fresh = |_: &str| 1u8;
+    let avoid = banned(&["cooking", "fishing"]);
+    let demand = vec![bid("leather", 900.0, 5.0), bid("bronze_dagger", 100.0, 2.0)];
+    let legs: Vec<String> = crate::obtain_legs::production_legs("leather").into_iter().map(|leg| leg.method).collect();
+    assert!(legs.iter().any(|method| method == "tan:cow_hide"), "leather is tanned: {legs:?}");
+    let healthy = super::side_goal_with(&fresh, &avoid, &demand, &nothing_held, false, &|_| false).expect("a side goal");
+    assert_eq!(healthy.0, GoalKind::Produce { item: "leather".to_string(), count: 40 }, "leather pays best while its leg works");
+    let quarantine = |method: &str| legs.iter().any(|leg| leg == method);
+    let (goal, origin) = super::side_goal_with(&fresh, &avoid, &demand, &nothing_held, false, &quarantine).expect("a side goal");
+    assert_eq!(goal, GoalKind::Produce { item: "bronze_dagger".to_string(), count: 40 }, "the next feasible demand");
+    assert_eq!(origin, format!("{SIDE_PREFIX}demand:bronze_dagger"));
+}
+
 /// Melee is one group: a strength ban bans every fight method.
 #[test]
 fn bans_read_methods_by_skill_group() {

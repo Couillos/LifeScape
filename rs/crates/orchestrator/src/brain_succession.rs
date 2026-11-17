@@ -18,7 +18,7 @@
 
 use lifescape_json::Value;
 use lifescape_planner::{
-    append_goal, ban_entry, ban_states, draw_goal_origin, goal_closed, mark_drawn, goal_skills, side_goal, stuck_cause, unban_entry, BanState, GoalKind,
+    append_goal, ban_entry, ban_states, draw_goal_origin, goal_closed, mark_drawn, goal_skills, stuck_cause, unban_entry, BanState, GoalKind,
     Life, NoGoal, StuckCause, DONE_TAG, SIDE_PREFIX, SKILL_BAN_TICKS,
 };
 
@@ -226,7 +226,12 @@ fn side_goal_for(life: &Life, live: &Value, banned: &[String]) -> Option<(GoalKi
     // Held OR listed: stock on the market already answers a bid.
     let held_of = |item: &str| crate::brain_ambition::live_count(live, item);
     let demand = if life.profile.ironman { Vec::new() } else { crate::market_demand::demand_items(&crate::market_demand::signals_for(&life.account)) };
-    side_goal(&level_of, banned, &demand, &held_of, life.profile.ironman)
+    // A demand none of whose legs launches now (quarantine, this bot's
+    // cooldowns) is never drawn (plan P2).
+    let quarantined = crate::method_health::quarantined();
+    let cooled = crate::brain_cool::active(life);
+    let sick = |method: &str| quarantined.iter().any(|known| known == method) || lifescape_planner::cooldown::method_cooled(&cooled, method);
+    lifescape_planner::side_goal_with(&level_of, banned, &demand, &held_of, life.profile.ironman, &sick)
 }
 
 /// Close the current goal (done or stuck) and append the next one.
