@@ -140,9 +140,9 @@ construction à la demande) :
   plus que son temps, est divisé par ce poids : même ordre) ; une ligne
   bloquée, inaccessible, sans XP, ou marché pour un Iron, n'a pas de
   score ;
-- choix : `train_score::choose` = meilleur score (point d'extension R7 :
-  le tirage pondéré D10/D14 prend cette place sur les mêmes lignes
-  classées) ; consommables dont le bot tient moins d'une action
+- choix : le tirage R7 (section suivante, `train_score::pick`) sur les
+  mêmes lignes classées (`best` = tête de l'ordre du score seul) ;
+  consommables dont le bot tient moins d'une action
   (`training::missing_inputs`, tirés du rendement) à obtenir d'abord ;
   verrouillé par `lock_training_pick` comme avant ;
 - aucun guide publié (premier cycle) ou aucune ligne jouable : aucun
@@ -164,6 +164,60 @@ une vie écrite avant le trait reçoit le MÊME tirage au chargement
 `training::best_pick` (prix à la demande, section suivante) n'est plus
 appelé par le cerveau ; il reste au planificateur, ses temps lus du
 rendement (R3.3).
+
+## Choix des bots dans les guides (R7, 2026-11-17)
+
+Une seule règle pour tout choix lu dans les guides précalculés
+(`guides_store::current()`, asks du cycle, jamais de calcul à la demande)
+— argent (make_money, have_coins, financement d'un outil) et TOUTE montée
+(récolte, combat, recettes, sorts) ; `planner/src/guide_pick.rs` (pur),
+décision datée dans `docs/decisions.md`.
+- Candidats : lignes du guide de la tranche du bot jugées par
+  `guide_feasible::feasible_for` sur son état LIVE (niveaux, combat,
+  quêtes, stock libre, bourse libre, asks du cycle). Classes, la première
+  non vide tire : 0 faisable maintenant (argent : `food_gate::ready_now`
+  aussi, premier critère gardé), 1 après un prérequis obtenu seul (pièces
+  d'un lot, nourriture), 2 après un outil à obtenir (le nœud bloque sur
+  lui) ; jamais : `sick()` (quarantaine, refroidissement), `excluded`
+  (cycle), quête manquante, combat hors portée.
+- Tirage (D10) : bande = lignes à ≤ 15 % du meilleur score
+  (`BAND_SHARE`) ; poids = score × profil (`merit_money` : profit, ligne
+  marché ÷ (1,5 − market_affinity) ; `merit_training` : 1 / score
+  `train_score`, thrift et affinité déjà dedans).
+- Exploration (D14) : les lignes hors bande à < 3 runs mesurés
+  (`MEASURED_RUNS`) et de poids positif se partagent 5 % des tirages
+  (`EXPLORE_SHARE`, au total), uniformément.
+- Graine : `seed_for(profil.seed, nœud, LifeMemory::draws)` ; le
+  compteur avance à chaque choix enregistré. Collant : le choix précédent
+  d'un nœud bloqué sur son outil (`blocked_by`) revient dès qu'il est
+  faisable ; un lot trade acheté est crafté d'abord (`trade_craft::
+  sticky`).
+- Argent : `orchestrator::brain_money::publish` lit les lignes de la vue
+  de chaque niveau du bot (compétence de bande de l'activité), recettes
+  `alch:` réévaluées sur SON stock (`GuideFilter::held`, moins ce qu'il
+  garde), mappe chaque ligne vers la méthode lancée (farm : sa méthode si
+  un nœud argent la lance ; market : `trade:craft/<recette>` quand le
+  bot a l'offre ; recette : `alch:` ; chaîne : jamais), cotée et
+  rentable, une par méthode → `ReadyCtx::money_guide` ;
+  `planner::money_pick::resolve_from_guide` tire. Aucun guide ou aucune
+  ligne tirable : classement statique d'avant R7, loggé.
+- Entraînement : `brain_train::fill_ctx` pour TOUTE montée (plus
+  seulement `priced_at_resolve`) ; une ligne de mêlée seulement dans le
+  style de la compétence de la montée (PV : toutes) ; lignes `stock` du
+  stock propre (alchimie de ses objets, lot = son stock) ; consommables
+  manquants lus de la mesure (`missing_inputs_with`).
+- Lecteurs du planificateur (`plan_read::PlanRead`, variantes `*_with`) :
+  rendement MESURÉ (`brain_plan_read::measured_rate`, prior sous 3 runs)
+  pour la taille des obtentions d'un blocage, du squelette et la durée
+  des tranches ; oracle `guide_trains` : une tranche que le guide
+  choisira ne dépose rien de sa méthode statique.
+- Mesure : log `brain <compte>: nX money|training pick <méthode> (score
+  …, class …, k in band of n, exploration, previous pick again)`,
+  mémoire `picks` (40) et `draws`, section « bot choices »
+  d'`orchestrator economy`.
+- CPU (bench ignoré `brain_picks::bench::brain_choice_bench`) : décision
+  d'entraînement 1,9 ms (R6 1,7), d'argent 2,6 ms (statique 1,7), montée
+  de magie ~20 ms, oracle du squelette 26 ms pour 15 tranches.
 
 ## XP et temps dérivés des rendements (R3.3, 2026-11-17)
 
@@ -1321,13 +1375,14 @@ d'une récolte planifiée (plumes, appât de pêche :
   manquantes) et `feasible_for` les juge pour un bot : `Feasible` |
   `AfterPrereqs(niveau, combat, quête, points, outil, pièces)` |
   `Infeasible(raisons)`. Seuls lecteurs du cerveau aujourd'hui : les offres
-  `trade:craft` ci-dessus (brain_plan et brain_train ne lisent pas encore
-  les guides : R7, tirage pondéré, viendra après).
-- Choix : `money_methods` ajoute chaque offre, `resolve_money` la classe sur
-  son profit/6000 du guide comme toute méthode d'argent (classe « faisable
-  maintenant » quand un lot tient : `workable`, outils détenus, ni
-  quarantaine ni refroidissement). Point d'extension R7 :
-  `trade_craft::pick_offer`.
+  `trade:craft` ci-dessus (R7 : brain_money et brain_train lisent les
+  guides, § « Choix des bots dans les guides »).
+- Choix (R7) : chaque offre est une ligne argent du guide (`brain_money` :
+  la ligne market mappée vers son lot), tirée par `money_pick` comme toute
+  méthode d'argent (classe « faisable maintenant » quand un lot tient :
+  `workable`, outils détenus, ni quarantaine ni refroidissement) ;
+  `pick_offer` supprimé. Sans guide : `money_methods` la classe sur son
+  profit/6000 comme avant.
 - Lot (`lot_size`) : min(volume d'une fenêtre de la ligne, profondeur des
   asks + unités détenues, bourse libre au coût du carnet — chaque unité au
   moins au prix courant) ; borne affichée `capital` | `depth` | `window`.

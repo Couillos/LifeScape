@@ -191,3 +191,23 @@ fn conditions_list_every_requirement() {
     let market = conditions(&prereqs).into_iter().find(|condition| condition.kind() == "market").expect("market");
     assert_eq!(market.text(), "buy naturerune 28/lot: asks 0, recent 40, shops 0");
 }
+
+/// D22 Q1 (R7): a profile given, the rows it can work come first, then
+/// those after prerequisites, then the infeasible; the guide's order kept
+/// within each; a filter without a bot leaves the order alone.
+#[test]
+fn feasible_rows_come_first_for_a_profile() {
+    let level = |need: u8| Prereqs { levels: vec![("mining".to_string(), need)], ironman: true, ..Prereqs::default() };
+    let impossible = Prereqs { sources: vec![SourceGap { item: "x".to_string(), reason: "none".to_string() }], ironman: true, ..Prereqs::default() };
+    let mut rows = vec![impossible.clone(), level(60), level(10), level(50), level(20)];
+    let level_of = |_: &str| 30u8;
+    let held = |_: &str| 0.0;
+    let asks = |_: &str| None;
+    let bot = BotState { level_of: &level_of, combat: 30, quests_done: &[], held: &held, coins: None, ironman: false, asks: &asks };
+    super::feasible_first(&mut rows, &bot);
+    assert_eq!(rows, vec![level(10), level(20), level(60), level(50), impossible]);
+    let filter = crate::guide_model::GuideFilter::default();
+    assert!(!filter.has_profile(), "the catalogue: no bot");
+    assert!(crate::guide_model::GuideFilter { level: Some(30), ..filter.clone() }.has_profile());
+    assert!(crate::guide_model::GuideFilter { coins: Some(10.0), ..filter }.has_profile());
+}

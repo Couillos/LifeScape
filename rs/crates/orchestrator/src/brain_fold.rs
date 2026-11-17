@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use lifescape_json::Value;
-use lifescape_planner::{complete_node, end_engagement, normalize, record_block_from, record_contract_error, record_failure_timed, retry_uncounted, FailureFold, NodeKind, NodeStatus};
+use lifescape_planner::{complete_node, end_engagement, normalize, record_contract_error, record_failure_timed, retry_uncounted, FailureFold, NodeKind, NodeStatus};
 
 use crate::brain::{load_life, push_history, save_life};
 use crate::brain_plan::{fold_travel_failure, holdings_count, is_travel_failure, rescue_replan_cause, TravelFold};
@@ -394,7 +394,9 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         Verdict::Blocked(needs) => {
             // A missing level climbs from the reported live level.
             let level_of = |skill: &str| reach_level(report, skill).unwrap_or(1);
-            let fold = record_block_from(&mut life, index, needs, &level_of);
+            let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(lifescape_json::Value::Null);
+            let view = crate::brain_plan_read::BotView::of(&life);
+            let fold = crate::brain_plan_read::with_plan_read(&view, &live, |read| lifescape_planner::record_block_with(&mut life, index, needs, &level_of, read));
             push_history(&mut life, &id, crate::brain_launch::block_outcome(&fold));
             if let FailureFold::CycleBroken(line) = &fold {
                 crate::logln!("brain {account}: {line}");

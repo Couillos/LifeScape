@@ -406,6 +406,11 @@ pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
     if crate::trade_craft::sticky(node, ctx) {
         return;
     }
+    // The money guide's lines (R7): the draw of `guide_pick` among those
+    // the bot works now first. Nothing drawable: the static methods.
+    if crate::money_pick::resolve_from_guide(node, ctx) {
+        return;
+    }
     let mut methods = money_methods(ctx);
     for alt in &node.alternatives {
         // A trade lot no longer offered (guide moved, Iron) never ranks.

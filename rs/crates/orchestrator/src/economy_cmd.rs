@@ -9,7 +9,9 @@
 //! plan marché §6 (`Store::market_criteria`, lineages of schema 6), each
 //! beside its 2026-11-16 baseline and target. The market makers section
 //! (plan marché Q6) lists each maker: slice, phase, capital, P&L, mean
-//! spread, book share, stock (`market_maker_report`).
+//! spread, book share, stock (`market_maker_report`). The bot choices
+//! section (plan rendements R7, `brain_picks`) tallies the choices the
+//! bots drew from the guides: methods chosen, exploration share.
 
 use lifescape_store::{laspeyres, Store};
 
@@ -87,6 +89,7 @@ pub fn economy_cli(args: &[String]) -> i32 {
     }
     crate::market_maker_report::print_rows(&crate::market_maker_report::maker_rows(&store, &crate::brain::lives_dir()));
     crate::trade_report::print_rows(&crate::trade_report::trade_rows(&store, &crate::brain::lives_dir()));
+    crate::brain_picks::print_section(&crate::brain_picks::fleet_picks(&crate::brain::lives_dir()), since, hours);
     0
 }
 

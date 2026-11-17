@@ -256,13 +256,22 @@ pub fn build_guide(store: &Store, snapshot: &crate::rates_service::Snapshot, kin
     let world = GuideWorld { rate: &rate, price: &price, npc_sale: &npc_sale, shop_buy: &shop_buy, market_wait_ticks: waits.market_wait, quest_ticks: &quest_ticks, measured: &measured };
     let engine = lifescape_planner::guide_engine::Engine::new(&world);
     let engine_began = Instant::now();
+    // D22 Q1 (R7): the same order as a read of the set (feasible first
+    // for a profile).
+    let profiled = filter.has_profile();
     let (rows, unrated) = lifescape_planner::guide_feasible::with_filter_bot(filter, |bot| match kind {
         GuideKind::Money => {
-            let (rows, unrated) = lifescape_planner::guide_money::money_guide(&engine, filter);
+            let (mut rows, unrated) = lifescape_planner::guide_money::money_guide(&engine, filter);
+            if profiled {
+                lifescape_planner::guide_feasible::feasible_first(&mut rows, bot);
+            }
             (rows.iter().map(|row| money_value(row, bot)).collect::<Vec<Value>>(), unrated)
         }
         GuideKind::Training => {
-            let (rows, unrated) = lifescape_planner::guide_training::training_guide(&engine, filter);
+            let (mut rows, unrated) = lifescape_planner::guide_training::training_guide(&engine, filter);
+            if profiled {
+                lifescape_planner::guide_feasible::feasible_first(&mut rows, bot);
+            }
             (rows.iter().map(|row| training_value(row, bot)).collect::<Vec<Value>>(), unrated)
         }
     });
@@ -301,10 +310,20 @@ pub fn engine_stats(engine: &lifescape_planner::guide_engine::Engine) -> Value {
 /// One guide read from a published set as the API serves it, with the
 /// set's age, cost and what the read approximates.
 pub fn read_guide(set: &crate::guides_store::GuideSet, kind: GuideKind, filter: &GuideFilter) -> Value {
+    // D22 Q1 (R7): a profile given, the lines it can work come first.
+    let profiled = filter.has_profile();
     let read = lifescape_planner::guide_feasible::with_filter_bot(filter, |bot| match kind {
-        GuideKind::Money => set.money(filter).map(|(rows, unrated)| (rows.iter().map(|row| money_value(row, bot)).collect::<Vec<Value>>(), unrated)),
+        GuideKind::Money => set.money(filter).map(|(mut rows, unrated)| {
+            if profiled {
+                lifescape_planner::guide_feasible::feasible_first(&mut rows, bot);
+            }
+            (rows.iter().map(|row| money_value(row, bot)).collect::<Vec<Value>>(), unrated)
+        }),
         GuideKind::Training => {
-            let (rows, unrated) = set.training(filter);
+            let (mut rows, unrated) = set.training(filter);
+            if profiled {
+                lifescape_planner::guide_feasible::feasible_first(&mut rows, bot);
+            }
             Ok((rows.iter().map(|row| training_value(row, bot)).collect::<Vec<Value>>(), unrated))
         }
     });

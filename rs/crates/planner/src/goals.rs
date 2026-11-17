@@ -10,7 +10,6 @@
 //! ambition. A life without ambition draws nothing (typed `NoGoal`): the
 //! brain assigns one first, never a silent fallback.
 
-use crate::expand::expand_goal_from;
 use crate::model::{GoalKind, HistoryEntry, Life, Node, NodeKind, Profile};
 
 /// Skills the socle trains end to end (gather, fight, cook, fire). The
@@ -196,6 +195,11 @@ pub fn goal_root_done(life: &Life) -> bool {
 /// bank, worn): its obtain node asks `held + count`, so stock the bot
 /// already had never closes it without producing (review 2026-11-13).
 pub fn append_goal(life: &mut Life, goal: GoalKind, profile: &Profile, level_of: &dyn Fn(&str) -> u8, held_of: &dyn Fn(&str) -> i64) {
+    append_goal_with(life, goal, profile, level_of, held_of, &crate::plan_read::PlanRead::prior())
+}
+
+/// `append_goal` expanding with `read` (R7, `plan_read`).
+pub fn append_goal_with(life: &mut Life, goal: GoalKind, profile: &Profile, level_of: &dyn Fn(&str) -> u8, held_of: &dyn Fn(&str) -> i64, read: &crate::plan_read::PlanRead) {
     // Past every id ever issued (retired ones included): never reused.
     let offset = crate::lifecycle::max_id_number(life);
     let renumber = |id: &str| -> String {
@@ -204,7 +208,7 @@ pub fn append_goal(life: &mut Life, goal: GoalKind, profile: &Profile, level_of:
             None => id.to_string(),
         }
     };
-    let fresh: Vec<Node> = expand_goal_from(&goal, profile, level_of)
+    let fresh: Vec<Node> = crate::expand::expand_goal_with(&goal, profile, level_of, read)
         .into_iter()
         .map(|mut node| {
             node.id = renumber(&node.id);

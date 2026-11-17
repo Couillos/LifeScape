@@ -390,6 +390,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         ready_ctx(&life, &node, &live)
     };
     ctx.quests_done = quests_done;
+    // The seed of this resolve's draw from a guide (R7): the bot, the
+    // node, its draw counter.
+    ctx.draw_seed = lifescape_planner::guide_pick::seed_for(life.profile.seed, &life.nodes[position].id, life.memory.draws);
     // Own wallet gates the market leg (same coverage rule as the
     // carnet): a broke bot farms instead of placing doomed orders.
     // Carried tools gate the gather legs the same way (t04: rod-less
@@ -426,6 +429,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     crate::cpu_profile::timed("alch.publish", || crate::brain_alch::publish(&mut ctx, &life.nodes[position], &life, &live));
     // 100 % market lots read from the precomputed money guide (R5).
     crate::cpu_profile::timed("trade.publish", || crate::brain_trade::publish(&mut ctx, &life.nodes[position], &life, &live, job));
+    // The money guide's lines the bot may take (R7), its trade offers
+    // mapped to their lots.
+    crate::cpu_profile::timed("money.publish", || crate::brain_money::publish(&mut ctx, &life.nodes[position], &life, &live, job));
     // Smithing and magic (from 21) climbs pick their method with the
     // market: what to hammer or smelt, alchemy or a combat spell.
     crate::cpu_profile::timed("train.fill_ctx", || crate::brain_train::fill_ctx(&mut ctx, &life.nodes[position], &life, &live));
@@ -548,6 +554,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             }
         }
     }
+    // The choice drawn from a guide (R7), logged and kept in memory.
+    crate::brain_picks::record(&mut life, position, &ctx, now_unix());
     // A 100 % market lot locked by the resolve is recorded (R5): its
     // purchases, cost and predicted profit, before the block buys them.
     crate::brain_trade::note_lot(&mut life, position, &ctx, now_unix());
@@ -564,7 +572,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             push_history(&mut life, &id, "abandoned");
         } else {
             let level_of = |skill: &str| crate::brain_succession::live_level(&live, skill);
-            let fold = lifescape_planner::record_block_from(&mut life, position, &missing, &level_of);
+            let view = crate::brain_plan_read::BotView::of(&life);
+            let fold = crate::brain_plan_read::with_plan_read(&view, &live, |read| lifescape_planner::record_block_with(&mut life, position, &missing, &level_of, read));
             push_history(&mut life, &id, block_outcome(&fold));
             if let lifescape_planner::FailureFold::CycleBroken(line) = &fold {
                 crate::logln!("brain {}: {line}", job.account);

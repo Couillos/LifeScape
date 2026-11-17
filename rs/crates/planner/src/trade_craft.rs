@@ -30,8 +30,11 @@
 //! Feasibility (D22): a row is offered to a bot only within its reach
 //! (`eligible`, `guide_feasible::feasible_for`: the guides block nothing).
 //!
-//! R7 extension point: `pick_offer` (today the best profit) is where the
-//! weighted draw of D10/D14 will choose among the offers.
+//! Choice (R7): a trade lot is one money line among the others
+//! (`orchestrator::brain_money` maps the market row to its lot when the
+//! bot has the offer), drawn by `money_pick` (`guide_pick`: workable now
+//! first, a weighted draw among the lines within 15 % of the best profit,
+//! the unmeasured lines' 5 % of exploration).
 
 use lifescape_json::{object, str_value, Value};
 
@@ -208,12 +211,6 @@ pub fn offers(rows: &[&MoneyRow], quote: &dyn Fn(&str) -> Option<Quote>, bot: &c
     }
     out.sort_by(|left, right| right.profit_6000.total_cmp(&left.profit_6000));
     out
-}
-
-/// R7 extension point: the offer a bot works among those it may. Today
-/// the best guide profit; R7 replaces it by the weighted draw (D10, D14).
-pub fn pick_offer(offers: &[TradeOffer]) -> Option<&TradeOffer> {
-    offers.iter().max_by(|left, right| left.profit_6000.total_cmp(&right.profit_6000))
 }
 
 /// What bounds a lot.

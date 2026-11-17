@@ -58,11 +58,16 @@ pub fn xp_per_action(method: &str, level: u8) -> Option<f64> {
 /// Actions a tranche from `from` to `to` takes with `method` (`None`: no
 /// rate or no XP for the method, e.g. melee fights, which burn nothing).
 pub fn tranche_actions(method: &str, from: u8, to: u8) -> Option<i64> {
+    tranche_actions_with(&prior_rate, method, from, to)
+}
+
+/// `tranche_actions` read from `rate`.
+pub fn tranche_actions_with(rate: &dyn Fn(&str, u8) -> Option<WorkRate>, method: &str, from: u8, to: u8) -> Option<i64> {
     // The method must pay XP at its start, even for an empty climb.
-    xp_per_action(method, from.max(1)).filter(|per| *per > 0.0)?;
+    xp_per_action_with(rate, method, from.max(1)).filter(|per| *per > 0.0)?;
     let mut actions = 0.0;
     for level in from.max(1)..to.min(99) {
-        let per = xp_per_action(method, level).filter(|per| *per > 0.0)?;
+        let per = xp_per_action_with(rate, method, level).filter(|per| *per > 0.0)?;
         actions += xp_between(level, level + 1) / per;
     }
     Some((actions - 1e-6).ceil().max(0.0) as i64)
@@ -121,8 +126,13 @@ pub fn tranche_consumption(method: &str, from: u8, to: u8) -> Vec<(String, i64)>
 /// one object an alchemy, the spell's runes a cast, the way's inputs a
 /// recipe), rounded up.
 pub fn per_action_need(method: &str, level: u8, need: &str) -> Option<i64> {
+    per_action_need_with(&prior_rate, method, level, need)
+}
+
+/// `per_action_need` read from `rate`.
+pub fn per_action_need_with(rate: &dyn Fn(&str, u8) -> Option<WorkRate>, method: &str, level: u8, need: &str) -> Option<i64> {
     let skill = trained_skill(method)?;
-    let read = prior_rate(method, level.max(1))?;
+    let read = rate(method, level.max(1))?;
     let per_action = read.xp_per_action(&skill)?;
     read.burned_per_xp(&skill).into_iter().find(|(item, _)| item == need).map(|(_, per_xp)| (per_xp * per_action - 1e-6).ceil().max(1.0) as i64)
 }
@@ -130,7 +140,12 @@ pub fn per_action_need(method: &str, level: u8, need: &str) -> Option<i64> {
 /// Units of `need` a tranche of `method` from `from` to `to` burns
 /// (`None` when the tranche does not consume it).
 pub fn tranche_need(method: &str, from: u8, to: u8, need: &str) -> Option<i64> {
-    tranche_consumption(method, from, to).into_iter().find(|(item, _)| item == need).map(|(_, units)| units)
+    tranche_need_with(&prior_rate, method, from, to, need)
+}
+
+/// `tranche_need` read from `rate`.
+pub fn tranche_need_with(rate: &dyn Fn(&str, u8) -> Option<WorkRate>, method: &str, from: u8, to: u8, need: &str) -> Option<i64> {
+    tranche_consumption_with(rate, method, from, to).into_iter().find(|(item, _)| item == need).map(|(_, units)| units)
 }
 
 #[cfg(test)]

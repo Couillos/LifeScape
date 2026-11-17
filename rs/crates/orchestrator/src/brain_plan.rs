@@ -327,18 +327,6 @@ pub fn rescue_replan_cause(last_error: &Value) -> Option<lifescape_planner::Repl
     }
 }
 
-/// Money diversity (P2.5 §4.4): `rank_money_method` plus a ±2% seed
-/// jitter on revenue, so near-ties vary by profile instead of herding
-/// every bot onto one chain. The seed is the bot's own (D22-safe).
-pub fn rank_money_diverse(profit: f64, trend_score: f64, revenue: f64, trend_weight: f64, seed: u64, slot: u64) -> f64 {
-    let mut word = seed.wrapping_add(slot.wrapping_mul(0x9E37_79B9_7F4A_7C15)).max(1);
-    word ^= word << 13;
-    word ^= word >> 7;
-    word ^= word << 17;
-    let jitter = (word % 200) as f64 / 100.0 - 1.0;
-    lifescape_planner::rank_money_method(profit, trend_score, revenue, trend_weight) + jitter * 0.02 * revenue.max(0.0)
-}
-
 /// Bot combat level for the gate (cerveau): the live heartbeat value
 /// (server XP-max formula), else recomputed from the skill XP rows
 /// with the same formula, else 3 (fresh account).
@@ -394,7 +382,7 @@ pub fn fold_travel_failure(node: &mut Node, method: &str) -> TravelFold {
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_money, live_combat, merge_keep, rank_money_diverse, rescue_replan_cause, sale_blocked};
+    use super::{choose_money, live_combat, merge_keep, rescue_replan_cause, sale_blocked};
     use lifescape_json::{object, str_value};
     use lifescape_planner::{Node, NodeKind, NodeStatus};
 
@@ -477,21 +465,6 @@ mod tests {
         let other = object(vec![("type", str_value("Locked"))]);
         assert!(rescue_replan_cause(&other).is_none(), "other errors never rescue-replan");
     }
-
-    #[test]
-    fn money_diversity_flips_only_close_calls() {
-        // Same seed replays.
-        assert_eq!(rank_money_diverse(500.0, 0.0, 1000.0, 0.1, 7, 3), rank_money_diverse(500.0, 0.0, 1000.0, 0.1, 7, 3));
-        // A 10x profit gap never flips on a ±2% jitter.
-        let poor: Vec<f64> = (0..8).map(|slot| rank_money_diverse(100.0, 0.0, 1000.0, 0.1, 7, slot)).collect();
-        let rich = rank_money_diverse(1000.0, -1.0, 1000.0, 0.1, 7, 0);
-        assert!(poor.iter().all(|score| *score < rich), "10x gap stays put");
-        // A tie breaks by seed: two bots need not pick the same slot.
-        let left = rank_money_diverse(500.0, 0.0, 1000.0, 0.1, 7, 0);
-        let varied = (0..8).any(|slot| rank_money_diverse(500.0, 0.0, 1000.0, 0.1, slot + 100, 0) != left);
-        assert!(varied, "seeds vary close calls");
-    }
-
 
     #[test]
     fn gate_reads_xp_max_combat_then_skills_then_fresh() {

@@ -84,6 +84,22 @@ fn stacks_of(live: &Value) -> Vec<(String, i64)> {
     out
 }
 
+/// The bot's own free stock (pack and bank, coins and runes out, banknotes
+/// as their object, its listings out) minus what it keeps (`keep`): what
+/// a guide line on its own stock may transform (R7, `GuideFilter::held`).
+pub(crate) fn own_stock(live: &Value, account: &str, keep: &[String]) -> Vec<(String, f64)> {
+    let locks = crate::brain_locks::locked_items(account);
+    stacks_of(live)
+        .into_iter()
+        .filter(|(name, _)| !keep.contains(name))
+        .map(|(name, qty)| {
+            let free = crate::brain_locks::free_count(qty, crate::brain_locks::locked_in(&locks, &name));
+            (name, free as f64)
+        })
+        .filter(|(_, free)| *free > 0.0)
+        .collect()
+}
+
 /// Stock the bot could alch: `(object, free units, what one sells for)`,
 /// minus what it keeps (`keep`: its plan's inputs, its gear, its tools).
 pub(crate) fn alch_stock(live: &Value, account: &str, keep: &[String]) -> Vec<(String, i64, f64)> {

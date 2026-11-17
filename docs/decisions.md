@@ -1414,3 +1414,94 @@ Décision (D22, D21 sans objet) :
 Coût (copie du 2026-11-17, 4 mesures alternées, hôte chargé) : cycle chaud
 3,32-3,76 s CPU (avant 3,30-3,64 s, +3 % dans le bruit) ; résident +10 Mio ;
 JSON des 42 vues 81 Mio (avant 61).
+
+## 2026-11-17 — Les bots choisissent dans les guides : tirage pondéré et exploration (plan rendements R7)
+
+Plan rendements R7 (D10, D13, D14, D17, D22 ; décisions utilisateur
+2026-11-17 (a)-(e)). Une seule règle pour chaque choix lu dans les
+guides précalculés (`guides_store::current()`, jamais de calcul à la
+demande, asks du cycle ≤ 300 s, (e)) :
+1. Candidats = lignes du guide de la tranche du bot, jugées par
+   `guide_feasible::feasible_for` sur son état LIVE (niveaux, combat,
+   quêtes, stock libre, bourse libre, asks du cycle). Classes, la
+   première non vide tire (`guide_pick::class_order`) : 0 faisable
+   maintenant (pour l'argent : `food_gate::ready_now` en plus, priorité
+   gardée comme premier critère), 1 après un prérequis obtenu seul
+   (pièces d'un lot, nourriture), 2 après un outil à obtenir (le nœud
+   bloque sur lui, `missing:<outil>`) ; jamais : quarantaine,
+   refroidissement, cycle (`excluded`), quête manquante, combat hors
+   portée, `sick()`.
+2. Tirage pondéré D10 (`planner::guide_pick::draw`) : bande = lignes à
+   ≤ 15 % du meilleur score (`BAND_SHARE`, `score >= best − 15 % ×
+   |best|`) ; poids = score × profil : argent `merit_money` (profit/6000,
+   ligne marché ÷ (1,5 − market_affinity)) ; entraînement
+   `merit_training` (1 / score de `train_score`, qui contient déjà
+   thrift et market_affinity ; −score pour une ligne qui rapporte plus
+   que son temps). Bande et score de l'entraînement : sur le score
+   `train_score` (plus bas gagne).
+3. Exploration D14 : les lignes HORS bande à moins de `MEASURED_RUNS` (3)
+   runs mesurés et de poids positif se partagent `EXPLORE_SHARE` (5 %)
+   des tirages, uniformément ; 5 % AU TOTAL, jamais par ligne (au début
+   des mesures presque tout est non mesuré : 5 % chacune ferait tout le
+   tirage). Aucune telle ligne : tout va à la bande.
+4. Graine : `guide_pick::seed_for(profil.seed, nœud, LifeMemory::draws)`
+   (splitmix64, sel 104) : déterministe et testable ; le compteur avance à
+   chaque choix enregistré (le tirage suivant du même nœud en est un
+   autre). Collant : un nœud qui a bloqué sur l'outil de son choix
+   précédent (`blocked_by`) le reprend dès qu'il est faisable (jamais un
+   outil acheté pour rien) ; le lot trade acheté reste crafté d'abord
+   (`trade_craft::sticky`).
+5. Où : argent (make_money, have_coins, financement d'outils = un
+   have_coins) : `orchestrator::brain_money` mappe chaque ligne vers la
+   méthode lancée (farm : sa méthode si un nœud argent la lance ;
+   market : le lot `trade:craft/<recette>` quand le bot a l'offre ;
+   recette sur stock : `alch:` seulement ; chaîne : jamais), une par
+   méthode, cotée et rentable, `ReadyCtx::money_guide` ;
+   `planner::money_pick` tire (remplace le classement statique et
+   `trade_craft::pick_offer`, supprimé). Entraînement : TOUTE montée
+   (`brain_train`, plus seulement les compétences cotées : récolte et
+   combat aussi, (c)) ; `train_score::pick` remplace `choose` (renommé
+   `best`, l'ordre du score seul). Sans guide publié ou sans ligne
+   tirable : méthodes statiques comme avant R7, loggé.
+6. (a) Le guide d'entraînement lit le stock PROPRE du bot
+   (`GuideFilter::held` : stock libre moins ce qu'il garde, équipement,
+   outils, intrants du plan) : chaque recette de la vue money dont il
+   détient le stock devient une ligne `stock` (`Supply::Stock`,
+   `guide_training::stock_rows` : économie de la fenêtre pleine, intrants
+   au prix de vente D5, D17 du bot) ; lot = son stock (alchimie de ses
+   objets). Seulement pour un lecteur qui détient du stock (le bot, l'API
+   avec `held`).
+7. (b) Le planificateur lit la MESURE : `planner::plan_read::PlanRead`
+   (lecteur de rendement + oracle du guide) passé aux variantes `*_with`
+   (`expand_goal_with`, `append_goal_with`, `record_block_with`,
+   `reach_chain_with`, `need_count_with`, `missing_inputs_with`,
+   `tranche_*_with`) ; côté cerveau `brain_plan_read::measured_rate`
+   (estimateur `rates_read` : n ≥ 3 mélangé au prior, sinon le prior
+   lui-même ; actions = actions du prior × XP mesurée / XP du prior : une
+   action paie l'XP du jeu) ; chaînes de `market_demand` par
+   `eval_chain_with`. `bid_response` et `market_fit` restent au prior.
+8. (c) Squelette : une tranche que le guide choisira (`guide_trains` :
+   une ligne à portée du bot à son niveau de départ dans le dernier jeu)
+   ne dépose ni outil ni consommation de la méthode statique (comme la
+   magie dès confuse) ; le choix au lancement bloque sur ce qui LUI
+   manque. Sans guide : dépôts statiques inchangés.
+9. (d) D22 Q1 : un profil donné (`GuideFilter::has_profile` : niveau,
+   niveaux, quêtes, stock, pièces), les lignes faisables d'abord, puis
+   après prérequis, puis infaisables, ordre du guide gardé dans chaque
+   état (`guide_feasible::feasible_first`, API ; `visibleRows` du front).
+10. Mesure : chaque choix loggé (`brain <compte>: nX money|training pick
+    <méthode> (score, class, k in band of n, exploration, previous pick
+    again)`) et gardé (`LifeMemory::picks`, 40 derniers, `draws`) ;
+    section « bot choices » d'`orchestrator economy` (répartition des
+    méthodes, part d'exploration, candidats moyens, staff exclu).
+11. Supprimés : jitter ±2 % (`brain_plan::rank_money_diverse`, celui de
+    `chains::best_for_money`), `trade_craft::pick_offer`.
+Coût CPU (bench ignoré `brain_picks::bench::brain_choice_bench`, jeu de
+guides construit des priors, 7 bots de 5 à 95) : décision d'entraînement
+(forge) 1,74 → 1,94 ms ; décision d'argent 1,74 (classement statique) →
+2,59 ms ; une montée de magie ~20 ms (même lecture qu'en R6, ~1000 lignes
+d'alchimie) ; oracle du squelette 26 ms pour 15 tranches.
+Rejeté : 5 % d'exploration par ligne ; exploration des lignes de la
+bande ou sans valeur ; recalcul du guide par bot ; relecture du carnet au
+moment de décider ; recettes sur stock autres que l'alchimie en nœud
+argent (question ouverte).

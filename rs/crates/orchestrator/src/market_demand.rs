@@ -190,10 +190,13 @@ pub fn chain_profits() -> Vec<ChainProfit> {
     // D-A: a shop price never values a product (nobody sells to merchants).
     let shop = |_: &str| 0.0;
     let prices = ChainPrices { market: &market, shop: &shop, trip_ticks: crate::brain_plan::TRIP_TICKS };
+    // R7 (b): each step's time and XP from the measured yields (the
+    // prior below three runs), never the prior alone.
+    let rate = crate::brain_plan_read::live_rate();
     CHAINS
         .iter()
         .map(|chain| {
-            let eval = lifescape_planner::eval_chain(chain, 28.0, &prices);
+            let eval = lifescape_planner::eval_chain_with(chain, 28.0, &prices, &rate);
             let kind = chain.steps.last().and_then(|step| kind_for_skill(step.skill)).map(str::to_string);
             ChainProfit { chain: chain.id.to_string(), product: chain.product.to_string(), kind, profit_per_6000: eval.profit_per_6000 }
         })

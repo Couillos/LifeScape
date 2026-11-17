@@ -240,7 +240,7 @@ R5  Exécution 100 % market.
     par bourse libre, asks et fenêtre de la ligne ; obtentions market:buy
     seules ; lot acheté crafté d'abord ; vente motif `trade` ; lots en
     mémoire de vie, prévu vs réalisé dans `orchestrator economy` et la
-    page economy. Choix par tirage pondéré : R7 (`pick_offer`).
+    page economy. Choix par tirage pondéré : R7 (`money_pick`, fait).
 
 R6  Guide d'entraînement + traits.
     - lignes skill × tranche × méthode × site × outil × mode
@@ -260,6 +260,17 @@ R7  Choix des bots.
     - brain_plan (choose_money / rank_money_diverse), brain_train,
       résolution farm/achat rebranchés sur les guides ; suppression du
       jitter ±2 %.
+
+    État 2026-11-17 : code et tests faits, sans live (decisions.md « Les
+    bots choisissent dans les guides ») : `planner::guide_pick` (bande
+    15 %, poids score × profil, exploration 5 % au total des lignes à < 3
+    mesures, graine du bot), argent `brain_money` + `money_pick`
+    (`food_gate::ready_now` premier critère, lots trade = lignes market),
+    toute montée `brain_train` (récolte et combat compris, lignes `stock`
+    du stock propre), planificateur sur la mesure (`plan_read`, `*_with`)
+    et squelette sans dépôt statique quand le guide choisira ; jitter ±2 %
+    et `pick_offer` supprimés ; choix loggés et section « bot choices »
+    d'`orchestrator economy`.
 
 R8  Dashboard : pages "money making" et "training" (filtres skill,
     tranche, famille, prérequis ; confiance visible) ; docs à jour.

@@ -702,8 +702,15 @@ asks 0, recent 40, shops 0", "impossible": false, "item": "naturerune",
   serves_what_a_direct_build_gives`). `rates-rebuild <copie>
   --guides-store <dossier> [money|training:requête …]` construit le jeu
   hors ligne et en donne le coût (docs/resources.md) ;
-- les bots ne lisent pas encore les guides pour leurs choix (R7 :
-  `guides_store::current`), sauf l'exécution 100 % market (R5, ci-dessous).
+- les bots CHOISISSENT dans ces guides (R7, 2026-11-17, `docs/planner.md`
+  § « Choix des bots dans les guides ») : argent et toute montée, lignes
+  jugées par `feasible_for` sur l'état live du bot, faisables d'abord,
+  tirage pondéré parmi les lignes à ≤ 15 % du meilleur score (poids =
+  score × profil), 5 % d'exploration des lignes à < 3 mesures ; les asks
+  lus sont ceux du cycle. Un profil donné à l'API (`level`, `levels`,
+  `quests`, `held`, `coins`) trie les lignes faisables d'abord (D22 Q1),
+  le front aussi ; avec `held`, le guide d'entraînement ajoute les lignes
+  `stock` (recettes sur le stock du lecteur, R7 (a)).
 
 ### Exécution 100 % market (R5, 2026-11-17)
 
@@ -737,8 +744,8 @@ plafonnées aux produits faits ; réalisé = ventes − achats ; statut
   pièces par XP converties au D17 du bot, une ligne marché ×(1,5 −
   market_affinity) (`planner::train_score`, `docs/planner.md` §
   « Entraînement par le guide et les traits ») ; meilleur score en
-  attendant le tirage pondéré de R7. Le guide money making n'est pas
-  encore lu par les bots (R7).
+  tirage pondéré de R7 (`train_score::pick`, `guide_pick`) ; le guide
+  money making est lu par les nœuds argent (R7, `brain_money`).
 
 Rentabilité d'une (activité, style, tranche), cumul tous sites et outils :
 Σ flux positifs × prix courant (médiane des 5 derniers fills bornée par

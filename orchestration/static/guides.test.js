@@ -27,6 +27,14 @@ check('feasible or after prerequisites', GuidesView.visibleRows(rows, { feasibil
 check('every line kept by default (nothing blocked)', GuidesView.visibleRows(rows, { limit: 0 }).length, 3);
 check('search', GuidesView.visibleRows(rows, { search: 'steel', limit: 0 }).map(function (row) { return row.method; }), ['smelt:steel_bar']);
 check('top N keeps the best first', GuidesView.visibleRows(rows, { limit: 2 }).length, 2);
+// D22 Q1 (R7): a profile given, the feasible lines first, then after
+// prerequisites, then infeasible, the API order kept within each.
+check('feasible first for a profile', GuidesView.visibleRows(rows, { feasibleFirst: true, limit: 0 }).map(function (row) { return row.method; }), ['gather:mining/coal', 'gather:mining/iron_ore', 'smelt:steel_bar']);
+check('feasible first then top N', GuidesView.visibleRows(rows, { feasibleFirst: true, limit: 2 }).map(function (row) { return row.method; }), ['gather:mining/coal', 'gather:mining/iron_ore']);
+check('API order without a profile', GuidesView.visibleRows(rows, { limit: 0 }).map(function (row) { return row.method; }), ['gather:mining/coal', 'smelt:steel_bar', 'gather:mining/iron_ore']);
+check('a level is a profile', GuidesView.hasProfile({ skill: 'mining', level: '30' }), true);
+check('a skill alone is no profile', GuidesView.hasProfile({ skill: 'mining', level: '', family: 'farm' }), false);
+check('coins are a profile', GuidesView.hasProfile({ coins: '2500' }), true);
 
 // Conditions (D22): the API's structured list, each with its text; the
 // impossible ones (no site within bank reach: danger::NEVER, never shown

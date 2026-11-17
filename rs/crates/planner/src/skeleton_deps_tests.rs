@@ -91,3 +91,45 @@ fn every_tranche_recipe_opens_at_its_start() {
         }
     }
 }
+
+/// R7 (c): a tranche the training guide will choose at resolve files
+/// nothing of its static method ahead (no net, no rod, no bait); a
+/// tranche the guide does not cover keeps them (`plan_read`).
+#[test]
+fn a_guided_tranche_files_no_static_tools_nor_consumption() {
+    let fished = |guided: &dyn Fn(&str, u8, u8) -> bool| {
+        let read = crate::plan_read::PlanRead { rate: &crate::work_rate::prior_rate, guide_trains: guided };
+        let mut counter = 0;
+        let mut after = String::new();
+        obtains(&super::reach_chain_with("fishing", 1, 25, &mut counter, &mut after, crate::expand::NESTED_DEPTH, &read)).into_iter().map(|(item, _, _)| item).collect::<Vec<String>>()
+    };
+    assert!(fished(&|_, _, _| true).is_empty(), "every tranche from the guide: nothing ahead");
+    let partial = fished(&|_, from, _| from < 20);
+    assert!(!partial.contains(&"net".to_string()) && !partial.contains(&"fishing_bait".to_string()), "the guided tranches under 20 file nothing: {partial:?}");
+    assert!(partial.contains(&"feather".to_string()) && partial.contains(&"fly_fishing_rod".to_string()), "20->25 without a guide line keeps its static needs: {partial:?}");
+    assert_eq!(fished(&|_, _, _| false), obtains(&chain("fishing", 1, 25)).into_iter().map(|(item, _, _)| item).collect::<Vec<String>>(), "no guide: the static skeleton");
+}
+
+/// R7 (b): the skeleton sizes what a tranche burns on the reader it is
+/// given: a measured rate burning twice the prior's bait per XP files
+/// twice the bait.
+#[test]
+fn the_skeleton_sizes_on_the_measured_reader() {
+    let doubled = |method: &str, level: u8| {
+        crate::work_rate::prior_rate(method, level).map(|mut rate| {
+            for flow in &mut rate.flows_6000 {
+                if flow.1 == "bait" {
+                    flow.2 *= 2.0;
+                }
+            }
+            rate
+        })
+    };
+    let never = |_: &str, _: u8, _: u8| false;
+    let read = crate::plan_read::PlanRead { rate: &doubled, guide_trains: &never };
+    let mut counter = 0;
+    let mut after = String::new();
+    let measured: i64 = obtains(&super::reach_chain_with("fishing", 5, 10, &mut counter, &mut after, crate::expand::NESTED_DEPTH, &read)).iter().filter(|(item, _, _)| item == "fishing_bait").map(|(_, count, _)| *count).sum();
+    let prior: i64 = obtains(&chain("fishing", 5, 10)).iter().filter(|(item, _, _)| item == "fishing_bait").map(|(_, count, _)| *count).sum();
+    assert!(prior > 0 && (measured - 2 * prior).abs() <= 1, "measured {measured} vs prior {prior}");
+}
