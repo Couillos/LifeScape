@@ -5,7 +5,7 @@
 use crate::Error;
 
 /// Latest schema version this build understands.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 pub(crate) const MIGRATION_V1: &str = "
 CREATE TABLE IF NOT EXISTS items(
@@ -294,7 +294,35 @@ fn pending_steps(connection: &rusqlite::Connection, found: u32) -> Result<(), Er
     if found < 6 {
         apply_lineage_v6(connection)?;
     }
+    if found < 7 {
+        apply_quarter_candles_v7(connection)?;
+    }
     Ok(())
+}
+
+/// Migration 7 (market 24 h view in 15-minute candles, user
+/// 2026-11-17): no column, the `candles` table is keyed by resolution
+/// code; the `15m` rows of every traded item are rebuilt from the
+/// execution log (same aggregate as a settled fill's repaint), so the
+/// history reads continuous quarters at once. Inside the run's
+/// transaction with its version bump: a failure leaves schema 6.
+fn apply_quarter_candles_v7(connection: &rusqlite::Connection) -> Result<(), Error> {
+    let traded: Vec<i64> = {
+        let mut statement = connection
+            .prepare("SELECT DISTINCT item_id FROM executions ORDER BY item_id")
+            .map_err(|source| Error::Sql(format!("migration 7: {source}")))?;
+        let mapped = statement
+            .query_map([], |row| row.get(0))
+            .map_err(|source| Error::Sql(format!("migration 7: {source}")))?;
+        mapped
+            .collect::<Result<Vec<i64>, _>>()
+            .map_err(|source| Error::Sql(format!("migration 7: {source}")))?
+    };
+    for item_id in traded {
+        crate::candles::write_candles(connection, item_id, crate::YieldCandleResolution::Min15)
+            .map_err(|error| Error::Sql(format!("migration 7 item {item_id}: {error}")))?;
+    }
+    connection.execute_batch("PRAGMA user_version = 7").map_err(|source| Error::Sql(format!("migration 7 version: {source}")))
 }
 
 /// Migration 6 (plan marché M0, decision Q1): order lineage columns,
@@ -432,6 +460,51 @@ mod schema_tests {
         let version: i64 = store.connection.query_row("SELECT measure_version FROM task_reports WHERE report_id = 1", [], |row| row.get(0))?;
         assert_eq!(version, 1);
         assert_eq!(store.yields_for_report(1)?.len(), 1, "v1 lines kept until the purge");
+        Ok(())
+    }
+
+    /// A v6 file (live base before the 15-minute candles, 2026-11-17)
+    /// gains its `15m` candles at open, rebuilt from the execution log in
+    /// the migration's transaction; hourly and daily rows stay as they
+    /// were, and the market reads the quarter history without a fill.
+    #[test]
+    fn v6_file_backfills_quarter_hour_candles() -> Result<(), Error> {
+        use rusqlite::Connection;
+        let path = temp_database_path("migrate-v6");
+        let _remove_guard = RemoveGuard { path: path.clone() };
+        let hour = 48_000 * 3600;
+        {
+            let connection = Connection::open(&path)?;
+            for (version, step) in [(1, MIGRATION_V1), (2, MIGRATION_V2), (3, MIGRATION_V3), (4, MIGRATION_V4), (5, MIGRATION_V5)] {
+                connection.execute_batch(step)?;
+                connection.execute_batch(&format!("PRAGMA user_version = {version}"))?;
+            }
+            super::apply_lineage_v6(&connection)?;
+            connection.execute_batch(&format!(
+                "INSERT INTO items(item_id, name, shop_price, alch_value) VALUES (314, 'Feather', 2, 1);
+                 INSERT INTO items(item_id, name, shop_price, alch_value) VALUES (315, 'Untraded', 2, 1);
+                 INSERT INTO executions(item_id, quantity, price, clock, server_tick, taker_side) VALUES (314, 5, 3, {a}, {a}, 'buy');
+                 INSERT INTO executions(item_id, quantity, price, clock, server_tick, taker_side) VALUES (314, 2, 6, {b}, {b}, 'sell');
+                 INSERT INTO candles(item_id, resolution, window_start, open_price, high_price, low_price, close_price, volume, buy_volume, sell_volume)
+                     VALUES (314, '1h', {hour}, 3, 6, 3, 6, 7, 5, 2);",
+                a = hour + 60,
+                b = hour + 1000,
+            ))?;
+            assert_eq!(current_version(&connection)?, 6);
+        }
+        let mut store = Store::open(&path)?;
+        assert_eq!(store.schema_version()?, SCHEMA_VERSION);
+        assert!(SCHEMA_VERSION >= 7);
+        let quarters = store.candles_for(314, crate::YieldCandleResolution::Min15, 0, i64::MAX)?;
+        assert_eq!(
+            quarters.iter().map(|candle| (candle.window_start, candle.close_price, candle.volume, candle.buy_volume, candle.sell_volume)).collect::<Vec<_>>(),
+            vec![(hour, 3, 5, 5, 0), (hour + 900, 6, 2, 0, 2)]
+        );
+        assert!(store.candles_for(315, crate::YieldCandleResolution::Min15, 0, i64::MAX)?.is_empty(), "no fill, no candle");
+        assert_eq!(store.candles_for(314, crate::YieldCandleResolution::Hour1, 0, i64::MAX)?.len(), 1, "hourly kept");
+        assert_eq!(store.rebuild_candles(314, crate::YieldCandleResolution::Min15)?, quarters, "backfill = rebuild");
+        drop(store);
+        assert_eq!(Store::open(&path)?.schema_version()?, SCHEMA_VERSION, "idempotent reopen");
         Ok(())
     }
 

@@ -189,7 +189,7 @@ mod tests {
         }
         let store = Store::open(&path)?;
         assert_eq!(store.schema_version()?, crate::schema::SCHEMA_VERSION);
-        assert_eq!(crate::schema::SCHEMA_VERSION, 6);
+        assert!(crate::schema::SCHEMA_VERSION >= 6, "v6 lineage columns present");
         let shape = |order_id: i64| -> Result<(Option<i64>, i64, i64, String, OrderStatus), Error> {
             let found = store.get_order(order_id)?.ok_or_else(|| Error::NotFound(format!("order {order_id}")))?;
             Ok((found.replaces, found.root_id, found.root_clock, found.cancel_reason, found.status))

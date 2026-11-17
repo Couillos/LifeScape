@@ -1,5 +1,5 @@
 // LifeChart: shared canvas charts, no dependency (PRD2 §6.1).
-// Fixed time slots (24 hourly or 183 daily, empty slot when no datum),
+// Fixed time slots (96 quarter-hour, 168 hourly, 30 or 183 daily, empty slot when no datum),
 // graduated left and right scales with titles, always-visible legend,
 // hover and touch tooltip with crosshair, live end.
 // Series: `candles` (market OHLCV) and `line` (holdings curve).
@@ -84,7 +84,8 @@ const LifeChart = (() => {
     return String(value).padStart(2, '0');
   }
 
-  // Human period label for one slot: `12/11 14:00–15:00` hourly,
+  // Human period label for one slot: `12/11 14:00–15:00` hourly
+  // (`12/11 14:15–14:30` for a quarter),
   // `12/11` daily (local time, like the rest of the dashboard).
   function periodLabel(slotStart, width) {
     const open = new Date(slotStart * 1000);
@@ -95,7 +96,8 @@ const LifeChart = (() => {
       pad2(close.getHours()) + ':' + pad2(close.getMinutes());
   }
 
-  // Time-axis label for one slot: `dd/mm` daily, `HH:MM` hourly within
+  // Time-axis label for one slot: `dd/mm` daily, `HH:MM` hourly or
+  // quarter-hourly within
   // a day, `dd/mm HH:MM` hourly over several days (7-day view: bare
   // hours would repeat across days).
   function axisLabel(slotStart, width, slotCount) {

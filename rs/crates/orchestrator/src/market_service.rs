@@ -525,15 +525,14 @@ impl MarketService {
         if self.lock_engine().find_item(item).is_none() {
             return Self::err(format!("unknown item {item}"));
         }
-        let resolution = match request.get("res").as_str().unwrap_or("1h") {
-            "1d" => YieldCandleResolution::Day1,
-            _ => YieldCandleResolution::Hour1,
-        };
+        // `15m` (24 h view), `1h` (7 days), `1d`; unknown reads hourly.
+        let resolution = YieldCandleResolution::from_code(request.get("res").as_str().unwrap_or("1h"))
+            .unwrap_or(YieldCandleResolution::Hour1);
         // Half-open store windows (`clock < to`) would drop prints from
         // the current second, so the live edge sits one second out.
         let to = request.get("to").as_i64().unwrap_or_else(|| Self::now_clock() + 1);
         let default_from = match resolution {
-            YieldCandleResolution::Hour1 => to - 86400,
+            YieldCandleResolution::Min15 | YieldCandleResolution::Hour1 => to - 86400,
             YieldCandleResolution::Day1 => to - 183 * 86400,
         };
         let from = request.get("from").as_i64().unwrap_or(default_from);

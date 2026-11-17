@@ -1,8 +1,9 @@
 // Market front: item list, OHLC candles over volume bars, book and last
 // trades. Canvas maison via the shared LifeChart module (chart.js).
-// Four views: 24 h (default, D42) or 7 days of hourly candles, 30 days or
-// 6 months of daily candles. Fixed time slots (24, 168, 30 or 183) ending
-// on the live window; no gap
+// Four views: 24 h of 15-minute candles (default, D42; quarters, user
+// 2026-11-17), 7 days of hourly candles, 30 days or 6 months of daily
+// candles. Fixed time slots (96, 168, 30 or 183) ending on the live
+// window; no gap
 // (user rule 2026-11-13): every candle opens at the previous close and a
 // trade-less slot is a flat grey candle at the last close (the server
 // history is already chained, `LifeChart.carryFlat` keeps the live tail
@@ -13,7 +14,7 @@ let items = [];
 let selected = null;
 // Chart views: candle resolution, slot width and slot count.
 const VIEWS = {
-  hour: { res: '1h', width: 3600, count: 24 },
+  hour: { res: '15m', width: 900, count: 96 },
   week: { res: '1h', width: 3600, count: 168 },
   month: { res: '1d', width: 86400, count: 30 },
   day: { res: '1d', width: 86400, count: 183 },
@@ -21,7 +22,7 @@ const VIEWS = {
 let view = 'hour';
 let candles = [];
 // Last trade price before the history window: the close the leading
-// trade-less hours carry (one flat candle per empty hour).
+// trade-less slots carry (one flat candle per empty slot).
 let prevClose = null;
 let trades = [];
 // `to` of the loaded history: its candles already hold every print
@@ -124,11 +125,6 @@ function renderList() {
   document.getElementById('pageinfo').textContent = 'page ' + (pageIndex + 1) + '/' + pages + ' · ' + matches.length + ' item(s)';
 }
 
-// One listener on the stable <table>: rows are rebuilt on every render.
-document.getElementById('items').addEventListener('click', (event) => {
-  const row = event.target.closest('tr[data-id]');
-  if (row) pick(Number(row.getAttribute('data-id')));
-});
 
 function page(delta) {
   pageIndex += delta;
@@ -227,13 +223,6 @@ function renderRecent() {
   document.getElementById('recent').innerHTML = rows.join('');
 }
 
-// One listener on the stable table: rows are rebuilt every 10 s.
-document.getElementById('recent').addEventListener('click', (event) => {
-  const cell = event.target.closest('td.item-link[data-id]');
-  if (!cell) return;
-  pick(Number(cell.getAttribute('data-id')));
-  document.getElementById('chart')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-});
 
 function itemName(id) {
   const item = items.find(entry => entry.item === id);
@@ -267,34 +256,34 @@ async function loadRecent() {
   } catch (e) { /* keep the last frame */ }
 }
 
-// Fixed slots for the current view: 24 or 168 hourly, 30 or 183 daily windows,
-// aligned on multiples of the width since epoch (same buckets as the
-// store candles), the last one holding `now`: the live candle. (It used
-// to end one window early, so the current hour never showed: live
+// Fixed slots of one view: 96 quarter-hour, 168 hourly, 30 or 183 daily
+// windows, aligned on multiples of the width since epoch (same buckets as
+// the store candles), the last one holding `now`: the live candle. (It
+// used to end one window early, so the current hour never showed: live
 // 2026-11-13, Bronze axe's chart closed at 20 while its last trades read
 // 8, 8, 8, 6.)
-function currentSlots(now) {
-  const { width, count } = VIEWS[view];
-  const at = now === undefined ? Math.floor(Date.now() / 1000) : now;
-  return { slots: LifeChart.liveSlots(at, width, count), width };
+function viewSlots(key, now) {
+  const { width, count } = VIEWS[key];
+  return { slots: LifeChart.liveSlots(now, width, count), width };
 }
 
-function draw() {
-  const canvas = document.getElementById('chart');
-  const item = items.find(entry => entry.item === selected);
-  document.getElementById('title').textContent = item ? item.name : (selected === null ? 'Pick an item' : itemName(selected));
-  document.getElementById('refline').textContent = item ? ' ref ' + item.price + ' · 24h ' + changeText(item.change24h) + ' · vol ' + item.volume24h : '';
+function currentSlots(now) {
+  return viewSlots(view, now === undefined ? Math.floor(Date.now() / 1000) : now);
+}
 
-  const { slots, width } = currentSlots();
+// Rows drawn on the slots: the loaded history plus the live tail, chained.
+// The newest WS prints (at or after `loadedTo`, within the last two
+// slots) fold into a copy of the candles, oldest first so the close ends
+// on the freshest print; a print past the last stored candle opens its
+// slot (same `width` buckets as the store: a 15-minute view folds into
+// the live quarter), then `carryFlat` opens it at the previous close like
+// every other candle. Pure: the inputs are never mutated.
+function chartRows(slots, width, history, prints, previousClose, loadedTo) {
   const byTime = new Map();
-  for (const row of candles) byTime.set(row.t, { ...row });
-
-  // Live tail: fold the newest WS prints into a copy of the candles.
-  // Oldest first so the close ends on the freshest print; a print past
-  // the last stored candle opens the live slot, then `carryFlat` below
-  // opens it at the previous close like every other candle.
-  const fresh = trades
-    .filter(trade => slots.length && trade.t >= historyTo && trade.t >= slots[slots.length - 1] - width && trade.t < slots[slots.length - 1] + width)
+  for (const row of history) byTime.set(row.t, { ...row });
+  const last = slots.length ? slots[slots.length - 1] : 0;
+  const fresh = prints
+    .filter(trade => slots.length && trade.t >= loadedTo && trade.t >= last - width && trade.t < last + width)
     .slice()
     .sort((a, b) => a.t - b.t);
   for (const trade of fresh) {
@@ -307,8 +296,18 @@ function draw() {
     // Split by the print's taker side (`s`: buy, sell, null = unknown).
     LifeChart.foldPrint(tail, trade);
   }
+  return LifeChart.carryFlat(LifeChart.fillSlots(slots, [...byTime.values()]), previousClose);
+}
 
-  const rows = LifeChart.carryFlat(LifeChart.fillSlots(slots, [...byTime.values()]), prevClose);
+function draw() {
+  const canvas = document.getElementById('chart');
+  const item = items.find(entry => entry.item === selected);
+  document.getElementById('title').textContent = item ? item.name : (selected === null ? 'Pick an item' : itemName(selected));
+  document.getElementById('refline').textContent = item ? ' ref ' + item.price + ' · 24h ' + changeText(item.change24h) + ' · vol ' + item.volume24h : '';
+
+  const { slots, width } = currentSlots();
+  // Live tail: the newest WS prints stretch the live slot.
+  const rows = chartRows(slots, width, candles, trades, prevClose, historyTo);
   LifeChart.draw(canvas, {
     slots,
     width,
@@ -368,13 +367,31 @@ function watchLive() {
 }
 
 let resizeTimer = null;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (candles.length) draw(); }, 150);
-});
 
-loadList().then(() => { loadDetail(); loadRecent(); });
-setInterval(loadList, 60000);
-setInterval(loadDetail, 30000);
-setInterval(loadRecent, 10000);
-watchLive();
+// Page wiring (browser only; node loads the pure helpers for its tests).
+function boot() {
+  // One listener on the stable <table>: rows are rebuilt on every render.
+  document.getElementById('items').addEventListener('click', (event) => {
+    const row = event.target.closest('tr[data-id]');
+    if (row) pick(Number(row.getAttribute('data-id')));
+  });
+  // One listener on the stable table: rows are rebuilt every 10 s.
+  document.getElementById('recent').addEventListener('click', (event) => {
+    const cell = event.target.closest('td.item-link[data-id]');
+    if (!cell) return;
+    pick(Number(cell.getAttribute('data-id')));
+    document.getElementById('chart')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (candles.length) draw(); }, 150);
+  });
+  loadList().then(() => { loadDetail(); loadRecent(); });
+  setInterval(loadList, 60000);
+  setInterval(loadDetail, 30000);
+  setInterval(loadRecent, 10000);
+  watchLive();
+}
+
+if (typeof document !== 'undefined') boot();
+if (typeof module !== 'undefined' && module.exports) module.exports = { VIEWS, viewSlots, chartRows };

@@ -223,6 +223,47 @@ mod candle_chain_tests {
         Ok(())
     }
 
+    /// Market 24 h view in quarter hours (user 2026-11-17): 96 chained
+    /// windows of 900 s ending on the live quarter, the close before the
+    /// window carrying the leading flats, every traded quarter opening on
+    /// the previous close, exactly like the hourly and daily chains.
+    #[test]
+    fn day_in_quarter_hours_is_96_chained_windows() -> Result<(), Error> {
+        const QUARTER: i64 = 900;
+        let mut store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 316)?;
+        let fill = |clock: i64, price: i64| NewExecution {
+            item_id: 316,
+            quantity: 2,
+            price,
+            clock,
+            server_tick: clock,
+            taker_side: None,
+        };
+        let now = 20_500 * 86_400 + 13 * HOUR + 7 * 60;
+        let live = (now / QUARTER) * QUARTER;
+        let from = live - 95 * QUARTER;
+        store.record_execution(&fill(from - 3 * HOUR, 12))?;
+        store.record_execution(&fill(from + 10 * QUARTER + 5, 15))?;
+        store.record_execution(&fill(from + 10 * QUARTER + 400, 11))?;
+        store.record_execution(&fill(live + 30, 14))?;
+        store.rebuild_all_candles(316)?;
+        let (day, previous_close) = store.continuous_candles(316, YieldCandleResolution::Min15, from, now + 1)?;
+        assert_eq!(previous_close, Some(12));
+        assert_eq!(day.len(), 96);
+        assert_eq!(day.first().map(|candle| candle.window_start), Some(from));
+        assert_eq!(day.last().map(|candle| candle.window_start), Some(live), "the live quarter closes the view");
+        assert!(day.windows(2).all(|pair| pair[1].window_start - pair[0].window_start == QUARTER), "no gap");
+        assert!(day.windows(2).all(|pair| pair[1].open_price == pair[0].close_price), "chained on the previous close");
+        assert_eq!(ohlcv(&day[9..12]), vec![
+            (from + 9 * QUARTER, 12, 12, 12, 12, 0),
+            (from + 10 * QUARTER, 12, 15, 11, 11, 4),
+            (from + 11 * QUARTER, 11, 11, 11, 11, 0),
+        ]);
+        assert_eq!(ohlcv(&day[95..]), vec![(live, 11, 14, 11, 14, 2)]);
+        Ok(())
+    }
+
     /// Dashboard 7-day (hourly) and 30-day (daily) views: one chained
     /// candle per window over the whole span once a price is known before
     /// it, the live window last.

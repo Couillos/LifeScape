@@ -95,8 +95,10 @@ impl MarketService {
                 crate::logln!("market: settled execution not recorded ({error})");
                 return;
             }
-            let _ = store.rebuild_candles(item, lifescape_store::YieldCandleResolution::Hour1);
-            let _ = store.rebuild_candles(item, lifescape_store::YieldCandleResolution::Day1);
+            // Every cached resolution (15 min, hour, day) in one pass.
+            if let Err(error) = store.rebuild_all_candles(item) {
+                crate::logln!("market: candles of item {item} not repainted ({error})");
+            }
             taker
         };
         let mut engine = self.lock_engine();

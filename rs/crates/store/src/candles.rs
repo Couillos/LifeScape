@@ -7,24 +7,38 @@
 use crate::{Error, OrderSide, Store};
 
 /// Candle resolution. Buckets align on multiples of the width since epoch.
+/// `Min15` draws the market's 24 h view (96 quarters, user 2026-11-17),
+/// `Hour1` the 7-day view, `Day1` the 30-day and 6-month views.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum YieldCandleResolution {
+    Min15,
     Hour1,
     Day1,
 }
 
 impl YieldCandleResolution {
+    /// Every cached resolution: a settled fill repaints them all.
+    pub const ALL: [YieldCandleResolution; 3] =
+        [YieldCandleResolution::Min15, YieldCandleResolution::Hour1, YieldCandleResolution::Day1];
+
     /// Short code stored in the `candles` table.
     pub fn as_str(self) -> &'static str {
         match self {
+            YieldCandleResolution::Min15 => "15m",
             YieldCandleResolution::Hour1 => "1h",
             YieldCandleResolution::Day1 => "1d",
         }
     }
 
+    /// Resolution of a stored or requested code, `None` when unknown.
+    pub fn from_code(code: &str) -> Option<YieldCandleResolution> {
+        YieldCandleResolution::ALL.into_iter().find(|resolution| resolution.as_str() == code)
+    }
+
     /// Bucket width in clock seconds.
     pub fn width_seconds(self) -> i64 {
         match self {
+            YieldCandleResolution::Min15 => 900,
             YieldCandleResolution::Hour1 => 3600,
             YieldCandleResolution::Day1 => 86400,
         }
@@ -274,8 +288,7 @@ impl Store {
         touched.sort_unstable();
         touched.dedup();
         for item in touched {
-            self.rebuild_candles(item, YieldCandleResolution::Hour1)?;
-            self.rebuild_candles(item, YieldCandleResolution::Day1)?;
+            self.rebuild_all_candles(item)?;
         }
         Ok(settled.0 as usize)
     }
@@ -288,40 +301,88 @@ impl Store {
         item_id: i64,
         resolution: YieldCandleResolution,
     ) -> Result<Vec<Candle>, Error> {
-        let fills = self.executions_for_item(item_id, 0, i64::MAX)?;
-        let rebuilt = aggregate_fills(item_id, resolution, &fills);
         let transaction = self
             .connection
             .transaction()
             .map_err(|source| Error::Sql(source.to_string()))?;
-        transaction.execute(
-            "DELETE FROM candles WHERE item_id = ?1 AND resolution = ?2",
-            rusqlite::params![item_id, resolution.as_str()],
-        )?;
-        for bucket in &rebuilt {
-            transaction.execute(
-                "INSERT INTO candles(item_id, resolution, window_start, open_price, \
-                 high_price, low_price, close_price, volume, buy_volume, sell_volume) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                rusqlite::params![
-                    bucket.item_id,
-                    bucket.resolution,
-                    bucket.window_start,
-                    bucket.open_price,
-                    bucket.high_price,
-                    bucket.low_price,
-                    bucket.close_price,
-                    bucket.volume,
-                    bucket.buy_volume,
-                    bucket.sell_volume,
-                ],
-            )?;
-        }
+        let rebuilt = write_candles(&transaction, item_id, resolution)?;
         transaction
             .commit()
             .map_err(|source| Error::Sql(source.to_string()))?;
         Ok(rebuilt)
     }
+
+    /// Repaints every resolution (`YieldCandleResolution::ALL`) of one
+    /// item from executions in one transaction (a settled fill, a resync).
+    pub fn rebuild_all_candles(&mut self, item_id: i64) -> Result<(), Error> {
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(|source| Error::Sql(source.to_string()))?;
+        for resolution in YieldCandleResolution::ALL {
+            write_candles(&transaction, item_id, resolution)?;
+        }
+        transaction
+            .commit()
+            .map_err(|source| Error::Sql(source.to_string()))
+    }
+}
+
+/// Fills of one item, oldest first, on a bare connection (the store's
+/// own, a transaction, or a migration step's).
+fn item_fills(connection: &rusqlite::Connection, item_id: i64) -> Result<Vec<Execution>, Error> {
+    let mut statement = connection.prepare(
+        "SELECT exec_id, item_id, quantity, price, clock, server_tick, taker_side \
+         FROM executions WHERE item_id = ?1 ORDER BY clock, exec_id",
+    )?;
+    let mut found_rows = statement.query(rusqlite::params![item_id])?;
+    let mut fills = Vec::new();
+    while let Some(row) = found_rows.next()? {
+        fills.push(Execution {
+            exec_id: row.get(0)?,
+            item_id: row.get(1)?,
+            quantity: row.get(2)?,
+            price: row.get(3)?,
+            clock: row.get(4)?,
+            server_tick: row.get(5)?,
+            taker_side: OrderSide::parse_taker(row.get(6)?)?,
+        });
+    }
+    Ok(fills)
+}
+
+/// Replaces the cached candles of one item and resolution by the
+/// aggregate of its executions, inside the caller's transaction.
+pub(crate) fn write_candles(
+    connection: &rusqlite::Connection,
+    item_id: i64,
+    resolution: YieldCandleResolution,
+) -> Result<Vec<Candle>, Error> {
+    let rebuilt = aggregate_fills(item_id, resolution, &item_fills(connection, item_id)?);
+    connection.execute(
+        "DELETE FROM candles WHERE item_id = ?1 AND resolution = ?2",
+        rusqlite::params![item_id, resolution.as_str()],
+    )?;
+    for bucket in &rebuilt {
+        connection.execute(
+            "INSERT INTO candles(item_id, resolution, window_start, open_price, \
+             high_price, low_price, close_price, volume, buy_volume, sell_volume) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                bucket.item_id,
+                bucket.resolution,
+                bucket.window_start,
+                bucket.open_price,
+                bucket.high_price,
+                bucket.low_price,
+                bucket.close_price,
+                bucket.volume,
+                bucket.buy_volume,
+                bucket.sell_volume,
+            ],
+        )?;
+    }
+    Ok(rebuilt)
 }
 
 /// Buy and sell share of one fill by its taker side; unknown counts in
@@ -464,9 +525,43 @@ mod candles_tests {
         assert_eq!(fills.len(), 1, "only the settled handover: {fills:?}");
         assert_eq!((fills[0].quantity, fills[0].clock), (5, 10 * 3600 + 600));
         assert_eq!(fills[0].taker_side, Some(crate::OrderSide::Sell), "the deal's taker side carries over");
-        let candles = store.candles_for(314, YieldCandleResolution::Hour1, 0, i64::MAX)?;
-        assert_eq!(candles.iter().map(|candle| candle.volume).sum::<i64>(), 5, "candles repainted");
+        for resolution in YieldCandleResolution::ALL {
+            let candles = store.candles_for(314, resolution, 0, i64::MAX)?;
+            assert_eq!(candles.iter().map(|candle| candle.volume).sum::<i64>(), 5, "{resolution:?} candles repainted");
+        }
         assert_eq!(store.resync_executions_from_deals()?, 1, "idempotent");
+        Ok(())
+    }
+
+    /// Market 24 h view in 15-minute candles (user 2026-11-17): the
+    /// `15m` code round-trips, buckets are 900 s, and one rebuild pass
+    /// repaints every resolution from the same executions.
+    #[test]
+    fn quarter_hour_candles_bucket_on_900_seconds() -> Result<(), Error> {
+        assert_eq!(YieldCandleResolution::Min15.as_str(), "15m");
+        assert_eq!(YieldCandleResolution::Min15.width_seconds(), 900);
+        for resolution in YieldCandleResolution::ALL {
+            assert_eq!(YieldCandleResolution::from_code(resolution.as_str()), Some(resolution));
+        }
+        assert_eq!(YieldCandleResolution::from_code("5m"), None);
+        let mut store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 314)?;
+        let hour = 10 * 3600;
+        store.record_execution(&sample_fill(hour + 60, 3, 1))?;
+        store.record_execution(&sample_fill(hour + 899, 5, 2))?;
+        store.record_execution(&sample_fill(hour + 900, 4, 3))?;
+        store.record_execution(&sample_fill(hour + 3 * 900 + 10, 7, 4))?;
+        store.rebuild_all_candles(314)?;
+        let quarters = store.candles_for(314, YieldCandleResolution::Min15, 0, i64::MAX)?;
+        let rows: Vec<(i64, i64, i64, i64, i64, i64)> = quarters
+            .iter()
+            .map(|candle| (candle.window_start, candle.open_price, candle.high_price, candle.low_price, candle.close_price, candle.volume))
+            .collect();
+        assert_eq!(rows, vec![(hour, 3, 5, 3, 5, 3), (hour + 900, 4, 4, 4, 4, 3), (hour + 2700, 7, 7, 7, 7, 4)]);
+        assert!(quarters.iter().all(|candle| candle.resolution == "15m"));
+        assert_eq!(store.candles_for(314, YieldCandleResolution::Hour1, 0, i64::MAX)?.len(), 1, "same pass, hourly");
+        assert_eq!(store.candles_for(314, YieldCandleResolution::Day1, 0, i64::MAX)?.len(), 1, "same pass, daily");
+        assert_eq!(store.rebuild_candles(314, YieldCandleResolution::Min15)?, quarters, "single rebuild agrees");
         Ok(())
     }
 

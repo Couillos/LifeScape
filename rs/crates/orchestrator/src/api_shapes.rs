@@ -22,9 +22,11 @@ use lifescape_json::{object, str_value, Value};
 
 // -- market (§6.2) -----------------------------------------------------------
 
-/// Candle resolution: hourly (24 h view) or daily (6-month view).
+/// Candle resolution: quarter hours (24 h view, 96 candles, user
+/// 2026-11-17), hourly (7-day view) or daily (30-day and 6-month views).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CandleRes {
+    Min15,
     Hour1,
     Day1,
 }
@@ -32,15 +34,18 @@ pub enum CandleRes {
 impl CandleRes {
     pub fn as_str(self) -> &'static str {
         match self {
+            CandleRes::Min15 => "15m",
             CandleRes::Hour1 => "1h",
             CandleRes::Day1 => "1d",
         }
     }
 
     /// DELTA (P1.3 serves it): unknown resolutions read as hourly, like
-    /// the current `op_history`; the front only ever sends `1h` or `1d`.
+    /// the current `op_history`; the front only ever sends `15m`, `1h`
+    /// or `1d`.
     pub fn parse(raw: &str) -> CandleRes {
         match raw {
+            "15m" => CandleRes::Min15,
             "1d" => CandleRes::Day1,
             _ => CandleRes::Hour1,
         }
@@ -396,6 +401,8 @@ mod tests {
         assert_eq!(keys(&value.get("candles").as_arr().expect("candles")[0]), ["c", "h", "l", "n", "o", "t", "v", "vb", "vs"]);
         assert_eq!(keys(&value.get("trades").as_arr().expect("trades")[0]), ["p", "q", "s", "t"]);
         assert_eq!(CandleRes::parse("1d"), CandleRes::Day1);
+        assert_eq!(CandleRes::parse("15m"), CandleRes::Min15);
+        assert_eq!(CandleRes::Min15.as_str(), "15m");
         assert_eq!(CandleRes::parse("unknown"), CandleRes::Hour1, "unknown reads hourly, like op_history");
     }
 

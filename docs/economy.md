@@ -897,18 +897,27 @@ triche (règle 13) : leur stock vient de leurs deals.
 
 ## Front et base
 
-Page `market` (prix au-dessus des bâtons de volume, 6 mois / jour et
-24 h / heure, dernier point temps réel par le WS, carnet + dernières
-exécutions ; canvas maison, zéro dépendance). La fenêtre demandée est
-recalée sur les bornes des bougies (`web::snap_range`) pour que la
-bougie en cours reste dedans. Bougies continues, sans trou (règle
+Page `market` (prix au-dessus des bâtons de volume ; vues 24 h en
+bougies de 15 min, 96 créneaux, `res=15m` (demande utilisateur
+2026-11-17), 7 j / heure (`1h`), 30 j et 6 mois / jour (`1d`) ; dernier
+point temps réel par le WS, replié dans le créneau en cours de la vue
+(le quart d'heure en 24 h, `chartRows` de `market.js`) ; carnet +
+dernières exécutions ; canvas maison, zéro dépendance). La fenêtre
+demandée est recalée sur les bornes des bougies (`web::snap_range` :
+900, 3600 ou 86400 s) pour que la bougie en cours reste dedans. Bougies continues, sans trou (règle
 utilisateur 2026-11-13) : chaque bougie ouvre à la clôture de la
 précédente (haut/bas élargis à cette ouverture), une fenêtre sans
 échange est une bougie plate grise à la dernière clôture (volume 0), de
 la première exécution connue jusqu'à la fenêtre en cours. Le chaînage est
 fait à la lecture côté serveur (`store::candle_chain`, op `history`,
 `prev_close` = dernier prix avant la fenêtre) ; la table `candles` garde
-les agrégats bruts par fenêtre. Le front rechaîne la queue live
+les agrégats bruts par fenêtre et par résolution (`15m`, `1h`, `1d` :
+`YieldCandleResolution::ALL`), tous repeints ensemble à chaque échange
+réglé (`Store::rebuild_all_candles`, une transaction). Les `15m` de
+l'historique existant sont reconstruits depuis `executions` par la
+migration 7 du store (au démarrage, dans la transaction de migration) ;
+une fenêtre sans bougie en cache mais avec des exécutions est
+reconstruite à la demande (`candles_or_rebuild`). Le front rechaîne la queue live
 (`LifeChart.carryFlat`) et ses créneaux finissent sur la fenêtre en cours
 (`LifeChart.liveSlots`). L'anneau des prints (`trades`, `tick`, WS) est
 rechargé depuis `executions` au démarrage du daemon. Page rendements (vue mesures, § Rendements) : tableaux activité ×
