@@ -125,6 +125,21 @@ fn station_debugname(loc: u16) -> String {
 /// station radius of `near`: live stream first, one static batch second
 /// (the worker paints nothing). Nearest first; exact match only, so
 /// orange furniture never reads as a cooking range.
+/// Stations ranked by Manhattan distance and then re-ranked by walking cost.
+const STATION_SHORTLIST: usize = 8;
+
+/// The station to work: the nearest of `site_tiles` that a route
+/// reaches (one `walk_costs` batch, `skill_walk::refine_walking`;
+/// routed first). Never the closest by Manhattan distance alone (live
+/// 2026-11-17: 9 cooks from Edgeville sent to the Black Knights' banquet
+/// fireplace (3030,3514), sealed from outside: door loops, then
+/// "consumed nothing"). Nav unwired: Manhattan order, as before.
+fn reachable_station(bot: &mut Bot, name: &str, near: (i32, i32)) -> Option<(i32, i32, i32, u16)> {
+    let cands = site_tiles(bot, name, near);
+    let ranked = crate::skill_walk::refine_walking(bot, cands, STATION_SHORTLIST, name, |tile| lifescape_nav::plan::Tile { x: tile.0, z: tile.1, level: tile.2 });
+    ranked.into_iter().next().map(|(_, tile)| tile)
+}
+
 fn site_tiles(bot: &mut Bot, name: &str, near: (i32, i32)) -> Vec<(i32, i32, i32, u16)> {
     let level = bot.world.level;
     let mut cands: Vec<(i64, (i32, i32, i32, u16))> = Vec::new();
@@ -622,7 +637,7 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
         ProduceSite::Loc(names) => {
             let mut picked: Option<(i32, i32, i32, u16)> = None;
             for name in *names {
-                if let Some(tile) = site_tiles(bot, name, near).into_iter().next() {
+                if let Some(tile) = reachable_station(bot, name, near) {
                     bot.log(&format!("{} on {name} at ({},{})", job.spec.verb, tile.0, tile.1));
                     picked = Some(tile);
                     break;
