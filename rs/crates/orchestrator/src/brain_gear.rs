@@ -165,10 +165,12 @@ pub(crate) fn deal_coins_from(account: &str, deals: &[lifescape_store::Deal]) ->
 /// down: nothing rests then).
 pub(crate) fn committed_coins(account: &str, except: Option<i64>) -> i64 {
     let Some(service) = crate::market_service::shared() else { return 0 };
-    let store = service.lock_store();
-    let rows = store.account_orders(account).unwrap_or_default();
-    let deals = store.open_deals_for_account(account).unwrap_or_default();
-    committed_from(&rows, except) + deal_coins_from(account, &deals)
+    let (rows, deals) = {
+        let store = service.lock_store();
+        (store.account_orders(account).unwrap_or_default(), store.open_deals_for_account(account).unwrap_or_default())
+    };
+    // The coins a donor owes the makers (`fund-makers`) are spent too.
+    committed_from(&rows, except) + deal_coins_from(account, &deals) + service.gifts_owed(account)
 }
 
 /// The wallet a new ceiling may share (review 2026-11-13, finding 6):
@@ -199,6 +201,24 @@ fn gear_free_coins(job: &Job) -> i64 {
 fn expected_price(service: Option<&std::sync::Arc<crate::market_service::MarketService>>, item: &str) -> i64 {
     let traded = service.zip(obj_id(item)).and_then(|(service, id)| lifescape_market::median_price(&service.last_fill_prices(id)));
     traded.unwrap_or_else(|| lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.alch_high).unwrap_or(1)).max(1)
+}
+
+/// What the gear plan would buy next at this wallet (its wants at their
+/// expected prices, same budget as `gear_pass`): the part of a donor's
+/// reserve kept for its own gear (`funding_plan`). An Iron buys none.
+pub(crate) fn next_gear_cost(job: &Job, life: &Life, live: &Value) -> i64 {
+    let levels_owned = crate::brain_market::live_levels(live);
+    if life.profile.ironman || levels_owned.is_empty() {
+        return 0;
+    }
+    let levels: Vec<(&str, i64)> = levels_owned.iter().map(|(name, level)| (name.as_str(), i64::from(*level))).collect();
+    let quests_owned = crate::brain_rescue::quests_done(life);
+    let quests: Vec<&str> = quests_owned.iter().map(String::as_str).collect();
+    let (owned, _) = holdings(job);
+    let service = crate::market_service::shared();
+    let budget = gear_ladder::wallet_ceiling(gear_free_coins(job), gear_ladder::GEAR_SHARE_PCT);
+    let wants = gear_plan::plan_gear(goal_style(life), &levels, &quests, &owned, budget, &|item| expected_price(service.as_ref(), item));
+    wants.iter().map(|want| want.expected.max(0)).sum()
 }
 
 fn cancel_order(service: &crate::market_service::MarketService, account: &str, order: i64) -> bool {

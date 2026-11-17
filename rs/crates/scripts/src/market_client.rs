@@ -61,17 +61,20 @@ pub fn trade_id(base: u16) -> u16 {
     base
 }
 
-/// Typed deal report: trading settled, or failed with its reason.
-pub fn deal_report(account: &str, id: i64, outcome: &str, reason: &str) {
-    let _ = market_call(
-        "deal_report",
-        vec![
-            ("account", str_value(account)),
-            ("deal", Value::Int(id)),
-            ("outcome", str_value(outcome)),
-            ("reason", str_value(reason)),
-        ],
-    );
+/// Typed deal report: trading settled, or failed with its reason. A
+/// gift's maker adds the coins its pack gained (`received`): the daemon
+/// checks them against the amount (`fund-makers`).
+pub fn deal_report(account: &str, id: i64, outcome: &str, reason: &str, received: Option<i64>) {
+    let mut fields = vec![
+        ("account", str_value(account)),
+        ("deal", Value::Int(id)),
+        ("outcome", str_value(outcome)),
+        ("reason", str_value(reason)),
+    ];
+    if let Some(received) = received {
+        fields.push(("received", Value::Int(received)));
+    }
+    let _ = market_call("deal_report", fields);
 }
 
 /// One market request, one reply. Transport failures are loud IO errors,

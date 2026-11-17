@@ -172,6 +172,8 @@ pub(crate) struct Engine {
     /// Deals each account let expire in a row (`timeout` it reported
     /// itself); a settled deal resets it (decision D8).
     pub(crate) timeout_streak: HashMap<String, u32>,
+    /// Gifts to the market makers, deals of their own kind (`funding_gifts`).
+    pub(crate) gifts: crate::funding_gifts::GiftBook,
 }
 
 impl Engine {
@@ -204,6 +206,7 @@ impl Engine {
             timeout_streak: HashMap::new(),
             patience: HashMap::new(),
             horizon_withdrawn: HashMap::new(),
+            gifts: Default::default(),
         }
     }
 
