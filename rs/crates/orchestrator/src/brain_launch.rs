@@ -658,7 +658,15 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // bid on the daemon market and the node waits for the fill.
     if method == "market:buy" {
         let id = node_snapshot.id.clone();
-        match crate::cpu_profile::timed("market.obtain_bid", || crate::brain_market::place_obtain_bid(job, &node_snapshot, &ctx)) {
+        // What one unit is worth to this buyer: its own make cost.
+        let worth = match &node_snapshot.kind {
+            NodeKind::ObtainItems { item, count } => {
+                let units = (*count - ctx.held).max(1);
+                crate::brain_bids::production_costs_for(&life, &live, &[(item.clone(), units)]).get(item).map(|cost| cost.ceil() as i64)
+            }
+            _ => None,
+        };
+        match crate::cpu_profile::timed("market.obtain_bid", || crate::brain_market::place_obtain_bid(job, &node_snapshot, &ctx, worth)) {
             Ok(_) => {
                 // Parked, not locked (no idle bot, 2026-11-13): the bid
                 // rests while the worker runs the next node or a filler.

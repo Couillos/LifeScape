@@ -174,26 +174,31 @@ pub fn buying_in_flight(account: &str, item: i64, deals: &[lifescape_store::Deal
 /// the object (its `need` lineage first) is TAKEN OVER, its price and
 /// walk kept, its ceiling following the wallet; never cancelled and
 /// re-placed lower at the remembered price.
-pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx) -> Result<i64, String> {
+///
+/// `worth`: what one unit is worth to this buyer (its own make cost at
+/// its coin rate, `brain_bids::production_costs_for`): the bid opens
+/// there, capped by the wallet (user 2026-11-18 levier 2).
+pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx, worth: Option<i64>) -> Result<i64, String> {
     let NodeKind::ObtainItems { item, count } = &node.kind else { return Err("not an obtain node".to_string()) };
     let service = crate::market_service::shared().ok_or("market service not running")?;
     let id = obj_id(item).ok_or_else(|| format!("unknown item {item}"))?;
     let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
     let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity);
-    let (order, price, kept) = match keep_need_bid(&service, &job.account, id, quantity, ceiling)? {
+    let (order, price, kept) = match keep_need_bid(&service, &job.account, id, quantity, worth.unwrap_or(1), ceiling)? {
         crate::market_reprice::StandingBid::Placed { order, price } => (order, price, false),
         crate::market_reprice::StandingBid::Kept { order, price } => (order, price, true),
     };
     let how = if kept { "kept (its lineage goes on)" } else { "placed" };
-    crate::logln!("brain {}: bid {quantity}/{count} {item} @ {price} {how} (ceiling {ceiling}, held {}), awaiting the fill", job.account, ctx.held);
+    let worth_note = worth.map(|value| format!(", worth {value}")).unwrap_or_default();
+    crate::logln!("brain {}: bid {quantity}/{count} {item} @ {price} {how} (ceiling {ceiling}{worth_note}, held {}), awaiting the fill", job.account, ctx.held);
     Ok(order)
 }
 
 /// The `need` bid of `account` on `item` for `quantity`, ceiling
 /// `ceiling`: the resting one taken over, else a new lineage
 /// (`market_reprice::keep_bid_from`, motive `need`).
-pub(crate) fn keep_need_bid(service: &crate::market_service::MarketService, account: &str, item: i64, quantity: i64, ceiling: i64) -> Result<crate::market_reprice::StandingBid, String> {
-    crate::market_reprice::keep_bid_from(service, account, item, quantity, 1, ceiling, crate::market_lineage::NEED)
+pub(crate) fn keep_need_bid(service: &crate::market_service::MarketService, account: &str, item: i64, quantity: i64, worth: i64, ceiling: i64) -> Result<crate::market_reprice::StandingBid, String> {
+    crate::market_reprice::keep_bid_from(service, account, item, quantity, worth, ceiling, crate::market_lineage::NEED)
 }
 
 /// Seconds between two orphan-need sweeps of one account.

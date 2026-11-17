@@ -237,3 +237,30 @@ fn a_never_traded_bid_opens_on_the_public_anchors() {
     assert!(matches!(placed, StandingBid::Placed { price, .. } if price == store_pays), "the store's offer, not 1: {placed:?}");
     cleanup(&path);
 }
+
+/// User 2026-11-18 (levier 2) : lily_north bid 563 air runes @ 6 with a
+/// ceiling of 20 and her own make cost at 31, then walked to 20 only
+/// after 6000 ticks: the demand stayed invisible to the producers. A
+/// need bid opens at what the object is worth to the buyer (its own make
+/// cost, capped by the wallet), and a resting one under that worth is
+/// raised to it at once (lineage kept).
+#[test]
+fn a_need_bid_opens_and_rises_to_the_buyers_worth() {
+    let (market, path) = service("worth");
+    funded(&market, "lily_north");
+    let first = super::keep_bid_from(&market, "lily_north", FEATHER, 5, 1, 30, crate::market_lineage::NEED).expect("placed");
+    let StandingBid::Placed { order: root, price } = first else { panic!("{first:?}") };
+    assert!(price < 8, "no worth known: the old opening, got {price}");
+    let raised = super::keep_bid_from(&market, "lily_north", FEATHER, 5, 8, 30, crate::market_lineage::NEED).expect("kept");
+    let StandingBid::Kept { order, price: 8 } = raised else { panic!("raised to its worth: {raised:?}") };
+    let row = market.lock_store().get_order(order).ok().flatten().expect("raised row");
+    assert_eq!(row.root_id, root, "the lineage goes on");
+    let capped = super::keep_bid_from(&market, "lily_north", FEATHER, 5, 50, 20, crate::market_lineage::NEED).expect("kept");
+    let StandingBid::Kept { price: 20, .. } = capped else { panic!("never over the wallet: {capped:?}") };
+    let (fresh, fresh_path) = service("worth-new");
+    funded(&fresh, "ryan_park");
+    let opened = super::keep_bid_from(&fresh, "ryan_park", FEATHER, 5, 12, 30, crate::market_lineage::NEED).expect("placed");
+    let StandingBid::Placed { price: 12, .. } = opened else { panic!("a new need bid opens at its worth: {opened:?}") };
+    cleanup(&path);
+    cleanup(&fresh_path);
+}

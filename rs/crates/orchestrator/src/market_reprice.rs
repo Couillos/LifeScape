@@ -400,7 +400,8 @@ pub fn keep_bid(service: &MarketService, account: &str, item: i64, qty: i64, cei
 /// `keep_bid` whose NEW bid opens at least at `open_at` (never over the
 /// ceiling): what the buyer knows the object is worth (the gear plan's
 /// expected price, 2026-11-14: a never-traded platebody bid opened at 1
-/// and climbed 5 % per window for hours). A resting bid keeps its walk.
+/// and climbed 5 % per window for hours). A resting bid keeps its walk,
+/// raised first to `open_at` when under it (2026-11-18).
 /// Lineage (plan marché M2, C3): the resting bid of the same `motive` is
 /// taken first, else any resting bid of the account on the object (one
 /// bid per object, never a second beside it); its lineage, t0 and price
@@ -418,19 +419,24 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
     if let Some(row) = open {
         let mut order = row.order_id;
         let mut price = row.price;
-        if price > ceiling {
+        // Over the wallet: down to the ceiling. Under what the buyer
+        // knows the object is worth (`open_at`, user 2026-11-18 levier
+        // 2): up to that worth at once, never a slow walk from a noise
+        // price while producers read no demand.
+        let target = if price > ceiling { Some(ceiling) } else { Some(open_at.min(ceiling)).filter(|worth| *worth > price) };
+        if let Some(target) = target {
             let reply = service.handle(&object(vec![
                 ("op", str_value("amend")),
                 ("account", str_value(account)),
                 ("order", Value::Int(order)),
-                ("price", Value::Int(ceiling)),
+                ("price", Value::Int(target)),
             ]));
             if reply.get("ok").as_bool() != Some(true) {
                 return Err(reply.get("error").as_str().unwrap_or("amend refused").to_string());
             }
             service.lock_engine().quote_bounds.remove(&order);
             order = reply.get("order").as_i64().unwrap_or(order);
-            price = ceiling;
+            price = target;
         }
         let mut engine = service.lock_engine();
         let bounds = engine.quote_bounds.entry(order).or_insert_with(|| QuoteBounds::for_row(&row, price, ceiling));
@@ -449,7 +455,7 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
     let discovered = if covered || reference.traded { None } else { discovery_bid(service, account, item, (open_at > 1).then_some(open_at), ceiling) };
     let price = match discovered {
         _ if covered => remembered,
-        Some(open) => open,
+        Some(open) => open.max(open_at.min(ceiling)),
         None => remembered.max(open_at.min(ceiling)),
     };
     let reply = service.handle(&object(vec![
