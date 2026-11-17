@@ -169,3 +169,10 @@ test('value labels keep their distance and tick counts follow the pane height', 
   assert.ok(!LifeChart.spaced(taken, 108), 'too close to the last label');
   assert.ok(LifeChart.spaced(taken, 120));
 });
+
+test('chartHeight keeps the 720:340 ratio, capped by maxHeight', () => {
+  assert.equal(LifeChart.chartHeight(720), 340);
+  assert.equal(LifeChart.chartHeight(1800), 850);
+  assert.equal(LifeChart.chartHeight(1800, 260), 260, 'a wide screen stays under the cap');
+  assert.equal(LifeChart.chartHeight(400, 260), 189, 'a narrow one keeps its ratio');
+});

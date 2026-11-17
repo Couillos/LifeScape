@@ -205,11 +205,18 @@ const LifeChart = (() => {
   // { slots, width, kind: 'candles'|'line', rows (aligned, null = empty),
   //   leftTitle, rightTitle, legend: [{swatch, label}], live, emptyText,
   //   tooltipFor(slot, row) -> string[] }
+  // Canvas height for a width: the 720:340 ratio, capped by `maxHeight`
+  // (a page that must fit without scrolling, e.g. errors).
+  function chartHeight(width, maxHeight) {
+    const natural = Math.round(width * 340 / 720);
+    return maxHeight ? Math.min(natural, maxHeight) : natural;
+  }
+
   function draw(canvas, model) {
     const ctx = canvas.getContext('2d');
     const ratio = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     const width = Math.max(320, canvas.clientWidth || 720);
-    const height = Math.round(width * 340 / 720);
+    const height = chartHeight(width, model.maxHeight);
     canvas.width = Math.round(width * ratio);
     canvas.height = Math.round(height * ratio);
     canvas.style.height = height + 'px';
@@ -555,7 +562,7 @@ const LifeChart = (() => {
 
   return {
     slotStarts, liveSlots, fillSlots, carryFlat, candleColor, niceTicks, periodLabel, axisLabel, candleTooltip, lineTooltip, nearestFilled, labelEvery, tickCount, spaced,
-    volumeSplit, volumeScaleMax, foldPrint, draw, UP, DOWN, FLAT,
+    volumeSplit, volumeScaleMax, foldPrint, draw, chartHeight, UP, DOWN, FLAT,
   };
 })();
 

@@ -234,6 +234,7 @@ if (typeof document !== 'undefined') {
       kind: 'line',
       rows: data.rows,
       leftTitle: 'errors / hour',
+      maxHeight: 240,
       legend: [{ swatch: 'line', color: '#4caf50', label: series === 'total' ? 'all sources' : series }],
       live: true,
       emptyText: 'No error in this window.',
