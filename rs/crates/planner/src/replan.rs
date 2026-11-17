@@ -248,6 +248,21 @@ pub fn nested_per_unit(product: &str, need: &str, depth: u8) -> Option<f64> {
     None
 }
 
+/// True when `need` of a market climb (`Node::buys_inputs`, user lever
+/// 2026-11-17: « les profils marché achètent leurs intrants ») comes by
+/// the market only: an input or consumable the market trades (bars, logs,
+/// raw fish, runes, bones), never a carried tool of the method (the
+/// hammer, the tinderbox: their usual legs). The obtain then bids at the
+/// tranche's volume (`need_count_with`, a need bid capped by the wallet,
+/// `resolve_obtain::buy_quantity`).
+pub fn buys_by_market(node: &Node, need: &str) -> bool {
+    if !node.buys_inputs || !crate::obtain_legs::tradeable_f2p(need) {
+        return false;
+    }
+    let method = node.method.as_deref().or_else(|| node.alternatives.first().map(|alt| alt.method.as_str())).unwrap_or("");
+    !crate::tools::required_tool(method).is_some_and(|tools| tools.tools.iter().any(|tool| tool == need))
+}
+
 /// Apply one replan cause: returns fresh sub-task nodes to insert (e.g. an
 /// `obtain_items` for each missing tool/input). The node itself moves to
 /// `ready` (retry with a new method) or stays `blocked` until its deps
@@ -279,8 +294,9 @@ pub fn replan_node_with(node: &mut Node, cause: &ReplanCause, missing: &[String]
                 // production way, the shop under D-A); Iron is filtered
                 // at resolve time, which re-prices them. A 100 % market
                 // lot (R5) buys its inputs on the market only (a tool it
-                // lacks comes by the usual legs).
-                sub.alternatives = if node.method.as_deref().is_some_and(|method| crate::trade_craft::buys_input(method, need)) {
+                // lacks comes by the usual legs); so does a climb whose
+                // training pick is a market line (user lever 2026-11-17).
+                sub.alternatives = if node.method.as_deref().is_some_and(|method| crate::trade_craft::buys_input(method, need)) || buys_by_market(node, need) {
                     vec![Alternative { method: "market:buy".to_string(), est_ticks: 0, est_coins: 0 }]
                 } else {
                     crate::obtain_legs::obtain_alternatives(need, false)
@@ -464,3 +480,7 @@ mod tests {
         assert_eq!(level.status, NodeStatus::Ready, "levels continue toward the goal");
     }
 }
+
+#[cfg(test)]
+#[path = "market_climb_tests.rs"]
+mod market_climb_tests;

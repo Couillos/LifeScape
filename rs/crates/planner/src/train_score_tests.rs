@@ -1,4 +1,4 @@
-use super::{best as choose, coin_weight, market_weight, rank_rows, score_row, ticks_per_coin};
+use super::{best as choose, buy_weight, coin_weight, market_weight, rank_rows, score_row, ticks_per_coin};
 use crate::guide_model::{Confidence, Prereqs, SourceGap, Supply, TrainingRow};
 use crate::model::{Archetype, Profile};
 
@@ -125,4 +125,50 @@ fn unrunnable_lines_never_score() {
     let iron = Profile::new(true, 0.5, 0.5, 7, Archetype::Producer);
     assert!(score_row(&line("fire:yew_logs", Supply::Market, 60_000.0, -30_000.0), &iron, per_coin).is_none(), "an Ironman never buys");
     assert!(choose(&[]).is_none());
+}
+
+/// The market weight of a training line is a continuous, decreasing
+/// curve of market_affinity (user lever 2026-11-17, « entraînement
+/// marché plus fréquent »): neutral at 0.5, a market profile (≥ 0.6)
+/// discounts buying, an autarkic one (≤ 0.4) taxes it.
+#[test]
+fn the_buy_weight_follows_the_trait_continuously() {
+    assert!((buy_weight(0.5) - 1.0).abs() < 1e-12);
+    assert!(buy_weight(0.6) < 1.0 && buy_weight(0.4) > 1.0);
+    assert!(buy_weight(0.8) < 0.5 && buy_weight(0.1) > 2.5, "{} {}", buy_weight(0.8), buy_weight(0.1));
+    let mut previous = f64::INFINITY;
+    for step in 0..=100 {
+        let affinity = f64::from(step) / 100.0;
+        let weight = buy_weight(affinity);
+        assert!(weight < previous, "decreasing at {affinity}");
+        assert!(previous.is_infinite() || previous - weight < 0.12, "continuous at {affinity}: {previous} -> {weight}");
+        previous = weight;
+    }
+    assert_eq!(buy_weight(-3.0), buy_weight(0.0));
+    assert_eq!(buy_weight(7.0), buy_weight(1.0));
+}
+
+/// Smithing 40-45 (user test 2026-11-17): bars bought (market: 4400 XP
+/// per 6000 ticks, 0.6 coin per XP) against ore mined, smelted and
+/// smithed (autonomous: 1700 XP per 6000 ticks, earning 0.3 coin per
+/// XP). At the fleet's D17 (30 000 coins per 6000 ticks) a market
+/// profile (0.8) buys its bars, an autarkic one (0.1) works them up; a
+/// bot whose best money line earns little (D17 high: 300 coins per 6000
+/// ticks, 20 ticks a coin) works them up whatever its trait.
+#[test]
+fn a_market_profile_buys_its_bars_while_its_coins_allow_it() {
+    let mut bought = line("smith:steel_platebody", Supply::Market, 4400.0, -2640.0);
+    bought.skill = "smithing".to_string();
+    let mut worked = line("smith:steel_platebody", Supply::Autonomous, 1700.0, 510.0);
+    worked.skill = "smithing".to_string();
+    let rows = vec![worked, bought];
+    let fleet = ticks_per_coin(Some(BEST_PROFIT));
+    for thrift in [0.0, 0.5, 1.0] {
+        let market = choose(&rank_rows(&rows, &bot(0.8, thrift), fleet, &reach)).expect("a line");
+        assert_eq!(market.supply, Supply::Market, "market profile 0.8, thrift {thrift}");
+        let autarkic = choose(&rank_rows(&rows, &bot(0.1, thrift), fleet, &reach)).expect("a line");
+        assert_eq!(autarkic.supply, Supply::Autonomous, "autarkic profile 0.1, thrift {thrift}");
+        let poor = choose(&rank_rows(&rows, &bot(0.8, thrift), ticks_per_coin(Some(300.0)), &reach)).expect("a line");
+        assert_eq!(poor.supply, Supply::Autonomous, "D17 high: the autonomous line again, thrift {thrift}");
+    }
 }

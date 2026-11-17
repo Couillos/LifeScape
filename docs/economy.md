@@ -172,6 +172,24 @@ Exemples : pêcheur mouche 20-25 → plumes (≈ une par prise de la
 tranche) ; firemaker → bûches ; mage → runes du sort ; combattant →
 nourriture adaptée à ses PV, s'il en mange.
 
+### Montées en mode marché : bids `need` au volume de la tranche (2026-11-17)
+
+Levier utilisateur « entraînement marché plus fréquent » (`decisions.md`
+2026-11-17) : une montée dont le tirage R7 prend une ligne MARCHÉ du
+guide d'entraînement (`brain_train`, `TrainPick::buys_inputs`) marque son
+nœud (`Node::buys_inputs`, écrit dans la vie, remis à zéro à chaque
+résolution). Quand elle bloque sur ses intrants (barres, bûches, poisson
+cru, runes, os, peaux, essence…), l'obtention déposée (`replan`,
+`replan::buys_by_market`) n'a que la jambe `market:buy`, dimensionnée sur
+la tranche (`need_count_with` : intrants de son niveau live à la fin de
+la tranche) : un ask couvert est pris, sinon un bid `need` au repos au
+volume de la tranche, borné par ce que le portefeuille paie
+(`resolve_obtain::buy_quantity`), le reste au blocage suivant ; sans
+pièces, `have_coins` d'abord. Jamais de production en parallèle ni de
+fonte/coupe de l'intrant. Les outils (marteau, tinderbox) gardent leurs
+jambes. Une ligne autonome garde toutes ses jambes (production d'abord).
+Ironman : jamais (aucune ligne marché).
+
 ### Découverte du prix d'un objet jamais échangé (plan marché M7, 2026-11-17)
 
 Un objet sans aucun fill s'ouvre sur des ancrages PUBLICS seulement
@@ -685,7 +703,16 @@ asks 0, recent 40, shops 0", "impossible": false, "item": "naturerune",
   test `a_rare_drop_is_farmed_in_autonomous_mode_however_slow`) ; seuls ceux
   qu'aucune activité ne fait restent achetés (péages et pièces jamais
   produits) ; la ligne affiche la voie de chacun (`routes`) ; marché : intrants achetés selon la règle d'achat ci-dessus,
-  volume au-delà des asks + boutique → prix courant et condition (D22) ; une méthode qui ne
+  volume au-delà des asks + boutique → prix courant et condition (D22) ;
+  un aller-retour place de Varrock et une attente market mesurée par
+  ACHAT, un achat portant les intrants de toute la tranche de 5 niveaux
+  (`guide_training::band_slots`, au moins un sac ; levier utilisateur
+  2026-11-17 « entraînement marché plus fréquent » : la montée achète
+  sa tranche d'un coup par des bids `need` à son volume, jamais un sac
+  par visite au marché ; avant, l'attente de 1 224 ticks par sac de 28
+  plafonnait toute ligne marché rapide à ~110 intrants/6000 ticks) ;
+  conditions inchangées (disponibilité d'un sac, capital d'un sac) ; la
+  ligne 100 % market du guide money garde un achat par sac ; une méthode qui ne
   consomme QUE des consommables (téléports, malédictions, munitions,
   appât : aucun intrant de stock) a aussi sa ligne marché (décision
   2026-11-17) : chaque consommable acheté au volume disponible (asks,

@@ -6,7 +6,7 @@
 //! come in as plain values; the daemon reads the life files.
 
 use crate::ambition::{may_change, pinned, Ambition, GENERALIST};
-use crate::ambition_catalog::{fit, kind_for_group, primary_group, KindDemand, GROUPS, specs};
+use crate::ambition_catalog::{fit, kind_for_group, primary_group, transform_share, KindDemand, GROUPS, specs};
 
 /// One bot as the fleet assignment sees it.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,14 +55,34 @@ pub fn coverage_gaps(kinds: &[&str]) -> Vec<String> {
     GROUPS.iter().filter(|group| !covered.contains(group)).map(|group| group.to_string()).collect()
 }
 
-/// Score of one bot for one gap: skill fit.
+/// Strength of the market_affinity tilt (user lever 2026-11-17): a
+/// pure market profile weighs a pure transformation kind ×2^1.5 (≈ 2.8)
+/// and a pure harvest or fight kind ÷2.8; an autarkic one the reverse;
+/// the neutral 0.5 tilts nothing.
+pub const AFFINITY_TILT: f64 = 1.5;
+
+/// Weight of `kind` for a bot of `affinity` (user lever 2026-11-17,
+/// « entraînement marché plus fréquent »): 2^(TILT × (2a − 1) × (2s − 1))
+/// where s is the kind's transformation share (`transform_share`,
+/// computed from the game data: the share of its skill's activities fed
+/// by buy-able inputs). A market bot leans on the skills a player trains
+/// by buying (smithing, cooking, firemaking, crafting, magic, prayer,
+/// runecraft), an autarkic one on harvests and fights; never a hand list.
+pub fn affinity_tilt(kind: &str, affinity: f64) -> f64 {
+    let lean = 2.0 * affinity.clamp(0.0, 1.0) - 1.0;
+    let transforms = 2.0 * transform_share(kind) - 1.0;
+    2f64.powf(AFFINITY_TILT * lean * transforms)
+}
+
+/// Score of one bot for one gap: skill fit × the trait's tilt.
 fn gap_score(bot: &FleetBot, group: &str) -> Option<f64> {
     let kind = kind_for_group(group)?;
-    Some(fit(kind, &|skill| bot.level(skill)))
+    Some(fit(kind, &|skill| bot.level(skill)) * affinity_tilt(kind, bot.market_affinity))
 }
 
 /// Fleet pass: every bot without an ambition gets one. Coverage first
-/// (global greedy: the best-fitting (bot, gap) pair goes first, seeded
+/// (global greedy: the best-fitting (bot, gap) pair goes first, fit ×
+/// the trait's tilt `affinity_tilt`, seeded
 /// tie-break), then a demand- and level-weighted random draw for the
 /// rest. Bots that already hold an ambition count as coverage and are
 /// never reassigned here.
@@ -96,9 +116,11 @@ pub fn assign_fleet(bots: &[FleetBot], demand: &[KindDemand]) -> Vec<Assignment>
     out
 }
 
-/// One bot's draw: an open coverage gap it can hold (best fit, seeded
-/// tie-break) wins; otherwise a random kind weighted by demand × √fit
-/// (never an operator-only kind). Past coverage
+/// One bot's draw: an open coverage gap it can hold (best fit × the
+/// trait's tilt, seeded tie-break) wins; otherwise a random kind weighted
+/// by demand × √fit × `affinity_tilt` (user lever 2026-11-17: a market
+/// profile leans on transformation kinds; never an operator-only kind).
+/// Past coverage
 /// the draw stays random (user decision 2026-11-13): levels tilt it (√fit
 /// = 1 + lead/5) but never fix it, or the inherited melee levels turn the
 /// whole fleet into warriors. `exclude` keeps kinds out (the one just blocked). `why`:
@@ -126,7 +148,7 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
     for entry in specs().iter().filter(|entry| !operator_only(entry.kind) && !exclude.contains(&entry.kind)) {
         let tilt = demand.iter().find(|known| known.kind == entry.kind);
         let demand_weight = tilt.map(|known| known.weight).unwrap_or(1.0).max(0.01);
-        let weight = demand_weight * fit(entry.kind, &|skill| bot.level(skill)).sqrt();
+        let weight = demand_weight * fit(entry.kind, &|skill| bot.level(skill)).sqrt() * affinity_tilt(entry.kind, bot.market_affinity);
         let top = tilt.filter(|known| known.weight >= 1.5).and_then(|known| known.top_item.clone());
         weighted.push((entry.kind, weight, top));
     }
@@ -184,3 +206,7 @@ pub fn optional_change(ambition: &Ambition, bot: &FleetBot, gaps: &[String], red
     let (kind, why) = draw_kind(bot, &[], demand, &[current]);
     Some((kind, why))
 }
+
+#[cfg(test)]
+#[path = "ambition_market_tests.rs"]
+mod market_tests;

@@ -189,6 +189,9 @@ pub(crate) fn pick_from_guide(set: &GuideSet, climb: &Climb, life: &Life, bot: &
         method: row.method.clone(),
         batch,
         missing,
+        // A market line buys its inputs at the tranche's volume (user
+        // lever 2026-11-17, `replan::buys_by_market`).
+        buys_inputs: row.supply == Supply::Market,
         cost_per_xp: row.coins_per_xp,
         xp_per_tick: row.effective_xp_6000 / lifescape_planner::guide_model::WINDOW_TICKS,
         profit_per_tick: row.coins_6000 / lifescape_planner::guide_model::WINDOW_TICKS,

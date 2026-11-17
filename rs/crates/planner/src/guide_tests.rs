@@ -606,3 +606,6 @@ mod sourcing;
 
 #[path = "guide_volume_tests.rs"]
 mod volume;
+
+#[path = "guide_market_lot_tests.rs"]
+mod market_lot;

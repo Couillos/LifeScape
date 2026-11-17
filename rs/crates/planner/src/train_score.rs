@@ -11,10 +11,15 @@
 //!   `coin_weight = 0.5 + thrift` (0.5 for a fast bot that spends to go
 //!   faster, 1.5 for a thrifty one; 1 = the neutral D17 total);
 //! - market_affinity (autarcique 0 ↔ marché 1) weighs a MARKET line
-//!   against an autonomous one as `cost::choose_market_or_farm` does
-//!   (×(1.5 − affinity) on its cost): a market bot buys its yew logs as
-//!   soon as buying is faster, an autarkic one cuts them unless buying is
-//!   far faster (a rune pickaxe nobody can smith: every bot buys);
+//!   against an autonomous one by `buy_weight` (2026-11-17, user lever
+//!   « entraînement marché plus fréquent »): a continuous curve of the
+//!   trait, ×2^(2 − 4 × affinity) on the line's cost (×1 at 0.5, ×0.44 at
+//!   0.8, ×3 at 0.1, ×4 at 0, ×0.25 at 1): a market bot (≥ 0.6) buys its
+//!   inputs (bars, logs, raw fish, runes, bones) unless their coins, at
+//!   its D17 price, make buying far slower than working them up itself;
+//!   an autarkic one farms unless buying is far faster (a rune pickaxe
+//!   nobody can smith: every bot buys). The money guide's market lines
+//!   keep the linear `market_weight` (1.5 − affinity, not this lever);
 //! - a negative score (the line earns more than its time costs) keeps the
 //!   same order: the weight divides it instead of multiplying.
 //!
@@ -34,9 +39,17 @@ pub fn coin_weight(thrift: f64) -> f64 {
     0.5 + thrift.clamp(0.0, 1.0)
 }
 
-/// Weight of a market line's cost (D15, `cost::choose_market_or_farm`).
+/// Weight of a market line's cost (D15, `cost::choose_market_or_farm`,
+/// the money guide's market lines `guide_pick::merit_money`).
 pub fn market_weight(affinity: f64) -> f64 {
     1.5 - affinity.clamp(0.0, 1.0)
+}
+
+/// Weight of a MARKET training line's cost for a bot of `affinity`
+/// (module doc): 2^(2 − 4 × affinity), continuous and decreasing, 1 at
+/// the neutral 0.5.
+pub fn buy_weight(affinity: f64) -> f64 {
+    2f64.powf(2.0 - 4.0 * affinity.clamp(0.0, 1.0))
 }
 
 /// One line's terms for a bot, per XP of the line's skill.
@@ -71,7 +84,7 @@ pub fn score_row(row: &TrainingRow, profile: &Profile, ticks_per_coin: Option<f6
     let coins = ticks_per_coin.map(|per_coin| row.coins_per_xp * per_coin).unwrap_or(0.0);
     let total = own + coin_weight(profile.thrift) * coins;
     let score = if row.supply == Supply::Market {
-        let weight = market_weight(profile.market_affinity);
+        let weight = buy_weight(profile.market_affinity);
         if total >= 0.0 { total * weight } else { total / weight }
     } else {
         total

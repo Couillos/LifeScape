@@ -183,6 +183,9 @@ pub struct TrainPick {
     pub batch: i64,
     /// Inputs to obtain first (missing at resolve: obtain sub-tasks).
     pub missing: Vec<String>,
+    /// A market line of the training guide (user lever 2026-11-17): the
+    /// climb buys its inputs (`Node::buys_inputs`), never farms them.
+    pub buys_inputs: bool,
     pub cost_per_xp: f64,
     pub xp_per_tick: f64,
     /// Coins the method earns per tick, time not counted (product value
@@ -287,6 +290,7 @@ fn pick(method: String, batch: i64, missing: Vec<String>, cost_each: f64, xp_eac
         method,
         batch,
         missing,
+        buys_inputs: false,
         cost_per_xp: cost_each / xp_each,
         xp_per_tick: xp_each / ticks_each,
         profit_per_tick: coin_rate - cost_each / ticks_each,
