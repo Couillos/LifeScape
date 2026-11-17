@@ -77,6 +77,26 @@ fn rank_pickups(
     ranked
 }
 
+/// What a sweep leads to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SweepNext {
+    /// The load is done (pack full or `--want` met): bank it.
+    Bank,
+    /// Room left and the want short: stay on the spawn, watch the respawn.
+    Watch,
+}
+
+/// Pure: bank only a done load (`kit::want::load_done`), whatever this
+/// sweep took. Live 2026-11-17 (oscar_cole): banking every non-empty
+/// sweep walked Edgeville ↔ Graveyard of Shadows for one bone a trip.
+pub fn after_sweep(load_done: bool) -> SweepNext {
+    if load_done {
+        SweepNext::Bank
+    } else {
+        SweepNext::Watch
+    }
+}
+
 /// Pick banked sweeps in the open session: `ground_pickup [item] [count]
 /// [--site x,z,level] [--want item N]`. With an item (the brain's
 /// `ground:` order) only that object is taken, at the brain's site.
@@ -144,7 +164,12 @@ pub fn run_ground_pickup(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 Err(error) => step_bot.log(&format!("pickup failed: {error}")),
             }
         }
-        if taken == 0 {
+        if after_sweep(crate::kit::want::load_done(step_bot, until)) == SweepNext::Watch {
+            if taken > 0 {
+                // Room left: the next sweep watches the respawn here.
+                empty_since = None;
+                return Ok(StepControl::Continue);
+            }
             let since = *empty_since.get_or_insert(step_bot.world.ticks);
             if watch_over(since, step_bot.world.ticks, watch) {
                 // Other players took it: contention, never a failure (D4).
@@ -202,7 +227,7 @@ fn watch_floor(bot: &mut Bot, here: (i32, i32), wanted: &[u16], until: u64) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::{rank_pickups, respawn_watch_ticks, watch_over, PICKUP_RADIUS, RESPAWN_MARGIN_TICKS, WANTED};
+    use super::{after_sweep, rank_pickups, respawn_watch_ticks, watch_over, SweepNext, PICKUP_RADIUS, RESPAWN_MARGIN_TICKS, WANTED};
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
     use lifescape_gamedata as knowledge;
@@ -277,5 +302,16 @@ mod tests {
         assert!(slowest >= 500 + RESPAWN_MARGIN_TICKS, "gold ore (500) bounds the full sweep, got {slowest}");
         assert!(!watch_over(100, 100 + 40, sword), "40 ticks bare is not the end");
         assert!(watch_over(100, 100 + sword, sword), "a full respawn watched bare ends the run");
+    }
+
+    /// Live 2026-11-17 (oscar_cole, Graveyard of Shadows): one bone per
+    /// Edgeville round trip (~450 ticks each) while the spawn respawns in
+    /// 100: every non-empty sweep banked, 27 slots free. The load banks
+    /// only once done (pack full or `--want` met); short of it the bot
+    /// stays and watches the respawn.
+    #[test]
+    fn a_partial_load_stays_on_the_spawn() {
+        assert_eq!(after_sweep(false), SweepNext::Watch, "one bone, pack not full: stay and watch the respawn");
+        assert_eq!(after_sweep(true), SweepNext::Bank, "pack full or want met: bank");
     }
 }
