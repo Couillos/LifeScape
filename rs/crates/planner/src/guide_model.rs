@@ -65,13 +65,14 @@ impl RateAnswer {
 }
 
 /// A current price (D12: median of the last five fills clamped by the
-/// book) and whether a trade backs it, the median and how many fills it
-/// rests on, and the resting book (non-dormant levels, best first,
-/// (price, units)). The book counts only for the units it holds (bids
-/// for a sale, asks for a purchase), never for a window's volume: an
-/// object without a fill has NO current price (`price` then carries no
-/// value), and a clamp by the book moves the price of the clamping
-/// orders' units only.
+/// book) and whether a trade backs it, the median, how many fills it
+/// rests on and the units they moved, and the resting book (non-dormant
+/// levels, best first, (price, units)). The current price holds for the
+/// units its fills moved only (`fill_units`, user 2026-11-17), the book
+/// for the units it holds (bids for a sale, asks for a purchase), never
+/// for a window's volume: an object without a fill has NO current price
+/// (`price` then carries no value), and a clamp by the book moves the
+/// price of the clamping orders' units only.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Quote {
     pub price: f64,
@@ -80,15 +81,18 @@ pub struct Quote {
     pub median: f64,
     /// Fills the median rests on (at most five).
     pub fills: usize,
-    /// Units those fills moved (Σ quantities): a thin price (fewer than
-    /// `FULL_FILLS` fills) holds for these units only (user 2026-11-16).
+    /// Units those fills moved (Σ quantities of the fills the median
+    /// rests on, the last `FULL_FILLS` whatever their age: "recently"):
+    /// the current price holds for these units only, whatever the number
+    /// of fills (user 2026-11-17; 2026-11-16 for fewer than five).
     pub fill_units: f64,
     pub bids: Vec<(f64, f64)>,
     pub asks: Vec<(f64, f64)>,
 }
 
 /// Fills a current price needs to rest on to be called "traded" rather
-/// than "thin" (D12 reads the last five).
+/// than "thin" (D12 reads the last five). A confidence flag only: the
+/// units the price holds for are `Quote::fill_units`.
 pub const FULL_FILLS: usize = 5;
 
 /// What a flow's unit price rests on (the guide's price confidence).
@@ -97,7 +101,8 @@ pub enum PriceBasis {
     /// The current price of a traded object (D12).
     Traded,
     /// The current price of an object traded fewer than `FULL_FILLS`
-    /// times (D12 still: a median of what exists, flagged).
+    /// times (D12 still: a median of what exists, flagged), or one that
+    /// carries most of a volume running past the units its fills moved.
     Thin,
     /// A server shop's price (Q3 sale, Q7 purchase).
     Shop,

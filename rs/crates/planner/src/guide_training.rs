@@ -19,7 +19,11 @@
 //! - market: stock inputs bought (current price, or a shop's, Q7), a
 //!   square round trip and the measured wait per lot (as D15); a volume
 //!   the asks and a shop do not cover blocks the mode (the money guide's
-//!   purchase rule);
+//!   purchase rule). A method that spends only consumables (teleports,
+//!   curses, a fight's ammo, bait: no stock input) gets one too (user
+//!   2026-11-17): every consumable bought at its volume, the coins
+//!   converted by D17 as any market line; none when its autonomous line
+//!   already buys every consumable (nothing makes one: a copy);
 //! - a blocked line carries no effective rate (as a blocked money line
 //!   carries no profit) and ranks after every other;
 //! - coins spent convert to ticks at the best ACCESSIBLE money line of
@@ -32,7 +36,7 @@ use std::collections::HashMap;
 
 use crate::guide_chain::{Choice, Sourcing};
 use crate::guide_engine::{price_flows, Engine, InputPricing};
-use crate::guide_model::{band_of, Confidence, GuideFilter, InputRoute, Prereqs, Supply, TrainingRow, Unrated, WINDOW_TICKS};
+use crate::guide_model::{band_of, Confidence, GuideFilter, InputRoute, Prereqs, Route, Supply, TrainingRow, Unrated, WINDOW_TICKS};
 use crate::guide_money::{places, row_level, Place};
 
 /// The bot's balance of one supply mode: coins and XP per 6000 ticks
@@ -261,10 +265,14 @@ pub fn training_guide(engine: &Engine, filter: &GuideFilter) -> (Vec<TrainingRow
             let stock = place.answer.flows.iter().any(|(_, cause, qty)| cause == "input" && *qty < 0.0);
             for skill in trains {
                 // Autonomous farming upstream rides the prior's place only.
-                if !stock || index == 0 {
-                    rows.extend(row_of(skill, place, band, Supply::Autonomous, autonomous(engine, place), profit, place.answer.confidence.clone(), filter));
+                let own = (!stock || index == 0).then(|| autonomous(engine, place));
+                // Consumables only (user 2026-11-17): a market line when
+                // the autonomous one farms at least one of them.
+                let market = stock || own.as_ref().is_some_and(|balance| balance.routes.iter().any(|route| route.route == Route::Farm));
+                if let Some(balance) = own {
+                    rows.extend(row_of(skill, place, band, Supply::Autonomous, balance, profit, place.answer.confidence.clone(), filter));
                 }
-                if stock {
+                if market {
                     rows.extend(row_of(skill, place, band, Supply::Market, bought(engine, place, band), profit, place.answer.confidence.clone(), filter));
                 }
             }

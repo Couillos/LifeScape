@@ -470,15 +470,22 @@ le prior des guides (`method_rate::guide_prior` : un combat y ajoute sa
 table de drops ; le cerveau garde `method_prior`). Prix (2026-11-16,
 `guide_engine`), toujours pour le VOLUME d'une ligne (unités / 6000
 ticks), jamais le prix d'une unité appliqué à une fenêtre :
-- vente d'un objet échangé : prix courant (D12) pour chaque unité, ou
-  le PNJ s'il paie plus (Q3) ; un bid qui lève le prix au-dessus de la
-  médiane ne paie que ses propres unités (un bid d'1 unité paie 1 unité,
-  le reste à la médiane) ;
-- prix MINCE (< 5 fills, `thin`, décision 2026-11-16) : il ne vaut que
-  pour le volume réellement échangé (Σ quantités de ces fills,
-  `Quote::fill_units`) ; au-delà, vente aux bids restants pour leur
-  profondeur, puis au PNJ (Q3), sinon 0, comme un objet jamais échangé
-  (1 fill d'1 unité à 15 411 : 1 unité à 15 411, pas 300) ;
+- vente d'un objet échangé : prix courant (D12), ou le PNJ s'il paie
+  plus (Q3) ; un bid qui lève le prix au-dessus de la médiane ne paie que
+  ses propres unités (un bid d'1 unité paie 1 unité, le reste à la
+  médiane) ;
+- PRIX BORNÉ AU VOLUME RÉCENT (décision 2026-11-16 sous 5 fills, étendue
+  2026-11-17 à tout nombre de fills) : le prix courant ne vaut que pour
+  le volume réellement échangé RÉCEMMENT, c.-à-d. Σ des quantités des
+  fills qui forment la médiane (les 5 derniers fills de l'objet,
+  `PRICE_FILLS`, quel que soit leur âge : la même fenêtre que D12,
+  `Quote::fill_units`, `web_guides::quote_of`) ; au-delà, vente aux bids
+  restants pour leur profondeur, puis au PNJ (Q3), sinon 0, comme un
+  objet jamais échangé (1 fill d'1 unité à 15 411 : 1 unité à 15 411,
+  pas 300 ; Leather cowl, 5 fills d'1 unité vers 462 : 5 unités à 462
+  sur 988 par fenêtre, pas 988). Moins de 5 fills marquent le prix
+  `thin`, de même qu'un volume qui dépasse le volume échangé quand le
+  prix courant en porte encore la majorité ;
 - vente d'un objet jamais échangé : pas de prix courant ; bids pour
   leur profondeur, le reste au PNJ (Q3, `web_guides::NPC_SALE_VOLUME`)
   ou 0 sans débouché ;
@@ -487,7 +494,11 @@ ticks), jamais le prix d'une unité appliqué à une fenêtre :
   échangé, à l'ask seul sinon) et fenêtre des boutiques F2P parcourus
   ENSEMBLE du moins cher pour le volume (boutique d'abord à prix égal) ;
   au-delà, intrant introuvable : ligne bloquée (raison, aucun profit),
-  objet échangé compris (médiane 7 sous un ask à 35 : achat à 35) ;
+  objet échangé compris (médiane 7 sous un ask à 35 : achat à 35). Même
+  logique de volume que la vente : le prix courant n'est qu'un plancher,
+  jamais une profondeur (5 fills de 5 000 unités ne vendent pas une
+  unité que personne n'offre ; test
+  `guide_volume_tests::current_price_gives_no_purchase_depth`) ;
 - STOCK BOUTIQUE FINI (décision 2026-11-16 §2, `gamedata::shop_buy`) :
   une boutique vend par fenêtre de 6000 ticks son stock de base, unité
   par unité au prix serveur du stock restant (`shop.rs2`
@@ -570,7 +581,14 @@ toujours après les autres.
   test `a_rare_drop_is_farmed_in_autonomous_mode_however_slow`) ; seuls ceux
   qu'aucune activité ne fait restent achetés (péages et pièces jamais
   produits) ; la ligne affiche la voie de chacun (`routes`) ; marché : intrants achetés selon la règle d'achat ci-dessus,
-  volume au-delà des asks + boutique → ligne bloquée ; pièces converties
+  volume au-delà des asks + boutique → ligne bloquée ; une méthode qui ne
+  consomme QUE des consommables (téléports, malédictions, munitions,
+  appât : aucun intrant de stock) a aussi sa ligne marché (décision
+  2026-11-17) : chaque consommable acheté au volume disponible (asks,
+  boutiques), bloquée au-delà (loi introuvable au volume → raison, aucune
+  XP effective), même règle que les autres lignes marché ; aucune ligne
+  marché quand la ligne autonome achète déjà tous ses consommables
+  (aucun n'est produit : ce serait sa copie) ; pièces converties
   en ticks au profit de la meilleure ligne money making accessible, D17) ;
   ligne bloquée : aucune XP effective (comme aucun profit en money) ;
   sources d'une chaîne = jambes de production + activités du catalogue

@@ -1108,3 +1108,37 @@ enfilée ; la ligne achetait la non enfilée (150 asks à 540) au lieu de
 l'enfilée (1 ask à 805, aucune boutique F2P), donc n'était pas bloquée.
 Rejeté : condition de boutique ignorée (achat ouvert à tous) ; boutique
 à condition exclue du guide ; seuil de rareté d'un drop.
+
+## 2026-11-17 — Guides : prix borné au volume récent, ligne marché des consommables
+
+Décisions utilisateur (`planner::guide_engine|guide_training`,
+`docs/economy.md` § Rendements) :
+1. Prix borné au volume : le prix courant (médiane des fills) ne vaut que
+   pour le volume réellement échangé récemment, QUEL QUE SOIT le nombre
+   de fills. « Récemment » = les fills qui forment la médiane : les 5
+   derniers fills de l'objet (`PRICE_FILLS`, quel que soit leur âge, la
+   fenêtre de D12) ; volume = Σ de leurs quantités (`Quote::fill_units`).
+   Au-delà : bids au repos pour leur profondeur, puis PNJ (Q3), sinon 0.
+   Le seuil « < 5 fills » ne décide plus de la profondeur, il ne marque
+   que la confiance (`thin`, aussi posé quand le volume dépasse le
+   volume échangé). Côté achat, inchangé et cohérent : le prix courant
+   est un plancher (max(prix courant, ask)), jamais une profondeur ;
+   seuls asks et boutiques en ont. Cas réel : Leather cowl, 5 fills d'1
+   unité vers 462, fixait D17 au niveau 30 (454 324/6000) en vendant 988
+   unités à 462 ; copie de la base du 2026-11-17 : D17 niveau 30 passe de
+   342 632 (craft:leather_vambraces, chaîne, 988 unités à 349 sur 5
+   fills d'1 unité) à 11 675 (string:unstrung_sapphire_amulet, chaîne).
+2. Ligne MARCHÉ des méthodes à consommables seuls (téléports,
+   malédictions, munitions, appât ; enchant, alch et bananes ont un
+   intrant de stock et l'avaient déjà) : en plus de la ligne autonome,
+   une ligne où chaque consommable est acheté au volume disponible
+   (asks, boutiques ; bloquée au-delà), pièces converties via D17, même
+   règle que les autres lignes marché (`guide_money::market_row`).
+   Aucune ligne marché quand la ligne autonome achète déjà tout (rien
+   n'est produit : ce serait une copie).
+Tests : `guide_volume_tests` (5 fills d'1 unité sur 988, aucune
+profondeur d'achat par le prix courant, téléport avec lois achetées,
+ligne bloquée sans loi au volume, pas de copie).
+Rejeté : « 5 fills = prix valable pour tout volume » ; fenêtre en temps
+pour « récemment » (la médiane n'en a pas) ; ligne marché identique à
+l'autonome.

@@ -5,12 +5,15 @@
 //! VOLUME (the units a row moves per 6000 ticks), never for one unit
 //! applied to a window:
 //! - SALE of a TRADED object: its current price (median of its last five
-//!   fills clamped by the book) for every unit, or an F2P shop's when it
-//!   pays more (Q3). A bid lifting the price above the median pays its
-//!   own units only. A price resting on fewer than five fills (`thin`)
-//!   holds for the units those fills moved only: past them the sale hits
-//!   the remaining bids for their depth, then the shop (Q3), else is
-//!   worth nothing, as a never-traded object;
+//!   fills clamped by the book), or an F2P shop's when it pays more (Q3),
+//!   for the VOLUME those five fills moved only (`Quote::fill_units`,
+//!   user 2026-11-17: whatever the number of fills, "recently" = the
+//!   fills the median rests on, whatever their age): past it the sale
+//!   hits the remaining bids for their depth, then the shop (Q3), else is
+//!   worth nothing, as a never-traded object. A bid lifting the price
+//!   above the median pays its own units only. Fewer than five fills
+//!   flag the price `thin`; so does a volume that runs past the traded
+//!   one while the price still carries most of it;
 //! - SALE of a NEVER-TRADED object (no current price): the resting bids
 //!   best first (while they pay more than the shop), the rest to the
 //!   best F2P shop (Q3) or worth nothing without one;
@@ -18,7 +21,9 @@
 //!   max(current price, ask) for a traded object) and the F2P shops'
 //!   window (Q7, decision 2026-11-16 §2: base stock unit by unit at the
 //!   server price for the stock left, then the window's restock) walked
-//!   together cheapest first for the volume; past both, NOT for sale
+//!   together cheapest first for the volume (the current price is a
+//!   floor, never a depth: only asks and shops hold units); past both,
+//!   NOT for sale
 //!   (`available` false: the row needing it is blocked, never priced at
 //!   a made-up figure);
 //! - a shop behind a condition (an F2P quest, quest points; Q7) buys and
@@ -115,6 +120,8 @@ fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>) -> P
     let (mut remaining, mut value) = (units, 0.0);
     let (mut at_current, mut at_book, mut at_shop) = (0.0, 0.0, 0.0);
     let mut need = ShopNeed::default();
+    // A sale ran past its current price's volume (the price is thin).
+    let mut past_current = false;
     for step in steps {
         if remaining <= 0.0 {
             break;
@@ -127,7 +134,10 @@ fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>) -> P
         remaining -= taken;
         need = need.and(step.need);
         match step.tier {
-            Tier::Current => at_current += taken,
+            Tier::Current => {
+                at_current += taken;
+                past_current |= side == Side::Sell && remaining > 1e-9;
+            }
             Tier::Book => at_book += taken,
             Tier::Shop => at_shop += taken,
         }
@@ -142,6 +152,7 @@ fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>) -> P
                 PriceBasis::Nothing
             }
         }
+        (Some(_), _, _, _) if at_current >= at_book + at_shop + uncovered && past_current => PriceBasis::Thin,
         (Some(basis), _, _, _) if at_current >= at_book + at_shop + uncovered => basis,
         (_, true, false, false) => PriceBasis::Book,
         (_, true, true, _) => PriceBasis::BookShop,
@@ -164,25 +175,21 @@ fn median_of(quote: &Quote) -> f64 {
     }
 }
 
-/// True when a traded object's current price rests on fewer than
-/// `FULL_FILLS` fills (user 2026-11-16: it holds for their units only).
-fn thin(quote: &Quote) -> bool {
-    quote.fills < crate::guide_model::FULL_FILLS
-}
-
-/// Basis of a traded object's own price: thin under `FULL_FILLS`.
+/// Basis of a traded object's own price: thin under `FULL_FILLS` fills
+/// (a confidence flag only: the volume it holds is `Quote::fill_units`
+/// whatever the count, user 2026-11-17).
 fn traded_basis(quote: &Quote) -> PriceBasis {
-    if thin(quote) {
+    if quote.fills < crate::guide_model::FULL_FILLS {
         PriceBasis::Thin
     } else {
         PriceBasis::Traded
     }
 }
 
-/// Sale steps of a quote, best first (D12, Q3, user 2026-11-16). A
-/// traded object: the bids above its price for their units, then its
-/// price (for the units its fills moved when thin; every unit else),
-/// then, past a thin price, the remaining bids and the shop; a shop
+/// Sale steps of a quote, best first (D12, Q3, users 2026-11-16 and
+/// 2026-11-17). A traded object: the bids above its price for their
+/// units, then its price for the units its last fills moved
+/// (`Quote::fill_units`), then the remaining bids and the shop; a shop
 /// paying more than the price takes every unit the bids above it leave.
 /// A never-traded object: the bids above the shop, then the shop. A
 /// shop step carries the shop's condition (Q7).
@@ -200,12 +207,9 @@ fn sale_steps(quote: &Quote, offer: Option<(f64, ShopNeed)>) -> Vec<Step> {
     let bids: Vec<Step> = book_steps(&quote.bids).collect();
     let lifting = bids.iter().take_while(|step| step.price > base).count();
     steps.extend(bids[..lifting].iter().copied());
-    let depth = if thin(quote) { quote.fill_units.max(0.0) } else { f64::INFINITY };
-    steps.push(Step { price: base, depth, tier: Tier::Current, need: ShopNeed::default() });
-    if depth.is_finite() {
-        steps.extend(bids[lifting..].iter().copied().take_while(above_shop));
-        steps.extend(offer.map(shop_step));
-    }
+    steps.push(Step { price: base, depth: quote.fill_units.max(0.0), tier: Tier::Current, need: ShopNeed::default() });
+    steps.extend(bids[lifting..].iter().copied().take_while(above_shop));
+    steps.extend(offer.map(shop_step));
     steps
 }
 

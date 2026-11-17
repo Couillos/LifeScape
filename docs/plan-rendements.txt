@@ -146,7 +146,9 @@ D10 Choix d'un bot : tirage pondéré parmi les lignes proches du
 D11 Guide public seul : pas de mélange avec l'expérience propre du bot
     (brain_reserve, réserve vendeur, reste un sujet séparé).
 D12 Prix de vente : prix courant (médiane des 5 derniers fills bornée
-    par le carnet). Pas de saturation dans le guide.
+    par le carnet). Pas de saturation dans le guide. Révisé 2026-11-17
+    (decisions.md) : ce prix ne vaut que pour Σ quantités de ces 5 fills ;
+    au-delà bids, PNJ, sinon 0.
 D13 Deux traits de profil :
     - market_affinity (existant) : autarcique ↔ marché. Autarcique :
       achète seulement quand farmer coûte beaucoup plus (pioche rune,

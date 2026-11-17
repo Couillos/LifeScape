@@ -5,8 +5,8 @@
 //!   blended with the guides' game prior, else the prior alone), names
 //!   turned into debug names for the engine;
 //! - prices: the current price of each traded object (`rates_price`,
-//!   D12) and the units its fills moved (a thin price holds for them
-//!   only); a never-traded object has none, only its resting book (the
+//!   D12) and the units its last five fills moved (the price holds for
+//!   them only, user 2026-11-17); a never-traded object has none, only its resting book (the
 //!   engine counts it for the units it holds, `quote_of`); the best F2P
 //!   shop sale at a line's volume (Q3, `NPC_SALE_VOLUME`) and what the
 //!   F2P shops sell in one window (Q7, finite stock, decision 2026-11-16

@@ -85,8 +85,9 @@ impl Fixture {
         };
         let price = |item: &str| match (self.quotes.get(item), self.prices.get(item)) {
             (Some(quote), _) => quote.clone(),
-            // A traded object's market makers offer it at its price.
-            (None, Some(price)) => Quote { price: *price, traded: true, median: *price, fills: 5, fill_units: 500.0, asks: vec![(*price, 1e9)], ..Quote::default() },
+            // A traded object's market makers offer it at its price; its
+            // fills moved more than any window sells (a deep history).
+            (None, Some(price)) => Quote { price: *price, traded: true, median: *price, fills: 5, fill_units: 1e9, asks: vec![(*price, 1e9)], ..Quote::default() },
             (None, None) => {
                 let (bids, asks) = self.books.get(item).cloned().unwrap_or_default();
                 // The book midpoint a never-traded quote carries: no value.
@@ -358,7 +359,7 @@ fn a_book_clamp_moves_the_price_of_its_own_units_only() {
     let mut fixture = Fixture::new();
     fixture.yields.insert("smith:iron_2h_sword", answer(&[("iron_2h_sword", "product", 100.0), ("iron_bar", "input", -300.0)], &[("product", "iron_2h_sword", 100.0)]));
     fixture.prices.insert("iron_bar", 20.0);
-    fixture.quotes.insert("iron_2h_sword", Quote { price: 5000.0, traded: true, median: 500.0, fills: 5, fill_units: 5.0, bids: vec![(5000.0, 1.0)], asks: Vec::new() });
+    fixture.quotes.insert("iron_2h_sword", Quote { price: 5000.0, traded: true, median: 500.0, fills: 5, fill_units: 500.0, bids: vec![(5000.0, 1.0)], asks: Vec::new() });
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let sword = row(&rows, "smith:iron_2h_sword", Family::Recipe);
     let line = sword.flows.iter().find(|line| line.item == "iron_2h_sword").expect("sword line");
@@ -379,8 +380,9 @@ fn a_book_clamp_moves_the_price_of_its_own_units_only() {
     assert!((coal.unit_price - (5.0 + (units - 1.0) * 20.0) / units).abs() < 1e-9, "{}", coal.unit_price);
 }
 
-/// Thin price (user 2026-11-16): a current price resting on fewer than
-/// five fills holds for the units those fills moved only; past them a
+/// Thin price (user 2026-11-16, extended 2026-11-17 to any number of
+/// fills, `volume::current_price_holds_for_the_recent_fill_volume_only`):
+/// a current price holds for the units its fills moved only; past them a
 /// sale hits the bids for their depth, then the F2P shop (Q3), else is
 /// worth nothing, as for a never-traded object. One fill of one unit at
 /// 15 411 never prices 300 units at 15 411.
@@ -401,8 +403,9 @@ fn thin_price_holds_for_the_traded_volume_only() {
     assert!((many.price - (15411.0 + 20.0 * 400.0) / 300.0).abs() < 1e-9, "no outlet past the bids: {}", many.price);
     assert_eq!(many.basis, crate::guide_model::PriceBasis::BookNone);
     assert!(many.available, "a sale is always possible, at 0 past every outlet");
-    // Five fills: the current price for every unit (D12, no saturation).
-    fixture.quotes.insert("leather_chaps", Quote { price: 15411.0, traded: true, median: 15411.0, fills: 5, fill_units: 5.0, ..Quote::default() });
+    // Five fills that moved 300 units: the current price for every unit
+    // (D12, no saturation; 2026-11-17: the volume decides, not the count).
+    fixture.quotes.insert("leather_chaps", Quote { price: 15411.0, traded: true, median: 15411.0, fills: 5, fill_units: 300.0, ..Quote::default() });
     let many = fixture.run(|engine| engine.sale_at("leather_chaps", 300.0));
     assert!((many.price - 15411.0).abs() < 1e-9 && many.basis == crate::guide_model::PriceBasis::Traded, "{many:?}");
 }
@@ -565,3 +568,6 @@ fn training_market_input_is_limited_by_the_ask_depth() {
 
 #[path = "guide_sourcing_tests.rs"]
 mod sourcing;
+
+#[path = "guide_volume_tests.rs"]
+mod volume;
