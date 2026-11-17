@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use lifescape_planner::expand::ReadyCtx;
-use lifescape_planner::guide_model::{Confidence, Family, MoneyRow, Prereqs, Supply, TrainingRow};
+use lifescape_planner::guide_model::{Confidence, Family, MoneyRow, Prereqs, SourceGap, Supply, TrainingRow};
 use lifescape_planner::guide_read::{MoneyView, TrainingView};
 use lifescape_planner::{resolve_ready, Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
 
@@ -55,8 +55,7 @@ fn line(skill: &str, method: &str, supply: Supply, xp_6000: f64, coins_6000: f64
         routes: Vec::new(),
         confidence: Confidence::default(),
         price_confidence: "traded",
-        blocked: Vec::new(),
-        accessible: true,
+        priced: true,
     }
 }
 
@@ -81,8 +80,7 @@ fn money_line() -> MoneyRow {
         routes: Vec::new(),
         confidence: Confidence::default(),
         price_confidence: "traded",
-        blocked: Vec::new(),
-        accessible: true,
+        priced: true,
     }
 }
 
@@ -136,7 +134,7 @@ fn the_brain_picks_its_line_from_the_published_guide() {
 #[test]
 fn the_thrift_trait_splits_a_fast_line_from_a_cheap_one() {
     let mut blocked = line("magic", "fight:magic/fire_strike/cows", Supply::Autonomous, 900_000.0, 0.0);
-    blocked.blocked = vec!["firerune".to_string()];
+    blocked.prereqs.sources = vec![SourceGap { item: "firerune".to_string(), reason: "no autonomous source".to_string() }];
     let set = set_with(vec![
         blocked,
         line("magic", "teleport:varrock_teleport", Supply::Market, 120_000.0, -120_000.0),

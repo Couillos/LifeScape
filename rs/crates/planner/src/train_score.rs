@@ -52,12 +52,13 @@ pub fn ticks_per_coin(best_profit: Option<f64>) -> Option<f64> {
     best_profit.filter(|profit| *profit > 0.0).map(|profit| WINDOW_TICKS / profit)
 }
 
-/// The score of `row` for `profile` (module doc); `None` for a line the
-/// bot cannot run (blocked, inaccessible, no XP, market for an Ironman).
+/// The score of `row` for `profile` (module doc); `None` for a line
+/// without XP or a market line for an Ironman. Whether the bot can run it
+/// is judged per bot by `rank_rows` (D22, `guide_feasible`).
 /// Without an earning money line (`ticks_per_coin` `None`) the coins
 /// convert to nothing: time alone ranks.
 pub fn score_row(row: &TrainingRow, profile: &Profile, ticks_per_coin: Option<f64>) -> Option<LineScore> {
-    if !row.blocked.is_empty() || !row.accessible || row.xp_6000 <= 0.0 {
+    if row.xp_6000 <= 0.0 {
         return None;
     }
     if profile.ironman && row.supply == Supply::Market {
@@ -77,8 +78,10 @@ pub fn score_row(row: &TrainingRow, profile: &Profile, ticks_per_coin: Option<f6
 
 /// The scored lines of `rows` for `profile`, best (lowest) first; ties
 /// keep the guide's order.
-pub fn rank_rows<'a>(rows: &'a [TrainingRow], profile: &Profile, ticks_per_coin: Option<f64>) -> Vec<(LineScore, &'a TrainingRow)> {
-    let mut out: Vec<(LineScore, &TrainingRow)> = rows.iter().filter_map(|row| score_row(row, profile, ticks_per_coin).map(|score| (score, row))).collect();
+/// `within_reach`: the bot's judgement of a line (D22: feasible, or once a
+/// tool or a lot's coins are obtained); lines out of reach never rank.
+pub fn rank_rows<'a>(rows: &'a [TrainingRow], profile: &Profile, ticks_per_coin: Option<f64>, within_reach: &dyn Fn(&TrainingRow) -> bool) -> Vec<(LineScore, &'a TrainingRow)> {
+    let mut out: Vec<(LineScore, &TrainingRow)> = rows.iter().filter(|row| within_reach(row)).filter_map(|row| score_row(row, profile, ticks_per_coin).map(|score| (score, row))).collect();
     out.sort_by(|left, right| left.0.score.total_cmp(&right.0.score));
     out
 }

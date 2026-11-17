@@ -61,7 +61,8 @@ pub(crate) fn pick_from_guide(set: &GuideSet, skill: &str, level: u8, target: u8
     let lines: Vec<_> = rows.into_iter().filter(|row| row.skill == skill && launchable(&row.method, skill)).collect();
     let bot = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
     let best_profit = lifescape_planner::guide_read::best_profit_in(set.money_view(Some(level)), &bot);
-    let ranked = rank_rows(&lines, &life.profile, ticks_per_coin(best_profit));
+    let reach = |row: &lifescape_planner::guide_model::TrainingRow| lifescape_planner::guide_feasible::with_filter_bot(&bot, |judge| lifescape_planner::guide_feasible::feasible_for(row, judge).within_reach());
+    let ranked = rank_rows(&lines, &life.profile, ticks_per_coin(best_profit), &reach);
     let Some(row) = choose(&ranked) else {
         return Err(format!("no runnable {skill} line at {level} in the training guide ({} lines read)", lines.len()));
     };
