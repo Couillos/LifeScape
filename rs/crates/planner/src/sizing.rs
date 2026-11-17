@@ -1,26 +1,25 @@
-//! Tranche sizing (audit 2026-11-13 item A9): how many actions a reach
-//! tranche takes and what those actions burn — recipe inputs, bait,
-//! feathers, arrows, runes — from the XP the tranche must earn and the XP
-//! one action pays. Pure arithmetic over the server tables.
+//! Tranche sizing (audit 2026-11-13 item A9, plan rendements R3.3): how
+//! many actions a reach tranche takes, how long, and what those actions
+//! burn — recipe inputs, bait, feathers, arrows, runes — from the XP the
+//! tranche must earn and the method's YIELD (`work_rate`): XP per action,
+//! ticks per XP and units burned per XP all read from one rate, never
+//! from a constant of this file.
 //!
-//! Server truth (rev 274):
-//! - XP table in tenths (`gamedata::xp`), action XP in tenths in the dumps;
-//! - ranged pays 4 XP per damage point (`combat.rs2` `stat_advance(ranged,
-//!   $base)`, base = damage × 40 tenths); an arrow breaks one shot in five
-//!   (`^dropammo_chance = 5`) and the rest falls under the target: the
-//!   scripts never pick arrows back up, so every shot costs an arrow;
-//! - magic pays the spell's base XP plus 2 XP per damage point;
-//! - failed actions (iron smelts) burn their inputs without XP
-//!   (`Way::success`).
+//! Server truth (rev 274), through the rate:
+//! - XP table in tenths (`gamedata::xp`), unit XP from the dumps
+//!   (`unit_xp`): a product, an input eaten, a cast, a damage point;
+//! - fights: the server's hit rolls (`method_rate_fight`: ranged and
+//!   magic attack against the NPC's ranged or magic defence roll), every
+//!   shot an arrow (the scripts never pick them back up), every cast the
+//!   spell's runes;
+//! - failed actions (iron smelts, burnt fish) burn their inputs without
+//!   XP: the rate's flows count every attempt, its XP the successes.
 //!
-//! Fight damage is a model, not a table: a shot hits `HIT_ODDS` of the
-//! time for half its max hit on average (ranged max hit from the bronze-
-//! arrow formula, magic from the spell table).
+//! The planner reads the game prior (`work_rate::prior_rate`); a caller
+//! holding measured rates passes its reader (`*_with`). A climb is
+//! summed level by level (the odds rise with the level).
 
-use crate::method_way::{action_xp, magic_spell, method_way, spell_runes};
-
-/// Share of shots or casts that land on the low-defence F2P spots.
-pub const HIT_ODDS: f64 = 0.6;
+use crate::work_rate::{prior_rate, WorkRate};
 
 /// Display XP between two levels (server table in tenths).
 pub fn xp_between(from: u8, to: u8) -> f64 {
@@ -28,86 +27,104 @@ pub fn xp_between(from: u8, to: u8) -> f64 {
     ((at(to) - at(from)).max(0)) as f64 / 10.0
 }
 
-/// Ranged max hit with bronze arrows (ranged strength 7) at `level`.
-fn ranged_max_hit(level: u8) -> f64 {
-    (0.5 + (f64::from(level) + 8.0) * (7.0 + 64.0) / 640.0).floor().max(1.0)
+/// The skill a method's level climb trains (ranged and magic fights by
+/// their style, spells magic, recipes their way's gate). `None` for a
+/// melee fight (its skill rides in the node) and a way without XP.
+pub fn trained_skill(method: &str) -> Option<String> {
+    if method.starts_with("fight:ranged/") {
+        return Some("ranged".to_string());
+    }
+    if method.starts_with("fight:magic/") || method.starts_with("alch:") {
+        return Some("magic".to_string());
+    }
+    if method.starts_with("fight:") {
+        return None;
+    }
+    crate::method_way::method_way(method).or_else(|| crate::spell_methods::spell_way(method)).and_then(|(_, way)| way.skill.map(|(skill, _)| skill))
 }
 
-/// XP one action of `method` pays at `level` (fights: the damage model).
+/// XP one action of `method` pays at `level` read from `rate` (an
+/// attempt as the yield counts it; failures averaged in).
+pub fn xp_per_action_with(rate: &dyn Fn(&str, u8) -> Option<WorkRate>, method: &str, level: u8) -> Option<f64> {
+    let skill = trained_skill(method)?;
+    rate(method, level.max(1))?.xp_per_action(&skill)
+}
+
+/// XP one action of `method` pays at `level` (the game prior).
 pub fn xp_per_action(method: &str, level: u8) -> Option<f64> {
-    if method.starts_with("fight:ranged/") {
-        return Some(4.0 * HIT_ODDS * ranged_max_hit(level) / 2.0);
-    }
-    if let Some(spell) = magic_spell(method) {
-        let row = lifescape_gamedata::spells::all_spells().into_iter().find(|row| row.spell == spell)?;
-        let damage = HIT_ODDS * row.maxhit.unwrap_or(0) as f64 / 2.0;
-        return Some(row.xp as f64 / 10.0 + 2.0 * damage);
-    }
-    // Alchemy: the spell the level casts (low at 21, high at 55).
-    if method.starts_with("alch:") {
-        return crate::alchemy::alch_spell(level).map(|spell| spell.xp);
-    }
-    action_xp(method)
+    xp_per_action_with(&prior_rate, method, level)
 }
 
 /// Actions a tranche from `from` to `to` takes with `method` (`None`: no
-/// XP data for the method, e.g. melee fights, which burn nothing).
+/// rate or no XP for the method, e.g. melee fights, which burn nothing).
 pub fn tranche_actions(method: &str, from: u8, to: u8) -> Option<i64> {
-    let per = xp_per_action(method, from.max(1))?;
-    (per > 0.0).then(|| (xp_between(from, to) / per).ceil() as i64)
+    // The method must pay XP at its start, even for an empty climb.
+    xp_per_action(method, from.max(1)).filter(|per| *per > 0.0)?;
+    let mut actions = 0.0;
+    for level in from.max(1)..to.min(99) {
+        let per = xp_per_action(method, level).filter(|per| *per > 0.0)?;
+        actions += xp_between(level, level + 1) / per;
+    }
+    Some((actions - 1e-6).ceil().max(0.0) as i64)
 }
 
-/// What a tranche burns, (object, units): the way's consumed inputs (raw
-/// fish, ores, logs, essence, bait) per action divided by the success
-/// odds, a fight's arrows or the spell's runes per cast. Tools are not
+/// Ticks of work a tranche from `from` to `to` takes with `method`, level
+/// by level at `rate`'s ticks per XP (`None`: a level without a rate).
+pub fn tranche_ticks_with(rate: &dyn Fn(&str, u8) -> Option<WorkRate>, method: &str, from: u8, to: u8) -> Option<f64> {
+    let skill = trained_skill(method)?;
+    let mut ticks = 0.0;
+    for level in from.max(1)..to.min(99) {
+        ticks += xp_between(level, level + 1) * rate(method, level)?.ticks_per_xp(&skill)?;
+    }
+    Some(ticks)
+}
+
+/// `tranche_ticks_with` on the game prior.
+pub fn tranche_ticks(method: &str, from: u8, to: u8) -> Option<f64> {
+    tranche_ticks_with(&prior_rate, method, from, to)
+}
+
+/// What a tranche burns at `rate`, (object, units): each consumable the
+/// rate spends per XP (inputs over the success odds, a fight's arrows,
+/// the spell's runes, bait, thread), level by level. Tools are not
 /// consumption (`tools::required_tool`).
-pub fn tranche_consumption(method: &str, from: u8, to: u8) -> Vec<(String, i64)> {
-    let Some(actions) = tranche_actions(method, from, to) else { return Vec::new() };
-    if actions <= 0 {
-        return Vec::new();
+pub fn tranche_consumption_with(rate: &dyn Fn(&str, u8) -> Option<WorkRate>, method: &str, from: u8, to: u8) -> Vec<(String, i64)> {
+    let Some(skill) = trained_skill(method) else { return Vec::new() };
+    let mut sums: Vec<(String, f64)> = Vec::new();
+    let mut actions = 0.0;
+    for level in from.max(1)..to.min(99) {
+        let Some(read) = rate(method, level) else { return Vec::new() };
+        let climbed = xp_between(level, level + 1);
+        let Some(per_action) = read.xp_per_action(&skill) else { return Vec::new() };
+        actions += climbed / per_action;
+        for (item, per_xp) in read.burned_per_xp(&skill) {
+            match sums.iter_mut().find(|(known, _)| *known == item) {
+                Some(known) => known.1 += per_xp * climbed,
+                None => sums.push((item, per_xp * climbed)),
+            }
+        }
     }
-    if method.starts_with("fight:ranged/") {
-        return vec![("bronze_arrow".to_string(), actions)];
-    }
-    if let Some(spell) = magic_spell(method) {
-        return spell_runes(&spell).into_iter().map(|(rune, per_cast)| (rune, per_cast * actions)).collect();
-    }
-    // Alchemy: one object per cast plus the spell's runes (`alch:<object>`).
-    if let Some(item) = method.strip_prefix("alch:") {
-        let Some(spell) = crate::alchemy::alch_spell(from.max(1)) else { return Vec::new() };
-        let mut out = vec![(item.to_string(), actions)];
-        out.extend(spell.runes.iter().map(|(rune, per_cast)| (rune.clone(), per_cast * actions)));
-        return out;
-    }
-    let Some((_, way)) = method_way(method) else { return Vec::new() };
-    let success = if way.success > 0.0 { way.success } else { 1.0 };
-    let mut out: Vec<(String, i64)> = Vec::new();
-    for (input, per_action) in &way.inputs {
-        let units = (actions as f64 * (*per_action).max(1) as f64 / success).ceil() as i64;
-        out.push((input.clone(), units));
-    }
-    // Thread wears out one per five sewings (`leather.rs2`).
-    if way.tools.iter().any(|tool| tool == "thread") {
-        out.push(("thread".to_string(), (actions + 4) / 5));
-    }
-    out
+    // Whole actions: the climb's last action burns its full share (three
+    // air runes a teleport, never two), a float a hair above an integer
+    // is that integer.
+    let whole = (actions - 1e-6).ceil().max(0.0);
+    let scale = if actions > 0.0 { whole / actions } else { 0.0 };
+    sums.into_iter().map(|(item, units)| (item, (units * scale - 1e-6).ceil().max(0.0) as i64)).filter(|(_, units)| *units > 0).collect()
 }
 
-/// Units of `need` one action of `method` at `level` burns (alchemy: one
-/// object, the spell's runes; recipes: the way's inputs per success).
+/// `tranche_consumption_with` on the game prior.
+pub fn tranche_consumption(method: &str, from: u8, to: u8) -> Vec<(String, i64)> {
+    tranche_consumption_with(&prior_rate, method, from, to)
+}
+
+/// Units of `need` one action of `method` at `level` burns (an attempt:
+/// one object an alchemy, the spell's runes a cast, the way's inputs a
+/// recipe), rounded up.
 pub fn per_action_need(method: &str, level: u8, need: &str) -> Option<i64> {
-    if let Some(item) = method.strip_prefix("alch:") {
-        if item == need {
-            return Some(1);
-        }
-        return crate::alchemy::alch_spell(level.max(1))?.runes.into_iter().find(|(rune, _)| rune == need).map(|(_, count)| count);
-    }
-    if let Some(spell) = magic_spell(method) {
-        return spell_runes(&spell).into_iter().find(|(rune, _)| rune == need).map(|(_, count)| count);
-    }
-    let (_, way) = method_way(method)?;
-    let success = if way.success > 0.0 { way.success } else { 1.0 };
-    way.inputs.iter().find(|(input, _)| input == need).map(|(_, per)| ((*per).max(1) as f64 / success).ceil() as i64)
+    let skill = trained_skill(method)?;
+    let read = prior_rate(method, level.max(1))?;
+    let per_action = read.xp_per_action(&skill)?;
+    read.burned_per_xp(&skill).into_iter().find(|(item, _)| item == need).map(|(_, per_xp)| (per_xp * per_action - 1e-6).ceil().max(1.0) as i64)
 }
 
 /// Units of `need` a tranche of `method` from `from` to `to` burns
@@ -117,52 +134,5 @@ pub fn tranche_need(method: &str, from: u8, to: u8, need: &str) -> Option<i64> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{tranche_actions, tranche_consumption, tranche_need, xp_between};
-
-    #[test]
-    fn xp_between_reads_the_server_table() {
-        assert_eq!(xp_between(1, 2), 83.0);
-        assert_eq!(xp_between(1, 10), 1154.0);
-        assert_eq!(xp_between(10, 10), 0.0);
-    }
-
-    /// Fishing 20→30 on trout (50 XP a catch): 8 965 XP, 180 catches, one
-    /// feather each (audit 2026-11-13: consumables were sized at 1 unit).
-    #[test]
-    fn bait_scales_with_the_tranche() {
-        let actions = tranche_actions("gather:fishing/raw_trout", 20, 30).expect("trout xp");
-        assert_eq!(actions, ((133_630.0 - 44_700.0) / 10.0 / 50.0_f64).ceil() as i64);
-        assert_eq!(tranche_need("gather:fishing/raw_trout", 20, 30, "feather"), Some(actions));
-        assert_eq!(tranche_need("gather:fishing/raw_shrimp", 1, 5, "feather"), None, "nets burn nothing");
-    }
-
-    /// Recipe inputs follow the XP: cooking shrimps 1→10 (30 XP each) eats
-    /// 39 raw shrimps; iron smelting fails half the time, so every bar
-    /// costs two ores; runecraft burns one essence per rune.
-    #[test]
-    fn recipe_inputs_follow_the_xp() {
-        assert_eq!(tranche_need("cook/raw_shrimp", 1, 10, "raw_shrimp"), Some(39));
-        let iron_bars = tranche_actions("smelt:iron_bar", 15, 20).expect("iron xp");
-        assert_eq!(tranche_need("smelt:iron_bar", 15, 20, "iron_ore"), Some(iron_bars * 2));
-        let airs = tranche_actions("runecraft:airrune", 1, 2).expect("air xp");
-        assert_eq!(airs, 17, "83 XP at 5 XP a rune");
-        assert_eq!(tranche_need("runecraft:airrune", 1, 2, "blankrune"), Some(17));
-        assert_eq!(tranche_need("runecraft:airrune", 1, 2, "air_talisman"), None, "the talisman is a tool");
-        assert!(tranche_need("jewelry:gold_ring", 5, 8, "gold_bar").is_some_and(|bars| bars > 10));
-        assert_eq!(tranche_need("jewelry:gold_ring", 5, 8, "ring_mould"), None, "the mould is kept");
-    }
-
-    /// Fights burn ammunition: every shot an arrow, every cast the spell's
-    /// runes (fire strike: 3 fire, 2 air, 1 mind).
-    #[test]
-    fn fights_burn_arrows_and_runes() {
-        let arrows = tranche_need("fight:ranged/cows", 1, 10, "bronze_arrow").expect("arrows");
-        assert!(arrows > 500, "1 154 XP at ~1.2 XP a shot, got {arrows}");
-        let runes = tranche_consumption("fight:magic/fire_strike/cows", 13, 20);
-        let casts = tranche_actions("fight:magic/fire_strike/cows", 13, 20).expect("casts");
-        assert!(runes.contains(&("firerune".to_string(), casts * 3)), "{runes:?}");
-        assert!(runes.contains(&("airrune".to_string(), casts * 2)), "{runes:?}");
-        assert!(tranche_consumption("fight:melee/cows", 1, 10).is_empty(), "melee burns nothing");
-    }
-}
+#[path = "sizing_tests.rs"]
+mod tests;

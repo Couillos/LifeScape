@@ -176,3 +176,23 @@ fn priors_stay_within_twice_their_reference_measure() {
         assert!((0.5..=2.0).contains(&ratio), "{} L{}: prior {made:.1} vs reference {reference:.1} (x{ratio:.2})", ask.method, ask.level);
     }
 }
+
+/// Ranged and magic hit the server rolls (R3.3, no `HIT_ODDS`): a naked
+/// level-1 archer (accurate, +3) rolls 12 × 64 against a cow's
+/// (1 + 9) × (−21 + 64); a level-1 mage (+1) 10 × 64 against the cow's
+/// magic (1, engine default) + 9 times its −21 magic defence; a bow's
+/// ranged bonus lifts the odds, a giant's defence lowers them.
+#[test]
+fn ranged_and_magic_hit_the_server_rolls() {
+    use lifescape_gamedata::melee_math::hit_chance;
+    let cow = lifescape_gamedata::npc_combat::by_name("cow").expect("cow block");
+    assert_eq!((cow.defence, cow.ranged_defence, cow.magic, cow.magic_defence), (1, -21, 1, -21), "dump npc_combat.json");
+    let (odds, most) = crate::method_rate_fight::ranged_roll(&cow, 1, "");
+    assert!((odds - hit_chance(12 * 64, 10 * 43)).abs() < 1e-12, "{odds}");
+    assert_eq!(most, 1, "combat_maxhit(12 × (7 + 64))");
+    assert!((crate::method_rate_fight::magic_odds(&cow, 1, "") - hit_chance(10 * 64, 10 * 43)).abs() < 1e-12);
+    let (bow, _) = crate::method_rate_fight::ranged_roll(&cow, 1, "shortbow");
+    assert!(bow > odds, "a bow's ranged bonus: {bow} vs {odds}");
+    let giant = lifescape_gamedata::npc_combat::by_name("giant").expect("giant block");
+    assert!(crate::method_rate_fight::ranged_roll(&giant, 1, "").0 < odds, "a tougher defence");
+}

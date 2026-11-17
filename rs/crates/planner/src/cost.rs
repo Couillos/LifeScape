@@ -46,8 +46,7 @@ pub fn cost_craft(input_ticks: u64, qty: i64, yield_per_6000: f64, trip_ticks: u
 /// for every profile; a close call follows the personality. Iron never
 /// reaches here (market alternatives are filtered at expansion).
 pub fn choose_market_or_farm(market_ticks: u64, farm_ticks: u64, market_affinity: f64) -> bool {
-    let affinity = market_affinity.clamp(0.0, 1.0);
-    let weighted = market_ticks as f64 * (1.5 - affinity);
+    let weighted = market_ticks as f64 * crate::train_score::market_weight(market_affinity);
     weighted < farm_ticks as f64
 }
 

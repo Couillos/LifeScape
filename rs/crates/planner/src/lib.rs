@@ -71,13 +71,15 @@ pub mod training;
 pub mod training_production;
 pub mod training_spells;
 pub mod tranches;
+pub mod train_score;
+pub mod work_rate;
 
 pub use catalog::{
     activity_from_value, activity_to_value, catalog_from_value, catalog_to_value, validate, Activity, Arch,
     Epoch, Prereqs, Stack,
 };
 pub use chains::{
-    best_for_money, best_for_xp, boot_covers, boot_plan, chain_by_id, cheapest_source, eval_chain, quest_shortcut,
+    best_for_money, best_for_xp, boot_covers, boot_plan, chain_by_id, cheapest_source, eval_chain, eval_chain_with, quest_shortcut,
     quests_for_goal, synergies, usable_chains, xp_per_tick, BootStep, Chain, ChainEval, ChainPrices, ChainStep,
     QuestShortcut, Source, SourceCtx, CHAINS, WILDERNESS_TAX_TICKS,
 };

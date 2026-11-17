@@ -7,36 +7,30 @@
 //! bones to bananas when one of them does (D18).
 //!
 //! Score of one method = coins one XP costs the bot (lower wins):
-//! `(ticks per action × coin rate + inputs − product value) / XP per action`
-//! - ticks per action: the server action (a press 5 ticks, a smelt 5, a
-//!   cast 5, a combat cast with its target swaps 7) plus one bank trip
-//!   shared by the load (`BANK_TRIP_TICKS` over the slots it fills);
-//! - inputs: units held at what selling them brings now, the rest at
-//!   what buying or making them costs the bot, its time included
-//!   (`bid_response::unit_cost`, brain side); an elemental staff pays its
-//!   runes; an input the bot makes with the same skill (bars smelted for
-//!   the anvil) adds its XP;
-//! - product value: what the market absorbs at its current price
-//!   (saturation of the tranche's batch), or the alchemy net when the bot
-//!   casts and that pays more; an alchemy pays its coins.
+//! `(ticks per XP × coin rate + inputs per XP − product value per XP)`,
+//! everything per XP read from the method's YIELD (`TrainPrices::rate`,
+//! plan rendements R3.3: the measured blend the caller holds, else the
+//! game prior), never from a constant:
+//! - ticks per XP = 6000 / XP per 6000 (the work, its failures and its
+//!   bank walks as measured or as the prior models them);
+//! - inputs: each consumable the rate burns per XP (bars, ores, raw
+//!   fish, runes, bones, thread), units held at what selling them brings
+//!   now, the rest at what buying or making them costs the bot, its
+//!   time included (`bid_response::unit_cost`, brain side); an
+//!   elemental staff pays its runes; an input the bot makes with the
+//!   same skill (bars smelted for the anvil) adds its XP;
+//! - product value: each product the rate yields per XP at what the
+//!   market absorbs at its current price (saturation of the tranche's
+//!   batch), or the alchemy net when the bot casts and that pays more;
+//!   an alchemy pays its coins.
 //!
-//! Pure: prices, holdings and levels come in through `TrainPrices`.
+//! Pure: prices, holdings, levels and rates come in through `TrainPrices`.
 //! Cannonballs are members-only at 274 (`cannonballs.rs2`: `map_members`),
 //! gold and silver never go on an anvil: neither is an anvil option.
 
-use crate::alchemy::{alch_spell, alch_value, CAST_TICKS, FIRE_RUNE, FIRE_STAFF, MIN_ALCH_CASTS, NATURE_RUNE};
+use crate::alchemy::{alch_spell, alch_value, FIRE_RUNE, FIRE_STAFF, MIN_ALCH_CASTS, NATURE_RUNE};
+use crate::work_rate::WorkRate;
 
-/// Ticks of one anvil press (`[proc,smithing_anvil]`: product after 1,
-/// then 2 more, plus the click).
-pub const SMITH_PRESS_TICKS: f64 = 5.0;
-/// Ticks of one furnace smelt (`smelt_ore_weakqueue`, 3-4 ticks + click).
-pub const SMELT_TICKS: f64 = 5.0;
-/// Ticks of one combat cast with the walk to the next target.
-pub const FIGHT_CAST_TICKS: f64 = 7.0;
-/// One bank round trip from an anvil, a furnace or a casting spot.
-pub const BANK_TRIP_TICKS: f64 = 60.0;
-/// Pack slots one load fills (the last one holds the hammer or runes).
-pub const LOAD_SLOTS: f64 = 27.0;
 /// Most actions a tranche is priced over (book depth, saturation).
 pub const MAX_PRICED_ACTIONS: i64 = 2000;
 /// Magic level from which a tranche is priced (low alchemy).
@@ -165,6 +159,10 @@ pub struct TrainPrices<'a> {
     pub acquire: &'a dyn Fn(&str, i64) -> Option<Acquired>,
     /// What one product brings when `units` of it reach the market.
     pub product_value: &'a dyn Fn(&str, i64) -> f64,
+    /// The yield of (method, level) the caller trusts (R3.3: measured
+    /// blend, else `work_rate::prior_rate`); `None`: the method is not
+    /// priced (no rate, never a default figure).
+    pub rate: &'a dyn Fn(&str, u8) -> Option<WorkRate>,
 }
 
 /// One object the bot could alch: own stock (`own`) or resting asks.
@@ -201,19 +199,44 @@ pub(crate) struct Costed {
     pub(crate) short: bool,
 }
 
-/// `cost_input` for the sibling pricers (`training_production`).
-pub(crate) fn cost_input_of(item: &str, units: i64, first_load: i64, skill: &str, prices: &TrainPrices) -> Option<Costed> {
-    cost_input(item, units, first_load, skill, prices)
-}
-
-/// `actions_for` for the sibling pricers.
-pub(crate) fn actions_for_xp(xp_needed: f64, xp_each: f64) -> i64 {
-    actions_for(xp_needed, xp_each)
-}
-
-/// `pick` for the sibling pricers.
-pub(crate) fn pick_of(method: String, batch: i64, missing: Vec<String>, cost_each: f64, xp_each: f64, ticks_each: f64, coin_rate: f64) -> Option<TrainPick> {
-    pick(method, batch, missing, cost_each, xp_each, ticks_each, coin_rate)
+/// One method of a `skill` climb priced from its rate at `level`
+/// (module doc): its time per XP, each consumable it burns per XP at
+/// what the bot pays for it (the climb's units, its first action's
+/// units held or not), each product it yields per XP at what the market
+/// absorbs (coins at face value), its fees. `None`: no rate, no XP of
+/// the skill, or an input neither held, bought nor made.
+pub(crate) fn rated_option(method: &str, skill: &str, level: u8, xp_needed: f64, prices: &TrainPrices) -> Option<TrainPick> {
+    let rate = (prices.rate)(method, level)?;
+    let ticks_per_xp = rate.ticks_per_xp(skill)?;
+    let xp_each = rate.xp_per_action(skill)?;
+    let xp_6000 = rate.xp_of(skill);
+    let actions = actions_for(xp_needed, xp_each);
+    let climb_xp = actions as f64 * xp_each;
+    let mut cost_per_xp = 0.0;
+    let mut bonus_per_xp = 0.0;
+    let mut missing = Vec::new();
+    for (item, per_xp) in rate.burned_per_xp(skill) {
+        let units = (per_xp * climb_xp - 1e-6).ceil().max(1.0) as i64;
+        let first = (per_xp * xp_each - 1e-6).ceil().max(1.0) as i64;
+        let costed = cost_input(&item, units, first, skill, prices)?;
+        cost_per_xp += per_xp * costed.each;
+        bonus_per_xp += per_xp * costed.bonus_xp;
+        if costed.short {
+            missing.push(item);
+        }
+    }
+    let mut value_per_xp = 0.0;
+    for (item, cause, qty) in &rate.flows_6000 {
+        let per_xp = qty / xp_6000;
+        match cause.as_str() {
+            "product" if item == "coins" => value_per_xp += per_xp,
+            "product" | "byproduct" if *qty > 0.0 => value_per_xp += per_xp * (prices.product_value)(item, (per_xp * climb_xp).ceil() as i64).max(0.0),
+            "fee" if *qty < 0.0 => cost_per_xp -= per_xp,
+            _ => {}
+        }
+    }
+    let cost_each = xp_each * (ticks_per_xp * prices.coin_rate + cost_per_xp - value_per_xp);
+    pick(method.to_string(), 0, missing, cost_each, xp_each * (1.0 + bonus_per_xp), xp_each * ticks_per_xp, prices.coin_rate)
 }
 
 /// `sort_best_first` for the sibling pricers.
@@ -270,57 +293,22 @@ fn pick(method: String, batch: i64, missing: Vec<String>, cost_each: f64, xp_eac
     })
 }
 
-/// Every smithing method at `level` toward `target`, priced, best first:
-/// each open anvil product and each open bar to smelt.
+/// Every smithing method at `level` toward `target`, priced from its
+/// rate, best first: each open anvil product and each open bar to smelt.
+/// Bars the climb melts are the same for every product of a metal (XP is
+/// per bar): one acquisition price per metal (memoized by the caller).
 pub fn rank_smithing(level: u8, target: u8, prices: &TrainPrices) -> Vec<TrainPick> {
     let xp_needed = crate::sizing::xp_between(level, target.max(level.saturating_add(1)));
     let mut out = Vec::new();
     for row in smith_products().iter().filter(|row| row.level <= level) {
-        let method = format!("smith:{}", row.product);
-        let Some(xp_each) = crate::method_way::action_xp(&method) else { continue };
-        let actions = actions_for(xp_needed, xp_each);
-        // Bars the climb melts are the same for every product of a metal
-        // (XP is per bar): one acquisition price per metal (memoized).
-        let bars_total = ((xp_needed * row.bars as f64 / xp_each).ceil() as i64).clamp(row.bars, MAX_PRICED_ACTIONS);
-        let Some(bars) = cost_input(row.bar, bars_total, row.bars, "smithing", prices) else { continue };
-        let ticks_each = SMITH_PRESS_TICKS + BANK_TRIP_TICKS * row.bars as f64 / LOAD_SLOTS;
-        let value = (prices.product_value)(&row.product, actions).max(0.0);
-        let cost_each = ticks_each * prices.coin_rate + row.bars as f64 * bars.each - value;
-        let missing = if bars.short { vec![row.bar.to_string()] } else { Vec::new() };
-        out.extend(pick(method, 0, missing, cost_each, xp_each + row.bars as f64 * bars.bonus_xp, ticks_each, prices.coin_rate));
+        out.extend(rated_option(&format!("smith:{}", row.product), "smithing", level, xp_needed, prices));
     }
     for recipe in lifescape_gamedata::recipes::all_recipes(Some("smelt")) {
         if recipe.members != Some(false) || recipe.level > i64::from(level) {
             continue;
         }
         let Some((bar, _)) = recipe.outputs.first() else { continue };
-        let method = format!("smelt:{bar}");
-        let Some((_, way)) = crate::method_way::method_way(&method) else { continue };
-        let Some(xp_each) = crate::method_way::action_xp(&method) else { continue };
-        let success = if way.success > 0.0 { way.success } else { 1.0 };
-        let actions = actions_for(xp_needed, xp_each);
-        let mut inputs_each = 0.0;
-        let mut slots = 0.0;
-        let mut missing = Vec::new();
-        let mut feasible = true;
-        for (ore, per) in &way.inputs {
-            let per_bar = (*per).max(1) as f64 / success;
-            let Some(costed) = cost_input(ore, (actions as f64 * per_bar).ceil() as i64, per_bar.ceil() as i64, "smithing", prices) else {
-                feasible = false;
-                break;
-            };
-            inputs_each += per_bar * costed.each;
-            slots += per_bar;
-            if costed.short {
-                missing.push(ore.clone());
-            }
-        }
-        if !feasible {
-            continue;
-        }
-        let ticks_each = SMELT_TICKS / success + BANK_TRIP_TICKS * slots / (LOAD_SLOTS + 1.0);
-        let value = (prices.product_value)(bar, actions).max(0.0);
-        out.extend(pick(method, 0, missing, ticks_each * prices.coin_rate + inputs_each - value, xp_each, ticks_each, prices.coin_rate));
+        out.extend(rated_option(&format!("smelt:{bar}"), "smithing", level, xp_needed, prices));
     }
     sort_best_first(&mut out);
     out
@@ -334,30 +322,11 @@ pub fn rank_smithing(level: u8, target: u8, prices: &TrainPrices) -> Vec<TrainPi
 pub fn rank_magic(level: u8, target: u8, prices: &TrainPrices, supply: &[AlchSupply]) -> Vec<TrainPick> {
     let xp_needed = crate::sizing::xp_between(level, target.max(level.saturating_add(1)));
     let mut out = Vec::new();
-    let fight = crate::tranches::reach_method("magic", level);
-    if let (Some(xp_each), Some(spell)) = (crate::sizing::xp_per_action(&fight, level), crate::method_way::magic_spell(&fight)) {
-        let casts = actions_for(xp_needed, xp_each);
-        let mut runes_each = 0.0;
-        let mut missing = Vec::new();
-        let mut feasible = true;
-        for (rune, per_cast) in crate::method_way::spell_runes(&spell) {
-            let Some(costed) = cost_input(&rune, casts * per_cast, per_cast, "magic", prices) else {
-                feasible = false;
-                break;
-            };
-            runes_each += per_cast as f64 * costed.each;
-            if costed.short {
-                missing.push(rune);
-            }
-        }
-        if feasible {
-            out.extend(pick(fight, 0, missing, FIGHT_CAST_TICKS * prices.coin_rate + runes_each, xp_each, FIGHT_CAST_TICKS, prices.coin_rate));
-        }
-    }
+    out.extend(rated_option(&crate::tranches::reach_method("magic", level), "magic", level, xp_needed, prices));
     if let Some(spell) = alch_spell(level) {
         let casts_needed = actions_for(xp_needed, spell.xp);
         for offer in supply {
-            out.extend(alch_option(&spell, casts_needed, offer, prices));
+            out.extend(alch_option(&spell, casts_needed, offer, level, prices));
         }
     }
     out.extend(crate::training_spells::spell_options(level, target, prices));
@@ -368,7 +337,7 @@ pub fn rank_magic(level: u8, target: u8, prices: &TrainPrices, supply: &[AlchSup
 /// One alchemy option: casts = what the stock (or the asks), the runes
 /// and the wallet cover, at most the tranche; fire from a staff held,
 /// fire runes, or a staff bought when the batch's runes cost more.
-fn alch_option(spell: &crate::alchemy::AlchSpell, casts_needed: i64, offer: &AlchSupply, prices: &TrainPrices) -> Option<TrainPick> {
+fn alch_option(spell: &crate::alchemy::AlchSpell, casts_needed: i64, offer: &AlchSupply, level: u8, prices: &TrainPrices) -> Option<TrainPick> {
     let value = alch_value(&offer.item, spell.high)? as f64;
     let mut casts = offer.units.min(casts_needed);
     let natures_per = spell.runes.iter().find(|(rune, _)| rune == NATURE_RUNE).map(|(_, count)| *count).unwrap_or(1);
@@ -434,10 +403,12 @@ fn alch_option(spell: &crate::alchemy::AlchSpell, casts_needed: i64, offer: &Alc
             (None, None) => return None,
         }
     };
-    let stackable = lifescape_gamedata::objs_by_name(&offer.item).into_iter().next().is_some_and(|obj| obj.stackable);
-    let ticks_each = CAST_TICKS + if stackable { 0.0 } else { BANK_TRIP_TICKS / (LOAD_SLOTS - 1.0) };
+    // The cast and its bank walks (a non-stackable object fills the
+    // pack), from the rate: one cast = its XP × ticks per XP.
+    let method = format!("alch:{}", offer.item);
+    let ticks_each = spell.xp * (prices.rate)(&method, level)?.ticks_per_xp("magic")?;
     let cost_each = ticks_each * prices.coin_rate + offer.unit_cost.max(0.0) + natures_per as f64 * natures.each + fire_each - value;
-    pick(format!("alch:{}", offer.item), casts, missing, cost_each, spell.xp, ticks_each, prices.coin_rate)
+    pick(method, casts, missing, cost_each, spell.xp, ticks_each, prices.coin_rate)
 }
 
 /// Most profitable first (user 2026-11-15): every paying method (coins
@@ -471,6 +442,23 @@ pub fn best_pick(skill: &str, level: u8, target: u8, prices: &TrainPrices, suppl
         _ => Vec::new(),
     };
     ranked.into_iter().next()
+}
+
+/// Consumables a climb with `method` from `level` to `target` burns
+/// (`sizing::tranche_consumption`, from its yield) of which the bot
+/// holds less than one action's worth: what the tranche obtains first
+/// (the resolver blocks on them at once). An elemental staff held pays
+/// its rune.
+pub fn missing_inputs(method: &str, level: u8, target: u8, held: &dyn Fn(&str) -> i64) -> Vec<String> {
+    let staff = |item: &str| crate::tools::tool_family(item).iter().any(|name| name.starts_with("staff_of_") && held(name) > 0);
+    let mut out = Vec::new();
+    for (item, _) in crate::sizing::tranche_consumption(method, level, target.max(level.saturating_add(1))) {
+        let first = crate::sizing::per_action_need(method, level, &item).unwrap_or(1).max(1);
+        if !staff(&item) && held(&item) < first {
+            out.push(item);
+        }
+    }
+    out
 }
 
 /// Objects an open tranche of `skill` toward `target` keeps out of the

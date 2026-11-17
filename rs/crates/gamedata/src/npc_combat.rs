@@ -55,6 +55,11 @@ pub struct NpcCombat {
     pub strength_bonus: i64,
     /// `[stab, slash, crush]` defence bonuses.
     pub defence_bonus: [i64; 3],
+    /// Magic level (the magic defence roll's stat, engine default 1).
+    pub magic: i64,
+    /// `rangedefence` and `magicdefence` bonuses (`npc_combat_defencebonus`).
+    pub ranged_defence: i64,
+    pub magic_defence: i64,
     pub attack_rate: i64,
     pub damage_type: DamageType,
     /// `param=undead,^true`: skeletons, zombies, ghosts, shades — the
@@ -80,6 +85,9 @@ fn table() -> &'static HashMap<String, NpcCombat> {
                         attack_bonus: int("attackbonus", 0),
                         strength_bonus: int("strengthbonus", 0),
                         defence_bonus: [int("stabdefence", 0), int("slashdefence", 0), int("crushdefence", 0)],
+                        magic: int("magic", 1),
+                        ranged_defence: int("rangedefence", 0),
+                        magic_defence: int("magicdefence", 0),
                         attack_rate: int("attackrate", DEFAULT_ATTACK_RATE).max(1),
                         damage_type: DamageType::parse(row.get("damagetype").as_str().unwrap_or("")),
                         undead: row.get("undead").as_bool().unwrap_or(false),

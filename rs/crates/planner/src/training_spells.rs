@@ -3,22 +3,12 @@
 //! crumble undead join the combat spell and alchemy in `rank_magic`, each
 //! priced like the others — its runes per cast (an elemental staff pays
 //! its own), its other inputs (bones), its product (bananas) at what the
-//! market absorbs, the bot's time. Same score and ranking as `training`.
+//! market absorbs, the bot's time — all per XP from the spell's yield
+//! (R3.3, `training::rated_option`: measured, else the server timing of
+//! `method_rate_units`). Same score and ranking as `training`.
 
-use crate::spell_methods::{curse_method, debuff_spells, spell_spots, teleport_spells, BANANA, BANANA_BONES_PER_CAST};
-use crate::training::{actions_for_xp, cost_input_of, pick_of, TrainPick, TrainPrices, BANK_TRIP_TICKS, FIGHT_CAST_TICKS};
-
-/// Ticks of one teleport (`player_teleport_normal`: `p_delay(2)`, the
-/// jump, the next click); runes stack, one load serves the climb.
-pub const TELEPORT_TICKS: f64 = 5.0;
-/// Ticks of one curse: the 5-tick action delay, the walk to a fresh foe
-/// (a lowered one refuses the next cast) and the retaliating one
-/// finished in melee (`player_magic.rs2` `npc_retaliate`; a cow's 8 HP
-/// at a mage's low strength, ~5 swings of 4 ticks).
-pub const CURSE_TICKS: f64 = 25.0;
-/// Ticks of one bones to bananas: its `p_delay(2)` plus the bank trip
-/// that brings the next pack of bones (one cast converts them all).
-pub const BANANA_TICKS: f64 = 3.0 + BANK_TRIP_TICKS;
+use crate::spell_methods::{curse_method, debuff_spells, spell_spots, teleport_spells};
+use crate::training::{rated_option, TrainPick, TrainPrices};
 
 /// Lowest magic level with a choice beyond the strikes (confuse, 3):
 /// a magic climb is priced from there (`training::priced_at_resolve`).
@@ -54,27 +44,14 @@ pub fn kept_spell_inputs(target: u8) -> Vec<String> {
     out
 }
 
-/// One per-cast option: its way's inputs priced (runes, bones), the
-/// product it yields (`made` units of `product` per cast), `ticks` a cast.
-fn cast_option(method: String, level: u8, xp_needed: f64, ticks: f64, product: Option<(&str, f64)>, prices: &TrainPrices) -> Option<TrainPick> {
+/// One per-cast option open at `level`: priced from its rate (its runes
+/// and bones per XP, its product, the bot's time per XP).
+fn cast_option(method: String, level: u8, xp_needed: f64, prices: &TrainPrices) -> Option<TrainPick> {
     let (_, way) = crate::method_way::method_way(&method)?;
     if way.skill.as_ref().is_none_or(|(_, need)| *need > i64::from(level)) {
         return None;
     }
-    let xp_each = crate::sizing::xp_per_action(&method, level)?;
-    let casts = actions_for_xp(xp_needed, xp_each);
-    let mut inputs_each = 0.0;
-    let mut missing = Vec::new();
-    for (input, per) in &way.inputs {
-        let per = (*per).max(1);
-        let costed = cost_input_of(input, casts * per, per, "magic", prices)?;
-        inputs_each += per as f64 * costed.each;
-        if costed.short {
-            missing.push(input.clone());
-        }
-    }
-    let value = product.map(|(item, made)| (prices.product_value)(item, (casts as f64 * made).ceil() as i64).max(0.0) * made).unwrap_or(0.0);
-    pick_of(method, 0, missing, ticks * prices.coin_rate + inputs_each - value, xp_each, ticks, prices.coin_rate)
+    rated_option(&method, "magic", level, xp_needed, prices)
 }
 
 /// Fight option of a spell with a target param on the surface camps it
@@ -84,25 +61,7 @@ fn restricted_fight_options(level: u8, xp_needed: f64, prices: &TrainPrices) -> 
     let restricted = lifescape_gamedata::spells::all_spells().into_iter().filter(|row| !row.members && row.deals_damage() && row.level <= i64::from(level) && lifescape_gamedata::spells::target_param(&row.spell).is_some());
     for spell in restricted {
         let Some(spot) = spell_spots(&spell.spell).into_iter().next() else { continue };
-        let method = format!("fight:magic/{}/{spot}", spell.spell);
-        let Some(xp_each) = crate::sizing::xp_per_action(&method, level) else { continue };
-        let casts = actions_for_xp(xp_needed, xp_each);
-        let mut runes_each = 0.0;
-        let mut missing = Vec::new();
-        let mut feasible = true;
-        for (rune, per_cast) in crate::method_way::spell_runes(&spell.spell) {
-            let Some(costed) = cost_input_of(&rune, casts * per_cast, per_cast, "magic", prices) else {
-                feasible = false;
-                break;
-            };
-            runes_each += per_cast as f64 * costed.each;
-            if costed.short {
-                missing.push(rune);
-            }
-        }
-        if feasible {
-            out.extend(pick_of(method, 0, missing, FIGHT_CAST_TICKS * prices.coin_rate + runes_each, xp_each, FIGHT_CAST_TICKS, prices.coin_rate));
-        }
+        out.extend(rated_option(&format!("fight:magic/{}/{spot}", spell.spell), "magic", level, xp_needed, prices));
     }
     out
 }
@@ -113,13 +72,12 @@ pub fn spell_options(level: u8, target: u8, prices: &TrainPrices) -> Vec<TrainPi
     let xp_needed = crate::sizing::xp_between(level, target.max(level.saturating_add(1)));
     let mut out = Vec::new();
     for spell in teleport_spells() {
-        out.extend(cast_option(format!("teleport:{spell}"), level, xp_needed, TELEPORT_TICKS, None, prices));
+        out.extend(cast_option(format!("teleport:{spell}"), level, xp_needed, prices));
     }
     for spell in debuff_spells() {
-        out.extend(cast_option(curse_method(&spell, level), level, xp_needed, CURSE_TICKS, None, prices));
+        out.extend(cast_option(curse_method(&spell, level), level, xp_needed, prices));
     }
-    let bananas = format!("bananas:{}", crate::spell_methods::BANANA_BONES);
-    out.extend(cast_option(bananas, level, xp_needed, BANANA_TICKS, Some((BANANA, BANANA_BONES_PER_CAST as f64)), prices));
+    out.extend(cast_option(format!("bananas:{}", crate::spell_methods::BANANA_BONES), level, xp_needed, prices));
     out.extend(restricted_fight_options(level, xp_needed, prices));
     out
 }
