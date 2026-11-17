@@ -29,6 +29,7 @@ pub mod travel_fare;
 pub mod travel_here;
 pub mod travel_hook;
 pub mod travel_pause;
+pub mod travel_settle;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
