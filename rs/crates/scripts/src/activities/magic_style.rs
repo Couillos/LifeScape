@@ -262,7 +262,8 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if !worked {
         return Err(crate::kit::hunt::nothing_hunted_error(bot, "magic", &keys));
     }
-    Ok(0)
+    // No objective: the loop's end is a window, never a goal (P15).
+    Ok(crate::kit::cycle::ended_code(&spec))
 }
 
 #[cfg(test)]
