@@ -20,7 +20,21 @@ use crate::expand::ReadyCtx;
 use lifescape_gamedata::obtain::{ways, WayKind};
 
 /// The shop (key) and keeper site a bot buys `item` from now, if any.
+/// A keeper site this bot cooled (`shop:buy@<site>`: an empty live stock,
+/// `contended`, live 2026-11-17 Zezima relaunched the same empty gem shop
+/// 59 times in 20 min) is out until its cooldown ends.
 pub fn pick_shop(item: &str, ctx: &ReadyCtx) -> Option<(String, (i64, i64, i64))> {
+    let cooled = crate::cooldown::cooled_sites(&ctx.cooled, "shop:buy");
+    pick_shop_among(item, ctx, &|site| cooled.contains(site))
+}
+
+/// True when a keeper would sell `item` to this bot but every such site
+/// is cooled for it: the node waits (`cooled:shop:buy`), never relaunches.
+pub fn every_shop_cooled(item: &str, ctx: &ReadyCtx) -> bool {
+    pick_shop(item, ctx).is_none() && pick_shop_among(item, ctx, &|_| false).is_some()
+}
+
+fn pick_shop_among(item: &str, ctx: &ReadyCtx, skipped: &dyn Fn(&(i64, i64, i64)) -> bool) -> Option<(String, (i64, i64, i64))> {
     let pass = Pass::of(ctx);
     let fare = Fare::of(ctx);
     let distance = |site: &(i64, i64, i64)| match ctx.position {
@@ -35,7 +49,7 @@ pub fn pick_shop(item: &str, ctx: &ReadyCtx) -> Option<(String, (i64, i64, i64))
                 continue;
             }
         }
-        for site in &way.sites {
+        for site in way.sites.iter().filter(|site| !skipped(site)) {
             let (x, z, level) = *site;
             // An underground keeper the nav routes (the Dwarven Mine:
             // Nurmof's pickaxes) is a walk, not a refusal.
@@ -89,6 +103,26 @@ mod tests {
         assert!(lifescape_gamedata::access::gates_at(site.0, site.1, site.2).is_empty(), "{shop} at {site:?}");
         assert_eq!(shop_at("shears", site).as_deref(), Some(shop.as_str()));
         assert!(pick_shop("no_such_item", &ctx).is_none());
+    }
+
+    /// A keeper site cooled for this bot (empty stock, `contended`) is
+    /// skipped: the next keeper sells, and when every keeper is cooled the
+    /// node waits (`every_shop_cooled`), never relaunching the same shop.
+    #[test]
+    fn cooled_keepers_are_skipped() {
+        let mut ctx = ReadyCtx::blind(0.5);
+        ctx.combat = 3;
+        ctx.position = Some((3222, 3218, 0));
+        let (_, first) = pick_shop("shears", &ctx).expect("a shop sells shears");
+        ctx.cooled = vec![crate::cooldown::cool_key("shop:buy", Some(first))];
+        let next = pick_shop("shears", &ctx).map(|(_, site)| site);
+        assert!(next.is_some_and(|site| site != first), "another keeper: {next:?}");
+        assert!(!super::every_shop_cooled("shears", &ctx));
+        let mut every = ctx.clone();
+        while let Some((_, site)) = pick_shop("shears", &every) {
+            every.cooled.push(crate::cooldown::cool_key("shop:buy", Some(site)));
+        }
+        assert!(super::every_shop_cooled("shears", &every), "every keeper cooled: the node waits");
     }
 
     /// User 2026-11-14: upgrade pickaxes are Nurmof's alone (Dwarven

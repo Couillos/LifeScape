@@ -527,6 +527,12 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     // (the planner's shop, `--shop`), never a gated one.
     if locked == "shop:buy" {
         if let NodeKind::ObtainItems { item, .. } = &node.kind {
+            if crate::shop_site::every_shop_cooled(item, ctx) {
+                node.method = None;
+                node.site = None;
+                node.status = NodeStatus::Blocked { reason: format!("cooled:{locked}") };
+                return;
+            }
             node.site = crate::shop_site::pick_shop(item, ctx).map(|(_, site)| site);
             // `pick_shop` keeps a keeper across the Al Kharid fence or on
             // Karamja only with the fares covered: the launch then carries
