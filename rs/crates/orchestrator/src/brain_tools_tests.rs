@@ -148,3 +148,48 @@ fn a_locked_block_names_the_listed_object() {
     assert_eq!(plain_needs(&needs), vec!["iron_axe".to_string(), "coal".to_string()]);
     assert!(locked_needs(&["bronze_axe".to_string(), "locked:".to_string()]).is_empty());
 }
+
+/// Live 2026-11-17 (noah_hill n1942 16:02:33-16:02:47, Zezima n832):
+/// `smelt gold_bar` blocked `locked:gold_ore`, the brain withdrew the
+/// listing and relaunched at once, but the worker still held the old
+/// lock until the next market round (~10 s): two more blocks, counted
+/// as `missing gold_ore`, and a sub-node "holds 218 gold_ore, done".
+/// Releasing the listings hands the worker its new locks right away.
+#[test]
+fn a_released_listing_pushes_the_new_locks_at_once() {
+    use super::release_own_locks_with;
+    use crate::market_seed::CatalogueItem;
+    use crate::market_service::MarketService;
+    use lifescape_json::{object, str_value, Value};
+    let ore = crate::brain_gear::obj_id("gold_ore").expect("gold_ore id");
+    let path = std::env::temp_dir().join(format!("lifescape-locks-release-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let catalogue = vec![
+        CatalogueItem { id: ore, name: "Gold ore".to_string(), shop_price: 150, alch_value: 0 },
+        CatalogueItem { id: 995, name: "Coins".to_string(), shop_price: 1, alch_value: 0 },
+    ];
+    let service = MarketService::open(&path, catalogue).expect("opens");
+    service.sync_holdings("noah_t", 0, &[(ore, 159)]);
+    let placed = service.handle(&object(vec![
+        ("op", str_value("place")),
+        ("account", str_value("noah_t")),
+        ("side", str_value("sell")),
+        ("item", Value::Int(ore)),
+        ("qty", Value::Int(100)),
+        ("price", Value::Int(300)),
+    ]));
+    assert_eq!(placed.get("ok").as_bool(), Some(true), "listing placed: {placed:?}");
+    let mut pushed: Vec<(String, i64)> = Vec::new();
+    let withdrawn = release_own_locks_with(&service, "noah_t", &["gold_ore".to_string()], &mut |service, account| {
+        let locks = service.locks_for(&[account.to_string()]);
+        let ore_locked = locks.get(account).and_then(|(_, items)| items.get(&ore).copied()).unwrap_or(0);
+        pushed.push((account.to_string(), ore_locked));
+    });
+    assert_eq!(withdrawn, 1, "the gold ore listing is withdrawn");
+    assert_eq!(pushed, vec![("noah_t".to_string(), 0)], "new locks pushed at once, the ore free");
+    let mut again: Vec<String> = Vec::new();
+    assert_eq!(release_own_locks_with(&service, "noah_t", &["gold_ore".to_string()], &mut |_, account| again.push(account.to_string())), 0);
+    assert!(again.is_empty(), "nothing withdrawn: no push");
+    drop(service);
+    let _ = std::fs::remove_file(&path);
+}

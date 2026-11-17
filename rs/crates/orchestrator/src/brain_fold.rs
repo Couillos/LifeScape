@@ -238,7 +238,6 @@ pub(crate) fn fresh_error<'a>(decision: &Verdict, last_error: &'a str) -> &'a st
 /// Fold one pushed report into the graph; launches nothing (the launch
 /// pass runs right after, same brain tick).
 pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &Value) {
-    let _ = orch;
     let account = job.account.clone();
     let Some(mut life) = load_life(&account) else { return };
     let node_id = report.get("node_id").as_str().unwrap_or("").to_string();
@@ -399,7 +398,7 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             // A need its own listings lock (P5, `locked:<object>`): the
             // listings go, the node relaunches, no block counted, no buy.
             let locked = crate::brain_tools::locked_needs(needs);
-            let withdrawn: usize = locked.iter().map(|item| crate::brain_tools::withdraw_family_listings(&account, item)).sum();
+            let withdrawn = crate::brain_tools::release_own_locks(orch, &account, &locked);
             if withdrawn > 0 {
                 crate::logln!("brain {account}: {id} blocked on its own listings ({}): {withdrawn} listing(s) withdrawn, relaunch", locked.join(", "));
                 retry_uncounted(&mut life, index);
