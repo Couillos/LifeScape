@@ -202,6 +202,8 @@ pub mod rates_estimator;
 pub mod rates_measure;
 pub mod rates_names;
 pub mod rates_read;
+pub mod rates_view;
+pub mod web_rates_view;
 pub mod heartbeat_flows;
 pub mod session_log;
 pub mod log_rotate;

@@ -106,6 +106,37 @@ pub fn measure_rows(snapshot: &Snapshot, now: i64, price: &mut dyn FnMut(&str) -
     (flows, units, xp)
 }
 
+/// Running bots per script, from the daemon's status list (operator
+/// eyes only, never read by bots).
+fn engaged_counts(call: &dyn Fn(Value) -> Value) -> BTreeMap<String, i64> {
+    let mut engaged: BTreeMap<String, i64> = BTreeMap::new();
+    let status = call(object(vec![("cmd", str_value("status"))]));
+    for job in status.get("jobs").as_arr().cloned().unwrap_or_default() {
+        if job.get("phase").as_str() != Some("running") {
+            continue;
+        }
+        let script = job.get("script").as_str().unwrap_or("").to_string();
+        if script.is_empty() {
+            continue;
+        }
+        *engaged.entry(script).or_insert(0) += 1;
+    }
+    engaged
+}
+
+/// `/api/rates/trading` (rates page): the trading table and the engaged
+/// bots only, never the measure rows (`rates_api` keeps serving them in
+/// full to `/api/rates/table`).
+pub fn trading_api(call: &dyn Fn(Value) -> Value) -> Value {
+    let store = match Store::open(&crate::paths::store_db()) {
+        Ok(store) => store,
+        Err(error) => return object(vec![("ok", Value::Bool(false)), ("error", str_value(&format!("rates store: {error}")))]),
+    };
+    let shared = global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    let engaged: BTreeMap<String, Value> = engaged_counts(call).into_iter().map(|(script, count)| (script, Value::Int(count))).collect();
+    object(vec![("ok", Value::Bool(true)), ("trading", Value::Arr(trading_values(&store, &shared))), ("engaged", Value::Obj(engaged))])
+}
+
 /// Dashboard payload: opens the daemon store, serves the estimate of
 /// every key (yields and consumption, units, derived XP, confidence,
 /// prior or measured) and profitability, plus engaged counts per script counted from
@@ -121,18 +152,7 @@ pub fn rates_api(call: &dyn Fn(Value) -> Value) -> Value {
             ])
         }
     };
-    let mut engaged: BTreeMap<String, i64> = BTreeMap::new();
-    let status = call(object(vec![("cmd", str_value("status"))]));
-    for job in status.get("jobs").as_arr().cloned().unwrap_or_default() {
-        if job.get("phase").as_str() != Some("running") {
-            continue;
-        }
-        let script = job.get("script").as_str().unwrap_or("").to_string();
-        if script.is_empty() {
-            continue;
-        }
-        *engaged.entry(script).or_insert(0) += 1;
-    }
+    let engaged = engaged_counts(call);
     let shared = global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     rates_payload(&store, &shared, engaged)
 }

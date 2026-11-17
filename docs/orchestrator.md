@@ -59,6 +59,42 @@ Registre : `src/registry.rs`, source unique `lifescape_scripts::names()`.
 statiques dans `orchestration/static/`, port via `LIFESCAPE_WEB_PORT`).
 Pages : `/` (bots), `/items`, `/market`, `/rates`, `/life`, `/economy`,
 `/hiscores`, `/errors`, `/guides-money`, `/guides-training`.
+Page `/rates` (2026-11-17, `rates.js`, `src/rates_view.rs` pur,
+`src/web_rates_view.rs` HTTP) : la vue mesures publiait ~18 000 lignes de
+flux brutes (`/api/rates/table`, 11 Mo, ~1 s, gardé pour Top activities).
+Elle sert désormais une ligne par activité mesurée (méthode × style, ses
+clés pliées) ou par clé exacte (`group=key` : site × outil × tranche),
+filtrée, triée et paginée CÔTÉ SERVEUR :
+`GET /api/rates/activities?group=activity|key&q=<texte>&skill=&family=
+&band=<1er niveau>&measured=1&min_runs=<n>&sort=<colonne>&dir=asc|desc
+&offset=&limit=` (défaut : activités, `runs` décroissant, 50 lignes, au
+plus 500) → `rows` (méthode, style, famille, tranches, clés et clés
+mesurées, sites, runs, âge, confiance, 3 produits et 3 consommations
+principaux /6000, XP dérivée par skill, valeur nette /6000, taux d'échec),
+`matched` / `total` (« x lignes sur y »), `facets` (familles, skills,
+tranches présents), `took_ms`, `index_build_ms`, `index_age_ms`. Filtres
+au niveau de la CLÉ avant regroupement : texte (méthode, style, site,
+outil, famille, objets, skills ; mots tous présents), skill (XP dérivée
+> 0), famille (préfixe de méthode : fight, gather, smith…), tranche,
+« mesurées seulement » (n ≥ 3, seuil de l'estimateur : en dessous le
+cerveau lit le prior, ligne « estimated (thin) »), runs ≥ n. Une ligne
+d'activité = Σ (taux × ticks de travail) / Σ ticks de travail de ses
+clés gardées (Σ / Σ, jamais une moyenne de taux), runs et rejets sommés,
+échec Σ échoués / Σ terminés, âge de sa clé la plus fraîche : un chiffre
+de VUE, le cerveau et les guides lisent toujours la clé exacte.
+Détail au clic : `GET /api/rates/detail?method=&style=[&site=&tool=
+&band=]` (+ filtres de la page) → tous les flux valorisés (ramassages
+< 1/6000 pliés en « other drops »), unités, XP, et les clés en
+sous-lignes (cliquables, même détail). `GET /api/rates/trading` : table
+trading et bots engagés seuls (sections repliées). Index (clés mesurées,
+prix courant de leurs objets) construit depuis le snapshot live sous
+verrou, gardé `INDEX_TTL` (30 s) quand des rapports arrivent
+(`rates_service::generation`), sinon jusqu'à `PRICE_TTL` (300 s) ; une
+requête ne fait que filtrer, regrouper, trier, paginer. Mesure hors ligne
+(`orchestrator rates-rebuild <copie> --view [requête ...]`, copie du
+2026-11-17, 3 433 clés) : index 53 ms ; page par défaut (mesurées) 88
+activités, 50 affichées, 9 ms, 47 Kio ; `group=key` 3 433 clés, 74 ms ;
+détail 0,1-3 ms.
 Tableau Skills du spectateur (2026-11-16) : lignes heartbeat `skills`
 `{id, level, base, xp}` (`level` = niveau actuel boosté/drainé, `base` =
 niveau de l'xp, `session_heartbeat.rs`) ; ligne « Total » en bas (option

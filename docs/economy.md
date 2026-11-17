@@ -519,6 +519,16 @@ valorisée au prix courant (le profit garde chaque pièce). Copie de la
 base live du 2026-11-16 rejouée (`orchestrator rates-rebuild <copie>`) :
 735 clés mesurées (637 sous n = 3), 107 activités × style, 2 730 lignes
 de flux (contre 9 583 publiées avant, copies et échanges compris).
+Page agrégée (2026-11-17, `rates_view`, `docs/orchestrator.md`) : la
+liste plate atteignait 18 388 lignes de flux (+ 10 948 unités, 6 904 XP)
+sur la copie du 2026-11-17 ; la page sert une ligne par activité mesurée
+(188 ; 88 « mesurées seulement », vue par défaut) ou par clé exacte
+(3 433), produits et consommations principaux, XP dérivée, confiance
+(mesurée n ≥ 3 / estimée thin), filtres et pagination serveur, détail
+de chaque activité (tous les flux, other drops, unités, clés en
+sous-lignes). Une ligne d'activité plie ses clés en Σ / Σ ticks de
+travail : chiffre de vue seulement (les cumuls de l'estimateur restent
+internes, le cerveau lit la clé exacte).
 
 Guides (R4, `planner::guide_*`, moteur pur ; `web_guides`,
 `/api/guides/money|training?skill&level&family&quests`, pages
