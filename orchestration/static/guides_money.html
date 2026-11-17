@@ -23,6 +23,7 @@
   .prior { color: #e0a030; }
   #search { padding: 4px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
   tr.locked td { color: #777; }
+  .impossible { color: #e05050; }
   table.detail { margin: 4px 0 6px 12px; }
   #filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
   #filters input, #filters select { padding: 3px 5px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
@@ -41,12 +42,15 @@
   <input id="level" type="number" min="1" max="99" placeholder="level (all skills)" title="A bot with every skill at this level; empty: each method at its own gate">
   <select id="family"></select>
   <input id="quests" placeholder="quests done (doric,runemysteries)">
-  <label><input id="accessible" type="checkbox"> accessible only</label>
+  <input id="levels" placeholder="levels (smithing:40,magic:55)" title="Profile: per-skill levels overriding the level above">
+  <input id="held" placeholder="stock held (naturerune:100,iron_platebody:28)" title="Profile: objects held (debug names)">
+  <input id="coins" type="number" min="0" placeholder="free coins" title="Profile: free coins (empty: capital not judged)">
+  <select id="feasibility" title="Feasibility for the profile (D22: no line is blocked; each is judged)"><option value="">every line</option><option value="reach">feasible or after prerequisites</option><option value="now">feasible now</option></select>
   <input id="search" placeholder="Filter method, site, tool…" autocomplete="off">
   <label>top <input id="limit" type="number" min="0" style="width:60px"></label>
   <span id="summary" class="muted"></span>
 </div>
-<div class="muted">Profit = Σ signed flows × current price (D12; a shop when it pays more, Q3); recipe: owned inputs at their sale price (D5); chain: inputs farmed upstream (D16, stages compared); market: inputs bought, Varrock square trips and measured market wait counted (D15). <span class="prior">estimated</span> = game prior (under 3 runs). Click a line for its flows.</div>
+<div class="muted">Profit = Σ signed flows × current price (D12; a shop when it pays more, Q3); recipe: owned inputs at their sale price (D5); chain: inputs farmed upstream (D16, stages compared); market: inputs bought, Varrock square trips and measured market wait counted (D15). <span class="prior">estimated</span> = game prior (under 3 runs). No line is blocked (D22): each lists its conditions (<span class="impossible">red</span>: impossible today for every bot) and is judged for the profile typed in. Click a line for its flows.</div>
 <table id="guide"></table>
 <h2>Methods without an estimate <span class="muted">(no measure and no computable prior: typed reason)</span></h2>
 <div id="unrated" class="muted"></div>

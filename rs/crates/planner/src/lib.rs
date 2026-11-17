@@ -27,6 +27,7 @@ pub mod gear_ladder;
 pub mod gear_plan;
 pub mod guide_chain;
 pub mod guide_engine;
+pub mod guide_feasible;
 pub mod guide_flows;
 pub mod guide_methods;
 pub mod guide_model;

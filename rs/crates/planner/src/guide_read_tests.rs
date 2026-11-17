@@ -75,7 +75,8 @@ fn a_view_read_with_a_filter_is_the_guide_built_with_it() {
             assert_eq!(finish_money(&money, &read, &HashMap::new()), money_guide(engine, &read), "money {read:?}");
         }
         let bot = GuideFilter { quests_done: vec!["doric".to_string()], ..filter(Some(27)) };
-        assert_eq!(crate::guide_read::best_profit_in(&money, &bot), crate::guide_read::best_profit_of(&finish_money(&money, &bot, &HashMap::new()).0), "D17 read without a copy");
+        let copied = crate::guide_feasible::with_filter_bot(&bot, |judge| finish_money(&money, &bot, &HashMap::new()).0.iter().filter(|row| row.priced && row.profit_6000 > 0.0 && crate::guide_feasible::feasible_for(*row, judge).within_reach()).map(|row| row.profit_6000).reduce(f64::max));
+        assert_eq!(crate::guide_read::best_profit_in(&money, &bot), copied, "D17 read without a copy");
         for read in [filter(Some(30)), skill("smithing"), skill("firemaking"), quests] {
             assert_eq!(finish_training(&training, &read, None), training_guide(engine, &read), "training {read:?}");
         }
@@ -102,13 +103,13 @@ fn a_lower_level_of_the_band_leaves_out_what_it_cannot_open() {
         assert!(!at_27.iter().any(|row| row.method == "smelt:steel_bar"), "not at 27");
         assert!(at_27.iter().any(|row| row.method == "gather:mining/iron_ore"), "iron opens at 15");
         assert!(!at_27.iter().any(|row| row.method == "gather:mining/coal"), "coal at 30");
-        assert!(at_27.iter().all(|row| row.prereqs.levels.iter().all(|(_, needed)| *needed <= 27) || !row.accessible));
+        assert!(at_27.iter().all(|row| row.prereqs.levels.iter().all(|(_, needed)| *needed <= 27) || !crate::guide_feasible::with_filter_bot(&filter(Some(27)), |bot| crate::guide_feasible::feasible_for(row, bot).within_reach())));
     });
 }
 
 /// A chain whose upstream needs its own product (mining iron spends an
 /// iron bar) ends: the cycle is cut at the object already downstream,
-/// the autonomous smelting is blocked with its reason, and the guides
+/// the autonomous smelting carries the source gap (D22), and the guides
 /// build.
 #[test]
 fn a_cyclic_chain_ends_and_blocks_its_line() {
@@ -117,10 +118,10 @@ fn a_cyclic_chain_ends_and_blocks_its_line() {
     with_engine(&world, &reads, |engine| {
         let unit = crate::guide_chain::chain_unit(engine, "smelt:iron_bar", "", "iron_bar", 30, 0, &[], crate::guide_chain::Sourcing::Farm);
         let unit = unit.expect("the smelt itself reads");
-        assert!(!unit.missing.is_empty(), "iron ore has no autonomous source without a bar: {unit:?}");
+        assert!(!unit.gaps.is_empty(), "iron ore has no autonomous source without a bar: {unit:?}");
         let (training, _) = training_guide(engine, &filter(Some(30)));
         let smelt = training.iter().find(|row| row.method == "smelt:iron_bar" && row.supply == crate::guide_model::Supply::Autonomous).expect("autonomous smelt row");
-        assert!(!smelt.blocked.is_empty() && !smelt.accessible, "{smelt:?}");
+        assert!(!smelt.priced && !smelt.prereqs.sources.is_empty(), "{smelt:?}");
         let (money, _) = money_guide(engine, &filter(Some(30)));
         assert!(money.iter().any(|row| row.method == "smelt:iron_bar"));
     });

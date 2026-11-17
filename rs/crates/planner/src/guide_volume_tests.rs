@@ -3,7 +3,7 @@
 //! and a training method that spends only consumables gets a market line
 //! beside its autonomous one (§2).
 
-use super::{answer, level, row, training_row, Fixture};
+use super::{answer, level, reachable, row, training_row, why_not, Fixture};
 use crate::guide_model::{Family, GuideFilter, Outlet, PriceBasis, Quote, Route, Supply};
 use crate::guide_money::money_guide;
 use crate::guide_training::training_guide;
@@ -40,7 +40,7 @@ fn current_price_holds_for_the_recent_fill_volume_only() {
     let (rows, best) = fixture.run(|engine| (money_guide(engine, &level(30)).0, crate::guide_money::best_accessible_profit(engine, 30, &[])));
     let coal = row(&rows, "gather:mining/coal", Family::Farm);
     assert!((coal.profit_6000 - 5.0 * 15.0).abs() < 1e-9, "5 coal at 15, 95 worth nothing: {}", coal.profit_6000);
-    let top = rows.iter().filter(|row| row.accessible).map(|row| row.profit_6000).fold(0.0, f64::max);
+    let top = rows.iter().filter(|row| row.priced && reachable(*row, &level(30))).map(|row| row.profit_6000).fold(0.0, f64::max);
     assert_eq!(best, Some(top), "D17 reads the same rows");
 }
 
@@ -81,7 +81,7 @@ fn consumable_only_method_has_a_market_line() {
     let autonomous = training_row(&rows, "teleport:varrock_teleport", Supply::Autonomous);
     assert_eq!(autonomous.routes.iter().find(|route| route.item == "lawrune").map(|route| route.route), Some(Route::Farm), "{:?}", autonomous.routes);
     let market = training_row(&rows, "teleport:varrock_teleport", Supply::Market);
-    assert!(market.blocked.is_empty() && market.accessible, "{market:?}");
+    assert!(market.priced && reachable(market, &filter), "{market:?}");
     let law = market.flows.iter().find(|line| line.item == "lawrune").expect("law runes bought");
     assert!(law.per_6000 < 0.0 && (law.unit_price - 200.0).abs() < 1e-9, "{law:?}");
     let spent = 100.0 * 200.0 + 300.0 * 5.0 + 100.0 * 5.0;
@@ -94,20 +94,21 @@ fn consumable_only_method_has_a_market_line() {
 }
 
 /// §2: the market line buys at the VOLUME available: law runes no ask
-/// covers and no shop sells block it (reason, no rate); the autonomous
+/// covers and no shop sells are its condition (D22: priced past the asks
+/// at the last ask walked, never blocked); the autonomous
 /// line still farms them. A method whose autonomous line already buys
 /// every consumable (nothing makes any) gets no copy of it.
 #[test]
-fn consumable_market_line_is_blocked_past_the_available_volume() {
+fn consumable_market_line_names_the_available_volume() {
     let mut fixture = teleport_world();
     fixture.prices.remove("lawrune");
     fixture.books.insert("lawrune", (Vec::new(), vec![(24.0, 12.0)]));
     let filter = GuideFilter { skill: Some("magic".to_string()), level: Some(30), ..GuideFilter::default() };
     let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
     let market = training_row(&rows, "teleport:varrock_teleport", Supply::Market);
-    assert!(!market.accessible && market.blocked.iter().any(|reason| reason.contains("lawrune")), "{market:?}");
-    assert_eq!(market.effective_xp_6000, 0.0, "a blocked line has no rate");
-    assert!(training_row(&rows, "teleport:varrock_teleport", Supply::Autonomous).blocked.is_empty(), "the drop still feeds the autonomous line");
+    assert!(why_not(market, &filter).contains("lawrune"), "{market:?}");
+    assert!(market.priced && market.effective_xp_6000 > 0.0, "its rate at the current prices: {market:?}");
+    assert!(training_row(&rows, "teleport:varrock_teleport", Supply::Autonomous).priced, "the drop still feeds the autonomous line");
     // Nothing makes any rune: the autonomous line buys them all, the
     // market line would be its copy.
     let mut fixture = teleport_world();

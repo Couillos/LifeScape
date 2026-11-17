@@ -2,7 +2,7 @@
 //! produced in autonomous mode (§1), finite shop stock (§2), each chain
 //! input the cheaper way (§3), one line per key (§4).
 
-use super::{answer, level, row, training_row, Fixture};
+use super::{answer, level, reachable, row, training_row, why_not, Fixture};
 use crate::guide_chain::{chain_unit, sources, Sourcing, TimePrice};
 use crate::guide_model::{Family, GuideFilter, MeasuredKey, PriceBasis, Route, Supply};
 use crate::guide_money::money_guide;
@@ -31,7 +31,7 @@ fn autonomous_mode_farms_productible_consumables_and_buys_the_rest() {
     let filter = GuideFilter { skill: Some("fishing".to_string()), level: Some(30), ..GuideFilter::default() };
     let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
     let trout = training_row(&rows, "gather:fishing/raw_trout", Supply::Autonomous);
-    assert!(trout.blocked.is_empty(), "{:?}", trout.blocked);
+    assert!(trout.priced && trout.prereqs.sources.is_empty(), "{:?}", trout.prereqs);
     assert!(!trout.flows.iter().any(|line| line.item == "feather" && line.per_6000 < 0.0), "feathers farmed, never bought: {:?}", trout.flows);
     let route = trout.routes.iter().find(|route| route.item == "feather").expect("feather route");
     assert_eq!((route.route, route.source.as_str(), route.cause.as_str()), (Route::Farm, fight, "bait"));
@@ -49,8 +49,8 @@ fn autonomous_mode_farms_productible_consumables_and_buys_the_rest() {
 
 /// §2: a shop sells its base stock and its restock of the window, each
 /// unit at the price of the stock left (cheapest first, merged with the
-/// asks); past them the purchase is unavailable and the row needing it
-/// is blocked, as past the asks' depth.
+/// asks); past them the purchase is not covered and the row needing it
+/// names the condition (D22), as past the asks' depth.
 #[test]
 fn shop_stock_is_finite_and_its_price_rises() {
     let mut fixture = Fixture::new();
@@ -60,19 +60,20 @@ fn shop_stock_is_finite_and_its_price_rises() {
     assert!(two_hundred.available && (two_hundred.price - (100.0 * 12.0 + 100.0 * 15.0) / 200.0).abs() < 1e-9, "{two_hundred:?}");
     assert_eq!(two_hundred.basis, PriceBasis::Shop);
     assert!(!three_hundred.available, "the window holds 250 units: {three_hundred:?}");
-    let reason = fixture.run(|engine| engine.unavailable_reason("coal", 300.0));
-    assert!(reason.contains("coal") && reason.contains("250"), "{reason}");
+    let need = fixture.run(|engine| engine.market_need("coal", "input", 300.0, 19.0, three_hundred.priced));
+    assert!(need.shops == 250.0 && need.asks == 0.0 && need.priced, "the condition names the shops' window: {need:?}");
     // Asks and shop steps walk together, cheapest first.
     fixture.books.insert("coal", (Vec::new(), vec![(10.0, 20.0), (20.0, 1000.0)]));
     let mixed = fixture.run(|engine| engine.buy_at("coal", 400.0));
     let expected = (20.0 * 10.0 + 100.0 * 12.0 + 150.0 * 15.0 + 130.0 * 20.0) / 400.0;
     assert!(mixed.available && (mixed.price - expected).abs() < 1e-9, "{mixed:?} vs {expected}");
-    // A market row needing more coal than asks + shop hold is blocked.
+    // A market row needing more coal than asks + shop hold: no bot without
+    // coal can buy a lot (D22: a condition, never a block).
     fixture.books.clear();
     fixture.shop_ladders.insert("coal", vec![(12.0, 10.0)]);
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let market = row(&rows, "smelt:steel_bar", Family::Market);
-    assert!(!market.accessible && market.blocked.iter().any(|reason| reason.contains("coal")), "{:?}", market.blocked);
+    assert!(market.priced && why_not(market, &level(30)).contains("coal"), "{market:?}");
 }
 
 /// §3 (D16 revised): each input of a chain takes the cheaper way:
@@ -147,7 +148,7 @@ fn a_rare_drop_is_farmed_in_autonomous_mode_however_slow() {
     let filter = GuideFilter { skill: Some("magic".to_string()), level: Some(30), ..GuideFilter::default() };
     let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
     let autonomous = training_row(&rows, "teleport:varrock_teleport", Supply::Autonomous);
-    assert!(autonomous.blocked.is_empty(), "a rare drop is still a source: {:?}", autonomous.blocked);
+    assert!(autonomous.priced && autonomous.prereqs.sources.is_empty(), "a rare drop is still a source: {:?}", autonomous.prereqs.sources);
     let route = autonomous.routes.iter().find(|route| route.item == "lawrune").expect("law rune route");
     assert_eq!((route.route, route.source.as_str()), (Route::Farm, fight));
     assert!((route.farm_ticks_per_unit.unwrap_or(0.0) - 3000.0).abs() < 1e-6, "{route:?}");
@@ -178,16 +179,16 @@ fn a_conditioned_shop_is_a_prerequisite_of_its_row() {
     fixture.shop_needs.insert("iron_ore", ShopNeed { quest: None, quest_points: 32 });
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let market = row(&rows, "smelt:steel_bar", Family::Market);
-    assert!(market.blocked.is_empty(), "{:?}", market.blocked);
+    assert!(market.priced, "{market:?}");
     assert!(market.prereqs.quests.contains(&"dragon".to_string()) && market.prereqs.quest_points == 32, "{:?}", market.prereqs);
-    assert!(!market.accessible, "neither the quest nor the points");
+    assert!(!reachable(market, &level(30)), "neither the quest nor the points");
     let dragon_only = GuideFilter { quests_done: vec!["dragon".to_string()], ..level(30) };
     assert!(!crate::guide_prereq::passes(&market.prereqs, &dragon_only), "Dragon Slayer alone grants fewer than 32 points");
     let every_quest: Vec<String> = lifescape_gamedata::quest_requirements::all_f2p_quests().into_iter().map(|quest| quest.key).collect();
     let veteran = GuideFilter { quests_done: every_quest, ..level(30) };
     assert!(crate::guide_prereq::passes(&market.prereqs, &veteran), "every F2P quest: the quest and the points");
     let (rows, _) = fixture.run(|engine| money_guide(engine, &veteran));
-    assert!(row(&rows, "smelt:steel_bar", Family::Market).accessible);
+    assert!(reachable(row(&rows, "smelt:steel_bar", Family::Market), &veteran));
     // The sale side: coal sold to a shop behind the guild door.
     let mut fixture = Fixture::new();
     fixture.npc.insert("coal", 70.0);
@@ -195,7 +196,7 @@ fn a_conditioned_shop_is_a_prerequisite_of_its_row() {
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let coal = row(&rows, "gather:mining/coal", Family::Farm);
     assert!((coal.profit_6000 - 100.0 * 70.0).abs() < 1e-9 && coal.prereqs.quest_points == 32, "{} {:?}", coal.profit_6000, coal.prereqs);
-    assert!(!coal.accessible);
+    assert!(!reachable(coal, &level(30)));
     // A recipe values its stock at the sale price: it trades with nobody
     // for its inputs (its product, steel, sells on the market).
     let recipe = row(&rows, "smelt:steel_bar", Family::Recipe);

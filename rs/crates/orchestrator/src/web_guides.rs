@@ -19,7 +19,13 @@
 //! Filters (query string): `skill`, `level` (a bot with every skill at
 //! it; empty: each method at its own gate), `family`, `quests` (done,
 //! comma separated), `held` (objects a bot holds, `item:units,...`,
-//! debug names: a recipe on stock is evaluated on them). No request
+//! debug names: a recipe on stock is evaluated on them). Profile of the
+//! feasibility (D22, `guide_feasible`): `level`, `levels`
+//! (`skill:level,...`, overriding `level`), `quests`, `held` and `coins`
+//! (free coins; empty: a lot's capital unjudged). Every row carries its
+//! `conditions` (structured list) and its `feasibility` for that profile
+//! (`feasible` | `after_prereqs` | `infeasible`, pending and reasons);
+//! nothing is ever blocked. No request
 //! builds a guide: the API reads the set the `guides` thread publishes
 //! (`guides_store`, filters applied by reading); `build_guide` builds one
 //! guide directly for the offline check (`rates-rebuild --guide`).
@@ -31,6 +37,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
 use lifescape_json::{object, str_value, Value};
+use lifescape_planner::guide_feasible::{conditions, feasible_for, BotState, Condition, Feasibility};
 use lifescape_planner::guide_model::{Confidence, FlowLine, GuideFilter, GuideWorld, InputRoute, MeasuredKey, MoneyRow, Prereqs, Quote, RateAnswer, RateAsk, ShopNeed, TrainingRow, Unrated};
 use lifescape_store::Store;
 
@@ -177,11 +184,13 @@ pub fn filter_of(params: &HashMap<String, String>) -> GuideFilter {
         family: text("family"),
         quests_done: text("quests").map(|value| value.split(',').map(|quest| quest.trim().to_string()).filter(|quest| !quest.is_empty()).collect()).unwrap_or_default(),
         held: text("held").map(|value| held_of(&value)).unwrap_or_default(),
+        levels: text("levels").map(|value| held_of(&value).into_iter().map(|(skill, level)| (skill, level.clamp(1.0, 99.0) as u8)).collect()).unwrap_or_default(),
+        coins: text("coins").and_then(|value| value.parse::<f64>().ok()).filter(|coins| coins.is_finite() && *coins >= 0.0),
     }
 }
 
 /// `held=iron_ore:50,coal:500` (debug names): the objects a bot holds
-/// (R7); an entry without a valid count is left out.
+/// (R7); an entry without a valid count is left out (also `levels`).
 fn held_of(text: &str) -> Vec<(String, f64)> {
     text.split(',')
         .filter_map(|entry| {
@@ -247,16 +256,16 @@ pub fn build_guide(store: &Store, snapshot: &crate::rates_service::Snapshot, kin
     let world = GuideWorld { rate: &rate, price: &price, npc_sale: &npc_sale, shop_buy: &shop_buy, market_wait_ticks: waits.market_wait, quest_ticks: &quest_ticks, measured: &measured };
     let engine = lifescape_planner::guide_engine::Engine::new(&world);
     let engine_began = Instant::now();
-    let (rows, unrated) = match kind {
+    let (rows, unrated) = lifescape_planner::guide_feasible::with_filter_bot(filter, |bot| match kind {
         GuideKind::Money => {
             let (rows, unrated) = lifescape_planner::guide_money::money_guide(&engine, filter);
-            (rows.iter().map(money_value).collect::<Vec<Value>>(), unrated)
+            (rows.iter().map(|row| money_value(row, bot)).collect::<Vec<Value>>(), unrated)
         }
         GuideKind::Training => {
             let (rows, unrated) = lifescape_planner::guide_training::training_guide(&engine, filter);
-            (rows.iter().map(training_value).collect::<Vec<Value>>(), unrated)
+            (rows.iter().map(|row| training_value(row, bot)).collect::<Vec<Value>>(), unrated)
         }
-    };
+    });
     let mut stats = engine_stats(&engine);
     if let Value::Obj(map) = &mut stats {
         for (name, (calls, spent)) in timers.borrow().iter() {
@@ -292,15 +301,16 @@ pub fn engine_stats(engine: &lifescape_planner::guide_engine::Engine) -> Value {
 /// One guide read from a published set as the API serves it, with the
 /// set's age, cost and what the read approximates.
 pub fn read_guide(set: &crate::guides_store::GuideSet, kind: GuideKind, filter: &GuideFilter) -> Value {
-    let (rows, unrated) = match kind {
-        GuideKind::Money => match set.money(filter) {
-            Ok((rows, unrated)) => (rows.iter().map(money_value).collect::<Vec<Value>>(), unrated),
-            Err(error) => return crate::web::err_json(error),
-        },
+    let read = lifescape_planner::guide_feasible::with_filter_bot(filter, |bot| match kind {
+        GuideKind::Money => set.money(filter).map(|(rows, unrated)| (rows.iter().map(|row| money_value(row, bot)).collect::<Vec<Value>>(), unrated)),
         GuideKind::Training => {
             let (rows, unrated) = set.training(filter);
-            (rows.iter().map(training_value).collect::<Vec<Value>>(), unrated)
+            Ok((rows.iter().map(|row| training_value(row, bot)).collect::<Vec<Value>>(), unrated))
         }
+    });
+    let (rows, unrated) = match read {
+        Ok(found) => found,
+        Err(error) => return crate::web::err_json(error),
     };
     let view_level = match kind {
         GuideKind::Money => set.money_view(filter.level).level,
@@ -357,25 +367,60 @@ fn pairs(rows: &[(String, f64)]) -> Value {
     Value::Obj(map)
 }
 
-fn prereqs_value(prereqs: &Prereqs) -> Value {
-    let mut levels = BTreeMap::new();
-    for (skill, level) in &prereqs.levels {
-        levels.insert(skill.clone(), Value::Int(i64::from(*level)));
+/// One condition (D22) as JSON: `kind`, `text`, `impossible` (no bot
+/// meets it today) and its own fields.
+fn condition_value(condition: &Condition) -> Value {
+    let mut fields: Vec<(&str, Value)> = vec![("kind", str_value(condition.kind())), ("text", str_value(&condition.text())), ("impossible", Value::Bool(condition.impossible()))];
+    match condition {
+        Condition::Level { skill, level } => fields.extend([("skill", str_value(skill)), ("level", Value::Int(i64::from(*level)))]),
+        Condition::Combat { level } => fields.push(("level", Value::Int(i64::from(*level)))),
+        Condition::NoSite | Condition::NotIronman => {}
+        Condition::Quest { quest } => fields.push(("quest", str_value(quest))),
+        Condition::QuestPoints { points } => fields.push(("points", Value::Int(*points))),
+        Condition::Tool { tool, shop } => fields.extend([("tool", str_value(tool)), ("shop", Value::Bool(*shop))]),
+        Condition::Stock { item, units } => fields.extend([("item", str_value(item)), ("units", Value::Float(*units))]),
+        Condition::Capital { coins } => fields.push(("coins", Value::Float(*coins))),
+        Condition::Market(need) => fields.extend([
+            ("item", str_value(&need.item)),
+            ("cause", str_value(&need.cause)),
+            ("per_6000", Value::Float(need.per_6000)),
+            ("per_lot", Value::Float(need.per_lot)),
+            ("asks", Value::Float(need.asks)),
+            ("recent", Value::Float(need.recent)),
+            ("shops", Value::Float(need.shops)),
+            ("priced", Value::Bool(need.priced)),
+        ]),
+        Condition::Source(gap) => fields.extend([("item", str_value(&gap.item)), ("reason", str_value(&gap.reason))]),
     }
+    object(fields)
+}
+
+fn conditions_value(prereqs: &Prereqs) -> Value {
+    Value::Arr(conditions(prereqs).iter().map(condition_value).collect())
+}
+
+/// A row's feasibility for the request's profile (D22).
+fn feasibility_value(found: &Feasibility) -> Value {
+    let (pending, reasons): (&[lifescape_planner::guide_feasible::Pending], &[String]) = match found {
+        Feasibility::Feasible => (&[], &[]),
+        Feasibility::AfterPrereqs(pending) => (pending, &[]),
+        Feasibility::Infeasible(reasons, pending) => (pending, reasons),
+    };
     object(vec![
-        ("levels", Value::Obj(levels)),
-        ("combat", Value::Int(i64::from(prereqs.combat))),
-        ("quests", Value::Arr(prereqs.quests.iter().map(|quest| str_value(quest)).collect())),
-        ("quest_points", Value::Int(prereqs.quest_points)),
-        ("tools", Value::Arr(prereqs.tools.iter().map(|tool| str_value(tool)).collect())),
-        ("capital", Value::Float(prereqs.capital)),
-        ("ironman", Value::Bool(prereqs.ironman)),
-        ("stock", pairs(&prereqs.stock)),
+        ("state", str_value(found.state())),
+        ("within_reach", Value::Bool(found.within_reach())),
+        ("pending", Value::Arr(pending.iter().map(|need| str_value(&need.text())).collect())),
+        ("reasons", Value::Arr(reasons.iter().map(|reason| str_value(reason)).collect())),
     ])
 }
 
-fn blocked_value(reasons: &[String]) -> Value {
-    Value::Arr(reasons.iter().map(|reason| str_value(reason)).collect())
+/// A figure that means nothing on an unpriced row (D22): null.
+fn priced_value(priced: bool, value: f64) -> Value {
+    if priced {
+        Value::Float(value)
+    } else {
+        Value::Null
+    }
 }
 
 fn confidence_value(confidence: &Confidence) -> Value {
@@ -426,8 +471,8 @@ fn unrated_value(gap: &Unrated) -> Value {
     object(vec![("method", str_value(&gap.method)), ("reason", str_value(&gap.reason))])
 }
 
-/// One money line as JSON.
-pub fn money_value(row: &MoneyRow) -> Value {
+/// One money line as JSON, its feasibility for `bot` (D22).
+pub fn money_value(row: &MoneyRow, bot: &BotState) -> Value {
     object(vec![
         ("family", str_value(row.family.as_str())),
         ("method", str_value(&row.method)),
@@ -435,12 +480,14 @@ pub fn money_value(row: &MoneyRow) -> Value {
         ("site", str_value(&site_text(row.site))),
         ("tool", str_value(&row.tool)),
         ("band", Value::Int(row.band)),
-        ("profit_6000", Value::Float(row.profit_6000)),
-        ("revenue_6000", Value::Float(row.revenue_6000)),
-        ("cost_6000", Value::Float(row.cost_6000)),
+        ("priced", Value::Bool(row.priced)),
+        ("profit_6000", priced_value(row.priced, row.profit_6000)),
+        ("revenue_6000", priced_value(row.priced, row.revenue_6000)),
+        ("cost_6000", priced_value(row.priced, row.cost_6000)),
         ("extra_ticks_6000", Value::Float(row.extra_ticks_per_6000)),
         ("xp_6000", pairs(&row.xp_6000)),
-        ("prereqs", prereqs_value(&row.prereqs)),
+        ("conditions", conditions_value(&row.prereqs)),
+        ("feasibility", feasibility_value(&feasible_for(row, bot))),
         ("flows", Value::Arr(row.flows.iter().map(flow_value).collect())),
         (
             "other_drops",
@@ -458,13 +505,11 @@ pub fn money_value(row: &MoneyRow) -> Value {
         ("routes", Value::Arr(row.routes.iter().map(route_value).collect())),
         ("confidence", confidence_value(&row.confidence)),
         ("price_confidence", str_value(row.price_confidence)),
-        ("blocked", blocked_value(&row.blocked)),
-        ("accessible", Value::Bool(row.accessible)),
     ])
 }
 
-/// One training line as JSON.
-pub fn training_value(row: &TrainingRow) -> Value {
+/// One training line as JSON, its feasibility for `bot` (D22).
+pub fn training_value(row: &TrainingRow, bot: &BotState) -> Value {
     object(vec![
         ("skill", str_value(&row.skill)),
         ("band", Value::Int(row.band)),
@@ -473,22 +518,22 @@ pub fn training_value(row: &TrainingRow) -> Value {
         ("site", str_value(&site_text(row.site))),
         ("tool", str_value(&row.tool)),
         ("supply", str_value(row.supply.as_str())),
+        ("priced", Value::Bool(row.priced)),
         ("xp_6000", Value::Float(row.xp_6000)),
-        ("effective_xp_6000", Value::Float(row.effective_xp_6000)),
-        ("coins_6000", Value::Float(row.coins_6000)),
-        ("coins_per_xp", Value::Float(row.coins_per_xp)),
-        ("converted_ticks_6000", Value::Float(row.converted_ticks_6000)),
+        ("effective_xp_6000", priced_value(row.priced, row.effective_xp_6000)),
+        ("coins_6000", priced_value(row.priced, row.coins_6000)),
+        ("coins_per_xp", priced_value(row.priced, row.coins_per_xp)),
+        ("converted_ticks_6000", priced_value(row.priced, row.converted_ticks_6000)),
         ("ticks_to_band_end", row.ticks_to_band_end.map(Value::Float).unwrap_or(Value::Null)),
         ("other_xp_6000", pairs(&row.other_xp_6000)),
         ("quest_xp", Value::Float(row.quest_xp)),
         ("quest_ticks", row.quest_ticks.map(Value::Float).unwrap_or(Value::Null)),
-        ("prereqs", prereqs_value(&row.prereqs)),
+        ("conditions", conditions_value(&row.prereqs)),
+        ("feasibility", feasibility_value(&feasible_for(row, bot))),
         ("flows", Value::Arr(row.flows.iter().map(flow_value).collect())),
         ("routes", Value::Arr(row.routes.iter().map(route_value).collect())),
         ("confidence", confidence_value(&row.confidence)),
         ("price_confidence", str_value(row.price_confidence)),
-        ("blocked", blocked_value(&row.blocked)),
-        ("accessible", Value::Bool(row.accessible)),
     ])
 }
 

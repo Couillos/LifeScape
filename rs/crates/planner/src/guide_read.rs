@@ -18,9 +18,12 @@
 //!   caller (`guide_money::recipe_row`, `replaced`), every other row
 //!   kept.
 //!
-//! Then usable rows first (not blocked, prerequisites met), then by
-//! value, ties in activity order: the order `money_guide` and
-//! `training_guide` give, which are `finish` of a fresh view.
+//! Then priced rows first (D22: never "usable first", no row is blocked;
+//! an unpriced row has no value to rank by), then by value, ties in
+//! activity order: the order `money_guide` and `training_guide` give,
+//! which are `finish` of a fresh view. Feasibility is each reader's
+//! (`guide_feasible::feasible_for`: the API for its profile, the brain
+//! for its bot).
 
 use std::collections::HashMap;
 
@@ -71,10 +74,9 @@ fn money_skill_out(method: &str, style: &str, filter: &GuideFilter) -> bool {
     filter.skill.as_ref().is_some_and(|skill| crate::activity::band_skill(method, style).as_deref() != Some(skill.as_str()))
 }
 
-/// Usable first (not blocked, prerequisites met), then by `value`
-/// (stable: ties keep the activity order).
-fn usable_first<T>(rows: &mut [T], usable: impl Fn(&T) -> bool, value: impl Fn(&T) -> f64) {
-    rows.sort_by(|left, right| usable(left).cmp(&usable(right)).reverse().then(value(right).total_cmp(&value(left))));
+/// Priced first, then by `value` (stable: ties keep the activity order).
+fn priced_first<T>(rows: &mut [T], priced: impl Fn(&T) -> bool, value: impl Fn(&T) -> f64) {
+    rows.sort_by(|left, right| priced(left).cmp(&priced(right)).reverse().then(value(right).total_cmp(&value(left))));
 }
 
 /// First gap per method, in activity order.
@@ -96,30 +98,26 @@ pub fn finish_money(view: &MoneyView, filter: &GuideFilter, replaced: &HashMap<u
         if gated_out(&stored.method, filter) || money_skill_out(&stored.method, &stored.style, filter) || filter.family.as_deref().is_some_and(|family| family != stored.family.as_str()) {
             continue;
         }
-        let mut row = replaced.get(&index).unwrap_or(stored).clone();
-        row.accessible = row.blocked.is_empty() && crate::guide_prereq::passes(&row.prereqs, filter);
-        rows.push(row);
+        rows.push(replaced.get(&index).unwrap_or(stored).clone());
     }
-    usable_first(&mut rows, |row| row.blocked.is_empty() && row.accessible, |row| row.profit_6000);
+    priced_first(&mut rows, |row| row.priced, |row| row.profit_6000);
     let unrated = unrated_of(view.gaps.iter().filter(|gap| !gated_out(&gap.method, filter) && !money_skill_out(&gap.method, &gap.style, filter)));
     (rows, unrated)
 }
 
-/// Profit per 6000 ticks of the best accessible row of `rows` (D17),
-/// `None` when none earns.
-pub fn best_profit_of(rows: &[MoneyRow]) -> Option<f64> {
-    rows.iter().filter(|row| row.accessible && row.profit_6000 > 0.0).map(|row| row.profit_6000).fold(None, |best: Option<f64>, profit| Some(best.map_or(profit, |known| known.max(profit))))
-}
-
-/// D17 of a bot of `filter` read in `view` without copying a row:
-/// `best_profit_of` of `finish_money(view, filter)` (its skill and family
-/// ignored: a bot's best line is any line).
+/// D17 of a bot of `filter` read in `view` without copying a row: the
+/// best profit among the priced rows within its reach (`guide_feasible`:
+/// feasible, or once a tool is obtained or coins for a lot earned; its
+/// skill and family ignored: a bot's best line is any line), `None` when
+/// none earns.
 pub fn best_profit_in(view: &MoneyView, filter: &GuideFilter) -> Option<f64> {
-    view.rows
-        .iter()
-        .filter(|row| !gated_out(&row.method, filter) && row.blocked.is_empty() && row.profit_6000 > 0.0 && crate::guide_prereq::passes(&row.prereqs, filter))
-        .map(|row| row.profit_6000)
-        .fold(None, |best: Option<f64>, profit| Some(best.map_or(profit, |known| known.max(profit))))
+    crate::guide_feasible::with_filter_bot(filter, |bot| {
+        view.rows
+            .iter()
+            .filter(|row| !gated_out(&row.method, filter) && row.priced && row.profit_6000 > 0.0 && crate::guide_feasible::feasible_for(*row, bot).within_reach())
+            .map(|row| row.profit_6000)
+            .fold(None, |best: Option<f64>, profit| Some(best.map_or(profit, |known| known.max(profit))))
+    })
 }
 
 /// Level a training row was read at: the view's, else its method's gate.
@@ -135,7 +133,7 @@ pub fn convert(row: &mut TrainingRow, profit: Option<f64>, level: u8) {
         Some(profit) if profit > 0.0 && spent > 0.0 => spent / (profit / WINDOW_TICKS),
         _ => 0.0,
     };
-    row.effective_xp_6000 = if row.blocked.is_empty() { row.xp_6000 * WINDOW_TICKS / (WINDOW_TICKS + row.converted_ticks_6000) } else { 0.0 };
+    row.effective_xp_6000 = if row.priced { row.xp_6000 * WINDOW_TICKS / (WINDOW_TICKS + row.converted_ticks_6000) } else { 0.0 };
     let effective = row.effective_xp_6000;
     row.ticks_to_band_end = (effective > 0.0).then(|| crate::guide_training::xp_to_band_end(level) / (effective / WINDOW_TICKS));
 }
@@ -161,10 +159,9 @@ pub fn finish_training(view: &TrainingView, filter: &GuideFilter, d17: Option<&d
             let profit = d17(row.band);
             convert(&mut row, profit, level);
         }
-        row.accessible = row.blocked.is_empty() && crate::guide_prereq::passes(&row.prereqs, filter);
         rows.push(row);
     }
-    usable_first(&mut rows, |row| row.blocked.is_empty() && row.accessible, |row| row.effective_xp_6000);
+    priced_first(&mut rows, |row| row.priced, |row| row.effective_xp_6000);
     let unrated = unrated_of(view.gaps.iter().filter(|gap| !gated_out(&gap.method, filter)));
     (rows, unrated)
 }

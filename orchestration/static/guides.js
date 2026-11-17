@@ -7,6 +7,11 @@
 // (skill, level, family, quests); the table shows the best lines first
 // (profit or effective XP), a click on a line unfolds its flows, stages
 // and other XP. Sorting rides the shared TableSort helper (table.js).
+// D22: no line is ever blocked. Each line lists its conditions (levels,
+// site, quests, tools, stock, capital, market availability of what it
+// buys) and the API judges it for the profile typed in (level, per-skill
+// levels, quests, stock held, coins): the "feasibility" filter keeps the
+// lines feasible now, or feasible after prerequisites.
 var GuidesView = (function () {
   var SKILLS = ['attack', 'strength', 'defence', 'hitpoints', 'ranged', 'prayer', 'magic', 'cooking', 'woodcutting',
     'fishing', 'firemaking', 'crafting', 'smithing', 'mining', 'runecraft'];
@@ -59,23 +64,31 @@ var GuidesView = (function () {
     return keys.map(function (skill) { return skill + ' ' + number(map[skill]); }).join(', ') || '-';
   }
 
-  // "smithing 30, combat 12, quest doric, rune_pickaxe, 5k capital".
-  function prereqText(prereqs) {
-    if (!prereqs) return '-';
-    var parts = [];
-    var levels = prereqs.levels || {};
-    Object.keys(levels).sort().forEach(function (skill) { parts.push(skill + ' ' + levels[skill]); });
-    // 255 = danger::NEVER: no site of the method has a bank in reach.
-    if (prereqs.combat === 255) parts.push('no site within bank reach');
-    else if (prereqs.combat > 3) parts.push('combat ' + prereqs.combat);
-    (prereqs.quests || []).forEach(function (quest) { parts.push('quest ' + quest); });
-    if (prereqs.quest_points > 0) parts.push(prereqs.quest_points + ' quest points');
-    (prereqs.tools || []).forEach(function (tool) { parts.push(tool); });
-    var stock = prereqs.stock || {};
-    Object.keys(stock).sort().forEach(function (item) { parts.push('stock ' + number(stock[item]) + ' ' + item); });
-    if (prereqs.capital > 0) parts.push(number(prereqs.capital) + ' capital');
-    if (prereqs.ironman === false) parts.push('no ironman');
-    return parts.join(', ') || '-';
+  // "smithing 30, no site within bank reach (impossible today), quest
+  // doric, buy coal 19/lot: asks 0, recent 5, shops 0": the conditions of
+  // a line (D22, the API's structured list, each with its text).
+  function conditionsText(conditions) {
+    if (!conditions || !conditions.length) return '-';
+    return conditions.map(function (condition) { return condition.text || condition.kind; }).join(', ');
+  }
+
+  // Cell markup of the conditions: the impossible ones (no site within
+  // bank reach, an input nothing makes) highlighted.
+  function conditionsHtml(conditions) {
+    if (!conditions || !conditions.length) return '-';
+    return conditions.map(function (condition) {
+      var text = escapeHtml(condition.text || condition.kind);
+      return condition.impossible ? '<span class="impossible">' + text + '</span>' : text;
+    }).join(', ');
+  }
+
+  // "after_prereqs: smithing 20 -> 30, buy hammer" or "infeasible:
+  // coal: holds 0, asks 1, shops 0 of 19 per lot": the API's judgement
+  // for the profile of the query.
+  function feasibilityText(feasibility) {
+    if (!feasibility) return '-';
+    var parts = (feasibility.pending || []).concat(feasibility.reasons || []);
+    return feasibility.state + (parts.length ? ': ' + parts.join('; ') : '');
   }
 
   // Plain text (sort key and search), never markup.
@@ -91,27 +104,50 @@ var GuidesView = (function () {
     return source + ' · n ' + (confidence.runs || 0) + ' · ' + escapeHtml(confidence.read || '');
   }
 
+  // Filters of the query: the view (skill, level, family) and the profile
+  // the API judges each line for (level, levels, quests, held, coins).
+  var QUERY_KEYS = ['skill', 'level', 'family', 'quests', 'levels', 'held', 'coins'];
+
   // Query string of a filter object (empty values left out).
   function queryOf(filter) {
     var parts = [];
-    ['skill', 'level', 'family', 'quests'].forEach(function (key) {
+    QUERY_KEYS.forEach(function (key) {
       var value = filter[key];
       if (value !== undefined && value !== null && String(value).trim() !== '') parts.push(key + '=' + encodeURIComponent(String(value).trim()));
     });
     return parts.join('&');
   }
 
-  // Rows the page shows: accessible ones when asked, the text search,
-  // then the best `limit` (the API already sorts best first).
+  // Feasibility filter: '' every line, 'reach' feasible or after
+  // prerequisites (no infeasible condition), 'now' feasible now.
+  function keepFeasibility(row, wanted) {
+    var state = row.feasibility ? row.feasibility.state : '';
+    if (wanted === 'now') return state === 'feasible';
+    if (wanted === 'reach') return state === 'feasible' || state === 'after_prereqs';
+    return true;
+  }
+
+  // Rows the page shows: the feasibility for the profile, the text
+  // search, then the best `limit` (the API already sorts best first).
   function visibleRows(rows, options) {
     var needle = (options.search || '').trim().toLowerCase();
     var out = rows.filter(function (row) {
-      if (options.accessibleOnly && !row.accessible) return false;
+      if (!keepFeasibility(row, options.feasibility || '')) return false;
       if (!needle) return true;
       return [row.method, row.style, row.site, row.tool, row.family, row.skill, row.supply].filter(Boolean).join(' ').toLowerCase().indexOf(needle) >= 0;
     });
     return options.limit > 0 ? out.slice(0, options.limit) : out;
   }
+
+  // Unpriced line (an input nothing prices): no figure, said so.
+  function pricedNumber(value, row) {
+    return row && row.priced === false ? '<span class="muted">unpriced</span>' : number(value);
+  }
+
+  var CONDITION_COLS = [
+    { key: 'conditions_text', label: 'conditions', kind: 'str', fmt: function (text, row) { return conditionsHtml(row.conditions); } },
+    { key: 'feasibility_text', label: 'feasibility (profile)', kind: 'str' },
+  ];
 
   var MONEY_COLS = [
     { key: 'family', label: 'family', kind: 'str' },
@@ -119,16 +155,15 @@ var GuidesView = (function () {
     { key: 'site', label: 'site', kind: 'str', fmt: function (v) { return v ? escapeHtml(v) : '<span class="muted">best</span>'; } },
     { key: 'tool', label: 'tool', kind: 'str' },
     { key: 'band', label: 'band', kind: 'num', fmt: bandText },
-    { key: 'profit_6000', label: 'profit/6000', kind: 'num', fmt: number },
-    { key: 'revenue_6000', label: 'revenue', kind: 'num', fmt: number },
-    { key: 'cost_6000', label: 'cost', kind: 'num', fmt: number },
+    { key: 'profit_6000', label: 'profit/6000', kind: 'num', fmt: pricedNumber },
+    { key: 'revenue_6000', label: 'revenue', kind: 'num', fmt: pricedNumber },
+    { key: 'cost_6000', label: 'cost', kind: 'num', fmt: pricedNumber },
     { key: 'extra_ticks_6000', label: '+ticks/6000', kind: 'num', fmt: number },
     { key: 'xp_text', label: 'XP/6000 (bonus)', kind: 'str' },
-    { key: 'prereq_text', label: 'prerequisites', kind: 'str' },
+  ].concat(CONDITION_COLS, [
     { key: 'confidence_text', label: 'confidence', kind: 'str', fmt: function (v, row) { return confidenceHtml(row.confidence); } },
     { key: 'price_confidence', label: 'prices', kind: 'str' },
-    { key: 'blocked_text', label: 'blocked', kind: 'str' },
-  ];
+  ]);
 
   var TRAINING_COLS = [
     { key: 'skill', label: 'skill', kind: 'str' },
@@ -138,31 +173,25 @@ var GuidesView = (function () {
     { key: 'site', label: 'site', kind: 'str', fmt: function (v) { return v ? escapeHtml(v) : '<span class="muted">best</span>'; } },
     { key: 'tool', label: 'tool', kind: 'str' },
     { key: 'xp_6000', label: 'XP/6000', kind: 'num', fmt: number },
-    { key: 'effective_xp_6000', label: 'effective XP/6000', kind: 'num', fmt: number },
-    { key: 'coins_6000', label: 'coins/6000', kind: 'num', fmt: number },
-    { key: 'coins_per_xp', label: 'coins/XP', kind: 'num', fmt: function (v) { return isFinite(v) ? String(Math.round(v * 100) / 100) : '-'; } },
-    { key: 'converted_ticks_6000', label: 'coin ticks/6000', kind: 'num', fmt: number },
+    { key: 'effective_xp_6000', label: 'effective XP/6000', kind: 'num', fmt: pricedNumber },
+    { key: 'coins_6000', label: 'coins/6000', kind: 'num', fmt: pricedNumber },
+    { key: 'coins_per_xp', label: 'coins/XP', kind: 'num', fmt: function (value, row) { return row && row.priced === false ? '<span class="muted">unpriced</span>' : (value !== null && isFinite(value) ? String(Math.round(value * 100) / 100) : '-'); } },
+    { key: 'converted_ticks_6000', label: 'coin ticks/6000', kind: 'num', fmt: pricedNumber },
     { key: 'ticks_to_band_end', label: 'ticks to band end', kind: 'num', fmt: ticksText },
-    { key: 'prereq_text', label: 'prerequisites', kind: 'str' },
+  ].concat(CONDITION_COLS, [
     { key: 'confidence_text', label: 'confidence', kind: 'str', fmt: function (v, row) { return confidenceHtml(row.confidence); } },
     { key: 'price_confidence', label: 'prices', kind: 'str' },
-    { key: 'blocked_text', label: 'blocked', kind: 'str' },
-  ];
+  ]);
 
   // Flattened display fields of an API row (sortable as text).
   function decorate(row) {
     row.xp_text = xpText(row.xp_6000 && typeof row.xp_6000 === 'object' ? row.xp_6000 : row.other_xp_6000);
-    row.prereq_text = prereqText(row.prereqs);
+    row.conditions_text = conditionsText(row.conditions);
+    row.feasibility_text = feasibilityText(row.feasibility);
     row.confidence_text = confidenceText(row.confidence);
-    row.blocked_text = blockedText(row.blocked);
     return row;
   }
 
-  // Why no bot can work a row whatever its levels (stock not held, an
-  // input nobody makes, offers or sells).
-  function blockedText(reasons) {
-    return (reasons || []).join('; ') || '-';
-  }
 
   // The way an input or consumable came by (decisions 2026-11-16 §1/§3):
   // farmed by its source or bought, with what each way costs a unit.
@@ -197,6 +226,8 @@ var GuidesView = (function () {
     }
     if (row.other_xp_6000 && Object.keys(row.other_xp_6000).length) html += '<div class="muted">other XP/6000: ' + escapeHtml(xpText(row.other_xp_6000)) + '</div>';
     if (row.quest_xp > 0) html += '<div class="muted">quest XP ' + number(row.quest_xp) + ', measured duration ' + ticksText(row.quest_ticks) + '</div>';
+    html += '<div class="muted">conditions: ' + conditionsHtml(row.conditions) + '</div>';
+    html += '<div class="muted">for this profile: ' + escapeHtml(feasibilityText(row.feasibility)) + '</div>';
     return html;
   }
 
@@ -206,16 +237,15 @@ var GuidesView = (function () {
     var sorter = (typeof TableSort !== 'undefined') ? TableSort : null;
 
     function value(id) { var node = document.getElementById(id); return node ? node.value : ''; }
-    function checked(id) { var node = document.getElementById(id); return node ? node.checked : false; }
 
     function render() {
       if (!state.payload) return;
-      var options = { search: value('search'), accessibleOnly: checked('accessible'), limit: parseInt(value('limit'), 10) || 0 };
+      var options = { search: value('search'), feasibility: value('feasibility'), limit: parseInt(value('limit'), 10) || 0 };
       var rows = visibleRows(state.rows, options);
       document.getElementById('summary').textContent = state.rows.length + ' line(s), ' + rows.length + ' shown · ' + freshnessText(state.payload) +
         (state.payload.market_wait_ticks ? ' · market wait ' + Math.round(state.payload.market_wait_ticks) + ' ticks/lot' : ' · market wait unmeasured');
       var keyOf = function (row) { return [row.family, row.skill, row.method, row.style, row.site, row.tool, row.band, row.supply].join('|'); };
-      var rowAttrs = function (row) { return { 'data-key': keyOf(row), class: row.accessible ? 'line' : 'line locked' }; };
+      var rowAttrs = function (row) { return { 'data-key': keyOf(row), class: row.feasibility && row.feasibility.state === 'infeasible' ? 'line locked' : 'line' }; };
       // onSort: a header click re-runs this render, so sorted lines keep
       // their click handlers and open details.
       if (sorter) sorter.render('guide', columns, rows, sortOptions(rowAttrs, render));
@@ -237,7 +267,8 @@ var GuidesView = (function () {
     }
 
     function load() {
-      var filter = { skill: value('skill'), level: value('level'), family: value('family'), quests: value('quests') };
+      var filter = {};
+      QUERY_KEYS.forEach(function (key) { filter[key] = value(key); });
       document.getElementById('summary').textContent = 'loading…';
       fetch('/api/guides/' + kind + '?' + queryOf(filter)).then(function (response) { return response.json(); }).then(function (body) {
         if (!body.ok) {
@@ -258,8 +289,8 @@ var GuidesView = (function () {
     if (family) family.innerHTML = '<option value="">all families</option>' + FAMILIES.map(function (name) { return '<option>' + name + '</option>'; }).join('');
     var limit = document.getElementById('limit');
     if (limit && !limit.value) limit.value = DEFAULT_LIMIT;
-    ['skill', 'level', 'family', 'quests'].forEach(function (id) { var node = document.getElementById(id); if (node) node.onchange = load; });
-    ['search', 'accessible', 'limit'].forEach(function (id) { var node = document.getElementById(id); if (node) node.oninput = render; if (node) node.onchange = render; });
+    QUERY_KEYS.forEach(function (id) { var node = document.getElementById(id); if (node) node.onchange = load; });
+    ['search', 'feasibility', 'limit'].forEach(function (id) { var node = document.getElementById(id); if (node) node.oninput = render; if (node) node.onchange = render; });
     load();
     setInterval(load, 60000);
   }
@@ -275,7 +306,7 @@ var GuidesView = (function () {
     return [MONEY_COLS, TRAINING_COLS].map(function (cols) { return cols.some(function (col) { return col.key === key && typeof col.fmt === 'function'; }); });
   }
 
-  return { start: start, sortOptions: sortOptions, confidenceText: confidenceText, confidenceHtml: confidenceHtml, columnFormats: columnFormats, queryOf: queryOf, visibleRows: visibleRows, prereqText: prereqText, xpText: xpText, number: number, routeText: routeText, freshnessText: freshnessText, retryDelay: retryDelay };
+  return { start: start, sortOptions: sortOptions, confidenceText: confidenceText, confidenceHtml: confidenceHtml, columnFormats: columnFormats, queryOf: queryOf, visibleRows: visibleRows, conditionsText: conditionsText, conditionsHtml: conditionsHtml, feasibilityText: feasibilityText, xpText: xpText, number: number, routeText: routeText, freshnessText: freshnessText, retryDelay: retryDelay };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {

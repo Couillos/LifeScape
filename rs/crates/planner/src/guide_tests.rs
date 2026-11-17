@@ -116,6 +116,24 @@ fn row<'a>(rows: &'a [crate::guide_model::MoneyRow], method: &str, family: Famil
     rows.iter().find(|row| row.method == method && row.family == family).unwrap_or_else(|| panic!("{method} {family:?} row"))
 }
 
+/// The feasibility of a row for the bot a filter describes (D22).
+fn judged(row: &impl crate::guide_feasible::GuideRow, filter: &GuideFilter) -> crate::guide_feasible::Feasibility {
+    crate::guide_feasible::with_filter_bot(filter, |bot| crate::guide_feasible::feasible_for(row, bot))
+}
+
+/// Within the reach of the filter's bot (what "accessible" was).
+fn reachable(row: &impl crate::guide_feasible::GuideRow, filter: &GuideFilter) -> bool {
+    judged(row, filter).within_reach()
+}
+
+/// The reasons a row is infeasible for the filter's bot, joined.
+fn why_not(row: &impl crate::guide_feasible::GuideRow, filter: &GuideFilter) -> String {
+    match judged(row, filter) {
+        crate::guide_feasible::Feasibility::Infeasible(reasons, _) => reasons.join("; "),
+        _ => String::new(),
+    }
+}
+
 /// Profit = Σ signed flows × current price; XP = units × XP of the dump.
 #[test]
 fn farm_profit_is_the_priced_flow_balance() {
@@ -126,8 +144,8 @@ fn farm_profit_is_the_priced_flow_balance() {
     assert!((sum - coal.profit_6000).abs() < 1e-9);
     let mining = coal.xp_6000.iter().find(|(skill, _)| skill == "mining").map(|(_, xp)| *xp).unwrap_or(0.0);
     assert!((mining - 100.0 * 50.0).abs() < 1e-9, "coal pays 50 XP: {mining}");
-    let general: Vec<f64> = rows.iter().filter(|row| row.blocked.is_empty()).map(|row| row.profit_6000).collect();
-    assert!(general.windows(2).all(|pair| pair[0] >= pair[1]), "best profit first (blocked rows after)");
+    let general: Vec<f64> = rows.iter().filter(|row| row.priced).map(|row| row.profit_6000).collect();
+    assert!(general.windows(2).all(|pair| pair[0] >= pair[1]), "best profit first (unpriced rows after)");
 }
 
 /// D5: a recipe on owned stock prices its inputs at their sale price; a
@@ -197,7 +215,7 @@ fn training_converts_coins_to_time_at_the_best_money_line() {
     let filter = GuideFilter { skill: Some("firemaking".to_string()), level: Some(30), ..GuideFilter::default() };
     let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
     let (money, _) = fixture.run(|engine| money_guide(engine, &level(30)));
-    let best = money.iter().filter(|row| row.accessible).map(|row| row.profit_6000).fold(0.0, f64::max);
+    let best = money.iter().filter(|row| row.priced && reachable(*row, &level(30))).map(|row| row.profit_6000).fold(0.0, f64::max);
     let market = rows.iter().find(|row| row.method == "fire:logs" && row.supply == Supply::Market).expect("market mode");
     let spent = -market.coins_6000;
     assert!(spent > 0.0);
@@ -282,12 +300,12 @@ fn every_f2p_method_has_a_line_or_a_typed_reason() {
 }
 
 /// D5 on stock: a recipe transforms stock the bot HOLDS. Its row names
-/// one lot of that stock as a prerequisite; in the general guide (no
-/// bot, nothing held) it is blocked, never accessible and ranks after
-/// every other row (D17 never reads it); a bot holding the stock works
-/// it on that stock only.
+/// one lot of that stock as a condition; in the general guide (no bot,
+/// nothing held) it keeps its economy over a full window (D22: never
+/// blocked) but no bot of the filter can work it (D17 never reads it); a
+/// bot holding the stock works it on that stock only.
 #[test]
-fn recipe_on_stock_needs_its_stock_and_ranks_after_the_general_lines() {
+fn recipe_on_stock_needs_its_stock_and_is_judged_on_it() {
     let fixture = Fixture::new();
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let steel = row(&rows, "smelt:steel_bar", Family::Recipe);
@@ -296,24 +314,22 @@ fn recipe_on_stock_needs_its_stock_and_ranks_after_the_general_lines() {
     let stock = |item: &str| steel.prereqs.stock.iter().find(|(name, _)| name == item).map(|(_, units)| *units);
     assert_eq!(stock("iron_ore"), Some((100.0_f64 / lots).ceil()), "{:?}", steel.prereqs.stock);
     assert_eq!(stock("coal"), Some((200.0_f64 / lots).ceil()), "{:?}", steel.prereqs.stock);
-    assert!(!steel.accessible, "nobody holds the stock in the general guide");
-    assert!(steel.blocked.iter().any(|reason| reason.contains("stock") && reason.contains("iron_ore")), "{:?}", steel.blocked);
-    let first_blocked = rows.iter().position(|row| !row.blocked.is_empty()).expect("a blocked row");
-    assert!(rows[first_blocked..].iter().all(|row| !row.blocked.is_empty()), "blocked rows rank after every other row");
-    assert!(rows.iter().filter(|row| row.accessible).all(|row| row.family != Family::Recipe), "no stock is assumed");
+    assert!(steel.priced && (steel.profit_6000 - (5000.0 - 1000.0 - 3000.0)).abs() < 1e-9, "its economy stays: {}", steel.profit_6000);
+    assert!(why_not(steel, &level(30)).contains("stock") && why_not(steel, &level(30)).contains("iron_ore"), "nobody holds the stock in the general guide");
+    assert!(rows.iter().filter(|row| reachable(*row, &level(30))).all(|row| row.family != Family::Recipe), "no stock is assumed");
     let best = fixture.run(|engine| crate::guide_money::best_accessible_profit(engine, 30, &[]));
     let chain = row(&rows, "smelt:steel_bar", Family::Chain).profit_6000;
     assert!(best.is_some_and(|best| best >= chain && best < 1500.0 + 1e-9), "D17 reads the general lines: {best:?}");
-    // A bot holding half a window of ore and plenty of coal: accessible,
+    // A bot holding half a window of ore and plenty of coal: feasible,
     // half the window's work, half its profit.
     let held = GuideFilter { level: Some(30), held: vec![("iron_ore".to_string(), 50.0), ("coal".to_string(), 500.0)], ..GuideFilter::default() };
     let (rows, _) = fixture.run(|engine| money_guide(engine, &held));
     let steel = row(&rows, "smelt:steel_bar", Family::Recipe);
-    assert!(steel.accessible && steel.blocked.is_empty(), "{:?}", steel.blocked);
+    assert_eq!(judged(steel, &held), crate::guide_feasible::Feasibility::Feasible);
     assert!((steel.profit_6000 - (5000.0 - 1000.0 - 3000.0) * 0.5).abs() < 1e-9, "{}", steel.profit_6000);
     let short = GuideFilter { held: vec![("iron_ore".to_string(), 5.0), ("coal".to_string(), 500.0)], ..held };
     let (rows, _) = fixture.run(|engine| money_guide(engine, &short));
-    assert!(!row(&rows, "smelt:steel_bar", Family::Recipe).accessible, "under one lot of ore");
+    assert!(why_not(row(&rows, "smelt:steel_bar", Family::Recipe), &short).contains("iron_ore"), "under one lot of ore");
 }
 
 /// D12: an object never traded has no current price. A bid for one unit
@@ -412,8 +428,10 @@ fn thin_price_holds_for_the_traded_volume_only() {
 
 /// Purchase price (user 2026-11-16): an input costs at least the best
 /// resting ask: max(current price, asks walked for the volume); past the
-/// asks' depth an F2P shop (Q7), else the row is blocked. A median of 7
-/// under a cheapest ask of 35 buys at 35.
+/// asks' depth an F2P shop (Q7), else (D22) the current price, never
+/// under the last ask walked: the row keeps its economy and names what
+/// the market holds (a condition: the general bot cannot buy a lot). A
+/// median of 7 under a cheapest ask of 35 buys at 35.
 #[test]
 fn purchase_costs_at_least_the_best_ask() {
     let mut fixture = Fixture::new();
@@ -429,13 +447,17 @@ fn purchase_costs_at_least_the_best_ask() {
     fixture.quotes.insert("coal", Quote { price: 7.0, traded: true, median: 7.0, fills: 5, fill_units: 50.0, bids: Vec::new(), asks: vec![(5.0, 1000.0)] });
     let bought = fixture.run(|engine| engine.buy_at("coal", 200.0));
     assert!((bought.price - 7.0).abs() < 1e-9 && bought.basis == crate::guide_model::PriceBasis::Traded, "{bought:?}");
-    // Past the asks' depth: the shop, else not for sale (row blocked).
+    // Past the asks' depth: the shop, else the current price (at least
+    // the last ask walked), the availability a condition.
     fixture.quotes.insert("coal", Quote { price: 7.0, traded: true, median: 7.0, fills: 5, fill_units: 50.0, bids: Vec::new(), asks: vec![(35.0, 10.0)] });
     let bought = fixture.run(|engine| engine.buy_at("coal", 200.0));
-    assert!(!bought.available && bought.price == 0.0, "{bought:?}");
+    assert!(!bought.available && bought.priced && (bought.price - 35.0).abs() < 1e-9, "{bought:?}");
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let market = row(&rows, "smelt:steel_bar", Family::Market);
-    assert!(!market.accessible && market.blocked.iter().any(|reason| reason.contains("coal")), "{:?}", market.blocked);
+    assert!(market.priced, "never blocked: {market:?}");
+    let need = market.prereqs.market.iter().find(|need| need.item == "coal").expect("coal condition");
+    assert_eq!((need.asks, need.recent, need.priced), (10.0, 50.0, true), "{need:?}");
+    assert!(why_not(market, &level(30)).contains("coal"), "ten asks hold no lot");
     fixture.shop.insert("coal", 40.0);
     let bought = fixture.run(|engine| engine.buy_at("coal", 200.0));
     assert!((bought.price - (10.0 * 35.0 + 190.0 * 40.0) / 200.0).abs() < 1e-9 && bought.available, "{bought:?}");
@@ -443,25 +465,29 @@ fn purchase_costs_at_least_the_best_ask() {
 }
 
 /// D15/Q7: an ask for one unit sells one unit. Past the asks' depth a
-/// purchase goes to the F2P shop; with none the input is not for sale:
-/// the 100 % market row is blocked (with the reason), never accessible,
-/// and carries no profit.
+/// purchase goes to the F2P shop; with none (D22) the rest costs the
+/// last ask walked of a never-traded object: the 100 % market row keeps
+/// its profit, no bot without the coal can buy a lot (its condition).
 #[test]
-fn purchase_beyond_the_ask_depth_needs_a_shop_or_blocks_the_row() {
+fn purchase_beyond_the_ask_depth_is_a_condition_not_a_block() {
     let mut fixture = Fixture::new();
     fixture.prices.remove("coal");
     fixture.books.insert("coal", (Vec::new(), vec![(10.0, 1.0)]));
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let market = row(&rows, "smelt:steel_bar", Family::Market);
-    assert!(!market.accessible);
-    assert!(market.blocked.iter().any(|reason| reason.contains("coal")), "{:?}", market.blocked);
-    assert_eq!(market.profit_6000, 0.0, "no profit without the input");
-    // The chain mines its coal: still a general line.
-    assert!(row(&rows, "smelt:steel_bar", Family::Chain).blocked.is_empty());
+    assert!(market.priced && market.profit_6000 != 0.0, "{market:?}");
+    let coal = market.flows.iter().find(|line| line.item == "coal").expect("coal line");
+    assert!((coal.unit_price - 10.0).abs() < 1e-9 && coal.basis == crate::guide_model::PriceBasis::BookNone, "{coal:?}");
+    assert!(why_not(market, &level(30)).contains("coal"), "one ask holds no lot");
+    let mut holder = level(30);
+    holder.held = vec![("coal".to_string(), 19.0), ("iron_ore".to_string(), 10.0)];
+    assert!(reachable(market, &holder), "a bot holding a lot of coal works it");
+    // The chain mines its coal: within everyone's reach.
+    assert!(reachable(row(&rows, "smelt:steel_bar", Family::Chain), &level(30)));
     fixture.shop.insert("coal", 12.0);
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let market = row(&rows, "smelt:steel_bar", Family::Market);
-    assert!(market.blocked.is_empty() && market.accessible, "{:?}", market.blocked);
+    assert!(reachable(market, &level(30)), "{market:?}");
     let coal = market.flows.iter().find(|line| line.item == "coal").expect("coal line");
     let units = -coal.per_6000;
     assert!((coal.unit_price - (10.0 + (units - 1.0) * 12.0) / units).abs() < 1e-9, "one at the ask, the rest at the shop: {}", coal.unit_price);
@@ -469,16 +495,20 @@ fn purchase_beyond_the_ask_depth_needs_a_shop_or_blocks_the_row() {
 }
 
 /// Training: an input nothing makes at the level, nobody offers and no
-/// shop sells blocks both supply modes (with the reason).
+/// shop sells leaves both supply modes unpriced (no effective rate,
+/// ranked after the priced lines) with their conditions: no autonomous
+/// source, nothing prices the logs (D22: listed, never blocked).
 #[test]
-fn training_input_nobody_makes_or_sells_blocks_the_row() {
+fn training_input_nobody_makes_or_sells_is_unpriced_with_its_conditions() {
     let mut fixture = Fixture::new();
     fixture.prices.remove("logs");
     let filter = GuideFilter { skill: Some("firemaking".to_string()), level: Some(30), ..GuideFilter::default() };
     let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
     let fire: Vec<_> = rows.iter().filter(|row| row.method == "fire:logs").collect();
-    assert!(!fire.is_empty());
-    assert!(fire.iter().all(|row| !row.accessible && row.blocked.iter().any(|reason| reason.contains("logs"))), "{fire:?}");
+    assert_eq!(fire.len(), 2, "both modes listed: {fire:?}");
+    assert!(fire.iter().all(|row| !row.priced && row.effective_xp_6000 == 0.0 && why_not(*row, &filter).contains("logs")), "{fire:?}");
+    let first_unpriced = rows.iter().position(|row| !row.priced).expect("an unpriced row");
+    assert!(rows[first_unpriced..].iter().all(|row| !row.priced), "unpriced rows rank last");
 }
 
 fn training_row<'a>(rows: &'a [crate::guide_model::TrainingRow], method: &str, supply: Supply) -> &'a crate::guide_model::TrainingRow {
@@ -498,7 +528,7 @@ fn autonomous_rare_byproduct_input_collapses_the_effective_rate() {
     let filter = GuideFilter { skill: Some("crafting".to_string()), level: Some(30), ..GuideFilter::default() };
     let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
     let autonomous = training_row(&rows, "cut:sapphire", Supply::Autonomous);
-    assert!(autonomous.blocked.is_empty(), "the mine is an autonomous source: {:?}", autonomous.blocked);
+    assert!(autonomous.priced && autonomous.prereqs.sources.is_empty(), "the mine is an autonomous source: {:?}", autonomous.prereqs.sources);
     let units = vec![("product".to_string(), "sapphire".to_string(), 5000.0)];
     let work = crate::unit_xp::derived_xp("cut:sapphire", "", &units, 30).into_iter().find(|(skill, _)| skill == "crafting").map(|(_, xp)| xp).expect("crafting XP");
     // 5000 stones a window of cutting, each 6000 / 0.25 ticks of mining.
@@ -508,25 +538,26 @@ fn autonomous_rare_byproduct_input_collapses_the_effective_rate() {
     assert!(!autonomous.flows.iter().any(|line| line.item == "uncut_sapphire" && line.per_6000 < 0.0), "nothing bought: {:?}", autonomous.flows);
     assert!(autonomous.other_xp_6000.iter().any(|(skill, xp)| skill == "mining" && *xp > 0.0), "the mining rides the line");
     let market = training_row(&rows, "cut:sapphire", Supply::Market);
-    assert!(market.blocked.is_empty() && market.effective_xp_6000 > autonomous.effective_xp_6000 * 100.0, "{market:?}");
+    assert!(market.priced && market.effective_xp_6000 > autonomous.effective_xp_6000 * 100.0, "{market:?}");
 }
 
 /// D13 autonomous: an input no activity of the bot yields (logs without
 /// a woodcutting yield), or whose only source needs a purchase (steel
-/// bars without mined coal), blocks the autonomous line with the reason,
-/// never a purchase in disguise; it carries no effective rate. The
-/// market line still buys.
+/// bars without mined coal), is a source gap of the autonomous line
+/// (D22: impossible today, listed), never a purchase in disguise; it
+/// carries no effective rate. The market line still buys.
 #[test]
-fn autonomous_input_without_autonomous_source_is_blocked() {
+fn autonomous_input_without_autonomous_source_is_a_source_gap() {
     let fixture = Fixture::new();
     let filter = GuideFilter { skill: Some("firemaking".to_string()), level: Some(30), ..GuideFilter::default() };
     let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
     let autonomous = training_row(&rows, "fire:logs", Supply::Autonomous);
-    assert!(!autonomous.accessible && autonomous.blocked.iter().any(|reason| reason.contains("logs")), "{autonomous:?}");
-    assert_eq!(autonomous.effective_xp_6000, 0.0, "a blocked line has no rate");
+    assert!(!autonomous.priced && why_not(autonomous, &filter).contains("logs"), "{autonomous:?}");
+    assert!(crate::guide_feasible::conditions(&autonomous.prereqs).iter().any(|condition| condition.kind() == "source" && condition.impossible()));
+    assert_eq!(autonomous.effective_xp_6000, 0.0, "an unpriced line has no rate");
     assert!(autonomous.ticks_to_band_end.is_none());
     let market = training_row(&rows, "fire:logs", Supply::Market);
-    assert!(market.accessible && market.blocked.is_empty(), "{market:?}");
+    assert!(market.priced && reachable(market, &filter), "{market:?}");
     // Recursive: the dagger's bar is smelted, the bar's coal is not mined.
     let mut fixture = Fixture::new();
     fixture.yields.remove("gather:mining/coal");
@@ -535,36 +566,40 @@ fn autonomous_input_without_autonomous_source_is_blocked() {
     let filter = GuideFilter { skill: Some("smithing".to_string()), level: Some(30), ..GuideFilter::default() };
     let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
     let dagger = training_row(&rows, "smith:steel_dagger", Supply::Autonomous);
-    assert!(!dagger.accessible && dagger.blocked.iter().any(|reason| reason.contains("steel_bar")), "{dagger:?}");
+    assert!(why_not(dagger, &filter).contains("steel_bar"), "{dagger:?}");
     let smelt = training_row(&rows, "smelt:steel_bar", Supply::Autonomous);
-    assert!(smelt.blocked.iter().any(|reason| reason.contains("coal")), "{smelt:?}");
+    assert!(why_not(smelt, &filter).contains("coal"), "{smelt:?}");
     // The money chain still buys what it does not farm (D16): coal.
     let price = crate::guide_chain::TimePrice::new(1200.0);
     let unit = fixture.run(|engine| crate::guide_chain::chain_unit(engine, "smelt:steel_bar", "", "steel_bar", 30, 0, &[], crate::guide_chain::Sourcing::Cheapest(price))).expect("chain");
-    assert!(unit.missing.is_empty(), "{:?}", unit.missing);
+    assert!(unit.gaps.is_empty(), "{:?}", unit.gaps);
     assert_eq!(unit.routes.iter().find(|route| route.item == "coal").map(|route| route.route), Some(crate::guide_model::Route::Buy));
 }
 
 /// Market mode: the inputs come from the asks for their depth, then an
-/// F2P shop (the money guide's purchase rule); past both the line is
-/// blocked with the reason and carries no effective rate.
+/// F2P shop (the money guide's purchase rule); past both (D22) the line
+/// keeps its rate at the last ask walked, its condition saying the asks
+/// hold no lot.
 #[test]
-fn training_market_input_is_limited_by_the_ask_depth() {
+fn training_market_input_availability_is_a_condition() {
     let mut fixture = Fixture::new();
     fixture.prices.remove("logs");
     fixture.books.insert("logs", (Vec::new(), vec![(4.0, 10.0)]));
     let filter = GuideFilter { skill: Some("firemaking".to_string()), level: Some(30), ..GuideFilter::default() };
     let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
     let market = training_row(&rows, "fire:logs", Supply::Market);
-    assert!(!market.accessible && market.blocked.iter().any(|reason| reason.contains("logs")), "{market:?}");
-    assert_eq!(market.effective_xp_6000, 0.0, "a blocked line has no rate");
+    assert!(market.priced && market.effective_xp_6000 > 0.0, "{market:?}");
+    assert!(why_not(market, &filter).contains("logs"), "ten asks hold no lot: {market:?}");
     fixture.shop.insert("logs", 5.0);
     let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
     let market = training_row(&rows, "fire:logs", Supply::Market);
-    assert!(market.accessible && market.effective_xp_6000 > 0.0, "{market:?}");
+    assert!(reachable(market, &filter) && market.effective_xp_6000 > 0.0, "{market:?}");
     let logs = market.flows.iter().find(|line| line.item == "logs").expect("logs line");
     assert_eq!(logs.basis, crate::guide_model::PriceBasis::BookShop);
 }
+
+#[path = "guide_d22_tests.rs"]
+mod d22;
 
 #[path = "guide_sourcing_tests.rs"]
 mod sourcing;

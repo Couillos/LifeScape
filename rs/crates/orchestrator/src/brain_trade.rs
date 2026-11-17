@@ -10,6 +10,7 @@
 
 use lifescape_json::Value;
 use lifescape_planner::expand::ReadyCtx;
+use lifescape_planner::guide_feasible::BotState;
 use lifescape_planner::guide_model::{Family, MoneyRow};
 use lifescape_planner::trade_craft;
 use lifescape_planner::{Life, Node, NodeKind};
@@ -37,23 +38,34 @@ pub fn market_rows<'a>(set: &'a GuideSet, level_of: &dyn Fn(&str) -> u8) -> Vec<
     out
 }
 
-/// The offers of a bot (pure over the set): eligible market rows, plus
-/// the bare offer of the lot its node bought for (`blocked_by`) when that
-/// row left the guide (bought stock never strands).
-pub fn offers_for(set: &GuideSet, node: &Node, level_of: &dyn Fn(&str) -> u8, quests_done: &[String], held: &dyn Fn(&str) -> i64) -> Vec<trade_craft::TradeOffer> {
-    let rows = market_rows(set, level_of);
+/// The offers of a bot (pure over the set): the market rows within its
+/// reach (D22, `trade_craft::eligible` = `guide_feasible::feasible_for`
+/// on `bot`), plus the bare offer of the lot its node bought for
+/// (`blocked_by`) when that row left the guide (bought stock never
+/// strands).
+pub fn offers_for(set: &GuideSet, node: &Node, bot: &BotState) -> Vec<trade_craft::TradeOffer> {
+    let rows = market_rows(set, bot.level_of);
     let quote = |item: &str| set.quotes.get(item).cloned();
-    let mut offers = trade_craft::offers(&rows, &quote, held, level_of, quests_done, false);
+    let mut offers = trade_craft::offers(&rows, &quote, bot);
     if let Some(bought) = node.blocked_by.as_deref().filter(|method| trade_craft::is_trade(method)) {
         if !offers.iter().any(|offer| offer.method == bought) {
-            offers.extend(trade_craft::recipe_offer(bought, held));
+            let held = |item: &str| (bot.held)(item).max(0.0).floor() as i64;
+            offers.extend(trade_craft::recipe_offer(bought, &held));
         }
     }
     offers
 }
 
+/// Units resting on the asks of `item` in the set's cycle (the market of
+/// the moment the brain knows, at most `REFRESH_PERIOD` old).
+pub fn cycle_asks(set: &GuideSet, item: &str) -> Option<f64> {
+    set.quotes.get(item).map(|quote| quote.asks.iter().fold(0.0, |total, (_, units)| total + units.max(0.0)))
+}
+
 /// Publishes the bot's trade offers in `ctx` (a money or coin node, never
-/// an Ironman): no guide set yet, no offer (logged once per pass).
+/// an Ironman): no guide set yet, no offer (logged once per pass). The
+/// bot judged (D22): live levels and combat, its quests, its holdings,
+/// its free wallet, the cycle's asks.
 pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job) {
     if !matches!(node.kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) || life.profile.ironman {
         return;
@@ -64,9 +76,12 @@ pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value
     };
     let levels = crate::brain_market::live_levels(live);
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
-    let held = |item: &str| crate::brain_plan::holdings_count(job, item);
-    ctx.trades = offers_for(&set, node, &level_of, &ctx.quests_done, &held);
-    ctx.trade_wallet = crate::brain_gear::free_coins(job, None);
+    let held = |item: &str| crate::brain_plan::holdings_count(job, item) as f64;
+    let asks = |item: &str| cycle_asks(&set, item);
+    let wallet = crate::brain_gear::free_coins(job, None);
+    let bot = BotState { level_of: &level_of, combat: ctx.combat, quests_done: &ctx.quests_done, held: &held, coins: Some(wallet as f64), ironman: false, asks: &asks };
+    ctx.trades = offers_for(&set, node, &bot);
+    ctx.trade_wallet = wallet;
 }
 
 /// Records the lot the resolve just locked (idempotent per node) and logs
@@ -151,8 +166,7 @@ mod tests {
             routes: Vec::new(),
             confidence: Confidence::default(),
             price_confidence: "traded",
-            blocked: Vec::new(),
-            accessible: true,
+            priced: true,
         }
     }
 
@@ -180,25 +194,53 @@ mod tests {
     /// R5: the brain's offers come from the precomputed guide, the view
     /// of the bot's own level in the recipe's skill, market rows only,
     /// with the cycle's asks and the units held.
+    /// The offers of a bot at `level_of` holding `held` (D22: judged by
+    /// `feasible_for` on the cycle's asks, a wallet of 10 000).
+    fn offers_of(guides: &crate::guides_store::GuideSet, node: &Node, level_of: &dyn Fn(&str) -> u8, held: &dyn Fn(&str) -> f64) -> Vec<lifescape_planner::trade_craft::TradeOffer> {
+        let asks = |item: &str| super::cycle_asks(guides, item);
+        let bot = super::BotState { level_of, combat: 30, quests_done: &[], held, coins: Some(10_000.0), ironman: false, asks: &asks };
+        offers_for(guides, node, &bot)
+    }
+
     #[test]
     fn the_brain_reads_its_offers_from_the_precomputed_guide() {
         let guides = set();
         let node = Node::new("n1", NodeKind::MakeMoney, Vec::new(), 0);
         let smith = |skill: &str| if skill == "smithing" { 28 } else { 1 };
-        let held = |item: &str| if item == "copper_ore" { 5 } else { 0 };
-        let offers = offers_for(&guides, &node, &smith, &[], &held);
+        let held = |item: &str| if item == "copper_ore" { 5.0 } else { 0.0 };
+        let offers = offers_of(&guides, &node, &smith, &held);
         assert_eq!(offers.len(), 1, "the market row only: {offers:?}");
         assert_eq!(offers[0].method, "trade:craft/smelt:bronze_bar");
         assert_eq!(offers[0].inputs[0].asks, vec![(10.0, 60.0)], "the cycle's asks");
         assert_eq!(offers[0].inputs[0].held, 5);
         let novice = |_: &str| 3u8;
-        assert!(offers_for(&guides, &node, &novice, &[], &held).is_empty(), "another band's view: no row read for it");
+        assert!(offers_of(&guides, &node, &novice, &held).is_empty(), "another band's view: no row read for it");
         // Bought for a lot whose row left the guide: its bare offer stays.
         let mut bought = node.clone();
         bought.blocked_by = Some("trade:craft/smelt:bronze_bar".to_string());
-        let kept = offers_for(&guides, &bought, &novice, &[], &|_| 22);
+        let kept = offers_of(&guides, &bought, &novice, &|_| 22.0);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].makeable(), 22);
+    }
+
+    /// D22: the market availability a row names is judged on the cycle's
+    /// asks and the bot's own stock: no tin offered and none held, no
+    /// offer; a bot holding a lot of tin gets it.
+    #[test]
+    fn the_brain_judges_the_market_need_on_its_stock_and_the_cycle() {
+        let mut guides = set();
+        let need = |item: &str| lifescape_planner::guide_model::MarketNeed { item: item.to_string(), cause: "input".to_string(), per_6000: 100.0, per_lot: 14.0, asks: 0.0, recent: 0.0, shops: 0.0, priced: true };
+        for (_, view) in &mut guides.money_bands {
+            for row in &mut view.rows {
+                row.prereqs.market = vec![need("copper_ore"), need("tin_ore")];
+            }
+        }
+        guides.quotes.insert("tin_ore".to_string(), Quote { price: 12.0, traded: true, ..Quote::default() });
+        let node = Node::new("n1", NodeKind::MakeMoney, Vec::new(), 0);
+        let smith = |skill: &str| if skill == "smithing" { 28 } else { 1 };
+        assert!(offers_of(&guides, &node, &smith, &|_| 0.0).is_empty(), "no tin offered in the cycle, none held");
+        let tin = |item: &str| if item == "tin_ore" { 14.0 } else { 0.0 };
+        assert_eq!(offers_of(&guides, &node, &smith, &tin).len(), 1, "its own tin");
     }
 
     /// `check-method <staff> trade:craft/<recipe>` checks the craft leg

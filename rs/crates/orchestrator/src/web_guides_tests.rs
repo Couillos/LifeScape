@@ -60,8 +60,9 @@ fn money_guide_prices_the_measured_fight() -> Result<(), lifescape_store::Error>
     let flows = measured.get("flows").as_arr().cloned().unwrap_or_default();
     assert!(flows.iter().any(|line| line.get("item").as_str() == Some("feather")), "{flows:?}");
     assert!(flows.iter().all(|line| line.get("cause").as_str() != Some("traded")));
-    assert!(rows.iter().all(|row| row.get("prereqs").get("levels").get("attack").as_i64().unwrap_or(0) <= 3 || !row.get("accessible").as_bool().unwrap_or(true)));
-    for key in ["profit_6000", "xp_6000", "prereqs", "stages", "routes", "other_drops", "accessible", "band", "tool"] {
+    let attack_at_most = |row: &Value, level: i64| row.get("conditions").as_arr().cloned().unwrap_or_default().iter().all(|condition| condition.get("skill").as_str() != Some("attack") || condition.get("level").as_i64().unwrap_or(0) <= level);
+    assert!(rows.iter().all(|row| attack_at_most(row, 3) || row.get("feasibility").get("within_reach").as_bool() == Some(false)));
+    for key in ["profit_6000", "xp_6000", "conditions", "feasibility", "priced", "stages", "routes", "other_drops", "band", "tool"] {
         assert!(!matches!(measured.get(key), Value::Null), "{key} column");
     }
     Ok(())
@@ -79,6 +80,11 @@ fn query_sets_the_filter() {
     assert!(filter.held.is_empty(), "the general guide holds nothing");
     let held = filter_of(&crate::web::parse_query("level=30&held=iron_ore:50,coal:500"));
     assert_eq!(held.held, vec![("iron_ore".to_string(), 50.0), ("coal".to_string(), 500.0)]);
+    // The profile of the feasibility (D22): per-skill levels and coins.
+    let profile = filter_of(&crate::web::parse_query("level=30&levels=smithing:45,magic:120&coins=2500"));
+    assert_eq!(profile.levels, vec![("smithing".to_string(), 45), ("magic".to_string(), 99)]);
+    assert_eq!(profile.coins, Some(2500.0));
+    assert_eq!(filter.coins, None, "no wallet: capital unjudged");
 }
 
 /// D12: a never-traded object's quote carries no current price, only its
@@ -170,8 +176,8 @@ fn an_activity_flows_name_its_own_objects() {
 }
 
 /// End to end: the 100 % market enchant buys STRUNG amulets; one ask
-/// and no F2P shop stock cannot feed a window, so the line is blocked
-/// (never priced on the unstrung amulets' asks).
+/// and no F2P shop stock hold no lot: the line keeps its economy (the
+/// one ask's price, never the unstrung amulets'), infeasible (D22).
 #[test]
 fn market_enchant_buys_strung_amulets() -> Result<(), lifescape_store::Error> {
     let store = Store::open_in_memory()?;
@@ -191,8 +197,11 @@ fn market_enchant_buys_strung_amulets() -> Result<(), lifescape_store::Error> {
     let flows = enchant.get("flows").as_arr().cloned().unwrap_or_default();
     assert!(flows.iter().any(|line| line.get("item").as_str() == Some("strung_sapphire_amulet") && line.get("cause").as_str() == Some("input")), "{flows:?}");
     assert!(flows.iter().all(|line| line.get("item").as_str() != Some("unstrung_sapphire_amulet")), "{flows:?}");
-    assert!(!enchant.get("blocked").as_arr().cloned().unwrap_or_default().is_empty(), "one strung amulet for sale: {enchant:?}");
-    assert_eq!(enchant.get("accessible").as_bool(), Some(false));
+    let input = flows.iter().find(|line| line.get("item").as_str() == Some("strung_sapphire_amulet")).expect("strung input");
+    assert!(input.get("unit_price").as_f64().is_some_and(|price| (price - 805.0).abs() < 1e-6), "the strung ask, never the unstrung 540: {input:?}");
+    let condition = enchant.get("conditions").as_arr().cloned().unwrap_or_default().into_iter().find(|condition| condition.get("kind").as_str() == Some("market") && condition.get("item").as_str() == Some("strung_sapphire_amulet")).expect("its market condition");
+    assert_eq!(condition.get("asks").as_f64(), Some(1.0), "{condition:?}");
+    assert_eq!(enchant.get("feasibility").get("state").as_str(), Some("infeasible"), "one strung amulet for sale: {enchant:?}");
     Ok(())
 }
 

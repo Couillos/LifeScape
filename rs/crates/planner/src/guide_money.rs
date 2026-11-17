@@ -11,9 +11,10 @@
 //!   cast): products sold (market or shop, Q3), consumables bought;
 //! - recipe: transform owned stock, inputs at their sale price (D5).
 //!   Only a bot HOLDING the stock can work it: the row names one lot of
-//!   stock as a prerequisite; in the general guide (nothing held) it is
-//!   blocked and ranks after every other row; for a bot (filter `held`)
-//!   it is evaluated on its stock (the window's work its stock covers);
+//!   stock as a condition (D22: information, `guide_feasible` judges it
+//!   per bot); in the general guide (nothing held) it is priced on a full
+//!   window; for a bot (filter `held`) it is evaluated on its stock (the
+//!   window's work its stock covers);
 //! - chain: source the inputs then transform (D16 revised 2026-11-16,
 //!   `guide_chain`): each input the cheaper way, farmed (its ticks at the
 //!   bot's D17 price) or bought (D15 at its volume), the way of each on
@@ -26,9 +27,14 @@
 //!   per lot + the measured market wait per lot; capital = one lot;
 //!   Ironman excluded.
 //!
-//! An input nothing makes at the level, no ask covers and no shop sells
-//! blocks the chain or market row (reason given, no profit). Blocked rows
-//! are never accessible and rank after every other row.
+//! D22 (user 2026-11-17): no row is ever blocked. A purchase the asks
+//! and the shops do not cover is priced at the current price
+//! (`guide_engine`) and named in the row's conditions (`MarketNeed`:
+//! asks, recent fills, shops, units per lot); an object nothing prices
+//! (never traded, no ask, no shop) or a chain input nothing makes nor
+//! prices leaves the row unpriced (`priced` false, no profit, ranked
+//! after the priced rows), its conditions saying why. Each bot judges
+//! a row by `guide_feasible::feasible_for`.
 //!
 //! Rows: per activity, the prior's best site and the tool tier of the
 //! level, plus one row per measured exact key of that band (its site and
@@ -114,24 +120,24 @@ fn base_row(family: Family, place: &Place, band: i64) -> MoneyRow {
         routes: Vec::new(),
         confidence: place.answer.confidence.clone(),
         price_confidence: "traded",
-        blocked: Vec::new(),
-        accessible: false,
+        priced: true,
     }
 }
 
-/// Fills a row's priced flows; a purchase nobody covers blocks the row
-/// and leaves it without a profit (never a made-up price).
+/// Fills a row's priced flows and the availability of what it buys (its
+/// conditions, D22); a purchase nothing prices leaves the row unpriced
+/// (no profit, never a made-up price).
 fn apply_flows(row: &mut MoneyRow, priced: PricedFlows) {
     crate::guide_prereq::require_shop(&mut row.prereqs, priced.need);
     row.price_confidence = price_confidence(&priced.lines);
     row.flows = priced.lines;
     row.other_drops = priced.other;
-    if priced.missing.is_empty() {
+    row.prereqs.market.extend(priced.market);
+    row.priced = priced.priced;
+    if priced.priced {
         row.revenue_6000 = priced.revenue;
         row.cost_6000 = priced.cost;
         row.profit_6000 = priced.revenue - priced.cost;
-    } else {
-        row.blocked.extend(priced.missing);
     }
 }
 
@@ -141,9 +147,9 @@ fn held_of(held: &[(String, f64)], item: &str) -> f64 {
 }
 
 /// Farm or recipe line of a place: its own flows, its pauses in time. A
-/// recipe names one lot of its stock; nothing held (the general guide)
-/// blocks it, priced on a full window; a bot's stock (`held`) evaluates
-/// it on the share of the window that stock covers.
+/// recipe names one lot of its stock (a condition, D22); nothing held
+/// (the general guide) prices it on a full window; a bot's stock
+/// (`held`) evaluates it on the share of the window that stock covers.
 fn own_row(engine: &Engine, place: &Place, family: Family, band: i64, held: &[(String, f64)]) -> MoneyRow {
     let own = crate::guide_methods::own_product(&place.ask.method);
     let extra = place.answer.pause_per_6000.max(0.0);
@@ -152,10 +158,6 @@ fn own_row(engine: &Engine, place: &Place, family: Family, band: i64, held: &[(S
     let mut coverage = 1.0;
     if family == Family::Recipe {
         row.prereqs.stock = stock_lot(&place.answer);
-        let lacking: Vec<String> = row.prereqs.stock.iter().filter(|(item, lot)| held_of(held, item) < *lot).map(|(item, lot)| format!("{lot:.0} {item} (held {:.0})", held_of(held, item))).collect();
-        if !lacking.is_empty() {
-            row.blocked.push(format!("stock: one lot needs {}", lacking.join(", ")));
-        }
         if !held.is_empty() {
             coverage = stock_inputs(&place.answer).iter().map(|(item, units)| (held_of(held, item) / (units * share)).min(1.0)).fold(1.0, f64::min);
         }
@@ -168,8 +170,8 @@ fn own_row(engine: &Engine, place: &Place, family: Family, band: i64, held: &[(S
 }
 
 /// 100 % market line (D15): inputs bought, a square round trip and the
-/// measured wait per lot (a pack of non-stackable inputs). An input no
-/// ask covers and no shop sells blocks it.
+/// measured wait per lot (a pack of non-stackable inputs). What the asks
+/// and the shops hold of each input is a condition (D22), never a block.
 pub fn market_row(engine: &Engine, place: &Place, band: i64) -> MoneyRow {
     let answer = &place.answer;
     let lots = lots_per_6000(answer);
@@ -218,24 +220,27 @@ fn chain_row(engine: &Engine, place: &Place, band: i64, time: TimePrice) -> Opti
         traded: priced.traded,
         basis: priced.basis,
     }];
-    let mut missing = unit.missing.clone();
-    for (item, per_unit) in &unit.bought {
+    row.prereqs.sources.extend(unit.gaps.iter().cloned());
+    row.priced = unit.gaps.is_empty();
+    // One lot: a pack of the non-stackable inputs bought, else the window.
+    let slots: f64 = unit.bought.iter().filter(|(item, cause, _)| cause == "input" && !crate::guide_engine::stackable(item)).map(|(_, _, per_unit)| per_unit * units_per_6000).sum();
+    let lots = if slots > 0.0 { slots / crate::guide_model::LOT_SLOTS } else { 1.0 };
+    for (item, cause, per_unit) in &unit.bought {
         let units = per_unit * units_per_6000;
         let bought = engine.buy_at(item, units);
-        if !bought.available {
-            missing.push(engine.unavailable_reason(item, units));
-        }
+        row.priced &= bought.priced;
         crate::guide_prereq::require_shop(&mut row.prereqs, bought.need);
-        row.flows.push(crate::guide_model::FlowLine { item: item.clone(), cause: "input".to_string(), per_6000: -units, unit_price: bought.price, value_6000: -units * bought.price, outlet: bought.outlet, traded: bought.traded, basis: bought.basis });
+        row.prereqs.market.push(engine.market_need(item, cause, units, crate::guide_engine::whole_units(units / lots), bought.priced));
+        // A consumable's purchase rides the unit's value only.
+        if cause == "input" {
+            row.flows.push(crate::guide_model::FlowLine { item: item.clone(), cause: cause.clone(), per_6000: -units, unit_price: bought.price, value_6000: -units * bought.price, outlet: bought.outlet, traded: bought.traded, basis: bought.basis });
+        }
     }
     row.price_confidence = price_confidence(&row.flows);
-    if missing.is_empty() {
+    if row.priced {
         row.profit_6000 = (unit.value_consumed + priced.price) * units_per_6000;
         row.revenue_6000 = units_per_6000 * priced.price;
         row.cost_6000 = row.revenue_6000 - row.profit_6000;
-    } else {
-        missing.dedup();
-        row.blocked = missing;
     }
     row.xp_6000 = unit.xp_per_unit.iter().map(|(skill, xp)| (skill.clone(), xp * units_per_6000)).collect();
     row.extra_ticks_per_6000 = unit.ticks_per_unit * units_per_6000 - WINDOW_TICKS;
@@ -346,8 +351,8 @@ pub fn best_accessible_profit(engine: &Engine, level: u8, quests_done: &[String]
     engine.best_profit_memo((level, quests_done.to_vec(), true), || {
         engine.aside(|| {
             let filter = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
-            let (rows, _) = money_guide(engine, &filter);
-            crate::guide_read::best_profit_of(&rows)
+            let view = money_view(engine, Some(level), quests_done, &[]);
+            crate::guide_read::best_profit_in(&view, &filter)
         })
     })
 }
@@ -375,36 +380,41 @@ pub fn seed_best_accessible_profit(engine: &Engine, view: &crate::guide_read::Mo
 /// D17 price a chain reads (§3): the best ACCESSIBLE line outside the
 /// chains for a bot at `level` with `quests_done`, built once per build;
 /// `None` when none earns (time is then worth nothing). Recipe rows on
-/// stock are left out of that pass: nothing held, they are blocked.
+/// stock are left out of that pass: nothing held, no bot of the filter
+/// works them (`guide_feasible`).
 pub fn best_profit_outside_chains(engine: &Engine, level: u8, quests_done: &[String]) -> Option<f64> {
     engine.best_profit_memo((level, quests_done.to_vec(), false), || engine.aside(|| {
         engine.count("money_guide_no_chain");
         let filter = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
-        let mut best: Option<f64> = None;
-        for entry in entries(engine) {
-            let gate = crate::guide_methods::gate_level(&entry.method);
-            if gate > level {
-                continue;
-            }
-            // A row's prerequisites are its activity's (levels, combat,
-            // quests: never its tool nor its yield) plus shop conditions
-            // (`require_shop`, only more): an activity the bot cannot
-            // work sets no price, its yields are never read here. Read at
-            // its gate (one memo entry per activity): its skill's level
-            // max(gate, level) and the gate both pass at `level`.
-            let base = crate::guide_prereq::prereqs_of(&entry.method, &entry.style, gate, "");
-            if !crate::guide_prereq::passes(&base, &filter) {
-                continue;
-            }
-            let (found, _) = method_rows(engine, &entry.method, &entry.style, level, &[], None, None);
-            for row in found {
-                if row.blocked.is_empty() && row.profit_6000 > 0.0 && crate::guide_prereq::passes(&row.prereqs, &filter) {
-                    best = Some(best.map_or(row.profit_6000, |known: f64| known.max(row.profit_6000)));
-                }
+        crate::guide_feasible::with_filter_bot(&filter, |bot| best_outside_chains_for(engine, level, &filter, bot))
+    }))
+}
+
+fn best_outside_chains_for(engine: &Engine, level: u8, filter: &GuideFilter, bot: &crate::guide_feasible::BotState) -> Option<f64> {
+    let mut best: Option<f64> = None;
+    for entry in entries(engine) {
+        let gate = crate::guide_methods::gate_level(&entry.method);
+        if gate > level {
+            continue;
+        }
+        // A row's prerequisites are its activity's (levels, combat,
+        // quests: never its tool nor its yield) plus shop conditions
+        // (`require_shop`, only more): an activity the bot cannot
+        // work sets no price, its yields are never read here. Read at
+        // its gate (one memo entry per activity): its skill's level
+        // max(gate, level) and the gate both pass at `level`.
+        let base = crate::guide_prereq::prereqs_of(&entry.method, &entry.style, gate, "");
+        if !crate::guide_prereq::passes(&base, filter) {
+            continue;
+        }
+        let (found, _) = method_rows(engine, &entry.method, &entry.style, level, &[], None, None);
+        for row in found {
+            if row.priced && row.profit_6000 > 0.0 && crate::guide_feasible::feasible_for(&row, bot).within_reach() {
+                best = Some(best.map_or(row.profit_6000, |known: f64| known.max(row.profit_6000)));
             }
         }
-        best
-    }))
+    }
+    best
 }
 
 /// Confidence of a fabricated or missing answer (tests, quest rows).

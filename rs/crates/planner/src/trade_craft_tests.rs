@@ -35,8 +35,7 @@ fn bronze_row() -> MoneyRow {
         routes: Vec::new(),
         confidence: Confidence::default(),
         price_confidence: "traded",
-        blocked: Vec::new(),
-        accessible: true,
+        priced: true,
     }
 }
 
@@ -146,14 +145,23 @@ fn the_lot_is_bounded_by_the_window_the_asks_and_the_wallet() {
     assert_eq!(lot_size(&floored, 1_000_000).cost, 30 * 10 + 30 * 11 + 60 * 15);
 }
 
+/// The bot `feasible_for` judges (D22): every skill at `level`, holding
+/// `held`, `coins` free, the asks of the quotes.
+fn judge_bot<T>(level: u8, held: &dyn Fn(&str) -> f64, coins: Option<f64>, ironman: bool, body: impl FnOnce(&crate::guide_feasible::BotState) -> T) -> T {
+    let level_of = move |_: &str| level;
+    let asks = |item: &str| quote(item).map(|found| found.asks.iter().map(|(_, units)| *units).sum());
+    let bot = crate::guide_feasible::BotState { level_of: &level_of, combat: 40, quests_done: &[], held, coins, ironman, asks: &asks };
+    body(&bot)
+}
+
 #[test]
 fn an_ironman_never_trades() {
     let row = bronze_row();
-    let level = |_: &str| 30u8;
-    assert!(eligible(&row, &level, &[], false));
-    assert!(!eligible(&row, &level, &[], true), "Ironman excluded");
-    assert!(offers(&[&row], &quote, &|_| 0, &level, &[], true).is_empty());
-    assert!(!eligible(&row, &|_| 0u8, &[], false), "the level the row needs");
+    let none = |_: &str| 0.0;
+    assert!(judge_bot(30, &none, None, false, |bot| eligible(&row, bot)));
+    assert!(!judge_bot(30, &none, None, true, |bot| eligible(&row, bot)), "Ironman excluded");
+    assert!(judge_bot(30, &none, None, true, |bot| offers(&[&row], &quote, bot)).is_empty());
+    assert!(!judge_bot(0, &none, None, false, |bot| eligible(&row, bot)), "the level the row needs");
     let mut ctx = smith_ctx(0, 0, 10_000);
     assert!(crate::resolve_obtain::money_methods(&ctx).contains(&method_of(BRONZE)));
     ctx.ironman = true;
@@ -161,15 +169,37 @@ fn an_ironman_never_trades() {
     assert!(!super::workable(&method_of(BRONZE), &ctx));
 }
 
+/// D22: the guide blocks nothing, the bot judges the row. Tin no ask
+/// covers for a lot: not offered to a bot without tin; offered to the bot
+/// holding a lot of it; a short wallet bounds the lot (still offered).
 #[test]
-fn only_unblocked_earning_market_rows_with_market_purchases_trade() {
+fn a_trade_is_offered_on_the_bots_own_feasibility() {
+    let mut row = bronze_row();
+    let need = |item: &str, asks: f64| crate::guide_model::MarketNeed { item: item.to_string(), cause: "input".to_string(), per_6000: 100.0, per_lot: 14.0, asks, recent: 0.0, shops: 0.0, priced: true };
+    row.prereqs.market = vec![need("copper_ore", 60.0), need("tin_ore", 0.0)];
+    let none = |_: &str| 0.0;
+    let tinless = |item: &str| quote(item).filter(|_| item != "tin_ore");
+    let asks_tinless = |item: &str| tinless(item).map(|found| found.asks.iter().map(|(_, units)| *units).sum());
+    let level_of = |_: &str| 30u8;
+    let bot = crate::guide_feasible::BotState { level_of: &level_of, combat: 40, quests_done: &[], held: &none, coins: Some(10_000.0), ironman: false, asks: &asks_tinless };
+    assert!(!eligible(&row, &bot), "no tin offered now, none held");
+    let tin = |item: &str| if item == "tin_ore" { 20.0 } else { 0.0 };
+    let holder = crate::guide_feasible::BotState { held: &tin, ..bot };
+    assert!(eligible(&row, &holder), "its own tin");
+    assert_eq!(offers(&[&row], &tinless, &holder).len(), 1);
+    // A wallet under a lot's capital (616): offered, the lot bounded.
+    assert!(judge_bot(30, &none, Some(100.0), false, |bot| eligible(&bronze_row(), bot)), "the wallet bounds the lot");
+}
+
+#[test]
+fn only_priced_earning_market_rows_with_market_purchases_trade() {
     let held = |_: &str| 0;
     let mut shop = bronze_row();
     shop.flows[2].outlet = Outlet::Shop;
     assert!(offer_from_row(&shop, &quote, &held).is_err(), "a shop purchase has no market leg");
-    let mut blocked = bronze_row();
-    blocked.blocked.push("tin_ore: asks hold 0".to_string());
-    assert!(offer_from_row(&blocked, &quote, &held).is_err());
+    let mut unpriced = bronze_row();
+    unpriced.priced = false;
+    assert!(offer_from_row(&unpriced, &quote, &held).is_err(), "an input nothing prices");
     let mut recipe = bronze_row();
     recipe.family = Family::Recipe;
     assert!(offer_from_row(&recipe, &quote, &held).is_err());
