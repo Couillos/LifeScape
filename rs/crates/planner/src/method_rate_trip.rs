@@ -47,7 +47,16 @@ pub fn bank_walk_tiles(site: (i64, i64, i64)) -> Option<i64> {
 
 /// Round-trip walk from `site` to the nearest F2P bank, in ticks.
 pub fn bank_round_trip(site: (i64, i64, i64)) -> Option<f64> {
-    bank_walk_tiles(site).map(|tiles| 2.0 * tiles as f64 / WALK_TILES_PER_TICK)
+    // Static banks and links: once per site (every prior of a banking
+    // way asks it).
+    static MEMO: OnceLock<Mutex<HashMap<(i64, i64, i64), Option<f64>>>> = OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some(known) = memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&site) {
+        return *known;
+    }
+    let found = bank_walk_tiles(site).map(|tiles| 2.0 * tiles as f64 / WALK_TILES_PER_TICK);
+    memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(site, found);
+    found
 }
 
 /// The resources sharing a worked site.
@@ -102,14 +111,29 @@ pub fn best_work_site(key: &str, sites: &[(i64, i64, i64)], base: f64, fell: f64
         return *known;
     }
     let pack = crate::method_rate::PACK_SLOTS - 1.0;
-    let found = sites
+    let found = work_sites(key, sites)
         .iter()
-        .filter_map(|site| bank_round_trip(*site).map(|trip| (*site, trip)))
-        .map(|(site, trip)| (site, trip / pack + base + depletion_ticks(base, fell, respawn, settle, cluster(key, sites, site))))
+        .map(|(site, trip, near)| (*site, trip / pack + base + depletion_ticks(base, fell, respawn, settle, *near)))
         .min_by(|left, right| left.1.total_cmp(&right.1))
         .map(|(site, _)| site);
     memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(memo_key, found);
     found
+}
+
+/// Sites of `key` a bank serves, in order, with their bank round trip
+/// and their cluster (static game data, built once per key: the
+/// level-dependent search above only does arithmetic on it; `cluster`
+/// already holds one site list per key).
+fn work_sites(key: &str, sites: &[(i64, i64, i64)]) -> std::sync::Arc<Vec<((i64, i64, i64), f64, Cluster)>> {
+    static MEMO: OnceLock<Mutex<HashMap<String, std::sync::Arc<Vec<((i64, i64, i64), f64, Cluster)>>>>> = OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some(known) = memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(key) {
+        return known.clone();
+    }
+    let table: Vec<((i64, i64, i64), f64, Cluster)> = sites.iter().filter_map(|site| bank_round_trip(*site).map(|trip| (*site, trip, cluster(key, sites, *site)))).collect();
+    let table = std::sync::Arc::new(table);
+    memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(key.to_string(), table.clone());
+    table
 }
 
 /// Round trip of an essence load: bank to Aubury and back, teleport in,

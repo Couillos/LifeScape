@@ -125,7 +125,7 @@ fn terms(shop: &crate::shops::Shop, npcs: &[usize]) -> Option<(i64, i64)> {
 pub fn purchase_steps(item: &str, window_ticks: i64) -> Vec<ShopStep> {
     let Some(obj) = crate::objs_by_name(item).into_iter().next() else { return Vec::new() };
     let mut out: Vec<ShopStep> = Vec::new();
-    for shop in crate::f2p::f2p_shops() {
+    for shop in crate::f2p::f2p_shop_list() {
         if shop.members == Some(true) {
             continue;
         }

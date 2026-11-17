@@ -30,6 +30,7 @@ pub mod guide_methods;
 pub mod guide_model;
 pub mod guide_money;
 pub mod guide_prereq;
+pub mod guide_read;
 pub mod guide_training;
 pub mod goals;
 pub mod lifecycle;

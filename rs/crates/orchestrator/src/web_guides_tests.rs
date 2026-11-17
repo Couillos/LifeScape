@@ -195,3 +195,48 @@ fn market_enchant_buys_strung_amulets() -> Result<(), lifescape_store::Error> {
     assert_eq!(enchant.get("accessible").as_bool(), Some(false));
     Ok(())
 }
+
+/// `value` without the bucket ages (wall clock: two builds a second
+/// apart differ there only).
+fn without_ages(value: &Value) -> Value {
+    match value {
+        Value::Obj(map) => Value::Obj(map.iter().filter(|(key, _)| key.as_str() != "age_secs").map(|(key, inner)| (key.clone(), without_ages(inner))).collect()),
+        Value::Arr(items) => Value::Arr(items.iter().map(without_ages).collect()),
+        other => other.clone(),
+    }
+}
+
+/// The precomputed set (`guides_store`) read with a filter serves what a
+/// direct build of that filter gives, at a band's last level and in the
+/// catalogue; a level under it says what it approximates; the set's
+/// age and cost ride the answer.
+#[test]
+fn the_precomputed_set_serves_what_a_direct_build_gives() -> Result<(), lifescape_store::Error> {
+    let store = Store::open_in_memory()?;
+    let mut snapshot = Snapshot::new();
+    for qty in [50, 60, 70] {
+        snapshot.record(&parsed(), Some(&fight(qty)), 9);
+    }
+    let set = crate::guides_store::build_set(&store, &snapshot, &StoreWaits::default());
+    assert_eq!(set.money_bands.len(), 20, "one view per band");
+    assert_eq!(crate::guides_store::band_levels().first(), Some(&5));
+    assert_eq!(crate::guides_store::band_levels().last(), Some(&99));
+    let reads = [
+        (GuideKind::Money, GuideFilter { skill: Some("attack".to_string()), level: Some(5), ..GuideFilter::default() }),
+        (GuideKind::Money, GuideFilter { family: Some("market".to_string()), ..GuideFilter::default() }),
+        (GuideKind::Training, GuideFilter { level: Some(30), skill: Some("smithing".to_string()), ..GuideFilter::default() }),
+        (GuideKind::Training, GuideFilter { skill: Some("attack".to_string()), ..GuideFilter::default() }),
+    ];
+    for (kind, filter) in reads {
+        let served = read_guide(&set, kind, &filter);
+        let built = build_guide(&store, &snapshot, kind, &filter).map_err(lifescape_store::Error::Invalid)?;
+        assert_eq!(without_ages(served.get("rows")), without_ages(built.get("rows")), "{kind:?} {filter:?}");
+        assert_eq!(served.get("unrated"), built.get("unrated"), "{kind:?} {filter:?}");
+        assert_eq!(served.get("approximate").as_arr().map(Vec::len), Some(0), "exact read");
+        assert!(served.get("age_ms").as_i64().is_some() && served.get("cycle_ms").as_i64().is_some());
+    }
+    let lower = read_guide(&set, GuideKind::Money, &GuideFilter { level: Some(3), ..GuideFilter::default() });
+    assert_eq!(lower.get("view_level").as_i64(), Some(5));
+    assert_eq!(lower.get("approximate").as_arr().map(Vec::len), Some(1), "{:?}", lower.get("approximate"));
+    Ok(())
+}

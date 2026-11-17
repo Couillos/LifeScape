@@ -153,19 +153,43 @@ fn compute_gate_level(method: &str) -> u8 {
 /// best pickaxe or axe the level opens, the best melee weapon of a melee
 /// fighter at that level in every melee stat; empty otherwise.
 pub fn tool_at(method: &str, style: &str, level: u8) -> String {
-    static MEMO: OnceLock<Mutex<HashMap<(String, String, u8), String>>> = OnceLock::new();
-    memo(&MEMO, (method.to_string(), style.to_string(), level), || compute_tool_at(method, style, level))
+    compute_tool_at(method, style, level)
+}
+
+/// Which tool tier a method works with (`tool_at`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ToolKind {
+    Pickaxe,
+    Axe,
+    MeleeWeapon,
+    Nothing,
 }
 
 fn compute_tool_at(method: &str, style: &str, level: u8) -> String {
+    let kind = if method.starts_with("gather:mining/") || method.starts_with("essence:") {
+        ToolKind::Pickaxe
+    } else if method.starts_with("gather:woodcut/") {
+        ToolKind::Axe
+    } else if method.starts_with("fight:melee/") || style.starts_with("melee") {
+        ToolKind::MeleeWeapon
+    } else {
+        ToolKind::Nothing
+    };
+    // The tier depends on the kind and the level only: the gear search
+    // runs once per (kind, level), never per method.
+    static MEMO: OnceLock<Mutex<HashMap<(ToolKind, u8), String>>> = OnceLock::new();
+    memo(&MEMO, (kind, level), || tool_of_kind(kind, level))
+}
+
+fn tool_of_kind(kind: ToolKind, level: u8) -> String {
     let level = i64::from(level.max(1));
-    if method.starts_with("gather:mining/") || method.starts_with("essence:") {
+    if kind == ToolKind::Pickaxe {
         return lifescape_gamedata::gear::best_tool("pickaxe", &[("mining", level)]).unwrap_or_default();
     }
-    if method.starts_with("gather:woodcut/") {
+    if kind == ToolKind::Axe {
         return lifescape_gamedata::gear::best_tool("axe", &[("woodcutting", level)]).unwrap_or_default();
     }
-    if method.starts_with("fight:melee/") || style.starts_with("melee") {
+    if kind == ToolKind::MeleeWeapon {
         let levels = [("attack", level), ("strength", level), ("defence", level)];
         return lifescape_gamedata::gear::best_gear(lifescape_gamedata::gear::Style::Melee, &levels, &[])
             .into_iter()

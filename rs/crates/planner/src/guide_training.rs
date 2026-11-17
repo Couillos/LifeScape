@@ -32,8 +32,6 @@
 //! - quest shortcuts (D20): a quest's fixed XP over its measured
 //!   duration, beside the methods of the band (`chains::QuestShortcut`).
 
-use std::collections::HashMap;
-
 use crate::guide_chain::{Choice, Sourcing};
 use crate::guide_engine::{price_flows, Engine, InputPricing};
 use crate::guide_model::{band_of, Confidence, GuideFilter, InputRoute, Prereqs, Route, Supply, TrainingRow, Unrated, WINDOW_TICKS};
@@ -142,19 +140,10 @@ fn row_of(skill: &str, place: &Place, band: i64, supply: Supply, balance: Balanc
     if xp <= 0.0 {
         return None;
     }
-    let spent = (-balance.coins_6000).max(0.0);
-    let converted = match best_profit {
-        Some(profit) if profit > 0.0 && spent > 0.0 => spent / (profit / WINDOW_TICKS),
-        _ => 0.0,
-    };
-    // A blocked line (an input it cannot obtain) carries no rate, as a
-    // blocked money line carries no profit.
-    let effective = if balance.blocked.is_empty() { xp * WINDOW_TICKS / (WINDOW_TICKS + converted) } else { 0.0 };
     let level = filter.level.unwrap_or(place.ask.level).max(place.ask.level);
-    let ticks_to_band_end = (effective > 0.0).then(|| xp_to_band_end(level) / (effective / WINDOW_TICKS));
     let accessible = balance.blocked.is_empty() && crate::guide_prereq::passes(&balance.prereqs, filter);
     let price_confidence = crate::guide_model::price_confidence(&balance.flows);
-    Some(TrainingRow {
+    let mut row = TrainingRow {
         skill: skill.to_string(),
         band,
         method: place.ask.method.clone(),
@@ -166,9 +155,9 @@ fn row_of(skill: &str, place: &Place, band: i64, supply: Supply, balance: Balanc
         xp_6000: xp,
         coins_6000: balance.coins_6000,
         coins_per_xp: -balance.coins_6000 / xp,
-        converted_ticks_6000: converted,
-        effective_xp_6000: effective,
-        ticks_to_band_end,
+        converted_ticks_6000: 0.0,
+        effective_xp_6000: 0.0,
+        ticks_to_band_end: None,
         other_xp_6000: balance.xp_6000.into_iter().filter(|(name, _)| name != skill).collect(),
         quest_xp: 0.0,
         quest_ticks: None,
@@ -178,7 +167,11 @@ fn row_of(skill: &str, place: &Place, band: i64, supply: Supply, balance: Balanc
         price_confidence,
         blocked: balance.blocked,
         accessible,
-    })
+    };
+    // D17: coins converted to ticks; a blocked line (an input it cannot
+    // obtain) carries no rate, as a blocked money line no profit.
+    crate::guide_read::convert(&mut row, best_profit, level);
+    Some(row)
 }
 
 /// Quest shortcut rows of `skill` (D20) for the filter's bot.
@@ -230,25 +223,29 @@ pub fn quest_rows(engine: &Engine, skill: &str, filter: &GuideFilter) -> Vec<Tra
 }
 
 /// The training guide under `filter`, best effective XP rate first, and
-/// the activities nothing estimates.
+/// the activities nothing estimates (`guide_read::finish_training` of a
+/// fresh view).
 pub fn training_guide(engine: &Engine, filter: &GuideFilter) -> (Vec<TrainingRow>, Vec<Unrated>) {
-    let skills: Vec<String> = match &filter.skill {
-        Some(skill) => vec![skill.clone()],
-        None => crate::guide_methods::SKILLS.iter().map(|skill| skill.to_string()).collect(),
-    };
-    let mut best: HashMap<u8, Option<f64>> = HashMap::new();
+    crate::guide_read::finish_training(&training_view(engine, filter.level, &filter.quests_done), filter, None)
+}
+
+/// Every training row of a bot at `level` (`None`: each method at its
+/// gate, the D17 price at its band's first level) with `quests_done`,
+/// every skill, activity order, then the quest shortcuts of every skill
+/// (`guide_read`: the reader's filter applies to it).
+pub fn training_view(engine: &Engine, level: Option<u8>, quests_done: &[String]) -> crate::guide_read::TrainingView {
+    let filter = GuideFilter { level, quests_done: quests_done.to_vec(), ..GuideFilter::default() };
+    let skills: Vec<String> = crate::guide_methods::SKILLS.iter().map(|skill| skill.to_string()).collect();
     let mut rows = Vec::new();
-    let mut unrated = Vec::new();
-    for entry in &crate::guide_money::entries(engine) {
-        let level = row_level(&entry.method, filter);
+    let mut gaps = Vec::new();
+    for entry in crate::guide_money::entries(engine) {
+        let level = row_level(&entry.method, &filter);
         if filter.level.is_some() && crate::guide_methods::gate_level(&entry.method) > level {
             continue;
         }
-        let (found, error) = places(engine, &entry.method, &entry.style, level);
+        let (found, error) = engine.timed("places", || places(engine, &entry.method, &entry.style, level));
         if found.is_empty() {
-            if !unrated.iter().any(|known: &Unrated| known.method == entry.method) {
-                unrated.push(Unrated { method: entry.method.clone(), reason: error.unwrap_or_else(|| "no yield".to_string()) });
-            }
+            gaps.push(crate::guide_read::Gap { method: entry.method.clone(), style: entry.style.clone(), reason: error.unwrap_or_else(|| "no yield".to_string()) });
             continue;
         }
         let band = band_of(level);
@@ -261,28 +258,25 @@ pub fn training_guide(engine: &Engine, filter: &GuideFilter) -> (Vec<TrainingRow
             // D17 for the filter's bot; the catalogue view (no bot) reads
             // it at the band's first level (one money guide per band).
             let band_level = filter.level.unwrap_or(band.clamp(1, 99) as u8);
-            let profit = *best.entry(band_level).or_insert_with(|| crate::guide_money::best_accessible_profit(engine, band_level, &filter.quests_done));
+            let profit = crate::guide_money::best_accessible_profit(engine, band_level, &filter.quests_done);
             let stock = place.answer.flows.iter().any(|(_, cause, qty)| cause == "input" && *qty < 0.0);
             for skill in trains {
                 // Autonomous farming upstream rides the prior's place only.
-                let own = (!stock || index == 0).then(|| autonomous(engine, place));
+                let own = (!stock || index == 0).then(|| engine.timed("autonomous", || autonomous(engine, place)));
                 // Consumables only (user 2026-11-17): a market line when
                 // the autonomous one farms at least one of them.
                 let market = stock || own.as_ref().is_some_and(|balance| balance.routes.iter().any(|route| route.route == Route::Farm));
                 if let Some(balance) = own {
-                    rows.extend(row_of(skill, place, band, Supply::Autonomous, balance, profit, place.answer.confidence.clone(), filter));
+                    rows.extend(row_of(skill, place, band, Supply::Autonomous, balance, profit, place.answer.confidence.clone(), &filter));
                 }
                 if market {
-                    rows.extend(row_of(skill, place, band, Supply::Market, bought(engine, place, band), profit, place.answer.confidence.clone(), filter));
+                    rows.extend(row_of(skill, place, band, Supply::Market, engine.timed("bought", || bought(engine, place, band)), profit, place.answer.confidence.clone(), &filter));
                 }
             }
         }
     }
     for skill in &skills {
-        rows.extend(quest_rows(engine, skill, filter));
+        rows.extend(quest_rows(engine, skill, &filter));
     }
-    // Blocked rows (an input nobody makes, offers or sells) rank last.
-    // Usable first (not blocked, prerequisites met), then by value.
-    rows.sort_by(|left, right| (left.blocked.is_empty() && left.accessible).cmp(&(right.blocked.is_empty() && right.accessible)).reverse().then(right.effective_xp_6000.total_cmp(&left.effective_xp_6000)));
-    (rows, unrated)
+    crate::guide_read::TrainingView { level, rows, gaps }
 }

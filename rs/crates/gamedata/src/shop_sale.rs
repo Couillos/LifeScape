@@ -56,7 +56,7 @@ fn buys(shop: &crate::shops::Shop, item: &str, obj: &crate::Obj) -> bool {
 pub fn npc_sale_shops_reachable(item: &str) -> Vec<SaleShop> {
     let Some(obj) = crate::objs_by_name(item).into_iter().next() else { return Vec::new() };
     let mut out = Vec::new();
-    for shop in crate::f2p::f2p_shops() {
+    for shop in crate::f2p::f2p_shop_list() {
         if shop.members == Some(true) || !buys(&shop, item, obj) {
             continue;
         }
@@ -102,8 +102,8 @@ pub const MAX_SHOP_DELTA: i64 = 30;
 /// the market with this bound: never a unit sold under it.
 pub fn unit_value_floor(shop: &str, item: &str, held: i64) -> Option<i64> {
     let obj = crate::objs_by_name(item).into_iter().next()?;
-    let entry = crate::shops::by_name(shop).into_iter().next()?;
-    if !buys(&entry, item, obj) {
+    let entry = crate::shops::shop_list().iter().find(|entry| entry.name.eq_ignore_ascii_case(shop))?;
+    if !buys(entry, item, obj) {
         return None;
     }
     let multiplier = entry.keepers.iter().filter_map(|keeper| keeper.buy_multiplier).max()?;

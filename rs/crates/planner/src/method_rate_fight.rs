@@ -49,6 +49,13 @@ fn kill_units(npc_name: &str, hitpoints: i64) -> Vec<(&'static str, String, f64)
 /// spot's first rated NPC, its F2P drop table: rate × mean quantity),
 /// debug names. Empty when the spot or its table is unknown.
 pub fn fight_drops_per_kill(method: &str) -> Vec<(String, f64)> {
+    // Static drop tables, read once per method (the guides ask it per
+    // level: 0.5 ms a read).
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<(String, f64)>>>> = std::sync::OnceLock::new();
+    crate::guide_methods::memo(&MEMO, method.to_string(), || compute_fight_drops_per_kill(method))
+}
+
+fn compute_fight_drops_per_kill(method: &str) -> Vec<(String, f64)> {
     let Ok((npc_name, _)) = spot_target(method) else { return Vec::new() };
     let Some(npc) = lifescape_gamedata::npcs_by_name(&npc_name).into_iter().next() else { return Vec::new() };
     let mut out: Vec<(String, f64)> = Vec::new();
@@ -114,3 +121,4 @@ pub fn drop_action(method: &str, query: &PriorQuery) -> Result<Action, PriorErro
         trip: None,
     })
 }
+

@@ -28,6 +28,10 @@ check('stock prerequisite', GuidesView.prereqText({ levels: {}, combat: 3, quest
 check('route farmed', GuidesView.routeText({ item: 'iron_ore', display: 'Iron ore', cause: 'input', route: 'farm', source: 'gather:mining/iron_ore', farm_coins_per_unit: 12.5, buy_coins_per_unit: 20 }), 'Iron ore (input): farm gather:mining/iron_ore [farm 12.5gp, buy 20gp]');
 check('route bought', GuidesView.routeText({ item: 'fishing_bait', cause: 'bait', route: 'buy', source: '', farm_coins_per_unit: null, farm_ticks_per_unit: null, buy_coins_per_unit: 4 }), 'fishing_bait (bait): buy [buy 4gp]');
 check('xp text best first', GuidesView.xpText({ mining: 5000, smithing: 200, magic: 0 }), 'mining 5000, smithing 200');
+check('freshness of the set', GuidesView.freshnessText({ age_ms: 42400, cycle_ms: 3720, refresh_s: 300, approximate: [] }), 'set built 42 s ago in 3.7 s, rebuilt every 300 s');
+check('approximate read said', GuidesView.freshnessText({ age_ms: 0, cycle_ms: 0, refresh_s: 300, approximate: ['rates of level 30'] }), 'set built 0 s ago in 0 s, rebuilt every 300 s · ≈ rates of level 30');
+check('pending set asks again', GuidesView.retryDelay({ ok: false, pending: true }), 5000);
+check('an error is not retried', GuidesView.retryDelay({ ok: false, error: 'x' }), null);
 
 if (failures) {
   console.log(failures + ' failure(s)');

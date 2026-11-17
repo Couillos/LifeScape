@@ -356,6 +356,18 @@ pub struct ShopReach {
 /// opener (Magic Guild, members; Lundail in the Mage Arena, off the F2P
 /// map), or every keeper behind a door no bot opens.
 pub fn shop_reach(shop: &str) -> Option<ShopReach> {
+    // Pure function of the dumps: once per shop per process.
+    static MEMO: OnceLock<std::sync::Mutex<HashMap<String, Option<ShopReach>>>> = OnceLock::new();
+    let table = MEMO.get_or_init(Default::default);
+    if let Some(known) = table.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(shop) {
+        return known.clone();
+    }
+    let found = compute_shop_reach(shop);
+    table.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(shop.to_string(), found.clone());
+    found
+}
+
+fn compute_shop_reach(shop: &str) -> Option<ShopReach> {
     let access = crate::f2p::f2p_shop_access(shop)?;
     // A keeper behind a door no bot opens is no way at all; the
     // Champions' Guild keepers carry the door's quest points (Scavvo's

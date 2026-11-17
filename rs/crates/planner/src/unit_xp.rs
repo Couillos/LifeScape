@@ -94,6 +94,15 @@ fn buried_xp(subject: &str) -> Option<f64> {
 /// during a fight: §7, Prayer C "souvent DANS un run de combat").
 /// Subjects: items by debug name, spells by spell name, NPCs by name.
 pub fn unit_xp(method: &str, style: &str, kind: &str, subject: &str, level: u8) -> Vec<(String, f64)> {
+    // Static game data: once per (method, style, kind, subject), the
+    // level kept only where it counts (alchemy's spell); the guides ask
+    // it for every unit of every row (~10^5 times a set).
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(String, String, String, String, u8), Vec<(String, f64)>>>> = std::sync::OnceLock::new();
+    let level_key = if method.starts_with("alch:") { level } else { 0 };
+    crate::guide_methods::memo(&MEMO, (method.to_string(), style.to_string(), kind.to_string(), subject.to_string(), level_key), || compute_unit_xp(method, style, kind, subject, level))
+}
+
+fn compute_unit_xp(method: &str, style: &str, kind: &str, subject: &str, level: u8) -> Vec<(String, f64)> {
     if kind == "input" {
         if let Some(xp) = buried_xp(subject) {
             return vec![("prayer".to_string(), xp)];

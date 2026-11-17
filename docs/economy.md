@@ -602,7 +602,32 @@ toujours après les autres.
 - sans `level`, chaque méthode est lue à son propre seuil (vue
   catalogue) ; avec, un bot à ce niveau dans tous les skills, ses
   quêtes faites (`quests`) ; une ligne non accessible reste listée ;
-- les bots ne lisent pas encore les guides (R7).
+- MAGASIN PRÉCALCULÉ (2026-11-17, `orchestrator::guides_store`) : aucune
+  requête ne construit un guide. Le thread `guides` du daemon construit
+  toutes les `REFRESH_PERIOD` (300 s) un jeu complet dans UN moteur
+  (rendements, devis, sources et prix D17 partagés) : vues catalogue
+  money et training, et une vue money + training par tranche (1-5 …
+  96-99) construite au DERNIER niveau de la tranche (5, 10, …, 95, 99),
+  pour un bot sans quête ni stock ; l'API `/api/guides/*` et le cerveau
+  (R7, `guides_store::current()`, `Arc` partagé, `GuideSet::money|
+  training(filtre)`) lisent la dernière version avec son âge (`age_ms`,
+  `cycle_ms`, `cycle_cpu_ms`, `refresh_s`). Filtres appliqués en LISANT la
+  vue (`planner::guide_read`), jamais en reconstruisant : `skill`,
+  `family` (lignes retirées, ordre gardé) ; `level` = vue de sa tranche,
+  activités au-dessus du niveau retirées, accessibilité et ticks de fin
+  de tranche à ce niveau, rendements du dernier niveau de la tranche
+  (exact à 5, 10, …, 99) ; `quests` = accessibilité, raccourcis de quête
+  faits retirés, D17 du training relu dans la vue money avec ces quêtes ;
+  une ligne chain garde les choix farmer/acheter du bot sans quête ;
+  `held` = les seules lignes recette de la vue réévaluées sur ce stock
+  (aux devis du cycle ; un objet que le cycle n'a pas coté → erreur
+  typée). Ce que la lecture approxime est dit dans `approximate` (vide :
+  lecture identique au guide construit avec ce filtre, vérifié sur la
+  copie du 2026-11-17 et par `web_guides_tests::the_precomputed_set_
+  serves_what_a_direct_build_gives`). `rates-rebuild <copie>
+  --guides-store <dossier> [money|training:requête …]` construit le jeu
+  hors ligne et en donne le coût (docs/resources.md) ;
+- les bots ne lisent pas encore les guides (R7 : `guides_store::current`).
 
 Rentabilité d'une (activité, style, tranche), cumul tous sites et outils :
 Σ flux positifs × prix courant (médiane des 5 derniers fills bornée par

@@ -252,6 +252,7 @@ pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, lev
     if crate::guide_methods::gate_level(method) > level {
         return Err(format!("{method} needs level {}", crate::guide_methods::gate_level(method)));
     }
+    engine.count("chain_unit");
     let tool = crate::guide_methods::tool_at(method, style, level);
     let ask = RateAsk { method: method.to_string(), style: style.to_string(), site: None, tool: tool.clone(), level };
     let answer = engine.answer(&ask)?;

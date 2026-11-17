@@ -62,7 +62,7 @@ pub const EXACT_READ: &str = "Exact";
 pub fn places(engine: &Engine, method: &str, style: &str, level: u8) -> (Vec<Place>, Option<String>) {
     let band = band_of(level);
     let mut asks = vec![RateAsk { method: method.to_string(), style: style.to_string(), site: None, tool: crate::guide_methods::tool_at(method, style, level), level }];
-    for key in engine.world.measured.iter().filter(|key| key.method == method && key.style == style && key.band == band && key.site.is_some()) {
+    for key in engine.measured_sites(method, style, band) {
         if asks.iter().any(|known| known.site == key.site && known.tool == key.tool) {
             continue;
         }
@@ -248,37 +248,55 @@ fn chain_row(engine: &Engine, place: &Place, band: i64, time: TimePrice) -> Opti
 /// Every money line of one activity at `level` (filter applied later),
 /// recipes evaluated on `held` (empty: nothing held); `chains`: the
 /// quests of the bot whose D17 price the chain line reads, `None` for no
-/// chain line (the lines that set that price).
-pub fn method_rows(engine: &Engine, method: &str, style: &str, level: u8, held: &[(String, f64)], chains: Option<&[String]>) -> (Vec<MoneyRow>, Option<Unrated>) {
+/// chain line (the lines that set that price). `recipes` receives the
+/// place of each recipe row (its index among the rows returned); `None`
+/// leaves the recipe rows out (the D17 pass: nothing held, a recipe on
+/// stock is blocked, never accessible, it never sets the price).
+pub fn method_rows(engine: &Engine, method: &str, style: &str, level: u8, held: &[(String, f64)], chains: Option<&[String]>, mut recipes: Option<&mut Vec<(usize, RateAsk, RateAnswer)>>) -> (Vec<MoneyRow>, Option<Unrated>) {
     let band = band_of(level);
-    let (found, error) = places(engine, method, style, level);
+    let (found, error) = engine.timed("places", || places(engine, method, style, level));
     if found.is_empty() {
         return (Vec::new(), Some(Unrated { method: method.to_string(), reason: error.unwrap_or_else(|| "no yield".to_string()) }));
     }
     let mut rows = Vec::new();
     for (index, place) in found.iter().enumerate() {
         if !has_stock_inputs(&place.answer) {
-            rows.push(own_row(engine, place, Family::Farm, band, held));
+            rows.push(engine.timed("own_row", || own_row(engine, place, Family::Farm, band, held)));
             continue;
         }
-        rows.push(own_row(engine, place, Family::Recipe, band, held));
-        rows.push(market_row(engine, place, band));
+        if let Some(recipes) = recipes.as_deref_mut() {
+            recipes.push((rows.len(), place.ask.clone(), place.answer.clone()));
+            rows.push(engine.timed("own_row", || own_row(engine, place, Family::Recipe, band, held)));
+        }
+        rows.push(engine.timed("market_row", || market_row(engine, place, band)));
         // The chain farms upstream at the prior's places: one per band.
         if let (0, Some(quests)) = (index, chains) {
             let time = TimePrice::new(best_profit_outside_chains(engine, level, quests).unwrap_or(0.0));
-            rows.extend(chain_row(engine, place, band, time));
+            rows.extend(engine.timed("chain_row", || chain_row(engine, place, band, time)));
         }
     }
     (rows, None)
 }
 
+/// The recipe row of a place re-evaluated on a bot's stock `held` (R7:
+/// `guide_read`, the view's other rows unchanged), at the view's level.
+pub fn recipe_row(engine: &Engine, ask: &RateAsk, answer: &RateAnswer, held: &[(String, f64)]) -> MoneyRow {
+    let place = Place { ask: ask.clone(), answer: answer.clone() };
+    own_row(engine, &place, Family::Recipe, band_of(ask.level), held)
+}
+
 /// Activities of a build: the catalogue plus every measured activity it
 /// does not list (an alchemy of a gathered object, a style a fight
 /// was measured in), never the melee ladder (its rungs are listed).
-pub fn entries(engine: &Engine) -> Vec<crate::guide_methods::GuideMethod> {
+pub fn entries<'e>(engine: &'e Engine) -> &'e [crate::guide_methods::GuideMethod] {
+    engine.entries_memo(|| list_entries(engine))
+}
+
+fn list_entries(engine: &Engine) -> Vec<crate::guide_methods::GuideMethod> {
     let mut out: Vec<crate::guide_methods::GuideMethod> = crate::guide_methods::catalogue().to_vec();
+    let mut listed: std::collections::HashSet<(String, String)> = out.iter().map(|entry| (entry.method.clone(), entry.style.clone())).collect();
     for key in engine.world.measured {
-        if key.method == crate::guide_methods::LADDER || out.iter().any(|entry| entry.method == key.method && entry.style == key.style) {
+        if key.method == crate::guide_methods::LADDER || !listed.insert((key.method.clone(), key.style.clone())) {
             continue;
         }
         out.push(crate::guide_methods::GuideMethod { method: key.method.clone(), style: key.style.clone() });
@@ -288,58 +306,105 @@ pub fn entries(engine: &Engine) -> Vec<crate::guide_methods::GuideMethod> {
 
 /// The money making guide under `filter`: unblocked rows best profit
 /// first, then the blocked ones (best profit first), and the activities
-/// nothing estimates.
+/// nothing estimates (`guide_read::finish_money` of a fresh view).
 pub fn money_guide(engine: &Engine, filter: &GuideFilter) -> (Vec<MoneyRow>, Vec<Unrated>) {
-    guide_rows(engine, filter, true)
+    let view = money_view(engine, filter.level, &filter.quests_done, &filter.held);
+    crate::guide_read::finish_money(&view, filter, &std::collections::HashMap::new())
 }
 
-fn guide_rows(engine: &Engine, filter: &GuideFilter, with_chains: bool) -> (Vec<MoneyRow>, Vec<Unrated>) {
-    let mut rows = Vec::new();
-    let mut unrated = Vec::new();
-    for entry in &entries(engine) {
-        let level = row_level(&entry.method, filter);
+/// Every money row of a bot at `level` (`None`: each activity at its
+/// gate) with `quests_done` holding `held`, chain lines included,
+/// activity order (`guide_read`: the reader's filter applies to it).
+pub fn money_view(engine: &Engine, level: Option<u8>, quests_done: &[String], held: &[(String, f64)]) -> crate::guide_read::MoneyView {
+    engine.count("money_guide");
+    let filter = GuideFilter { level, quests_done: quests_done.to_vec(), held: held.to_vec(), ..GuideFilter::default() };
+    let mut rows: Vec<MoneyRow> = Vec::new();
+    let mut gaps = Vec::new();
+    let mut recipes: Vec<crate::guide_read::RecipePlace> = Vec::new();
+    for entry in entries(engine) {
+        let level = row_level(&entry.method, &filter);
         if filter.level.is_some() && crate::guide_methods::gate_level(&entry.method) > level {
             continue;
         }
-        if let Some(skill) = &filter.skill {
-            if crate::activity::band_skill(&entry.method, &entry.style).as_deref() != Some(skill.as_str()) {
-                continue;
-            }
+        let mut places_of: Vec<(usize, RateAsk, RateAnswer)> = Vec::new();
+        let (found, missing) = method_rows(engine, &entry.method, &entry.style, level, held, Some(quests_done), Some(&mut places_of));
+        if let Some(gap) = missing {
+            gaps.push(crate::guide_read::Gap { method: gap.method, style: entry.style.clone(), reason: gap.reason });
         }
-        let chains = with_chains.then_some(filter.quests_done.as_slice());
-        let (found, missing) = method_rows(engine, &entry.method, &entry.style, level, &filter.held, chains);
-        unrated.extend(missing.filter(|gap| !unrated.iter().any(|known: &Unrated| known.method == gap.method)));
-        for mut row in found {
-            if filter.family.as_deref().is_some_and(|family| family != row.family.as_str()) {
-                continue;
-            }
-            row.accessible = row.blocked.is_empty() && crate::guide_prereq::passes(&row.prereqs, filter);
-            rows.push(row);
-        }
+        recipes.extend(places_of.into_iter().map(|(index, ask, answer)| crate::guide_read::RecipePlace { row: rows.len() + index, ask, answer }));
+        rows.extend(found);
     }
-    // Usable first (not blocked, prerequisites met), then by value.
-    rows.sort_by(|left, right| (left.blocked.is_empty() && left.accessible).cmp(&(right.blocked.is_empty() && right.accessible)).reverse().then(right.profit_6000.total_cmp(&left.profit_6000)));
-    (rows, unrated)
+    crate::guide_read::MoneyView { level, rows, gaps, recipes }
 }
 
 /// Profit per 6000 ticks of the best ACCESSIBLE line for a bot at
 /// `level` with `quests_done` (D17's coin -> time rate), `None` when no
 /// accessible line earns. Nothing held: a recipe on stock never sets it.
+/// Built once per build (`seed_best_accessible_profit` sets it from a
+/// view already built).
 pub fn best_accessible_profit(engine: &Engine, level: u8, quests_done: &[String]) -> Option<f64> {
+    engine.best_profit_memo((level, quests_done.to_vec(), true), || {
+        engine.aside(|| {
+            let filter = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
+            let (rows, _) = money_guide(engine, &filter);
+            crate::guide_read::best_profit_of(&rows)
+        })
+    })
+}
+
+/// Reads the yields of every activity a bot at `level` works (the
+/// prior's place and the measured sites of its band) into the build's
+/// memo: the views of that level and their D17 pass read them there.
+pub fn read_level(engine: &Engine, level: u8) {
+    for entry in entries(engine) {
+        if crate::guide_methods::gate_level(&entry.method) <= level {
+            let _ = places(engine, &entry.method, &entry.style, level);
+        }
+    }
+}
+
+/// Records the D17 price of a bot at `level` with `quests_done` from the
+/// money view built for it (nothing held): the training guide of that
+/// bot reads it instead of building the same view again.
+pub fn seed_best_accessible_profit(engine: &Engine, view: &crate::guide_read::MoneyView, quests_done: &[String]) {
+    let Some(level) = view.level else { return };
     let filter = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
-    let (rows, _) = money_guide(engine, &filter);
-    rows.iter().filter(|row| row.accessible && row.profit_6000 > 0.0).map(|row| row.profit_6000).fold(None, |best: Option<f64>, profit| Some(best.map_or(profit, |known| known.max(profit))))
+    engine.best_profit_memo((level, quests_done.to_vec(), true), || crate::guide_read::best_profit_in(view, &filter));
 }
 
 /// D17 price a chain reads (§3): the best ACCESSIBLE line outside the
 /// chains for a bot at `level` with `quests_done`, built once per build;
-/// `None` when none earns (time is then worth nothing).
+/// `None` when none earns (time is then worth nothing). Recipe rows on
+/// stock are left out of that pass: nothing held, they are blocked.
 pub fn best_profit_outside_chains(engine: &Engine, level: u8, quests_done: &[String]) -> Option<f64> {
-    engine.best_profit_memo((level, quests_done.to_vec(), false), || {
+    engine.best_profit_memo((level, quests_done.to_vec(), false), || engine.aside(|| {
+        engine.count("money_guide_no_chain");
         let filter = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
-        let (rows, _) = guide_rows(engine, &filter, false);
-        rows.iter().filter(|row| row.accessible && row.profit_6000 > 0.0).map(|row| row.profit_6000).fold(None, |best: Option<f64>, profit| Some(best.map_or(profit, |known| known.max(profit))))
-    })
+        let mut best: Option<f64> = None;
+        for entry in entries(engine) {
+            let gate = crate::guide_methods::gate_level(&entry.method);
+            if gate > level {
+                continue;
+            }
+            // A row's prerequisites are its activity's (levels, combat,
+            // quests: never its tool nor its yield) plus shop conditions
+            // (`require_shop`, only more): an activity the bot cannot
+            // work sets no price, its yields are never read here. Read at
+            // its gate (one memo entry per activity): its skill's level
+            // max(gate, level) and the gate both pass at `level`.
+            let base = crate::guide_prereq::prereqs_of(&entry.method, &entry.style, gate, "");
+            if !crate::guide_prereq::passes(&base, &filter) {
+                continue;
+            }
+            let (found, _) = method_rows(engine, &entry.method, &entry.style, level, &[], None, None);
+            for row in found {
+                if row.blocked.is_empty() && row.profit_6000 > 0.0 && crate::guide_prereq::passes(&row.prereqs, &filter) {
+                    best = Some(best.map_or(row.profit_6000, |known: f64| known.max(row.profit_6000)));
+                }
+            }
+        }
+        best
+    }))
 }
 
 /// Confidence of a fabricated or missing answer (tests, quest rows).

@@ -209,6 +209,19 @@ pub fn estimate(book: &YieldBook, query: &RateQuery, now: i64) -> Result<RateEst
 /// The estimate of `query` with the prior `prior_of` (the guides pass
 /// `cached_guide_prior`).
 pub fn estimate_using(book: &YieldBook, query: &RateQuery, now: i64, prior_of: &dyn Fn(&PriorQuery) -> Result<RatePrior, PriorError>) -> Result<RateEstimate, RateError> {
+    estimate_logged(book, query, now, prior_of, true)
+}
+
+/// `estimate_using` for the guides: without the fallback log (they read
+/// every method at every level each cycle, ~50 000 reads: a log line per
+/// new (key, level) would flood the daemon log and empty the once-only
+/// set) and without the derived XP (`xp` left empty: the guides derive
+/// it from the units themselves, `unit_xp`).
+pub fn estimate_quiet(book: &YieldBook, query: &RateQuery, now: i64, prior_of: &dyn Fn(&PriorQuery) -> Result<RatePrior, PriorError>) -> Result<RateEstimate, RateError> {
+    estimate_logged(book, query, now, prior_of, false)
+}
+
+fn estimate_logged(book: &YieldBook, query: &RateQuery, now: i64, prior_of: &dyn Fn(&PriorQuery) -> Result<RatePrior, PriorError>, log: bool) -> Result<RateEstimate, RateError> {
     let exact = key_of_query(query);
     let mut ladder: Vec<(YieldKey, Fallback)> = Vec::new();
     if query.site.is_some() {
@@ -223,10 +236,10 @@ pub fn estimate_using(book: &YieldBook, query: &RateQuery, now: i64, prior_of: &
     let Some((key, fallback)) = measured else {
         let prior = prior.map_err(|cause| RateError::NoPrior { method: query.method.clone(), cause })?;
         let (flows, units) = prior_rows(&prior);
-        let xp = derived(query, &units);
+        let xp = if log { derived(query, &units) } else { Vec::new() };
         return Ok(RateEstimate { key: exact, fallback: Fallback::PriorOnly, prior: true, flows, units, xp, pause_per_6000: 0.0, confidence: confidence(thinnest, now) });
     };
-    if *fallback != Fallback::Exact {
+    if log && *fallback != Fallback::Exact {
         let reason = if query.site.is_none() { "no site known" } else { "exact key under the threshold" };
         log_fallback(&exact, *fallback, reason);
     }
@@ -238,7 +251,7 @@ pub fn estimate_using(book: &YieldBook, query: &RateQuery, now: i64, prior_of: &
         }
         Err(_) => (bucket.flow_rates(), bucket.unit_rates()),
     };
-    let xp = derived(query, &units);
+    let xp = if log { derived(query, &units) } else { Vec::new() };
     Ok(RateEstimate { key: key.clone(), fallback: *fallback, prior: false, flows, units, xp, pause_per_6000: bucket.pause_per_6000(), confidence: confidence(Some(&bucket), now) })
 }
 

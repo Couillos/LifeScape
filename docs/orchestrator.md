@@ -58,7 +58,7 @@ Registre : `src/registry.rs`, source unique `lifescape_scripts::names()`.
 `run/pathfinding.sock`. Dashboard `http://localhost:8765/` (`src/web.rs`,
 statiques dans `orchestration/static/`, port via `LIFESCAPE_WEB_PORT`).
 Pages : `/` (bots), `/items`, `/market`, `/rates`, `/life`, `/economy`,
-`/hiscores`, `/errors`.
+`/hiscores`, `/errors`, `/guides-money`, `/guides-training`.
 Tableau Skills du spectateur (2026-11-16) : lignes heartbeat `skills`
 `{id, level, base, xp}` (`level` = niveau actuel boosté/drainé, `base` =
 niveau de l'xp, `session_heartbeat.rs`) ; ligne « Total » en bas (option
@@ -209,6 +209,24 @@ value:[rang, valeur]|null, top:[{id, name, count, price, value}]}]}`,
 joueurs dans l'ordre overall. Le front relit l'API toutes les 5 min.
 Tests : `hiscores_tests.rs` (dont la route web servie depuis un snapshot
 fixture), `node orchestration/static/hiscores.test.js`.
+Guides (2026-11-17) : thread `guides` (`src/guides_store.rs`), premier
+jeu 20 s après le démarrage puis un toutes les 300 s (`REFRESH_PERIOD` :
+prix = médiane des 5 derniers fills, rendement = 3 runs d'une clé, un
+bot change d'activité à un changement de but) ; un jeu = vues catalogue
+et par tranche des guides money et training (docs/economy.md « Guides »),
+construit dans un seul moteur, publié en `Arc` (`guides_store::current`).
+`GET /api/guides/money|training?skill&level&family&quests&held` lit la
+dernière version (aucun calcul de guide par requête, ~60-80 ms de
+lecture + JSON pour une vue complète) ; `ok:false, pending:true` avant le
+premier jeu (la page redemande toutes les 5 s). Réponse : `rows`,
+`unrated`, `market_wait_ticks`, `view_level`, `approximate[]`,
+`built_at_ms`, `age_ms`, `cycle_ms`, `cycle_cpu_ms`, `refresh_s`. Coût :
+ligne `guides: built N money + M training views in X ms (Y ms CPU)` dans
+`run/orchestrator.log` à chaque cycle ; temps d'attente du marché et des
+quêtes comptés de façon incrémentale (seuls les nouveaux rapports lus,
+recomptage complet toutes les 12 cycles). Mesure hors ligne :
+`orchestrator rates-rebuild <copie> --guides-store <dossier>
+[money|training:requête …]`.
 Erreurs (2026-11-13) : page `/errors` (`orchestration/static/errors.html`,
 `errors.js`), API `web_errors.rs` : `/api/errors/summary?hours=1..72&source=
 &type=&account=&script=&zone=&signature=` (KPIs, tendance vs fenêtre

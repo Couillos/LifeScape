@@ -2,7 +2,8 @@
 // generated from the measured yields and the game priors, priced at the
 // current market price. One script for both pages: the page's body says
 // which guide (data-guide="money" | "training"). Read-only dashboard
-// pages: bots never read them (R7 later). Filters ride the API query
+// pages: the API serves the set the daemon precomputes (guides_store,
+// its age shown), the bots will read the same (R7). Filters ride the API query
 // (skill, level, family, quests); the table shows the best lines first
 // (profit or effective XP), a click on a line unfolds its flows, stages
 // and other XP. Sorting rides the shared TableSort helper (table.js).
@@ -33,6 +34,22 @@ var GuidesView = (function () {
     if (ticks === null || ticks === undefined || !isFinite(ticks)) return '-';
     if (ticks >= 6000) return (Math.round(ticks / 600) / 10) + ' × 6000';
     return String(Math.round(ticks));
+  }
+
+  // "set built 42 s ago in 3.7 s, rebuilt every 300 s": the age of the
+  // precomputed set the API read (guides_store), then what the read
+  // approximates (a level under its band's last, quests on chains).
+  function freshnessText(payload) {
+    if (!payload) return '';
+    var age = Math.round((payload.age_ms || 0) / 1000);
+    var parts = ['set built ' + age + ' s ago in ' + (Math.round((payload.cycle_ms || 0) / 100) / 10) + ' s, rebuilt every ' + (payload.refresh_s || '?') + ' s'];
+    (payload.approximate || []).forEach(function (note) { parts.push('≈ ' + note); });
+    return parts.join(' · ');
+  }
+
+  // Milliseconds before asking again: the first set is still building.
+  function retryDelay(body) {
+    return body && body.pending ? 5000 : null;
   }
 
   // "mining 5000, smithing 200": a skill → XP map, best first.
@@ -186,7 +203,7 @@ var GuidesView = (function () {
       if (!state.payload) return;
       var options = { search: value('search'), accessibleOnly: checked('accessible'), limit: parseInt(value('limit'), 10) || 0 };
       var rows = visibleRows(state.rows, options);
-      document.getElementById('summary').textContent = state.rows.length + ' line(s), ' + rows.length + ' shown · built in ' + (state.payload.built_ms || 0) + ' ms' +
+      document.getElementById('summary').textContent = state.rows.length + ' line(s), ' + rows.length + ' shown · ' + freshnessText(state.payload) +
         (state.payload.market_wait_ticks ? ' · market wait ' + Math.round(state.payload.market_wait_ticks) + ' ticks/lot' : ' · market wait unmeasured');
       var keyOf = function (row) { return [row.family, row.skill, row.method, row.style, row.site, row.tool, row.band, row.supply].join('|'); };
       var rowAttrs = function (row) { return { 'data-key': keyOf(row), class: row.accessible ? 'line' : 'line locked' }; };
@@ -210,9 +227,14 @@ var GuidesView = (function () {
 
     function load() {
       var filter = { skill: value('skill'), level: value('level'), family: value('family'), quests: value('quests') };
-      document.getElementById('summary').textContent = 'building…';
+      document.getElementById('summary').textContent = 'loading…';
       fetch('/api/guides/' + kind + '?' + queryOf(filter)).then(function (response) { return response.json(); }).then(function (body) {
-        if (!body.ok) { document.getElementById('summary').textContent = body.error || 'error'; return; }
+        if (!body.ok) {
+          document.getElementById('summary').textContent = body.error || 'error';
+          var delay = retryDelay(body);
+          if (delay) setTimeout(load, delay);
+          return;
+        }
         state.payload = body;
         state.rows = (body.rows || []).map(decorate);
         render();
@@ -231,7 +253,7 @@ var GuidesView = (function () {
     setInterval(load, 60000);
   }
 
-  return { start: start, queryOf: queryOf, visibleRows: visibleRows, prereqText: prereqText, xpText: xpText, number: number, routeText: routeText };
+  return { start: start, queryOf: queryOf, visibleRows: visibleRows, prereqText: prereqText, xpText: xpText, number: number, routeText: routeText, freshnessText: freshnessText, retryDelay: retryDelay };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {

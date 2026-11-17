@@ -41,6 +41,17 @@ pub struct AlchSpell {
 }
 
 fn spell_row(spell: &'static str, level: u8, high: bool) -> AlchSpell {
+    // Two spells, static dump: read once each (every alchemy prior and
+    // XP of the guides asks it).
+    static LOW: std::sync::OnceLock<AlchSpell> = std::sync::OnceLock::new();
+    static HIGH: std::sync::OnceLock<AlchSpell> = std::sync::OnceLock::new();
+    let slot = if high { &HIGH } else { &LOW };
+    let found = slot.get_or_init(|| read_spell_row(spell, level, high));
+    debug_assert!(found.spell == spell && found.level == level);
+    found.clone()
+}
+
+fn read_spell_row(spell: &'static str, level: u8, high: bool) -> AlchSpell {
     let row = lifescape_gamedata::spells::all_spells().into_iter().find(|row| row.spell == spell);
     let xp = row.as_ref().map(|row| row.xp as f64 / 10.0).unwrap_or(if high { 65.0 } else { 31.0 });
     let runes = row.map(|row| row.runes).filter(|runes| !runes.is_empty()).unwrap_or_else(|| {

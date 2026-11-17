@@ -7,7 +7,16 @@ use std::sync::OnceLock;
 
 /// Display name of a debug name (itself when the dump has none).
 pub fn display_of(debug: &str) -> String {
-    lifescape_gamedata::objs_by_name(debug).into_iter().next().and_then(|obj| obj.display.or(obj.name)).unwrap_or(debug).to_string()
+    // Static dump, asked per flow of every yield read (the guides read
+    // ~50 000 a set): once per name.
+    static MEMO: OnceLock<std::sync::Mutex<HashMap<String, String>>> = OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some(known) = memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(debug) {
+        return known.clone();
+    }
+    let found = lifescape_gamedata::objs_by_name(debug).into_iter().next().and_then(|obj| obj.display.or(obj.name)).unwrap_or(debug).to_string();
+    memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(debug.to_string(), found.clone());
+    found
 }
 
 /// Debug name of a display name: the object named like its display
@@ -41,6 +50,20 @@ pub fn debug_of(display: &str) -> String {
 /// `enchant:strung_sapphire_amulet` takes AND the unstrung one
 /// `string:` takes to make it).
 pub fn debug_in(method: &str, display: &str, consumed: bool) -> String {
+    // Static dump and ways: once per (method, display, side) (a way
+    // carries its sites, copied per read without this).
+    static MEMO: OnceLock<std::sync::Mutex<HashMap<(String, String, bool), String>>> = OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+    let key = (method.to_string(), display.to_string(), consumed);
+    if let Some(known) = memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&key) {
+        return known.clone();
+    }
+    let found = compute_debug_in(method, display, consumed);
+    memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(key, found.clone());
+    found
+}
+
+fn compute_debug_in(method: &str, display: &str, consumed: bool) -> String {
     let wanted = display.to_lowercase();
     if let Some((product, way)) = lifescape_planner::method_way::method_way(method) {
         let own: Vec<String> = if consumed { way.inputs.into_iter().map(|(input, _)| input).chain(way.tools).collect() } else { vec![product] };

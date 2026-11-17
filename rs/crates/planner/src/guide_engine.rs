@@ -234,10 +234,25 @@ type AskKey = (String, String, Option<(i64, i64, i64)>, String, u8);
 pub struct Engine<'a> {
     pub world: &'a GuideWorld<'a>,
     answers: RefCell<HashMap<AskKey, Result<RateAnswer, String>>>,
-    quotes: RefCell<HashMap<String, Quote>>,
+    /// Yields read inside a side computation (`aside`).
+    aside_answers: RefCell<HashMap<AskKey, Result<RateAnswer, String>>>,
+    aside_depth: std::cell::Cell<usize>,
+    quotes: RefCell<HashMap<String, std::rc::Rc<Quote>>>,
     sources: RefCell<HashMap<(String, u8, usize, crate::guide_chain::Sourcing), Option<crate::guide_chain::ChainUnit>>>,
     best_profit: RefCell<HashMap<(u8, Vec<String>, bool), Option<f64>>>,
-    shops: RefCell<HashMap<String, Vec<(f64, f64, ShopNeed)>>>,
+    shops: RefCell<HashMap<String, std::rc::Rc<Vec<(f64, f64, ShopNeed)>>>>,
+    npc_sales: RefCell<HashMap<String, Option<(f64, ShopNeed)>>>,
+    /// Merged sale and purchase steps of an object (functions of its
+    /// quote and its shops, both read once per build).
+    sale_walks: RefCell<HashMap<String, std::rc::Rc<Vec<Step>>>>,
+    purchase_walks: RefCell<HashMap<String, std::rc::Rc<Vec<Step>>>>,
+    /// Measured exact keys with a site by (method, style, band), in the
+    /// world's order (built once per build: `places` reads it per row).
+    measured_index: std::cell::OnceCell<HashMap<(String, String, i64), Vec<usize>>>,
+    /// Activities of the build (`guide_money::entries`), listed once.
+    entries: std::cell::OnceCell<Vec<crate::guide_methods::GuideMethod>>,
+    counters: RefCell<std::collections::BTreeMap<&'static str, u64>>,
+    timers: RefCell<std::collections::BTreeMap<&'static str, std::time::Duration>>,
 }
 
 impl<'a> Engine<'a> {
@@ -245,20 +260,87 @@ impl<'a> Engine<'a> {
         Engine {
             world,
             answers: RefCell::new(HashMap::new()),
+            aside_answers: RefCell::new(HashMap::new()),
+            aside_depth: std::cell::Cell::new(0),
             quotes: RefCell::new(HashMap::new()),
             sources: RefCell::new(HashMap::new()),
             best_profit: RefCell::new(HashMap::new()),
             shops: RefCell::new(HashMap::new()),
+            npc_sales: RefCell::new(HashMap::new()),
+            sale_walks: RefCell::new(HashMap::new()),
+            purchase_walks: RefCell::new(HashMap::new()),
+            measured_index: std::cell::OnceCell::new(),
+            entries: std::cell::OnceCell::new(),
+            counters: RefCell::new(std::collections::BTreeMap::new()),
+            timers: RefCell::new(std::collections::BTreeMap::new()),
         }
+    }
+
+    /// Counts one event of a build (its cost declared, `stats`).
+    pub fn count(&self, name: &'static str) {
+        *self.counters.borrow_mut().entry(name).or_insert(0) += 1;
+    }
+
+    /// Runs `body`, its time added to the step `name` (nested steps
+    /// count in each).
+    pub fn timed<T>(&self, name: &'static str, body: impl FnOnce() -> T) -> T {
+        let began = std::time::Instant::now();
+        let found = body();
+        *self.timers.borrow_mut().entry(name).or_default() += began.elapsed();
+        found
+    }
+
+    /// Time spent per step so far in this build.
+    pub fn step_times(&self) -> Vec<(&'static str, std::time::Duration)> {
+        self.timers.borrow().iter().map(|(name, spent)| (*name, *spent)).collect()
+    }
+
+    /// What the best reachable F2P shop pays (`GuideWorld::npc_sale`),
+    /// read once per build per object.
+    pub fn npc_sale(&self, item: &str) -> Option<(f64, ShopNeed)> {
+        if let Some(known) = self.npc_sales.borrow().get(item) {
+            return *known;
+        }
+        let found = (self.world.npc_sale)(item);
+        self.npc_sales.borrow_mut().insert(item.to_string(), found);
+        found
+    }
+
+    /// Measured exact keys of `method` × `style` in `band` that carry a
+    /// site, in the world's order.
+    pub fn measured_sites(&self, method: &str, style: &str, band: i64) -> Vec<&crate::guide_model::MeasuredKey> {
+        let index = self.measured_index.get_or_init(|| {
+            let mut out: HashMap<(String, String, i64), Vec<usize>> = HashMap::new();
+            for (at, key) in self.world.measured.iter().enumerate().filter(|(_, key)| key.site.is_some()) {
+                out.entry((key.method.clone(), key.style.clone(), key.band)).or_default().push(at);
+            }
+            out
+        });
+        index.get(&(method.to_string(), style.to_string(), band)).map(|found| found.iter().map(|at| &self.world.measured[*at]).collect()).unwrap_or_default()
+    }
+
+    /// The build's activities, listed once by `list`.
+    pub fn entries_memo(&self, list: impl FnOnce() -> Vec<crate::guide_methods::GuideMethod>) -> &[crate::guide_methods::GuideMethod] {
+        self.entries.get_or_init(list)
+    }
+
+    /// Events counted so far in this build.
+    pub fn stats(&self) -> Vec<(&'static str, u64)> {
+        self.counters.borrow().iter().map(|(name, count)| (*name, *count)).collect()
     }
 
     /// The F2P shops' window of an object (`GuideWorld::shop_buy`), read
     /// once per build.
     pub fn shop_steps(&self, item: &str) -> Vec<(f64, f64, ShopNeed)> {
+        self.shop_steps_shared(item).to_vec()
+    }
+
+    /// `shop_steps` shared with the memo (no copy per purchase priced).
+    fn shop_steps_shared(&self, item: &str) -> std::rc::Rc<Vec<(f64, f64, ShopNeed)>> {
         if let Some(known) = self.shops.borrow().get(item) {
             return known.clone();
         }
-        let found = (self.world.shop_buy)(item);
+        let found = std::rc::Rc::new((self.world.shop_buy)(item));
         self.shops.borrow_mut().insert(item.to_string(), found.clone());
         found
     }
@@ -267,8 +349,10 @@ impl<'a> Engine<'a> {
     /// build (the chains of every recipe share their upstream).
     pub fn source_memo(&self, key: (String, u8, usize, crate::guide_chain::Sourcing), compute: impl FnOnce() -> Option<crate::guide_chain::ChainUnit>) -> Option<crate::guide_chain::ChainUnit> {
         if let Some(known) = self.sources.borrow().get(&key) {
+            self.count("source_hit");
             return known.clone();
         }
+        self.count("source_miss");
         let found = compute();
         self.sources.borrow_mut().insert(key, found.clone());
         found
@@ -280,28 +364,64 @@ impl<'a> Engine<'a> {
         if let Some(known) = self.best_profit.borrow().get(&key) {
             return *known;
         }
+        self.count("best_profit_build");
         let found = compute();
         self.best_profit.borrow_mut().insert(key, found);
         found
     }
 
+    /// Runs a side computation (a D17 price): the yields it reads that
+    /// the build did not hold yet go to a scratch memo forgotten when the
+    /// outermost side computation ends (pure reads: one asked again is
+    /// read again, identical). A D17 pass reads every activity at its
+    /// level (~500 yields) and a set runs ~100 of them: the memo holds
+    /// one level's at a time, never all of them.
+    pub fn aside<T>(&self, body: impl FnOnce() -> T) -> T {
+        self.aside_depth.set(self.aside_depth.get() + 1);
+        let found = body();
+        self.aside_depth.set(self.aside_depth.get() - 1);
+        if self.aside_depth.get() == 0 {
+            self.aside_answers.borrow_mut().clear();
+        }
+        found
+    }
+
+    /// Forgets every yield read so far (between the views of a set).
+    pub fn forget_answers(&self) {
+        self.answers.borrow_mut().clear();
+    }
+
     /// The yield of one ask, asked once per build.
     pub fn answer(&self, ask: &RateAsk) -> Result<RateAnswer, String> {
+        self.timed("answer", || self.answer_inner(ask))
+    }
+
+    fn answer_inner(&self, ask: &RateAsk) -> Result<RateAnswer, String> {
         let key = (ask.method.clone(), ask.style.clone(), ask.site, ask.tool.clone(), ask.level);
         if let Some(known) = self.answers.borrow().get(&key) {
             return known.clone();
         }
+        if let Some(known) = self.aside_answers.borrow().get(&key) {
+            return known.clone();
+        }
+        self.count("yield_read");
         let found = (self.world.rate)(ask);
-        self.answers.borrow_mut().insert(key, found.clone());
+        let memo = if self.aside_depth.get() > 0 { &self.aside_answers } else { &self.answers };
+        memo.borrow_mut().insert(key, found.clone());
         found
     }
 
     /// The market quote of an object, read once per build.
     pub fn quote(&self, item: &str) -> Quote {
+        (*self.quote_shared(item)).clone()
+    }
+
+    /// `quote` shared with the memo (no copy of its book per price).
+    fn quote_shared(&self, item: &str) -> std::rc::Rc<Quote> {
         if let Some(known) = self.quotes.borrow().get(item) {
             return known.clone();
         }
-        let found = (self.world.price)(item);
+        let found = std::rc::Rc::new((self.world.price)(item));
         self.quotes.borrow_mut().insert(item.to_string(), found.clone());
         found
     }
@@ -311,9 +431,18 @@ impl<'a> Engine<'a> {
         if item == "coins" {
             return Priced::own();
         }
-        let quote = self.quote(item);
-        let shop = (self.world.npc_sale)(item);
-        walk(&sale_steps(&quote, shop), units, Side::Sell, quote.traded.then(|| traded_basis(&quote)))
+        self.count("sale_at");
+        let quote = self.quote_shared(item);
+        let known = self.sale_walks.borrow().get(item).cloned();
+        let steps = match known {
+            Some(steps) => steps,
+            None => {
+                let built = std::rc::Rc::new(sale_steps(&quote, self.npc_sale(item)));
+                self.sale_walks.borrow_mut().insert(item.to_string(), built.clone());
+                built
+            }
+        };
+        walk(&steps, units, Side::Sell, quote.traded.then(|| traded_basis(&quote)))
     }
 
     /// Mean purchase price of `units` (`purchase_steps`); `available`
@@ -322,16 +451,26 @@ impl<'a> Engine<'a> {
         if item == "coins" {
             return Priced::own();
         }
-        let quote = self.quote(item);
-        walk(&purchase_steps(&quote, &self.shop_steps(item)), units, Side::Buy, quote.traded.then(|| traded_basis(&quote)))
+        self.count("buy_at");
+        let quote = self.quote_shared(item);
+        let known = self.purchase_walks.borrow().get(item).cloned();
+        let steps = match known {
+            Some(steps) => steps,
+            None => {
+                let built = std::rc::Rc::new(purchase_steps(&quote, &self.shop_steps_shared(item)));
+                self.purchase_walks.borrow_mut().insert(item.to_string(), built.clone());
+                built
+            }
+        };
+        walk(&steps, units, Side::Buy, quote.traded.then(|| traded_basis(&quote)))
     }
 
     /// Why `units` of `item` cannot be bought (for a blocked row).
     pub fn unavailable_reason(&self, item: &str, units: f64) -> String {
-        let quote = self.quote(item);
+        let quote = self.quote_shared(item);
         let depth = quote.asks.iter().fold(0.0, |held, (_, depth)| held + depth.max(0.0));
         let traded = if quote.traded { "" } else { "never traded, " };
-        let shop: f64 = self.shop_steps(item).iter().map(|(_, units, _)| units.max(0.0)).sum();
+        let shop: f64 = self.shop_steps_shared(item).iter().map(|(_, units, _)| units.max(0.0)).sum();
         let shops = if shop > 0.0 { format!("F2P shops {shop:.0} (stock + restock)") } else { "no F2P shop sells it".to_string() };
         format!("{item}: {traded}asks hold {depth:.0}, {shops}, of {units:.0} per window")
     }

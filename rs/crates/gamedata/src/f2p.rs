@@ -97,6 +97,19 @@ pub struct ShopAccess {
 }
 
 pub fn f2p_shop_access(shop: &str) -> Option<ShopAccess> {
+    // Pure function of the dumps: computed once per shop per process
+    // (the guides price hundreds of objects against every shop).
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<ShopAccess>>>> = std::sync::OnceLock::new();
+    let table = MEMO.get_or_init(Default::default);
+    if let Some(known) = table.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(shop) {
+        return known.clone();
+    }
+    let found = compute_f2p_shop_access(shop);
+    table.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(shop.to_string(), found.clone());
+    found
+}
+
+fn compute_f2p_shop_access(shop: &str) -> Option<ShopAccess> {
     let mut npcs = Vec::new();
     let mut quests: Vec<Option<String>> = Vec::new();
     for (npc, opening) in crate::shop_access::openers(shop) {
@@ -123,7 +136,13 @@ pub fn f2p_shop_access(shop: &str) -> Option<ShopAccess> {
 /// Shops a non-member can use: some NPC opens it on an F2P world while
 /// standing in an F2P zone, with only F2P quest gates (`shop_access`).
 pub fn f2p_shops() -> Vec<Shop> {
-    crate::shops::all_shops().into_iter().filter(|entry| f2p_shop_access(&entry.name).is_some()).collect()
+    f2p_shop_list().to_vec()
+}
+
+/// `f2p_shops` without the copy, built once per process (static dumps).
+pub fn f2p_shop_list() -> &'static [Shop] {
+    static LIST: std::sync::OnceLock<Vec<Shop>> = std::sync::OnceLock::new();
+    LIST.get_or_init(|| crate::shops::all_shops().into_iter().filter(|entry| f2p_shop_access(&entry.name).is_some()).collect())
 }
 
 /// Stock lines a non-member can buy: members objects never sell to an

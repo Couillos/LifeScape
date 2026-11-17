@@ -4,14 +4,18 @@
 //! prints what the measures view would publish (keys, rows), touching
 //! neither the daemon nor `run/`. Offline check of a migration: run it
 //! on a copy of `run/lifescape.db`, never on the live file. `--guide`
-//! builds a guide on the rebuilt estimator (the API's JSON, `web_guides`).
+//! builds a guide on the rebuilt estimator (the API's JSON, `web_guides`);
+//! `--guides-store <dir> [money|training:query ...]` builds the whole
+//! precomputed set as the `guides` thread does (`guides_store`), prints
+//! its cost (wall, CPU, resident memory) and writes each read asked to
+//! `<dir>/<n>.json` with its read time.
 
 #![forbid(unsafe_code)]
 
 /// CLI entry; returns the process exit code.
 pub fn rates_rebuild_cli(args: &[String]) -> i32 {
     let Some(path) = args.first() else {
-        eprintln!("usage: orchestrator rates-rebuild <copy of lifescape.db> [--rows] [--guide money|training [skill=..&level=..]]");
+        eprintln!("usage: orchestrator rates-rebuild <copy of lifescape.db> [--rows] [--guide money|training [skill=..&level=..]] [--guides-store <dir> [money|training:query ...]]");
         return 2;
     };
     let path = std::path::PathBuf::from(path);
@@ -46,6 +50,9 @@ pub fn rates_rebuild_cli(args: &[String]) -> i32 {
     println!("buckets: {} ({exact} measured keys, {thin} under n>=3, {} internal roll-ups)", book.buckets.len(), book.buckets.len() - exact);
     println!("activities (method, style): {}", activities.len());
     println!("measure rows: {} flows ({folded} folded 'other drops' lines), {} units, {} xp", flows.len(), units.len(), xp.len());
+    if let Some(at) = args.iter().position(|arg| arg == "--guides-store") {
+        return guides_store_check(&store, &snapshot, args.get(at + 1..).unwrap_or(&[]));
+    }
     if let Some(at) = args.iter().position(|arg| arg == "--guide") {
         let kind = match args.get(at + 1).map(String::as_str) {
             Some("training") => crate::web_guides::GuideKind::Training,
@@ -67,6 +74,82 @@ pub fn rates_rebuild_cli(args: &[String]) -> i32 {
             let number = |key: &str| row.get(key).as_f64().unwrap_or(0.0);
             println!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{:.1}", text("method"), text("style"), text("site"), text("tool"), row.get("band").as_i64().unwrap_or(0), row.get("runs").as_i64().unwrap_or(0), text("item") + "|" + &text("cause"), number("per_6000"), number("value_6000"));
         }
+    }
+    0
+}
+
+/// Resident memory of the process in KiB (Linux `/proc/self/status`).
+fn resident_kib() -> Option<i64> {
+    let text = std::fs::read_to_string("/proc/self/status").ok()?;
+    text.lines().find_map(|line| line.strip_prefix("VmRSS:")).and_then(|rest| rest.split_whitespace().next()).and_then(|value| value.parse().ok())
+}
+
+/// `--guides-store`: one set built and read as the daemon does.
+fn guides_store_check(store: &lifescape_store::Store, snapshot: &crate::rates_service::Snapshot, args: &[String]) -> i32 {
+    let Some(dir) = args.first() else {
+        eprintln!("rates-rebuild: --guides-store <dir> [money|training:query ...]");
+        return 2;
+    };
+    let waits_began = std::time::Instant::now();
+    let mut tally = crate::guides_store::WaitsTally::default();
+    if let Err(error) = tally.advance(store) {
+        eprintln!("rates-rebuild: {error}");
+        return 1;
+    }
+    let waits_ms = waits_began.elapsed().as_millis();
+    let before = resident_kib().unwrap_or(0);
+    let set = crate::guides_store::build_set(store, snapshot, &tally.waits());
+    let after = resident_kib().unwrap_or(0);
+    println!(
+        "guides store: waits {waits_ms} ms (full tally), set {} ms wall, {} ms CPU, resident +{} MiB ({} -> {} MiB), {} quotes",
+        set.cycle_ms,
+        set.cycle_cpu_ms.map(|cpu| cpu.to_string()).unwrap_or_else(|| "?".to_string()),
+        (after - before) / 1024,
+        before / 1024,
+        after / 1024,
+        set.quotes.len()
+    );
+    println!("guides store stats: {}", lifescape_json::stringify(&set.stats));
+    // The daemon's steady cycle: the process memos of the static game
+    // data (priors' tables, tool tiers, XP, shops) already filled.
+    drop(set);
+    let set = crate::guides_store::build_set(store, snapshot, &tally.waits());
+    println!(
+        "guides store (second cycle, warm): set {} ms wall, {} ms CPU, resident {} MiB",
+        set.cycle_ms,
+        set.cycle_cpu_ms.map(|cpu| cpu.to_string()).unwrap_or_else(|| "?".to_string()),
+        resident_kib().unwrap_or(0) / 1024
+    );
+    // The set's size: every view as the API serializes it (its rows in
+    // memory hold about as much).
+    let mut views: Vec<(crate::web_guides::GuideKind, lifescape_planner::guide_model::GuideFilter)> = vec![(crate::web_guides::GuideKind::Money, Default::default()), (crate::web_guides::GuideKind::Training, Default::default())];
+    for level in crate::guides_store::band_levels() {
+        for kind in [crate::web_guides::GuideKind::Money, crate::web_guides::GuideKind::Training] {
+            views.push((kind, lifescape_planner::guide_model::GuideFilter { level: Some(level), ..Default::default() }));
+        }
+    }
+    let bytes: usize = views.iter().map(|(kind, filter)| lifescape_json::stringify(&crate::web_guides::read_guide(&set, *kind, filter)).len()).sum();
+    println!("guides store: {} views, {} MiB as JSON", views.len(), bytes / (1024 * 1024));
+    let incremental = std::time::Instant::now();
+    if let Err(error) = tally.advance(store) {
+        eprintln!("rates-rebuild: {error}");
+        return 1;
+    }
+    println!("guides store: incremental waits {} ms (no new report)", incremental.elapsed().as_millis());
+    for (index, spec) in args.iter().skip(1).enumerate() {
+        let (kind, query) = spec.split_once(':').unwrap_or((spec.as_str(), ""));
+        let kind = if kind == "training" { crate::web_guides::GuideKind::Training } else { crate::web_guides::GuideKind::Money };
+        let began = std::time::Instant::now();
+        let filter = crate::web_guides::filter_of(&crate::web::parse_query(query));
+        let value = crate::web_guides::read_guide(&set, kind, &filter);
+        let text = lifescape_json::stringify(&value);
+        let spent = began.elapsed().as_millis();
+        let path = std::path::Path::new(dir).join(format!("{index}.json"));
+        if let Err(error) = std::fs::write(&path, &text) {
+            eprintln!("rates-rebuild: {}: {error}", path.display());
+            return 1;
+        }
+        println!("read {spec}: {spent} ms (read + JSON, {} KiB) -> {}", text.len() / 1024, path.display());
     }
     0
 }

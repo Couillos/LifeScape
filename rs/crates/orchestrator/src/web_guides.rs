@@ -19,24 +19,23 @@
 //! Filters (query string): `skill`, `level` (a bot with every skill at
 //! it; empty: each method at its own gate), `family`, `quests` (done,
 //! comma separated), `held` (objects a bot holds, `item:units,...`,
-//! debug names: a recipe on stock is evaluated on them). A build is cached `GUIDE_TTL` per query: the bots
-//! never read these guides (R7 later), the page does.
+//! debug names: a recipe on stock is evaluated on them). No request
+//! builds a guide: the API reads the set the `guides` thread publishes
+//! (`guides_store`, filters applied by reading); `build_guide` builds one
+//! guide directly for the offline check (`rates-rebuild --guide`).
 
 #![forbid(unsafe_code)]
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use lifescape_json::{object, str_value, Value};
 use lifescape_planner::guide_model::{Confidence, FlowLine, GuideFilter, GuideWorld, InputRoute, MeasuredKey, MoneyRow, Prereqs, Quote, RateAnswer, RateAsk, ShopNeed, TrainingRow, Unrated};
 use lifescape_store::Store;
 
-/// Longest a built guide serves before a rebuild.
-pub const GUIDE_TTL: Duration = Duration::from_secs(60);
 /// Store reports read per page while measuring waits and quests.
-const MEASURE_PAGE: i64 = 2000;
+pub const MEASURE_PAGE: i64 = 2000;
 
 /// Measured waits of the store: market pause per paused run, quest
 /// durations by planner quest key.
@@ -47,30 +46,12 @@ pub struct StoreWaits {
 }
 
 /// Mean market pause of the runs that paused, mean ticks of each
-/// quest's finished runs (contract 2).
+/// quest's finished runs (contract 2): every report tallied
+/// (`guides_store::WaitsTally` from the first).
 pub fn store_waits(store: &Store) -> Result<StoreWaits, String> {
-    let (mut paused, mut pauses) = (0.0, 0usize);
-    let mut quests: HashMap<String, (f64, usize)> = HashMap::new();
-    let mut after = 0;
-    loop {
-        let page = store.measures_after(after, MEASURE_PAGE).map_err(|error| format!("guides measures: {error}"))?;
-        let Some(last) = page.last() else { break };
-        after = last.report_id;
-        for stored in &page {
-            if stored.measure.pause_ticks > 0 {
-                paused += stored.measure.pause_ticks as f64;
-                pauses += 1;
-            }
-            if let Some(quest) = stored.measure.planner_method.strip_prefix("quest:") {
-                if stored.stop == "goal_reached" && stored.measure.work_ticks > 0 {
-                    let entry = quests.entry(quest.to_string()).or_insert((0.0, 0));
-                    entry.0 += (stored.measure.work_ticks + stored.measure.pause_ticks.max(0)) as f64;
-                    entry.1 += 1;
-                }
-            }
-        }
-    }
-    Ok(StoreWaits { market_wait: (pauses > 0).then(|| paused / pauses as f64), quests: quests.into_iter().map(|(key, (ticks, runs))| (key, ticks / runs as f64)).collect() })
+    let mut tally = crate::guides_store::WaitsTally::default();
+    tally.advance(store)?;
+    Ok(tally.waits())
 }
 
 /// Units a shop is assumed to already hold when a guide line sells to
@@ -166,7 +147,11 @@ pub fn measured_keys(snapshot: &crate::rates_service::Snapshot) -> Vec<MeasuredK
 /// The engine's yield of one ask from the live estimator.
 pub fn answer_of(snapshot: &crate::rates_service::Snapshot, ask: &RateAsk, now: i64) -> Result<RateAnswer, String> {
     let query = crate::rates_read::RateQuery { method: ask.method.clone(), style: ask.style.clone(), site: ask.site, tool: ask.tool.clone(), level: ask.level.max(1) };
-    let estimate = crate::rates_read::estimate_using(snapshot.book(), &query, now, &crate::rates_read::cached_guide_prior).map_err(|error| error.to_string())?;
+    // The guides' prior, unmemoised here: the engine asks each yield
+    // once per build, and a process memo (`rates_read::cached_guide_prior`,
+    // 4096 entries shared with the brain's) would be emptied over and
+    // over by the ~50 000 asks of a set (one per method and level).
+    let estimate = crate::rates_read::estimate_quiet(snapshot.book(), &query, now, &lifescape_planner::method_rate::guide_prior).map_err(|error| error.to_string())?;
     // A display several objects share names the activity's own object.
     Ok(RateAnswer {
         flows: estimate.flows.iter().map(|(item, cause, qty)| (crate::rates_names::debug_in(&ask.method, item, *qty < 0.0), cause.clone(), *qty)).collect(),
@@ -219,23 +204,49 @@ pub enum GuideKind {
 pub fn build_guide(store: &Store, snapshot: &crate::rates_service::Snapshot, kind: GuideKind, filter: &GuideFilter) -> Result<Value, String> {
     let started = Instant::now();
     let waits = store_waits(store)?;
+    let waits_ms = started.elapsed().as_millis() as i64;
     let measured = measured_keys(snapshot);
     let now = crate::rates_service::now_secs();
     let prices: RefCell<HashMap<String, Quote>> = RefCell::new(HashMap::new());
-    let rate = |ask: &RateAsk| answer_of(snapshot, ask, now);
+    let timers: RefCell<BTreeMap<&'static str, (u64, Duration)>> = RefCell::new(BTreeMap::new());
+    let timed = |name: &'static str, began: Instant| {
+        let mut slot = timers.borrow_mut();
+        let entry = slot.entry(name).or_insert((0, Duration::ZERO));
+        entry.0 += 1;
+        entry.1 += began.elapsed();
+    };
+    let rate = |ask: &RateAsk| {
+        let began = Instant::now();
+        let found = answer_of(snapshot, ask, now);
+        timed("rate", began);
+        found
+    };
     let price = |item: &str| {
         if let Some(known) = prices.borrow().get(item) {
             return known.clone();
         }
+        let began = Instant::now();
         let quote = quote_of(store, item);
+        timed("price", began);
         prices.borrow_mut().insert(item.to_string(), quote.clone());
         quote
     };
-    let npc_sale = |item: &str| npc_volume_value(item);
-    let shop_buy = |item: &str| shop_window(item);
+    let npc_sale = |item: &str| {
+        let began = Instant::now();
+        let found = npc_volume_value(item);
+        timed("npc_sale", began);
+        found
+    };
+    let shop_buy = |item: &str| {
+        let began = Instant::now();
+        let found = shop_window(item);
+        timed("shop_buy", began);
+        found
+    };
     let quest_ticks = |key: &str| waits.quests.get(key).copied();
     let world = GuideWorld { rate: &rate, price: &price, npc_sale: &npc_sale, shop_buy: &shop_buy, market_wait_ticks: waits.market_wait, quest_ticks: &quest_ticks, measured: &measured };
     let engine = lifescape_planner::guide_engine::Engine::new(&world);
+    let engine_began = Instant::now();
     let (rows, unrated) = match kind {
         GuideKind::Money => {
             let (rows, unrated) = lifescape_planner::guide_money::money_guide(&engine, filter);
@@ -246,6 +257,15 @@ pub fn build_guide(store: &Store, snapshot: &crate::rates_service::Snapshot, kin
             (rows.iter().map(training_value).collect::<Vec<Value>>(), unrated)
         }
     };
+    let mut stats = engine_stats(&engine);
+    if let Value::Obj(map) = &mut stats {
+        for (name, (calls, spent)) in timers.borrow().iter() {
+            map.insert(format!("{name}_calls"), Value::Int(*calls as i64));
+            map.insert(format!("{name}_ms"), Value::Int(spent.as_millis() as i64));
+        }
+        map.insert("waits_ms".to_string(), Value::Int(waits_ms));
+        map.insert("engine_and_json_ms".to_string(), Value::Int(engine_began.elapsed().as_millis() as i64));
+    }
     Ok(object(vec![
         ("ok", Value::Bool(true)),
         ("count", Value::Int(rows.len() as i64)),
@@ -253,33 +273,76 @@ pub fn build_guide(store: &Store, snapshot: &crate::rates_service::Snapshot, kin
         ("unrated", Value::Arr(unrated.iter().map(unrated_value).collect())),
         ("market_wait_ticks", waits.market_wait.map(Value::Float).unwrap_or(Value::Null)),
         ("built_ms", Value::Int(started.elapsed().as_millis() as i64)),
+        ("stats", stats),
     ]))
 }
 
-type GuideCache = HashMap<(GuideKind, String), (Instant, Arc<Value>)>;
+/// Counters of one build: engine events and the time of its steps.
+pub fn engine_stats(engine: &lifescape_planner::guide_engine::Engine) -> Value {
+    let mut map = BTreeMap::new();
+    for (name, count) in engine.stats() {
+        map.insert(name.to_string(), Value::Int(count as i64));
+    }
+    for (name, spent) in engine.step_times() {
+        map.insert(format!("step_{name}_ms"), Value::Int(spent.as_millis() as i64));
+    }
+    Value::Obj(map)
+}
 
-/// HTTP entry: the cached guide of `kind` for the query string.
-pub fn guides_api(kind: GuideKind, query: &str) -> Arc<Value> {
-    static CACHE: OnceLock<Mutex<GuideCache>> = OnceLock::new();
-    let cache = CACHE.get_or_init(Default::default);
-    let filter = filter_of(&crate::web::parse_query(query));
-    let key = (kind, format!("{filter:?}"));
-    let mut slot = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some((built, value)) = slot.get(&key) {
-        if built.elapsed() < GUIDE_TTL {
-            return value.clone();
+/// One guide read from a published set as the API serves it, with the
+/// set's age, cost and what the read approximates.
+pub fn read_guide(set: &crate::guides_store::GuideSet, kind: GuideKind, filter: &GuideFilter) -> Value {
+    let (rows, unrated) = match kind {
+        GuideKind::Money => match set.money(filter) {
+            Ok((rows, unrated)) => (rows.iter().map(money_value).collect::<Vec<Value>>(), unrated),
+            Err(error) => return crate::web::err_json(error),
+        },
+        GuideKind::Training => {
+            let (rows, unrated) = set.training(filter);
+            (rows.iter().map(training_value).collect::<Vec<Value>>(), unrated)
+        }
+    };
+    let view_level = match kind {
+        GuideKind::Money => set.money_view(filter.level).level,
+        GuideKind::Training => set.training_view(filter.level).level,
+    };
+    // What the read does not rebuild (`guide_read`): said, never hidden.
+    let mut approximate: Vec<Value> = Vec::new();
+    if let (Some(level), Some(built)) = (filter.level, view_level) {
+        if level != built {
+            approximate.push(str_value(&format!("rates of level {built}, the band's last level (activities above {level} left out, accessibility at {level})")));
         }
     }
-    let built = match Store::open(&crate::market_service::db_path()) {
-        Ok(store) => build_guide(&store, &crate::rates_service::live_snapshot(), kind, &filter).unwrap_or_else(crate::web::err_json),
-        Err(error) => crate::web::err_json(format!("guides store: {error}")),
-    };
-    let value = Arc::new(built);
-    if slot.len() > 64 {
-        slot.clear();
+    if !filter.quests_done.is_empty() {
+        approximate.push(str_value(match kind {
+            GuideKind::Money => "chain lines keep the farm-or-buy choices of a bot without quests (its D17 outside the chains)",
+            GuideKind::Training => "D17 re-read from the money view with the quests (its chain lines as for a bot without quests)",
+        }));
     }
-    slot.insert(key, (Instant::now(), value.clone()));
-    value
+    object(vec![
+        ("ok", Value::Bool(true)),
+        ("count", Value::Int(rows.len() as i64)),
+        ("rows", Value::Arr(rows)),
+        ("unrated", Value::Arr(unrated.iter().map(unrated_value).collect())),
+        ("market_wait_ticks", set.market_wait_ticks.map(Value::Float).unwrap_or(Value::Null)),
+        ("view_level", view_level.map(|level| Value::Int(i64::from(level))).unwrap_or(Value::Null)),
+        ("approximate", Value::Arr(approximate)),
+        ("built_at_ms", Value::Int(set.built_unix_ms)),
+        ("age_ms", Value::Int(set.age().as_millis() as i64)),
+        ("cycle_ms", Value::Int(set.cycle_ms as i64)),
+        ("cycle_cpu_ms", set.cycle_cpu_ms.map(|cpu| Value::Int(cpu as i64)).unwrap_or(Value::Null)),
+        ("refresh_s", Value::Int(crate::guides_store::REFRESH_PERIOD.as_secs() as i64)),
+    ])
+}
+
+/// HTTP entry: the guide of `kind` for the query string, read from the
+/// last published set (never built here); pending before the first.
+pub fn guides_api(kind: GuideKind, query: &str) -> Value {
+    let filter = filter_of(&crate::web::parse_query(query));
+    match crate::guides_store::current() {
+        Some(set) => read_guide(&set, kind, &filter),
+        None => object(vec![("ok", Value::Bool(false)), ("pending", Value::Bool(true)), ("error", str_value("guides: first build running"))]),
+    }
 }
 
 fn site_text(site: Option<(i64, i64, i64)>) -> String {

@@ -256,7 +256,7 @@ pub(crate) fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Respon
         }
         if parts == ["api", "guides", "money"] || parts == ["api", "guides", "training"] {
             let kind = if parts[2] == "money" { crate::web_guides::GuideKind::Money } else { crate::web_guides::GuideKind::Training };
-            return Ok(ok_json((*crate::web_guides::guides_api(kind, query)).clone()));
+            return Ok(ok_json(crate::web_guides::guides_api(kind, query)));
         }
         if let [page] = parts.as_slice() {
             if let Some((file, content_type)) = guide_asset(page) {

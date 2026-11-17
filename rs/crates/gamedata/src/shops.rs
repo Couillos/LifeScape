@@ -78,6 +78,16 @@ fn keeper_from_static(row: &StaticKeeper) -> Keeper {
 
 /// Every shop, each with its keepers attached.
 pub fn all_shops() -> Vec<Shop> {
+    shop_list().to_vec()
+}
+
+/// `all_shops` without the copy, built once per process (static dump).
+pub fn shop_list() -> &'static [Shop] {
+    static LIST: std::sync::OnceLock<Vec<Shop>> = std::sync::OnceLock::new();
+    LIST.get_or_init(build_shops)
+}
+
+fn build_shops() -> Vec<Shop> {
     generated::SHOPS
         .iter()
         .map(|row| {
@@ -106,7 +116,7 @@ pub fn all_shops() -> Vec<Shop> {
 /// Shops with this exact (case-insensitive) name.
 pub fn by_name(name: &str) -> Vec<Shop> {
     let wanted = name.to_lowercase();
-    all_shops().into_iter().filter(|entry| entry.name.to_lowercase() == wanted).collect()
+    shop_list().iter().filter(|entry| entry.name.to_lowercase() == wanted).cloned().collect()
 }
 
 /// Raw keeper rows for one NPC debugname (case-insensitive).
