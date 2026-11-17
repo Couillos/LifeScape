@@ -56,6 +56,10 @@ fn cast_spell(units: &[(String, String, i64)]) -> Option<String> {
 /// style), `target` (its first positional, the spot or resource) and its
 /// XP-bearing `units` (kind, subject, quantity).
 pub fn activity_of_run(method: &str, style: &str, target: &str, units: &[(String, String, i64)]) -> String {
+    // A 100 % market lot's craft run measures its recipe's yield (R5).
+    if let Some(recipe) = crate::trade_craft::recipe_of(method) {
+        return activity_of_run(recipe, style, target, units);
+    }
     if let Some(item) = method.strip_prefix("farm:") {
         if !style.is_empty() {
             let Some(spot) = fight_spot(target, item) else { return method.to_string() };

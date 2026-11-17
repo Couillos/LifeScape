@@ -201,6 +201,10 @@ pub fn method_way(method: &str) -> Option<(String, Way)> {
 }
 
 fn compute_method_way(method: &str) -> Option<(String, Way)> {
+    // A 100 % market lot works its recipe's way (`trade_craft`).
+    if let Some(recipe) = crate::trade_craft::recipe_of(method) {
+        return compute_method_way(recipe);
+    }
     let (family, tail) = method.split_once([':', '/'])?;
     let found = match family {
         "gather" => {

@@ -32,6 +32,8 @@ fn quest_key(directory: &str) -> String {
 /// Quest a method needs before it can run (`None`: none). `item` names
 /// the obtained object for purchase legs (`shop:buy`).
 pub fn method_quest(method: &str, item: Option<&str>) -> Option<String> {
+    // A 100 % market lot needs its recipe's quest (`trade_craft`).
+    let method = crate::trade_craft::inner(method);
     if method.starts_with("essence:") {
         return lifescape_gamedata::obtain::gather_quest("blankrune").map(quest_key);
     }

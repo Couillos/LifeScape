@@ -77,6 +77,14 @@ pub struct ReadyCtx {
     /// A market maker's post by the Varrock fountain (plan Q6,
     /// `market_maker::maker_post`): the site of its `market:make` node.
     pub maker_post: Option<(i64, i64, i64)>,
+    /// 100 % market offers this bot may work (plan rendements R5,
+    /// `trade_craft`): the money guide's market rows the brain read from
+    /// the precomputed guides, with the cycle's asks and the units held.
+    /// Empty for an Ironman.
+    pub trades: Vec<crate::trade_craft::TradeOffer>,
+    /// Free wallet a trade lot may tie up (coins minus what the bot's
+    /// resting buys and deals commit).
+    pub trade_wallet: i64,
 }
 
 impl ReadyCtx {
@@ -107,6 +115,8 @@ impl ReadyCtx {
             quarantined: Vec::new(),
             cooled: Vec::new(),
             maker_post: None,
+            trades: Vec::new(),
+            trade_wallet: 0,
         }
     }
 
@@ -480,7 +490,9 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
         node.alternatives
             .iter()
             .map(|alt| alt.method.clone())
-            .filter(|method| *method != locked && !method.starts_with("market:") && !method.starts_with("shop:") && !method.starts_with("dialogue:") && method_feasible(method, ctx)),
+            // A trade lot (R5) is never a fallback: its lot was sized on
+            // its own lock.
+            .filter(|method| *method != locked && !method.starts_with("market:") && !method.starts_with("shop:") && !method.starts_with("dialogue:") && !crate::trade_craft::is_trade(method) && method_feasible(method, ctx)),
     );
     let mut needed: Option<u8> = None;
     let mut fare_short: Option<i64> = None;

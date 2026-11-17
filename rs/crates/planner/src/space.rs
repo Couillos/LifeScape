@@ -114,9 +114,10 @@ pub fn d17_order(stuck: &[(String, i64, i64)]) -> Vec<String> {
 }
 
 /// Iron never touches a `market:*` method (planner legs, brain orders and
-/// the physical handover alike); the cleanup method itself is not one.
+/// the physical handover alike) nor a 100 % market lot (`trade:craft/`,
+/// plan rendements R5); the cleanup method itself is not one.
 pub fn iron_may_use(method: &str) -> bool {
-    !method.starts_with("market:")
+    !method.starts_with("market:") && !crate::trade_craft::is_trade(method)
 }
 
 /// Launch guard for one locked method on an Iron profile.

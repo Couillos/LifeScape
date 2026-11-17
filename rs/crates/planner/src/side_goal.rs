@@ -108,7 +108,16 @@ pub fn steer_off_bans(node: &mut Node, ctx: &ReadyCtx, avoid: &[String]) -> Resu
     if avoid.is_empty() || !method_banned(&locked, avoid) {
         return Ok(false);
     }
-    let candidates: Vec<String> = node.alternatives.iter().map(|alt| alt.method.clone()).collect();
+    // A trade lot (R5) is never a steering target (its lot sizes on its
+    // own lock); steered away from one, the node drops its lot and the
+    // block on its purchases.
+    let candidates: Vec<String> = node.alternatives.iter().map(|alt| alt.method.clone()).filter(|method| !crate::trade_craft::is_trade(method)).collect();
+    if crate::trade_craft::is_trade(&locked) {
+        node.batch = 0;
+        if matches!(node.status, crate::model::NodeStatus::Blocked { .. }) {
+            node.status = crate::model::NodeStatus::Ready;
+        }
+    }
     for method in candidates {
         if method_banned(&method, avoid) || !method_feasible(&method, ctx) {
             continue;

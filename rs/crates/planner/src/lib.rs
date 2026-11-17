@@ -67,6 +67,7 @@ pub mod space;
 pub mod tool_kit;
 pub mod tool_upgrade;
 pub mod tools;
+pub mod trade_craft;
 pub mod training;
 pub mod training_production;
 pub mod training_spells;

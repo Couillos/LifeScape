@@ -8,6 +8,11 @@ use crate::model::{Node, NodeKind};
 /// Map one locked method to its script and CLI args. `None` means the
 /// method names no executable: the brain fails loud, never guesses.
 pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Option<(String, Vec<String>)> {
+    // A 100 % market lot (plan rendements R5): its recipe's own script
+    // and arguments, stopped at the lot (`--want <product> <lot>`).
+    if let Some(recipe) = crate::trade_craft::recipe_of(method) {
+        return map_trade(recipe, node, budget);
+    }
     let mut tail = vec!["--node".to_string(), node.id.clone()];
     if let Some((min_ticks, max_ticks)) = budget {
         tail.push("--budget-min".to_string());
@@ -268,6 +273,19 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     }
     head.extend(tail);
     Some((script, head))
+}
+
+/// The craft run of a trade lot: the recipe's mapping, the lot riding as
+/// `--want <product> <batch>` before the brain flags (no batch: the
+/// recipe's run as is). `None` when the recipe maps to no script.
+fn map_trade(recipe: &str, node: &Node, budget: Option<(u64, u64)>) -> Option<(String, Vec<String>)> {
+    let (script, mut args) = map_method(recipe, node, budget)?;
+    if node.batch > 0 {
+        let (product, _) = crate::method_way::method_way(recipe)?;
+        let at = args.iter().position(|arg| arg == "--node").unwrap_or(args.len());
+        args.splice(at..at, ["--want".to_string(), product, node.batch.to_string()]);
+    }
+    Some((script, args))
 }
 
 /// `--level <skill> <N>` for a reach tranche: the script stops at the

@@ -266,6 +266,8 @@ fn method_site_list(method: &str) -> Option<Vec<(i64, i64, i64)>> {
 /// requirement (read at its surface tile for an underground guild) and
 /// its gates.
 pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
+    // A 100 % market lot works at its recipe's stations (`trade_craft`).
+    let method = crate::trade_craft::inner(method);
     type Table = std::collections::HashMap<String, Option<std::sync::Arc<Vec<SiteRow>>>>;
     static CACHE: std::sync::OnceLock<std::sync::Mutex<Table>> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
