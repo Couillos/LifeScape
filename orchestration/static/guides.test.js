@@ -33,6 +33,13 @@ check('approximate read said', GuidesView.freshnessText({ age_ms: 0, cycle_ms: 0
 check('pending set asks again', GuidesView.retryDelay({ ok: false, pending: true }), 5000);
 check('an error is not retried', GuidesView.retryDelay({ ok: false, error: 'x' }), null);
 
+// Confidence column: plain text for sorting, HTML only through the column
+// formatter (never raw markup escaped into the cell).
+check('confidence text is plain', GuidesView.confidenceText({ measured: false, runs: 0, read: 'PriorOnly' }), 'estimated · n 0 · PriorOnly');
+check('confidence html marks estimates', GuidesView.confidenceHtml({ measured: false, runs: 2, read: 'Exact' }), '<span class="prior">estimated</span> · n 2 · Exact');
+check('confidence html escapes the read label', GuidesView.confidenceHtml({ measured: true, runs: 3, read: '<b>' }), 'measured · n 3 · &lt;b&gt;');
+check('confidence column renders through its formatter', GuidesView.columnFormats('confidence_text'), [true, true]);
+
 if (failures) {
   console.log(failures + ' failure(s)');
   process.exit(1);

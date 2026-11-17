@@ -76,7 +76,14 @@ var GuidesView = (function () {
     return parts.join(', ') || '-';
   }
 
+  // Plain text (sort key and search), never markup.
   function confidenceText(confidence) {
+    if (!confidence) return '-';
+    return (confidence.measured ? 'measured' : 'estimated') + ' · n ' + (confidence.runs || 0) + ' · ' + (confidence.read || '');
+  }
+
+  // Cell markup of the confidence column (estimates highlighted).
+  function confidenceHtml(confidence) {
     if (!confidence) return '-';
     var source = confidence.measured ? 'measured' : '<span class="prior">estimated</span>';
     return source + ' · n ' + (confidence.runs || 0) + ' · ' + escapeHtml(confidence.read || '');
@@ -116,7 +123,7 @@ var GuidesView = (function () {
     { key: 'extra_ticks_6000', label: '+ticks/6000', kind: 'num', fmt: number },
     { key: 'xp_text', label: 'XP/6000 (bonus)', kind: 'str' },
     { key: 'prereq_text', label: 'prerequisites', kind: 'str' },
-    { key: 'confidence_text', label: 'confidence', kind: 'str' },
+    { key: 'confidence_text', label: 'confidence', kind: 'str', fmt: function (v, row) { return confidenceHtml(row.confidence); } },
     { key: 'price_confidence', label: 'prices', kind: 'str' },
     { key: 'blocked_text', label: 'blocked', kind: 'str' },
   ];
@@ -135,7 +142,7 @@ var GuidesView = (function () {
     { key: 'converted_ticks_6000', label: 'coin ticks/6000', kind: 'num', fmt: number },
     { key: 'ticks_to_band_end', label: 'ticks to band end', kind: 'num', fmt: ticksText },
     { key: 'prereq_text', label: 'prerequisites', kind: 'str' },
-    { key: 'confidence_text', label: 'confidence', kind: 'str' },
+    { key: 'confidence_text', label: 'confidence', kind: 'str', fmt: function (v, row) { return confidenceHtml(row.confidence); } },
     { key: 'price_confidence', label: 'prices', kind: 'str' },
     { key: 'blocked_text', label: 'blocked', kind: 'str' },
   ];
@@ -253,7 +260,12 @@ var GuidesView = (function () {
     setInterval(load, 60000);
   }
 
-  return { start: start, queryOf: queryOf, visibleRows: visibleRows, prereqText: prereqText, xpText: xpText, number: number, routeText: routeText, freshnessText: freshnessText, retryDelay: retryDelay };
+  // Whether each guide (money, training) renders `key` through a formatter.
+  function columnFormats(key) {
+    return [MONEY_COLS, TRAINING_COLS].map(function (cols) { return cols.some(function (col) { return col.key === key && typeof col.fmt === 'function'; }); });
+  }
+
+  return { start: start, confidenceText: confidenceText, confidenceHtml: confidenceHtml, columnFormats: columnFormats, queryOf: queryOf, visibleRows: visibleRows, prereqText: prereqText, xpText: xpText, number: number, routeText: routeText, freshnessText: freshnessText, retryDelay: retryDelay };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {
