@@ -30,6 +30,7 @@ pub mod travel_here;
 pub mod travel_hook;
 pub mod travel_pause;
 pub mod travel_settle;
+pub mod travel_door_watch;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
