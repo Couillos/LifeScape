@@ -26,6 +26,7 @@ pub mod brain_alch;
 pub mod brain_ambition;
 pub mod brain_await;
 pub mod brain_chain;
+pub mod brain_cool;
 pub mod brain_idle;
 pub mod brain_bids;
 #[cfg(test)]

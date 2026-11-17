@@ -15,7 +15,7 @@
 //! Pure: levels, bans, demand and holdings come in as arguments.
 
 use crate::ambition_catalog::{group_of_skill, method_skill, DemandItem};
-use crate::combat::{pick_site_paid, Fare, SitePick};
+use crate::combat::SitePick;
 use crate::expand::{method_feasible, ReadyCtx};
 use crate::model::{GoalKind, Node};
 
@@ -96,7 +96,7 @@ pub fn steer_off_bans(node: &mut Node, ctx: &ReadyCtx, avoid: &[String]) -> Resu
         if method_banned(&method, avoid) || !method_feasible(&method, ctx) {
             continue;
         }
-        match pick_site_paid(&method, ctx.combat, ctx.position, Fare::of(ctx)) {
+        match crate::combat::pick_site_for(&method, ctx) {
             SitePick::Anywhere => {
                 node.method = Some(method);
                 node.site = None;
@@ -125,7 +125,7 @@ pub fn steer_off_bans(node: &mut Node, ctx: &ReadyCtx, avoid: &[String]) -> Resu
                 node.boat = true;
                 return Ok(true);
             }
-            SitePick::Fare(_) | SitePick::Needs(_) | SitePick::Access(..) => continue,
+            SitePick::Fare(_) | SitePick::Needs(_) | SitePick::Access(..) | SitePick::Cooled => continue,
         }
     }
     Err(format!("every workable money method trains a banned skill ({})", avoid.join(",")))

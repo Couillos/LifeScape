@@ -112,6 +112,15 @@ pub fn banned_scope(life: &Life, root: &str) -> Vec<String> {
         return Vec::new();
     }
     let mut out: BTreeSet<String> = BTreeSet::new();
+    // A money root (coin target, money window) takes down only the skill
+    // its own method works: what waits on coins waits on no craft (plan
+    // P1, live 2026-11-17: `fight:melee/men` failing "pack too full to
+    // hunt" under a coin node banned crafting, the melee resolved again).
+    if let Some(node) = life.nodes.iter().find(|node| node.id == root) {
+        if matches!(node.kind, NodeKind::HaveCoins { .. } | NodeKind::MakeMoney) {
+            return node_skill(node).into_iter().collect();
+        }
+    }
     for position in dependents(life, root) {
         let node = &life.nodes[position];
         if let Some(skill) = node_skill(node) {

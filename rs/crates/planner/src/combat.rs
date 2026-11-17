@@ -185,6 +185,9 @@ pub enum SitePick {
     /// the dependency that opens it (`access:crafting_guild` — skill and
     /// uniform —, or the key object to obtain).
     Access(&'static str, Option<&'static str>),
+    /// Every site this bot works safely is cooled for it (`cooldown`,
+    /// P1/D4): the method waits out the cooldown, another one serves.
+    Cooled,
 }
 
 /// Station families whose server way places them (furnace, anvil, range,
@@ -354,10 +357,36 @@ pub fn crowd_penalty(site: (i64, i64, i64), crowd: &[((i64, i64, i64), u32)]) ->
 /// `pick_site_gated` reading the fleet's sites: among equally open
 /// sites, distance plus the crowd penalty picks (guilds still first).
 pub fn pick_site_crowded(method: &str, combat: u8, position: Option<(i64, i64, i64)>, fare: Fare, pass: &Pass, crowd: &[((i64, i64, i64), u32)]) -> SitePick {
+    pick_site_avoiding(method, combat, position, fare, pass, crowd, &[])
+}
+
+/// The ready node's site pick: `pick_site_crowded` with the bot's fare,
+/// gates and fleet crowd, never on a site this bot cooled for `method`
+/// (`cooldown`, plan P1/D4).
+pub fn pick_site_for(method: &str, ctx: &crate::expand::ReadyCtx) -> SitePick {
+    let avoid = crate::cooldown::cooled_sites(&ctx.cooled, method);
+    pick_site_avoiding(method, ctx.combat, ctx.position, Fare::of(ctx), &Pass::of(ctx), &ctx.crowd, &avoid)
+}
+
+/// `pick_site_crowded` without the `avoid` sites: when they cover every
+/// site this combat level works, `Cooled` (never a combat need).
+pub fn pick_site_avoiding(
+    method: &str,
+    combat: u8,
+    position: Option<(i64, i64, i64)>,
+    fare: Fare,
+    pass: &Pass,
+    crowd: &[((i64, i64, i64), u32)],
+    avoid: &[(i64, i64, i64)],
+) -> SitePick {
     let Some(table) = method_site_table(method) else {
         return SitePick::Anywhere;
     };
-    let rows: Vec<&SiteRow> = table.iter().filter(|row| row.open_ever).collect();
+    let ever: Vec<&SiteRow> = table.iter().filter(|row| row.open_ever).collect();
+    let rows: Vec<&SiteRow> = ever.iter().copied().filter(|row| !avoid.contains(&row.site)).collect();
+    if !avoid.is_empty() && ever.iter().any(|row| row.required <= combat) && !rows.iter().any(|row| row.required <= combat) {
+        return SitePick::Cooled;
+    }
     let distance = |site: &(i64, i64, i64)| {
         let walk = match position {
             Some((x, z, level)) => (site.0 - x).abs() + (site.1 - z).abs() + if site.2 == level { 0 } else { 1000 },

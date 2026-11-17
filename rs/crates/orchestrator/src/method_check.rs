@@ -103,6 +103,7 @@ pub fn plan(method: &str, count: i64) -> Result<MethodPlan, String> {
         lifescape_planner::combat::SitePick::Needs(level) => return Err(format!("{method}: no site a staff bot works safely (combat {level} needed)")),
         lifescape_planner::combat::SitePick::Access(area, key) => return Err(format!("{method}: every site is behind access:{area} (key {key:?})")),
         lifescape_planner::combat::SitePick::Fare(coins) => return Err(format!("{method}: the fares need {coins} coins")),
+        lifescape_planner::combat::SitePick::Cooled => return Err(format!("{method}: every site is cooled")),
         lifescape_planner::combat::SitePick::Anywhere => {}
     }
     // A purchase: the brain's shop (`shop_site::pick_shop`: quests, gates,

@@ -147,8 +147,9 @@ pub fn gear_ok(item: &str, ctx: &ReadyCtx) -> bool {
 /// True when the bot can work `method` now: its quest done, no gear
 /// needed or the tool (and bait) held.
 pub fn method_feasible(method: &str, ctx: &ReadyCtx) -> bool {
-    // A quarantined method (broken live, `method_health`) never launches.
-    if ctx.quarantined.iter().any(|sick| sick == method) {
+    // A quarantined method (broken live, `method_health`) never launches,
+    // nor one this bot cooled after abandoning it (`cooldown`, P1).
+    if ctx.sick(method).is_some() {
         return false;
     }
     // A method whose quest the bot has not finished never launches.

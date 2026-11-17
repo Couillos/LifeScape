@@ -92,6 +92,7 @@ pub(crate) fn ready_ctx(life: &Life, node: &Node, live: &Value) -> ReadyCtx {
     ctx.ironman = life.profile.ironman;
     ctx.trip_ticks = TRIP_TICKS;
     ctx.quarantined = crate::method_health::quarantined();
+    ctx.cooled = crate::brain_cool::active(life);
     // A market maker's post (plan Q6): its slice's tile by the fountain.
     ctx.maker_post = lifescape_planner::maker_role(life).map(|role| lifescape_planner::maker_post(&role));
     let item_debug = match &node.kind {

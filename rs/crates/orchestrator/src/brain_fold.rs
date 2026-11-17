@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use lifescape_json::Value;
-use lifescape_planner::{complete_node, end_engagement, normalize, record_block_from, record_contract_error, record_failure, retry_uncounted, FailureFold, NodeKind, NodeStatus};
+use lifescape_planner::{complete_node, end_engagement, normalize, record_block_from, record_contract_error, record_failure_timed, retry_uncounted, FailureFold, NodeKind, NodeStatus};
 
 use crate::brain::{load_life, push_history, save_life};
 use crate::brain_plan::{fold_travel_failure, holdings_count, is_travel_failure, rescue_replan_cause, TravelFold};
@@ -251,6 +251,7 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
     }
     let kind = life.nodes[index].kind.clone();
     let method = life.nodes[index].method.clone().unwrap_or_default();
+    let site = life.nodes[index].site;
     // XP the run earned toward a climb is progress even short of a level
     // (a food refill is not a dead block; a slow prayer window is no
     // failure).
@@ -341,20 +342,30 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         Verdict::Contract(text) => {
             record_contract_error(&mut life, index, text);
             push_history(&mut life, &id, "abandoned");
+            crate::brain_cool::on_abandon(&mut life, &method, site, text);
         }
         Verdict::Travel(text) => {
             let banned = matches!(fold_travel_failure(&mut life.nodes[index], &method), TravelFold::NoRoute(_));
             if banned {
                 record_contract_error(&mut life, index, &format!("no reachable method left ({text})"));
                 push_history(&mut life, &id, "abandoned");
+                crate::brain_cool::on_abandon(&mut life, &method, site, text);
             } else {
-                let fold = record_failure(&mut life, index, text);
+                let fold = record_failure_timed(&mut life, index, text, ticks);
                 push_history(&mut life, &id, if fold == FailureFold::Abandoned { "abandoned" } else { "failed" });
+                if fold == FailureFold::Abandoned {
+                    crate::brain_cool::on_abandon(&mut life, &method, site, text);
+                }
             }
         }
         Verdict::Failure(text) => {
-            let fold = record_failure(&mut life, index, text);
+            let fold = record_failure_timed(&mut life, index, text, ticks);
             push_history(&mut life, &id, if fold == FailureFold::Abandoned { "abandoned" } else { "failed" });
+            // The method that failed cools for this bot, for every goal
+            // kind (plan P1): the next resolve never relaunches it hot.
+            if fold == FailureFold::Abandoned {
+                crate::brain_cool::on_abandon(&mut life, &method, site, text);
+            }
         }
     }
     let node = &life.nodes[index];
