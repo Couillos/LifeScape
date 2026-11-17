@@ -12,13 +12,16 @@
 //! plan (Varrock houses (3247,3398), (3236,3409), Falador (2970,3372),
 //! (3004,3323), Lumbridge fence (3257,3242)).
 //!
-//! The check floods from the destination over the most permissive view
-//! the planner could ever use (every door with an open op swung, tolls
-//! and requirements ignored, no F2P bound, both step directions), capped
-//! at `POCKET_CAP` tiles. A flood that closes under the cap without
-//! touching the start, and that no ride or custom edge lands in, proves
-//! the planner can never enter: every planner move is one of these. A
-//! flood that hits the cap proves nothing and the normal search runs.
+//! The check floods backwards from the destination over the most
+//! permissive view the planner could ever use (every door with an open
+//! op swung, tolls and requirements ignored, no F2P bound), keeping the
+//! planner's own step rule (a door-dependent step needs the door on one
+//! of its tiles; one-way doors refuse their shut side) and following
+//! ride and custom edges back to their stands, capped at `POCKET_CAP`
+//! tiles. A flood that closes under the cap without touching the start
+//! proves the planner can never enter: every planner move is one of
+//! these. A flood that hits the cap proves nothing and the normal search
+//! runs.
 
 #![forbid(unsafe_code)]
 
@@ -84,37 +87,108 @@ fn permissive_flags_with(world: &StaticWorld, tables: &Tables, tile: Tile, door_
 
 /// Start-independent flood verdict of one destination tile. `Closed`
 /// keeps every tile a start could stand on and still enter the pocket:
-/// the walkable members plus the unwalkable tiles that step in (the
-/// original check stopped on `next == from` before the walkable test).
+/// the walkable members (any level, through ride and custom stands) plus
+/// the unwalkable tiles that step in (the original check stopped on
+/// `next == from` before the walkable test).
 pub(crate) enum PocketVerdict {
     /// Unwalkable destination, or a flood past `POCKET_CAP`: never sealed.
     Open,
-    Closed { members: U64Set, edge_in: bool },
+    Closed { members: U64Set },
+}
+
+/// Flood reads shared by one verdict: permissive flags and door reads,
+/// each cached per tile (a tile's door is read by its 9 neighbours').
+struct FloodView<'a> {
+    world: &'a StaticWorld,
+    tables: &'a Tables,
+    flags: U64Map<u32>,
+    doors: U64Map<Option<(u16, u8, u8)>>,
+}
+
+impl FloodView<'_> {
+    /// Every door with an open op swung, except tile-blocked ones.
+    fn permissive(&mut self, tile: Tile) -> u32 {
+        if let Some(known) = self.flags.get(&tile.key()) {
+            return *known;
+        }
+        let (world, tables) = (self.world, self.tables);
+        let doors = &mut self.doors;
+        let mut door_at = |near: Tile| *doors.entry(near.key()).or_insert_with(|| world.door_at(near.x, near.z, near.level));
+        let found = permissive_flags_with(world, tables, tile, &mut door_at);
+        self.flags.insert(tile.key(), found);
+        found
+    }
+
+    /// A door on this tile the planner could ever swing (open op, not
+    /// blocked on this tile).
+    fn openable(&mut self, tile: Tile) -> Option<u16> {
+        let world = self.world;
+        let (id, _, _) = (*self.doors.entry(tile.key()).or_insert_with(|| world.door_at(tile.x, tile.z, tile.level)))?;
+        if self.tables.is_blocked(id, tile) || world.loc_def(id as usize).and_then(|def| def.open_op).is_none() {
+            return None;
+        }
+        Some(id)
+    }
+
+    /// The planner's own move rule (`plan::dijkstra`), widened only where
+    /// it depends on the search options: `from` steps onto `to` when the
+    /// shut view allows it and `to` holds no door, or through an
+    /// openable door on one of the two tiles. A one-way door refuses a
+    /// stand off its passable side (`Tables::side_ok`), for the click
+    /// edge and for walking onto its tile alike; stepping off the door
+    /// tile itself continues an opening and is never refused. A one-way
+    /// door the planner may read as shut (toll, requirement) keeps the
+    /// plain walk onto its tile.
+    fn planner_may_step(&mut self, from: Tile, to: Tile) -> bool {
+        let world = self.world;
+        let mut shut = |x: i32, z: i32| world.get(x, z, to.level);
+        let shut_step = can_step(&mut shut, from.x, from.z, to.x, to.z);
+        if let Some(id) = self.openable(to) {
+            if self.tables.side_ok(id, to, from) {
+                return true;
+            }
+            let conditional = world.is_toll(to.x, to.z, to.level) || self.tables.requirements.iter().any(|row| row.at == to);
+            return conditional && shut_step;
+        }
+        shut_step || self.openable(from).is_some()
+    }
 }
 
 /// Flood from `dest` with no start: the same walk as the per-start check,
 /// minus its early `next == from` exit, so one verdict answers every start.
+/// Rides and custom edges also count backwards: a ride landing in the
+/// pocket floods its stand (any level), so a fortress whose upper floor
+/// is entered only from inside stays sealed (Black Knights' Fortress
+/// 2026-11-17: ladders (3022,3517) / (3011,3514) land inside, their
+/// stands are upstairs, reached only by the ladders from inside).
 pub(crate) fn verdict(world: &StaticWorld, tables: &Tables, shared: &SharedEdges, dest: Tile) -> PocketVerdict {
-    let mut flags: U64Map<u32> = U64Map::default();
-    let mut doors: U64Map<Option<(u16, u8, u8)>> = U64Map::default();
-    let mut view = |tile: Tile| -> u32 {
-        if let Some(known) = flags.get(&tile.key()) {
-            return *known;
-        }
-        let mut door_at = |near: Tile| *doors.entry(near.key()).or_insert_with(|| world.door_at(near.x, near.z, near.level));
-        let found = permissive_flags_with(world, tables, tile, &mut door_at);
-        flags.insert(tile.key(), found);
-        found
-    };
-    if !tile_walkable(view(dest)) {
+    let mut view = FloodView { world, tables, flags: U64Map::default(), doors: U64Map::default() };
+    if !tile_walkable(view.permissive(dest)) {
         return PocketVerdict::Open;
     }
-    let level = dest.level;
+    let (rides, customs) = shared;
+    let mut stands_into: U64Map<Vec<u64>> = U64Map::default();
+    for (stand, landing) in rides
+        .iter()
+        .flat_map(|(stand, edges)| edges.iter().map(move |edge| (*stand, edge.dest.key())))
+        .chain(customs.iter().flat_map(|(stand, edges)| edges.iter().map(move |edge| (*stand, edge.dest.key()))))
+    {
+        stands_into.entry(landing).or_default().push(stand);
+    }
     let mut seen = U64Set::default();
     let mut entries = U64Set::default();
     seen.insert(dest.key());
     let mut queue = vec![dest];
     while let Some(here) = queue.pop() {
+        for stand in stands_into.get(&here.key()).into_iter().flatten() {
+            if seen.insert(*stand) {
+                if seen.len() > POCKET_CAP {
+                    return PocketVerdict::Open;
+                }
+                queue.push(crate::plan::unkey(*stand));
+            }
+        }
+        let level = here.level;
         for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
             let next = Tile { x: here.x + dx, z: here.z + dz, level };
             if seen.contains(&next.key()) {
@@ -124,11 +198,14 @@ pub(crate) fn verdict(world: &StaticWorld, tables: &Tables, shared: &SharedEdges
             // `here` (the server rule reads the entered tile only). A
             // tile no step can enter (loc, blocked floor) is never on a
             // path, except as the start itself.
-            let mut step = |x: i32, z: i32| view(Tile { x, z, level });
+            let mut step = |x: i32, z: i32| view.permissive(Tile { x, z, level });
             if !can_step(&mut step, next.x, next.z, here.x, here.z) {
                 continue;
             }
-            if !tile_walkable(view(next)) {
+            if !view.planner_may_step(next, here) {
+                continue;
+            }
+            if !tile_walkable(view.permissive(next)) {
                 entries.insert(next.key());
                 continue;
             }
@@ -139,11 +216,8 @@ pub(crate) fn verdict(world: &StaticWorld, tables: &Tables, shared: &SharedEdges
             queue.push(next);
         }
     }
-    let (rides, customs) = shared;
-    let ride_in = rides.values().flatten().any(|edge| seen.contains(&edge.dest.key()));
-    let custom_in = customs.values().flatten().any(|edge| seen.contains(&edge.dest.key()));
     seen.extend(entries);
-    PocketVerdict::Closed { members: seen, edge_in: ride_in || custom_in }
+    PocketVerdict::Closed { members: seen }
 }
 
 /// The per-start answer read off a start-independent verdict.
@@ -153,7 +227,7 @@ pub(crate) fn sealed_by(verdict: &PocketVerdict, from: Tile, dest: Tile) -> bool
     }
     match verdict {
         PocketVerdict::Open => false,
-        PocketVerdict::Closed { members, edge_in } => !edge_in && !members.contains(&from.key()),
+        PocketVerdict::Closed { members } => !members.contains(&from.key()),
     }
 }
 

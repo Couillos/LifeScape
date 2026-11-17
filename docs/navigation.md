@@ -174,8 +174,8 @@ clôture) faisait balayer tout le monde F2P à la recherche avant
 `approach_npc`). Un flood arrière depuis la destination, sur la vue la
 plus permissive (toutes portes à op d'ouverture ouvertes, péages,
 exigences et F2P ignorés, règle de pas serveur), plafonné à 512 tuiles :
-s'il se ferme sans toucher le départ et qu'aucune montée/arête custom n'y
-atterrit, le plan répond `Disconnected` tout de suite (closest = départ)
+s'il se ferme sans toucher le départ (montées et arêtes custom remontées
+jusqu'à leurs stands, portes one-way respectées), le plan répond `Disconnected` tout de suite (closest = départ)
 et `walk_costs` laisse la cible à `None` sans épuiser la recherche
 (lève en partie la « limite connue » ci-dessous pour ces cibles).
 Goldens `poche_*` (4-5 ms), test `pocket::tests`.
@@ -244,6 +244,33 @@ cette tuile (`DOOR_LEAF_*`, jamais un mur) et le plan passe par
 Porte verrouillée pour toujours : `lockeddoor1` (1591, op1 Open,
 `locked_doors.rs2` ne l'ouvre jamais) est dans `blocked_locs` ; golden
 `porte_verrouillee_varrock`.
+
+Forteresse des Chevaliers noirs (2026-11-17, ~60 dossiers/h, 9 comptes
+qui cuisaient au feu du banquet (3030,3514), tous DEHORS) : le plan
+entrait par les grandes portes 73/74 (3007,3515..3516) et sortait par
+elles, or `quest_blackknight.rs2` n'y répond que « You can't open this
+door. » ; il entrait aussi par 2337 (3016,3514, mur nord) depuis le sud,
+où `check_axis` lit le joueur « dehors » (z = 3514) et exige
+bronze_med_helm + iron_chainbody portés (sinon le garde). Le stand
+(3017,3514) → (3016,3515) n'était pas une diagonale fausse : c'est la
+montée sur la tuile de la porte puis la traversée, fusionnées. Balayage
+contenu de toutes les locs « Open » dont le handler n'est qu'un `mes` :
+`blocked_locs` 73, 74, 2340 (`inacbkfortressdoor`), 2534, 4631, 4632,
+4640 et les coffres 170, 172, 377, 2079, 2361, 2572, 2856 (un coffre
+n'est jamais un passage). `one_way_doors` 2337 `north` (sortie libre,
+`~open_and_close_door` dépose sur (3016,3514)) et 2338 (3020,3515, mur
+ouest) `not-west` (nouveau côté : le serveur ouvre depuis la colonne de
+la porte, x = 3020, stands nord/sud compris ; depuis l'ouest, dialogue
+du garde). La poche scellée (`pocket.rs`) suit désormais la règle de
+pas du planificateur (un pas qui dépend d'une porte la porte sur l'une
+de ses deux tuiles ; une porte one-way refuse son côté fermé) et remonte
+les montées/arêtes custom jusqu'à leurs stands (étage de la forteresse
+relié par ses échelles internes) : dehors → dedans répond `Disconnected`
+en quelques ms au lieu de 3 s de `BudgetExhausted`. Dedans → banque :
+2338 puis 2337 depuis (3016,3515). Goldens `forteresse_noire_*`, test
+`nav/tests/black_knights.rs`. Reste côté scripts : le choix de station
+de cuisson (`produce::site_tiles`, distance de Manhattan seule) vise
+encore ce feu ; il reçoit maintenant un NoRoute immédiat.
 
 Arrêts (`Interrupted`) : fin de budget (`budget_exhausted`), unload ou
 stop du cerveau tombant en pleine marche écrivent encore leur dossier
