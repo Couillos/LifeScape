@@ -573,3 +573,17 @@ sans gâcher, se soigner à la banque, emporter la nourriture adaptée.
   charge dimensionnée par le barreau ;
   sans nourriture en banque ⇒ `Blocked: <food_to_ask>` (avant : plan
   « plain », combat sans nourriture jusqu'à la mort : 57 runs `men` morts).
+
+## Contention, blessure, préconditions (2026-11-17)
+
+- Charge sans ressource avec d'autres joueurs sur le site (mining, ramassage,
+  tonte) : `Blocked contended:<site>` (`site::contended_error`), jamais un
+  échec (D4).
+- Charge ratée sous la moitié des PV : banque, soin, retour
+  (`survival::hurt_return`, D3), deux fois au plus d'affilée.
+- Nourriture gardée au dépôt de combat bornée par la charge et
+  `HUNT_MIN_FREE` (`combat_bank::kept_food_surplus`).
+- Intrants vérifiés au départ quand la banque est connue
+  (`withdraw::preflight_blocked`, smelt).
+- Un script de combat sans objectif finit `budget_exhausted`
+  (`cycle::ended_code`), jamais `goal_reached`.

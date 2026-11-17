@@ -639,3 +639,19 @@ Sorties des temples de runecraft (2026-11-15) : bords custom
 `runecraft.dbrow`). Un bot coupé dans un temple (redeploy en plein trajet,
 bh99tw2f) n'avait aucune sortie : tout trajet lisait Disconnected.
 Golden `autel_terre_sortie`.
+
+## Collision complétée par les données serveur (P6, P8, 2026-11-17)
+
+- PNJ immobiles qui bloquent les joueurs (`blockwalk=all` +
+  `moverestrict=nomove`, ex. `nasty_tree` de Draynor en (3138,3352)) :
+  `gamedata/data/npc_blockers.json`, peints comme des locs
+  (`StaticWorld::set_npc_blockers`, `Tables::npc_blockers`) ; recalculé
+  par `nav/tests/npc_blockers.rs` (`LIFESCAPE_WRITE_DUMPS=1`).
+- Sites de récolte sans case de travail (`site_reach` : aucune case qui
+  atteint le loc, ou poche scellée) : `gamedata/data/unreachable_sites.json`
+  (571 spawns, dont le saule (3168,3350)), exclus de `danger::sites` et des
+  choix des scripts ; recalculé par `nav/tests/work_sites.rs`
+  (`LIFESCAPE_WRITE_SITES=1`).
+- Après une traversée scriptée (péage, porte téléportante, ride), le SDK
+  attend 2 ticks avant d'envoyer la marche suivante (`travel_settle`,
+  `p_delay(0)` serveur).
