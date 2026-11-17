@@ -18,6 +18,8 @@ fn liquid(stock: i64) -> MakerInput {
         recent_buys: 50,
         anchor: 80,
         outside: Some(30),
+        make_cost: None,
+        alch_net: None,
         stock,
         stock_cost: stock * 100,
         capital: 100_000,
@@ -191,6 +193,8 @@ fn a_never_traded_object_is_discovered_prudently() {
         recent_buys: 0,
         anchor: 200,
         outside: Some(60),
+        make_cost: None,
+        alch_net: None,
         stock: 0,
         stock_cost: 0,
         capital: 100_000,
@@ -238,4 +242,40 @@ fn risk_caps_bound_capital_stock_and_book_share() {
     // Alone on a side: one lot (the maker is the liquidity).
     let alone = quote(&MAKER_CAPS, &MakerInput { bid_depth: 0, stock: 0, ..liquid(0) });
     assert_eq!(alone.bid.map(|leg| leg.qty), Some(lot_units(&MAKER_CAPS, 100)));
+}
+
+/// M7: a never-traded object with a published production cost is quoted
+/// around that cost, its bid over the sellers' outside options (shop
+/// offer, a cast's net) and its ask under the buyers' ceiling.
+#[test]
+fn discovery_centres_on_the_published_cost_inside_the_public_bounds() {
+    let fresh = MakerInput {
+        reference: Reference { price: 1, traded: false },
+        best_bid: None,
+        best_ask: None,
+        bid_depth: 0,
+        ask_depth: 0,
+        recent_buys: 0,
+        anchor: 200,
+        outside: Some(24),
+        make_cost: Some(30),
+        alch_net: None,
+        stock: 3,
+        stock_cost: 90,
+        capital: 100_000,
+        own_bid: None,
+    };
+    let seen = quote(&MAKER_CAPS, &fresh);
+    assert_eq!((seen.regime, seen.fair), (Regime::Discovery, 30), "the published cost, not 200 / 1.1: {seen:?}");
+    let (bid, ask) = (seen.bid.expect("bid").price, seen.ask.expect("ask").price);
+    assert!(bid >= 25 && bid < 30 && ask > 30 && ask <= 33, "around the cost: {seen:?}");
+    // A cast nets 40: no seller takes less, the bid climbs over it.
+    let caster = quote(&MAKER_CAPS, &MakerInput { alch_net: Some(40), ..fresh });
+    assert!(caster.bid.expect("bid").price >= 40, "{caster:?}");
+    // A cheap public listing caps the fair value whatever the cost.
+    let listed = quote(&MAKER_CAPS, &MakerInput { best_ask: Some(28), ..fresh });
+    assert!(listed.ask.expect("ask").price <= 28, "{listed:?}");
+    // No cost published: the ceiling rule of wave 3.
+    let unknown = quote(&MAKER_CAPS, &MakerInput { make_cost: None, ..fresh });
+    assert_eq!(unknown.fair, (200.0_f64 / (1.0 + MAKER_CAPS.half_spread_discovery)).floor() as i64);
 }

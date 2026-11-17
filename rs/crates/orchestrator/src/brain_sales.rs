@@ -242,7 +242,7 @@ fn adopt_listings(
         let make_cost = make_costs.get(name).copied();
         // Today's opening for this stock (2026-11-14: an ask anchored on
         // an old reserve or an outlier comes down to it).
-        let (today, reserve) = service.sale_decision(account, name, row.item_id, row.remaining, costs, Some(life), make_cost, false);
+        let (today, reserve) = service.sale_decision(account, name, row.item_id, row.remaining, costs, Some(life), make_cost, false, crate::brain_alch::alch_floor(live, name));
         // Never walked under what an F2P shop pays (Q3 outside option).
         let outside = lifescape_gamedata::shop_sale::npc_sale_value(name).unwrap_or(0);
         let reserve = reserve.map(|reserve| reserve.coins.max(outside));
@@ -502,7 +502,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
                 continue;
             }
         }
-        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, &costs, Some(life), make_costs.get(&name).copied(), pressed);
+        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, &costs, Some(life), make_costs.get(&name).copied(), pressed, crate::brain_alch::alch_floor(&live, &name));
         let (lot, price, floor) = match decision {
             // The alch floor (2026-11-14): a caster never sells under what
             // the cast nets it.

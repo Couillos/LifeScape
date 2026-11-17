@@ -244,6 +244,11 @@ pub struct MakerInput {
     pub anchor: i64,
     /// What an F2P shop pays for one unit (Q3 outside option).
     pub outside: Option<i64>,
+    /// Discovery anchors (M7, public): the production cost the guides
+    /// publish and the net of one alchemy cast (a caster's outside
+    /// option), runes at current prices.
+    pub make_cost: Option<i64>,
+    pub alch_net: Option<i64>,
     /// The maker's own stock (bank, pack) and equity (coins plus stock
     /// at the current price).
     pub stock: i64,
@@ -309,12 +314,22 @@ pub fn quote(caps: &MakerCaps, input: &MakerInput) -> MakerQuote {
     } else if let (Some(bid), Some(ask)) = (input.best_bid, input.best_ask) {
         (((bid + ask) / 2).max(1), Regime::Thin)
     } else {
-        // Never traded: a buyer pays at most the shop value or the
-        // cheapest public listing; the maker's ask joins that ceiling and
-        // its bid sits one spread under (fair = ceiling / (1 + h)).
-        let floor = input.outside.map_or(1, |paid| paid + 1);
+        // Never traded (M7, public anchors only): a buyer pays at most
+        // the shop value or the cheapest public listing (the ceiling), a
+        // seller takes at least the shop's offer or a cast's net (the
+        // floor). The fair value is the production cost the guides
+        // publish, kept where the bid draws a seller (>= floor) and the
+        // ask a buyer (<= ceiling); unknown, the ask joins the ceiling
+        // and the bid sits one spread under (fair = ceiling / (1 + h)).
+        let half = caps.half_spread_discovery;
+        let floor = input.outside.map_or(1, |paid| paid + 1).max(input.alch_net.unwrap_or(0));
         let ceiling = input.best_ask.map_or(input.anchor, |ask| ask.min(input.anchor)).max(floor).max(1);
-        (((ceiling as f64 / (1.0 + caps.half_spread_discovery)).floor() as i64).max(1), Regime::Discovery)
+        let top = ((ceiling as f64 / (1.0 + half)).floor() as i64).max(1);
+        let fair = match input.make_cost.filter(|cost| *cost >= 1) {
+            Some(cost) => cost.max((floor as f64 / (1.0 - half) - 1e-9).ceil() as i64).min(top),
+            None => top,
+        };
+        (fair.max(1), Regime::Discovery)
     };
     let half = match regime {
         Regime::Liquid => caps.half_spread_liquid,

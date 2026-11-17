@@ -31,6 +31,9 @@ pub struct SimMaker {
     pub anchor: i64,
     /// What an NPC shop pays per unit (Q3).
     pub outside: Option<i64>,
+    /// Discovery anchors (M7): published production cost, alchemy net.
+    pub make_cost: Option<i64>,
+    pub alch_net: Option<i64>,
     /// Ticks between two quote passes.
     pub window_ticks: u64,
     pub caps: MakerCaps,
@@ -39,7 +42,7 @@ pub struct SimMaker {
 impl SimMaker {
     /// The standard maker: `MAKER_CAPS`, a pass every 1000 ticks.
     pub fn standard(capital: i64, anchor: i64, outside: Option<i64>) -> SimMaker {
-        SimMaker { name: "maker".to_string(), capital, anchor, outside, window_ticks: 1000, caps: MAKER_CAPS }
+        SimMaker { name: "maker".to_string(), capital, anchor, outside, make_cost: None, alch_net: None, window_ticks: 1000, caps: MAKER_CAPS }
     }
 }
 
@@ -126,6 +129,8 @@ impl MakerState {
             recent_buys: self.others_buys.iter().filter(|(at, _)| *at >= since).map(|(_, units)| *units).sum(),
             anchor: self.spec.anchor,
             outside: self.spec.outside,
+            make_cost: self.spec.make_cost,
+            alch_net: self.spec.alch_net,
             stock: self.stock,
             stock_cost: self.stock_cost,
             capital: self.coins + self.stock * reference.price.max(1),

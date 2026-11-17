@@ -1414,3 +1414,61 @@ Décision (D22, D21 sans objet) :
 Coût (copie du 2026-11-17, 4 mesures alternées, hôte chargé) : cycle chaud
 3,32-3,76 s CPU (avant 3,30-3,64 s, +3 % dans le bruit) ; résident +10 Mio ;
 JSON des 42 vues 81 Mio (avant 61).
+
+## 2026-11-17 — Découverte du prix d'un objet jamais échangé (plan marché M7, §3.8)
+
+Contexte : un objet sans aucun fill n'avait pas de prix courant ; un
+acheteur ouvrait au prix de référence (1 pièce sur un carnet vide) et
+concédait ; un vendeur ouvrait à 2 × son coût propre ; le teneur de
+marché cotait `min(valeur boutique, meilleur ask) / (1 + h)`. Avec la
+vente PNJ (Q3), un vendeur qui ne voit aucun bid va au magasin : un
+acheteur posé à 1 ne découvrait jamais rien.
+Décision : les ouvertures d'un objet JAMAIS échangé s'ancrent sur des
+références PUBLIQUES (D22/D11), `lifescape_market::discovery` (pur) :
+- ancrages : offre d'une boutique F2P ouverte à tous (`calc_shop_value`
+  serveur, `shop_sale::npc_sale_value`) ; net d'une alchimie (le
+  vendeur : son propre sort, haute ou basse selon sa magie,
+  `brain_alch::alch_floor` ; acheteur et teneur, qui ne savent pas qui
+  lance : la basse alchimie, magie 21, runes au prix courant) ; coût de
+  production publié par les guides (`planner::guide_cost` : ligne cotée
+  recette, chaîne ou 100 % market la moins chère, `cost_6000 / produit
+  par 6000`, mise en cache par jeu de guides publié) ; prix de vente
+  d'une boutique F2P ouverte à tous (ni quête ni points) ;
+- plancher vendeur = max(coût propre, offre boutique, net d'alchimie)
+  (`seller_floor`, tout objet) ; ouverture vendeur d'un objet jamais
+  échangé = coût publié × (1 + marge), à défaut la règle existante (2 ×
+  plancher ; butin : sa valeur de haute alchimie), jamais au-dessus du
+  prix de vente boutique, jamais sous le plancher, un bid plus riche est
+  pris (`listing_open`, `loot_anchor`) ;
+- ouverture acheteur = valeur d'usage × (1 − marge) (gear : prix
+  attendu ; besoin dérivé : réserve dérivée ; sinon le coût publié,
+  sinon le prix boutique), jamais au-dessus du coût publié, au moins le
+  plancher public des vendeurs, jamais au-dessus du prix boutique ni du
+  plafond (`bid_open`) ; un ask couvert reste pris tel quel ;
+- marge = marge du profil `0,05 + 0,15 × price_patience`
+  (`discovery::margin_of` = `Profile::margin`) ;
+- teneur (régime Discovery) : juste valeur = coût publié, bornée pour
+  que le bid attire un vendeur (≥ plancher : offre boutique + 1, net
+  de basse alchimie) et que l'ask reste sous le plafond (valeur boutique,
+  meilleur ask des autres) ; sans coût publié, la règle de la vague 3 ;
+- sans aucun ancrage : comportement existant (prix choisi par le bot),
+  aucun prix inventé ; les guides ne changent pas (un objet que rien ne
+  cote reste « non coté »). Après le premier fill, l'objet est échangé :
+  prix courant, courbe de concession et recul ZIP reprennent la main.
+Simulateur `sim_discovery` (objet neuf, 5 vendeurs à coûts 20-40 et 5
+unités, 5 acheteurs à valeurs 30-90 et 3 unités, arrivées sur 6000
+ticks, offre du magasin général 25 et vente PNJ Q3 pour tous les
+vendeurs, coût publié 30, fenêtre 2000 ticks), 5 graines :
+  sans teneur : avant (ouvertures vague 2) AUCUN fill sur les 5 graines
+  (acheteurs posés à 1, tout vendeur part au magasin) ; après, premier
+  fill à 33-37 en 1-2 fenêtres sur les 4 graines où un vendeur arrive
+  après un acheteur (la 5e : tous les vendeurs avant tout acheteur,
+  partis au magasin) ;
+  avec teneur : avant, premier fill 40-62 en 1-2 fenêtres ; après, 33-34
+  en 1 fenêtre ; aucune vente sous 25 ni hors des limites des parties.
+Câblage : `market_seller::plan_sale` (FoundMarks.discovery, .margin),
+`sale_decision` (+ net d'alchimie propre, aussi pour le script `market
+sell`), `market_reprice::keep_bid_from` et `brain_market::
+place_standing_bid` (bids), `market_maker::quote_pass` (anchors lus
+seulement pour un objet jamais échangé), `market_discovery` (lecture des
+ancrages). Sans live (aucun déploiement).

@@ -214,3 +214,26 @@ fn adoption_after_a_restart_reads_t0_from_the_carnet() {
     assert_eq!(bounds.horizon_ticks, crate::market_lineage::horizon_ticks("gear", false));
     cleanup(&path);
 }
+
+/// Plan marché M7: a bid on an object nobody traded opens on its public
+/// anchors, never at the 1-coin reference: at least what the general
+/// store pays (a lower bid only sends sellers to the store), under the
+/// buyer's value when it knows one.
+#[test]
+fn a_never_traded_bid_opens_on_the_public_anchors() {
+    const BRONZE_BAR: i64 = 2349;
+    let path = std::env::temp_dir().join(format!("lifescape-reprice-{}-discovery.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let catalogue = vec![
+        CatalogueItem { id: BRONZE_BAR, name: "Bronze bar".to_string(), shop_price: 8, alch_value: 3 },
+        CatalogueItem { id: 995, name: "Coins".to_string(), shop_price: 1, alch_value: 0 },
+    ];
+    let service = MarketService::open(&path, catalogue).expect("opens");
+    let reply = service.handle(&object(vec![("op", str_value("fund")), ("account", str_value("smith")), ("coins", Value::Int(1_000_000))]));
+    assert_eq!(reply.get("ok").as_bool(), Some(true));
+    let store_pays = lifescape_gamedata::shop_sale::npc_sale_value("bronze_bar").expect("the general store buys bronze bars");
+    assert!(store_pays > 1);
+    let placed = super::keep_bid_from(&service, "smith", BRONZE_BAR, 5, 1, 500, crate::market_lineage::NEED).expect("placed");
+    assert!(matches!(placed, StandingBid::Placed { price, .. } if price == store_pays), "the store's offer, not 1: {placed:?}");
+    cleanup(&path);
+}

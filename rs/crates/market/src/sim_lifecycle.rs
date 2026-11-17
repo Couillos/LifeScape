@@ -15,10 +15,14 @@
 //! (`opening_bid`), else rests at the current price (never above its
 //! limit, `remembered_bid`); a seller opens at the current price or the
 //! richer bid when traded, else at twice its limit (`seller_open`); a
-//! loot seller per `found_open`.
+//! loot seller per `found_open`. With public discovery anchors
+//! (`run_full`, plan marché M7) a never-traded object opens on them
+//! (`discovery`): sellers over the published cost and never under the
+//! shop's offer, buyers under their value and over that floor.
 
 use crate::book::{Book, Fill, Side};
 use crate::concession::{concession_beta, step, window_offset, window_ticks, Concession, Step, Urgency, Window};
+use crate::discovery::{bid_open, listing_open, loot_anchor, margin_of, seller_floor, Anchors};
 use crate::price::{current_price, median_price, LastFill, Reference};
 use crate::sim::FixedRng;
 use crate::zip::{demand_step, found_open, opening_bid, seller_open, PATIENCE_TICKS};
@@ -103,9 +107,20 @@ struct Engine {
     /// Q3: what an NPC shop pays per unit; a seller the market pays less
     /// sells there instead (`outlets::npc_sale_beats_market`).
     outlet: Option<i64>,
+    /// M7: public anchors of the object (`None`: the openings of wave 2).
+    anchors: Option<Anchors>,
 }
 
 impl Engine {
+    /// A trader's limit: a seller's floor never under the public outside
+    /// options (M7 `seller_floor`) when the run has anchors.
+    fn limit_of(&self, trader: &Trader) -> i64 {
+        match self.anchors.as_ref() {
+            Some(anchors) if trader.sell => seller_floor(trader.limit, anchors),
+            _ => trader.limit,
+        }
+    }
+
     /// Q3 (wave 2 rule): the shop beats what the market pays the seller
     /// `owner` (others' best bid, the traded current price).
     fn shop_takes(&self, traders: &[Trader], owner: usize) -> bool {
@@ -145,18 +160,27 @@ fn opening(engine: &Engine, traders: &[Trader], owner: usize, model: Model) -> i
     let reference = engine.reference();
     let bid = engine.best_other(traders, owner, Side::Buy);
     let ask = engine.best_other(traders, owner, Side::Sell);
+    let margin = margin_of(trader.patience);
+    let limit = engine.limit_of(trader);
     if !trader.sell {
         // A covered ask is taken at placement (daemon `remembered_bid`),
-        // else the bid rests at the current price, never over its limit.
-        return opening_bid(reference.price, ask, trader.limit);
+        // else the bid rests at the current price, never over its limit;
+        // never traded with anchors (M7): under its value, over the floor.
+        let covered = ask.is_some_and(|ask| ask <= trader.limit);
+        let discovered = engine.anchors.as_ref().filter(|_| !reference.traded && !covered).and_then(|anchors| bid_open(anchors, Some(trader.limit), trader.limit, margin));
+        return discovered.unwrap_or_else(|| opening_bid(reference.price, ask, trader.limit));
     }
     if trader.loot {
-        return match model {
-            Model::Concession => found_open(reference, bid, ask, trader.limit, trader.anchor, None, trader.urgency == Urgency::Pressed).0,
-            Model::OldStep => old_found_open(reference, bid, ask, trader.anchor),
+        return match (model, engine.anchors.as_ref()) {
+            (Model::Concession, Some(anchors)) => found_open(reference, bid, ask, limit, loot_anchor(reference, trader.anchor, limit, anchors, margin), None, trader.urgency == Urgency::Pressed).0,
+            (Model::Concession, None) => found_open(reference, bid, ask, limit, trader.anchor, None, trader.urgency == Urgency::Pressed).0,
+            (Model::OldStep, _) => old_found_open(reference, bid, ask, trader.anchor),
         };
     }
-    seller_open(reference, bid, trader.limit, None).0
+    match engine.anchors.as_ref() {
+        Some(anchors) => listing_open(reference, bid, trader.limit, None, anchors, margin).0,
+        None => seller_open(reference, bid, trader.limit, None).0,
+    }
 }
 
 /// Wave-1 `found_open` (ask - 1, floor 1): the cascade the plan measured.
@@ -192,6 +216,13 @@ pub fn run_with_maker(traders: &[Trader], model: Model, end_tick: u64, maker: Op
 /// less (checked at placement and at each of its windows, like
 /// `brain_sales`).
 pub fn run_with_outlet(traders: &[Trader], model: Model, end_tick: u64, maker: Option<SimMaker>, outlet: Option<i64>) -> MakerRun {
+    run_full(traders, model, end_tick, maker, outlet, None)
+}
+
+/// `run_with_outlet` on an object whose public discovery anchors are
+/// `anchors` (M7): openings of a never-traded book on them, sellers'
+/// floors never under the public outside options.
+pub fn run_full(traders: &[Trader], model: Model, end_tick: u64, maker: Option<SimMaker>, outlet: Option<i64>, anchors: Option<Anchors>) -> MakerRun {
     let mut engine = Engine {
         book: Book::new(),
         prints: Vec::new(),
@@ -200,6 +231,7 @@ pub fn run_with_outlet(traders: &[Trader], model: Model, end_tick: u64, maker: O
         run: LifecycleRun { lowest_quote: i64::MAX, ..LifecycleRun::default() },
         maker: maker.map(MakerState::new),
         outlet,
+        anchors,
     };
     let first_arrival = traders.iter().map(|trader| trader.arrives).min().unwrap_or(0);
     let mut samples = Vec::new();
@@ -257,7 +289,7 @@ fn place(engine: &mut Engine, traders: &[Trader], owner: usize, model: Model, ti
         id,
         price,
         seen_remaining: engine.book.remaining(id).unwrap_or(0),
-        curve: Concession { opening: price, limit: trader.limit, horizon_ticks: trader.horizon_ticks, beta },
+        curve: Concession { opening: price, limit: engine.limit_of(trader), horizon_ticks: trader.horizon_ticks, beta },
         curve_start: tick,
         phase,
         window,
@@ -285,7 +317,7 @@ fn reprice(engine: &mut Engine, traders: &[Trader], model: Model, tick: u64) {
         live.seen_remaining = left;
         let next = match model {
             Model::OldStep => {
-                let (floor, ceiling) = if trader.sell { (trader.limit, i64::MAX / 4) } else { (1, trader.limit) };
+                let (floor, ceiling) = if trader.sell { (engine.limit_of(trader), i64::MAX / 4) } else { (1, trader.limit) };
                 let floor = if trader.loot { 1 } else { floor };
                 let next = demand_step(live.price, trader.sell, filled, floor, ceiling);
                 (next != live.price).then_some(next)

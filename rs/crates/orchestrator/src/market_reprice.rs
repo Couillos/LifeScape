@@ -442,8 +442,16 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
     let (_, ask) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
     let remembered = lifescape_market::remembered_bid(reference.price, ask, ceiling, service.own_buy_price(account, item));
     // A covered ask is taken at its price; otherwise the bid opens at
-    // what the buyer knows the object is worth, at least.
-    let price = if ask.is_some_and(|ask| ask >= 1 && ask <= ceiling) { remembered } else { remembered.max(open_at.min(ceiling)) };
+    // what the buyer knows the object is worth, at least. Never traded
+    // (M7): on the public anchors, under that worth (`open_at`, its use
+    // value when it knows one), over the sellers' public floor.
+    let covered = ask.is_some_and(|ask| ask >= 1 && ask <= ceiling);
+    let discovered = if covered || reference.traded { None } else { discovery_bid(service, account, item, (open_at > 1).then_some(open_at), ceiling) };
+    let price = match discovered {
+        _ if covered => remembered,
+        Some(open) => open,
+        None => remembered.max(open_at.min(ceiling)),
+    };
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),
         ("account", str_value(account)),
@@ -458,6 +466,13 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
         return Err(reply.get("error").as_str().unwrap_or("place refused").to_string());
     }
     Ok(StandingBid::Placed { order: reply.get("order").as_i64().unwrap_or(-1), price })
+}
+
+/// Opening of a bid on the never-traded book `item` (M7,
+/// `market_discovery::buyer_open`); `None` without anchors.
+pub(crate) fn discovery_bid(service: &MarketService, account: &str, item: i64, value: Option<i64>, ceiling: i64) -> Option<i64> {
+    let name = usize::try_from(crate::market_audit::base_of(item)).ok().and_then(lifescape_gamedata::obj_by_id).and_then(|obj| obj.name)?;
+    crate::market_discovery::buyer_open(service, account, name, value, ceiling)
 }
 
 /// Registered order count (dashboard and tests).

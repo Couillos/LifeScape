@@ -17,7 +17,8 @@ puis chaque tour de convocation). Code pur dans
 couverture), `deals` (machine à états), `price` (prix courant = médiane des 5
 derniers fills bornée par les prix d'impact du carnet, bougies OHLCV), `trends` (signaux publics), `zip` (cotation),
 `concession` (courbe vague 2), `maker` (teneurs de marché vague 3 :
-tranches, capital cible, cotation selon le stock), `sim`,
+tranches, capital cible, cotation selon le stock), `discovery` (ancrages
+publics d'un objet jamais échangé, M7), `sim`, `sim_discovery`,
 `sim_lifecycle` et `sim_maker` (simulateurs à graines fixes).
 
 Tick réel (plan marché Q0, 2026-11-16) : le serveur tourne à 60 ms
@@ -170,6 +171,31 @@ stock ne sont jamais listés ; les bids `stock` de l'alchimie
 Exemples : pêcheur mouche 20-25 → plumes (≈ une par prise de la
 tranche) ; firemaker → bûches ; mage → runes du sort ; combattant →
 nourriture adaptée à ses PV, s'il en mange.
+
+### Découverte du prix d'un objet jamais échangé (plan marché M7, 2026-11-17)
+
+Un objet sans aucun fill s'ouvre sur des ancrages PUBLICS seulement
+(`lifescape_market::discovery`, lus par `orchestrator::market_discovery`,
+`decisions.md` 2026-11-17) : offre d'une boutique F2P ouverte à tous
+(Q3, `calc_shop_value`) ; net d'une alchimie (le vendeur : son propre
+sort, haute ou basse, runes au prix courant ; acheteur et teneur : la
+basse alchimie) ; coût de production publié par les guides
+(`planner::guide_cost` : ligne cotée recette, chaîne ou 100 % market la
+moins chère, coût/6000 ÷ produit/6000, mis en cache par jeu publié) ;
+prix de vente d'une boutique F2P ouverte à tous. Règles : plancher
+vendeur = max(coût propre, offre boutique, net d'alchimie) (tout objet) ;
+ouverture vendeur = coût publié × (1 + marge du profil), à défaut 2 ×
+plancher (butin : sa valeur de haute alchimie), jamais au-dessus du prix
+boutique ni sous le plancher, un bid plus riche est pris ; ouverture
+acheteur = valeur d'usage × (1 − marge) (prix attendu du gear, réserve
+dérivée, sinon coût publié, sinon prix boutique), jamais au-dessus du
+coût publié, au moins le plancher public des vendeurs, jamais au-dessus
+du prix boutique ni du plafond ; un ask couvert reste pris. Marge =
+`0,05 + 0,15 × price_patience` (`Profile::margin`). Sans ancrage :
+règles existantes, aucun prix inventé, ligne de guide « non cotée »
+inchangée. Premier fill fait : prix courant, concession et ZIP
+reprennent la main. Simulateur `sim_discovery` (chiffres dans
+`decisions.md`).
 
 ### Section marché d'`orchestrator economy` (critères du plan marché §6)
 
@@ -823,8 +849,10 @@ triche (règle 13) : leur stock vient de leurs deals.
   1000 ticks, `market_maker::quote_pass`, motif `market_make`, prix fixe :
   jamais sur la courbe de concession) :
   juste valeur v = prix courant échangé, sinon milieu bid/ask des autres,
-  sinon (jamais échangé) plafond public / (1 + h) où plafond = min(valeur
-  boutique, meilleur ask des autres) ; lot = 1000 / v (1..500) ;
+  sinon (jamais échangé, M7) le coût de production publié par les guides,
+  borné à [plancher / (1 − h), plafond / (1 + h)] où plancher = max(offre
+  boutique + 1, net de basse alchimie) et plafond = min(valeur boutique,
+  meilleur ask des autres), à défaut plafond / (1 + h) ; lot = 1000 / v (1..500) ;
   biais de stock r = clamp((stock − lot)/lot, −1, 1), prix de réserve
   p = v (1 − h r) ; bid = ⌊p (1 − h)⌋ ≤ v − 1 ; ask = ⌈p (1 + h)⌉ ≥ v + 1,
   > bid, > ce que paie une boutique. h = 4 % (liquide : achats d'autres

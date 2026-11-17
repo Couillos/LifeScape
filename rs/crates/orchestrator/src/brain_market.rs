@@ -132,6 +132,10 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn 
         return;
     }
     let price = lifescape_market::remembered_bid(ctx.price.max(1), ctx.best_ask, ceiling, service.own_buy_price(&job.account, id)).max(open).min(ceiling.max(1));
+    // Never traded, no covered ask (M7): on the public anchors, under the
+    // derived value, over the sellers' public floor.
+    let covered = ctx.best_ask.is_some_and(|ask| ask >= 1 && ask <= ceiling);
+    let price = if covered || service.reference(id).traded { price } else { crate::market_reprice::discovery_bid(&service, &job.account, id, reserve.map(|value| value.round() as i64), ceiling).unwrap_or(price) };
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),
         ("account", str_value(&job.account)),

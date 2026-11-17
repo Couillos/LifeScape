@@ -136,3 +136,26 @@ fn own_fills_are_remembered_with_their_speed() {
     assert_eq!(service.own_buy_price("buyer_b", 314), Some(7));
     let _ = std::fs::remove_file(&path);
 }
+
+/// Plan marché M7: a never-traded object lists on its public anchors.
+/// A smith whose own bars cost 20 opens over the published production
+/// cost (30 x (1 + margin)), its floor never under the general store's
+/// offer (24); loot of a costed object anchors on that cost, never over
+/// the shop's selling price; without anchors, the wave-2 rules.
+#[test]
+fn never_traded_objects_list_on_their_public_anchors() {
+    let anchors = lifescape_market::Anchors { shop_sale: Some(24), alch_net: None, make_cost: Some(30), shop_buy: None };
+    let marks = FoundMarks { discovery: anchors, margin: 0.10, ..FoundMarks::default() };
+    let view = demand(0, Vec::new());
+    assert_eq!(plan_sale(28, reserve(20), UNTRADED, None, None, marks, &view), SaleDecision::List { qty: 28, price: 33, floor: 24 });
+    assert_eq!(plan_sale(28, reserve(20), UNTRADED, None, None, FoundMarks::default(), &view), SaleDecision::List { qty: 28, price: 40, floor: 20 }, "no anchor: twice the own cost");
+    // A caster's own cast nets 35: never sold under it.
+    let caster = FoundMarks { discovery: lifescape_market::Anchors { alch_net: Some(35), ..anchors }, ..marks };
+    assert_eq!(plan_sale(28, reserve(20), UNTRADED, None, None, caster, &view), SaleDecision::List { qty: 28, price: 35, floor: 35 });
+    // Traded: the current price, floor at the shop's offer.
+    let traded = Reference { price: 50, traded: true };
+    assert!(matches!(plan_sale(28, reserve(20), traded, None, None, marks, &view), SaleDecision::List { price: 50, floor: 24, .. }));
+    // Loot (zero own cost) of a costed object, a shop selling it at 31.
+    let loot = FoundMarks { discovery: lifescape_market::Anchors { shop_buy: Some(31), ..anchors }, anchor: Some(12), ..marks };
+    assert_eq!(plan_sale(5, found(), UNTRADED, None, None, loot, &asks(Vec::new())), SaleDecision::List { qty: 5, price: 31, floor: 24 });
+}

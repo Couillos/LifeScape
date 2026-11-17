@@ -1,0 +1,84 @@
+//! Plan marché M7 : découverte du prix d'un objet jamais échangé sur
+//! des ancrages publics (boutique PNJ, alchimie, coût publié du guide,
+//! prix de vente d'une boutique), jamais un prix inventé.
+
+use super::*;
+use crate::price::Reference;
+
+const UNTRADED: Reference = Reference { price: 1, traded: false };
+
+fn anchors(shop_sale: Option<i64>, alch_net: Option<i64>, make_cost: Option<i64>, shop_buy: Option<i64>) -> Anchors {
+    Anchors { shop_sale, alch_net, make_cost, shop_buy }
+}
+
+#[test]
+fn the_floor_is_the_best_outside_option() {
+    assert_eq!(anchors(Some(24), Some(30), None, None).floor(), 30, "a caster's net beats the shop");
+    assert_eq!(anchors(Some(24), Some(-5), None, None).floor(), 24, "a losing cast is no option");
+    assert_eq!(Anchors::default().floor(), 0);
+    assert!(!Anchors::default().known());
+    assert!(anchors(None, None, Some(30), None).known());
+    assert_eq!(seller_floor(20, &anchors(Some(24), None, None, None)), 24, "never under the shop's offer");
+    assert_eq!(seller_floor(40, &anchors(Some(24), None, None, None)), 40, "its own keep value when higher");
+    assert_eq!(seller_floor(0, &Anchors::default()), 1);
+}
+
+#[test]
+fn margins_follow_the_profile() {
+    assert!((margin_of(0.0) - 0.05).abs() < 1e-12);
+    assert!((margin_of(1.0) - 0.20).abs() < 1e-12);
+    assert!((margin_of(7.0) - 0.20).abs() < 1e-12, "clamped");
+}
+
+#[test]
+fn a_seller_opens_over_the_published_cost_under_the_shop() {
+    let cost = anchors(Some(24), None, Some(30), None);
+    assert_eq!(ask_open(&cost, 24, 0.10, 999), 33, "30 x 1.10");
+    assert_eq!(ask_open(&cost, 40, 0.10, 999), 40, "never under its floor");
+    let shop = anchors(Some(24), None, Some(30), Some(31));
+    assert_eq!(ask_open(&shop, 24, 0.10, 999), 31, "no buyer pays over the shop");
+    assert_eq!(ask_open(&shop, 35, 0.10, 999), 35, "the floor still holds");
+    let no_cost = anchors(Some(24), None, None, Some(50));
+    assert_eq!(ask_open(&no_cost, 24, 0.10, 48), 48, "no cost: the seller's own rule");
+    assert_eq!(ask_open(&no_cost, 24, 0.10, 80), 50, "capped by the shop");
+}
+
+#[test]
+fn a_buyer_opens_under_its_value_over_the_public_floor() {
+    let cost = anchors(Some(24), None, Some(30), None);
+    assert_eq!(bid_open(&cost, Some(90), 200, 0.10), Some(30), "never over the published cost");
+    assert_eq!(bid_open(&cost, None, 200, 0.10), Some(27), "no own value: the published cost less the margin");
+    assert_eq!(bid_open(&cost, Some(25), 200, 0.10), Some(24), "never under the sellers' floor");
+    assert_eq!(bid_open(&cost, Some(90), 28, 0.10), Some(28), "never over its ceiling");
+    assert_eq!(bid_open(&cost, Some(20), 20, 0.10), Some(20), "a ceiling under the floor rests at the ceiling");
+    let shop = anchors(None, None, None, Some(40));
+    assert_eq!(bid_open(&shop, Some(90), 200, 0.10), Some(40), "the shop sells at 40");
+    assert_eq!(bid_open(&shop, None, 200, 0.10), Some(36), "the shop's price as the value");
+    let floor_only = anchors(Some(12), None, None, None);
+    assert_eq!(bid_open(&floor_only, Some(90), 200, 0.10), Some(81), "its use value less the margin");
+    assert_eq!(bid_open(&floor_only, None, 200, 0.10), Some(12), "only the floor: bid it");
+    assert_eq!(bid_open(&Anchors::default(), Some(90), 200, 0.10), None, "no anchor: the buyer's own rule");
+}
+
+#[test]
+fn untraded_listings_open_on_the_anchors_traded_ones_on_the_price() {
+    let cost = anchors(Some(24), None, Some(30), None);
+    assert_eq!(listing_open(UNTRADED, None, 20, None, &cost, 0.10), (33, 24), "over the cost, floor at the shop");
+    assert_eq!(listing_open(UNTRADED, Some(45), 20, None, &cost, 0.10), (45, 24), "a richer bid is taken");
+    assert_eq!(listing_open(UNTRADED, None, 20, None, &Anchors::default(), 0.10), (40, 20), "no anchor: twice the keep value");
+    assert_eq!(listing_open(UNTRADED, None, 20, None, &anchors(Some(24), None, None, None), 0.10), (48, 24), "floor only: twice the floor");
+    let traded = Reference { price: 60, traded: true };
+    assert_eq!(listing_open(traded, None, 20, None, &cost, 0.10), (60, 24), "traded: the current price rules");
+    assert_eq!(listing_open(Reference { price: 10, traded: true }, None, 20, None, &cost, 0.10), (24, 24), "never under the shop's offer");
+}
+
+#[test]
+fn untraded_loot_anchors_on_the_cost_else_its_alch_value() {
+    let cost = anchors(Some(5), None, Some(30), Some(31));
+    assert_eq!(loot_anchor(UNTRADED, Some(12), 5, &cost, 0.10), Some(31), "the cost, capped by the shop");
+    let no_cost = anchors(Some(5), None, None, None);
+    assert_eq!(loot_anchor(UNTRADED, Some(12), 5, &no_cost, 0.10), Some(12), "its high alchemy value");
+    assert_eq!(loot_anchor(UNTRADED, None, 5, &no_cost, 0.10), Some(10), "twice the floor");
+    assert_eq!(loot_anchor(Reference { price: 9, traded: true }, Some(12), 5, &cost, 0.10), Some(12), "traded: untouched");
+    assert_eq!(loot_anchor(UNTRADED, Some(12), 1, &Anchors::default(), 0.10), Some(12), "no anchor: untouched");
+}

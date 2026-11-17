@@ -12,7 +12,7 @@
 //! script (`market sell`) through the `seller_quote` op.
 
 use lifescape_json::{object, str_value, Value};
-use lifescape_market::{found_open, seller_open, OwnFill, Reference};
+use lifescape_market::{discovery, found_open, OwnFill, Reference};
 use lifescape_planner::market_fit::{sale_lot, BookView};
 use lifescape_planner::Life;
 
@@ -43,6 +43,12 @@ pub struct FoundMarks {
     /// A full bank (D17, M4/M5): the lot hits a bid at or over its
     /// floor, or undercuts the cheapest ask by one relative step.
     pub pressed: bool,
+    /// Public discovery anchors (M7, `market_discovery::seller_anchors`):
+    /// the floor never under the shop's offer nor the seller's own cast,
+    /// a never-traded object opening over the published cost.
+    pub discovery: lifescape_market::Anchors,
+    /// The seller's profile margin (`discovery::margin_of`).
+    pub margin: f64,
 }
 
 /// One sale (pure): the opening ask from the seller's reserve and own
@@ -53,7 +59,11 @@ pub struct FoundMarks {
 /// stock (`CostSource::Found`: loot, drops, ground spawns) opens at the
 /// clearing price instead (`found_open`: current price, just under the
 /// cheapest ask of another account for an untraded object, else its
-/// high alchemy value, `FoundMarks`) and walks down to 1.
+/// high alchemy value, `FoundMarks`) and walks down to 1. M7: the floor
+/// is never under the public outside options (`discovery::seller_floor`)
+/// and a never-traded object opens on its public anchors
+/// (`discovery::listing_open`, `discovery::loot_anchor`: over the
+/// published production cost, under the shop's selling price).
 pub fn plan_sale(free: i64, reserve: Option<Reserve>, reference: Reference, best_bid: Option<i64>, last_sell: Option<OwnFill>, marks: FoundMarks, view: &BookView) -> SaleDecision {
     let Some(reserve) = reserve else { return SaleDecision::Hold("no own cost known".to_string()) };
     let qty = sale_lot(free, Some(view));
@@ -61,14 +71,15 @@ pub fn plan_sale(free: i64, reserve: Option<Reserve>, reference: Reference, best
         return SaleDecision::Hold("nothing free".to_string());
     }
     // The keep value: the own cost, never under the outside option.
-    let keep = reserve.coins.max(marks.outside).max(1);
+    let keep = discovery::seller_floor(reserve.coins.max(marks.outside), &marks.discovery);
     let (price, floor) = if reserve.source == CostSource::Found {
-        found_open(reference, best_bid, marks.others_ask, keep, marks.anchor, last_sell, marks.pressed)
+        let anchor = discovery::loot_anchor(reference, marks.anchor, keep, &marks.discovery, marks.margin);
+        found_open(reference, best_bid, marks.others_ask, keep, anchor, last_sell, marks.pressed)
     } else {
         match best_bid.filter(|bid| marks.pressed && *bid >= keep) {
             // M4: a full bank hits a bid at or over its floor.
             Some(bid) => (bid, keep),
-            None => seller_open(reference, best_bid, keep, last_sell),
+            None => discovery::listing_open(reference, best_bid, keep, last_sell, &marks.discovery, marks.margin),
         }
     };
     SaleDecision::List { qty, price, floor }
@@ -182,10 +193,12 @@ impl MarketService {
 
     /// The account's sale decision for `free` units of `name` (`item`),
     /// its reserve capped at `make_cost` (`brain_bids::production_costs_for`),
-    /// never under what an F2P shop pays (Q3 outside option), `pressed`
-    /// when its bank is full (M4/M5).
+    /// never under what an F2P shop pays (Q3 outside option) nor its own
+    /// cast's net (`own_alch`, `brain_alch::alch_floor`), `pressed` when
+    /// its bank is full (M4/M5); a never-traded object opens on its
+    /// public anchors (M7, `market_discovery`).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>, pressed: bool) -> (SaleDecision, Option<Reserve>) {
+    pub(crate) fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>, pressed: bool, own_alch: Option<i64>) -> (SaleDecision, Option<Reserve>) {
         let reserve = {
             let store = self.lock_store();
             costs.reserve(&store, name, item, life, make_cost)
@@ -201,6 +214,8 @@ impl MarketService {
             anchor: lifescape_planner::alchemy::alch_value(name, true),
             outside: lifescape_gamedata::shop_sale::npc_sale_value(name).unwrap_or(0),
             pressed,
+            discovery: crate::market_discovery::seller_anchors(name, own_alch),
+            margin: crate::market_discovery::account_margin(self, account),
         };
         (plan_sale(free, reserve, reference, bid, last, marks, &self.public_view(account, item)), reserve)
     }
@@ -218,7 +233,8 @@ impl MarketService {
         let life = crate::brain::load_life(&account);
         let make_cost = make_cost_of(life.as_ref(), &account, name, qty);
         let pressed = request.get("urgent").as_bool() == Some(true);
-        let (decision, reserve) = self.sale_decision(&account, name, item, qty, &costs, life.as_ref(), make_cost, pressed);
+        let own_alch = crate::supervise::live_of(&account).and_then(|live| crate::brain_alch::alch_floor(&live, name));
+        let (decision, reserve) = self.sale_decision(&account, name, item, qty, &costs, life.as_ref(), make_cost, pressed, own_alch);
         let reserve_value = reserve.map(|known| Value::Int(known.coins)).unwrap_or(Value::Null);
         match decision {
             SaleDecision::List { qty, price, floor } => object(vec![

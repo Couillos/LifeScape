@@ -63,6 +63,7 @@ pub mod brain_trade;
 pub mod brain_tutorial;
 pub mod market_absent;
 pub mod market_convene;
+pub mod market_discovery;
 pub mod market_convene_sweep;
 pub mod market_eta;
 pub mod create_user_cmd;

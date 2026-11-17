@@ -754,3 +754,12 @@ coût de guide).
   d'affinité (rien sous 0,25), réappro sous la moitié de la cible,
   budget 50 % du portefeuille libre, retrait `need_gone`/`need_met`.
   Live à faire : offres de plumes, appâts, runes, bûches au carnet.
+  État 2026-11-17 : M7 code et tests faits, sans live (decisions.md
+  « Découverte du prix d'un objet jamais échangé ») :
+  `lifescape_market::discovery` (ancrages boutique PNJ, alchimie, coût
+  publié `planner::guide_cost`, prix boutique ; plancher vendeur, ouverture
+  vendeur au-dessus du coût, acheteur sous sa valeur, teneur centré sur
+  le coût) ; simulateur `sim_discovery` (5 graines, vente PNJ Q3) :
+  premier fill 33-37 en ≤ 2 fenêtres (avant : aucun fill sans teneur),
+  aucune vente sous l'offre du magasin. Live à faire : premiers fills
+  d'objets jamais échangés (critère §6 « asks seuls jamais échangés »).
