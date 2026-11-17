@@ -131,8 +131,8 @@ pub fn live_snapshot() -> Arc<Snapshot> {
 pub use crate::rates_price::price_estimate;
 
 /// Snapshot generation: bumped by every recorded report (the rates page
-/// index rebuilds when it changes, `web_rates_view`). Moved here when
-/// the old profit table (`rates_profit`) left for the money guide.
+/// index rebuilds when it changes, `web_rates_view`). Kept here since
+/// the profits moved to the money guide.
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Current snapshot generation.
