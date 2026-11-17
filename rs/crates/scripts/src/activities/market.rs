@@ -110,6 +110,12 @@ pub fn parse_order(args: &[String]) -> Result<(), ScriptError> {
     }
 }
 
+/// Typed refusal of a `place` (P16): the market's own reason, side and
+/// object named, never « run returned 1 ».
+pub(crate) fn place_refused(buying: bool, item: &str, reason: &str) -> ScriptError {
+    ScriptError::Failed(format!("market {} {item} refused: {reason}", if buying { "buy" } else { "sell" }))
+}
+
 fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
     let SideOrder { item, mut qty, price, ceiling, mut floor } = parse_side(args)?;
     let price = if buying {
@@ -120,7 +126,11 @@ fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
         // Sellers price from their own reserve (daemon `seller_quote`):
         // a demand-sized lot, never under the reserve, never a 1-coin
         // fallback; no known own cost = hold.
-        let Some(quoted) = seller_quote(bot, item, qty)? else { return Ok(1) };
+        // A hold is a typed block, never a bare exit code (plan P16, rule
+        // 6: 71 « run returned 1 » the brain could not class).
+        let Some(quoted) = seller_quote(bot, item, qty)? else {
+            return Err(ScriptError::Failed(format!("market sell {}: held (no own cost known or nothing free to list)", args.get(1).map(String::as_str).unwrap_or("?"))));
+        };
         qty = quoted.qty;
         let reserve = floor.unwrap_or(quoted.floor).max(quoted.floor);
         floor = Some(reserve);
@@ -141,8 +151,9 @@ fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
     }
     let reply = market_call("place", params)?;
     if reply.get("ok").as_bool() != Some(true) {
-        bot.log(&format!("place refused: {}", reply.get("error").as_str().unwrap_or("?")));
-        return Ok(1);
+        let reason = reply.get("error").as_str().unwrap_or("?").to_string();
+        bot.log(&format!("place refused: {reason}"));
+        return Err(place_refused(buying, args.get(1).map(String::as_str).unwrap_or("?"), &reason));
     }
     bot.log(&format!(
         "placed {} order {} for {qty} x{} @ {price} (ceiling {:?}, floor {:?})",
@@ -229,6 +240,9 @@ mod tests {
         assert_eq!(super::SellerQuote::from_reply(&listed), Ok(Some(super::SellerQuote { qty: 25, price: 8, floor: 4 })));
         let held = object(vec![("ok", Value::Bool(true)), ("hold", str_value("no own cost known"))]);
         assert_eq!(super::SellerQuote::from_reply(&held), Ok(None), "a hold lists nothing");
+        // P16: a refused place is a typed failure naming side, object and reason.
+        let refused = super::place_refused(false, "iron_axe", "market rejected: seller holds 0, needs 1");
+        assert_eq!(refused.to_string().contains("market sell iron_axe refused: market rejected"), true, "{refused}");
         let refused = object(vec![("ok", Value::Bool(false)), ("error", str_value("unknown item 7"))]);
         assert!(super::SellerQuote::from_reply(&refused).is_err());
     }
