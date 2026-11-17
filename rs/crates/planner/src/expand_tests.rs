@@ -407,7 +407,7 @@ fn combat_tranches_name_real_spots() {
 fn reach_tranches_work_the_tier_open_at_their_start() {
     let mut counter = 0;
     let mut after = String::new();
-    let chain = super::reach_chain("fishing", 1, 40, &mut counter, &mut after);
+    let chain = super::reach_chain("fishing", 1, 40, &mut counter, &mut after, &crate::work_rate::prior_rate);
     let methods: Vec<(u8, String)> = chain
         .iter()
         .map(|node| match &node.kind {
@@ -429,7 +429,7 @@ fn reach_tranches_work_the_tier_open_at_their_start() {
     assert_eq!(methods, expected);
     let mut counter = 0;
     let mut after = String::new();
-    let mining = super::reach_chain("mining", 12, 20, &mut counter, &mut after);
+    let mining = super::reach_chain("mining", 12, 20, &mut counter, &mut after, &crate::work_rate::prior_rate);
     assert_eq!(mining[0].alternatives[0].method, "gather:mining/copper_ore", "12→15 mines copper, iron needs 15");
     assert_eq!(mining[1].alternatives[0].method, "gather:mining/iron_ore", "15→20 mines iron");
 }

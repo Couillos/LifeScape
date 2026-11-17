@@ -626,6 +626,13 @@ pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> Failur
 /// level): never a tranche the bot already holds. Past `MAX_BLOCKS` the
 /// node is abandoned.
 pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], level_of: &dyn Fn(&str) -> u8) -> FailureFold {
+    record_block_with(life, index, missing, level_of, &crate::plan_read::PlanRead::prior())
+}
+
+/// `record_block_from` reading `read` (R7, `plan_read`): the obtains sized
+/// on the measured yields, the climbs and quests it files planned with
+/// them and the training guide.
+pub fn record_block_with(life: &mut Life, index: usize, missing: &[String], level_of: &dyn Fn(&str) -> u8, read: &crate::plan_read::PlanRead) -> FailureFold {
     release_active(life, index);
     // A need a node waiting on this one already works toward (the same
     // object, coins, a level, a quest): a cycle, directly or through the
@@ -723,7 +730,7 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
                 Some(node) => reused.push(node.id.clone()),
                 None if lifescape_gamedata::quest_requirements::by_key(quest).is_some() => {
                     let mut counter = max_id_number(life) + fresh_nodes.len();
-                    let chain = crate::expand::expand_quest_from(quest, &life.profile, &mut counter, level_of);
+                    let chain = crate::expand::expand_quest_planned(quest, &life.profile, &mut counter, level_of, crate::expand::NESTED_DEPTH, read);
                     if let Some(last) = chain.last() {
                         reused.push(last.id.clone());
                     }
@@ -743,7 +750,7 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
                 Some(node) => reused.push(node.id.clone()),
                 None => {
                     let mut counter = max_id_number(life) + fresh_nodes.len();
-                    let chain = crate::expand::expand_access(area, &life.profile, &mut counter, level_of);
+                    let chain = crate::expand::expand_access_planned(area, &life.profile, &mut counter, level_of, crate::expand::NESTED_DEPTH, read);
                     if let Some(last) = chain.last() {
                         reused.push(last.id.clone());
                     }
@@ -765,7 +772,7 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
                 None => {
                     let mut counter = max_id_number(life) + fresh_nodes.len();
                     let mut after = String::new();
-                    let chain = crate::skeleton_deps::reach_chain_planned(&skill, level_of(&skill), level, &mut counter, &mut after, crate::expand::NESTED_DEPTH);
+                    let chain = crate::skeleton_deps::reach_chain_with(&skill, level_of(&skill), level, &mut counter, &mut after, crate::expand::NESTED_DEPTH, read);
                     if let Some(last) = chain.last() {
                         reused.push(last.id.clone());
                     }
@@ -788,7 +795,7 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
         NodeKind::ReachLevel { skill, .. } => Some(level_of(skill)),
         _ => None,
     };
-    let fresh = crate::replan::replan_node_from(&mut life.nodes[index], &ReplanCause::Blocked, &fresh_needs, &mut counter, live);
+    let fresh = crate::replan::replan_node_with(&mut life.nodes[index], &ReplanCause::Blocked, &fresh_needs, &mut counter, live, read.rate);
     let node = &mut life.nodes[index];
     node.method = None;
     for id in reused {

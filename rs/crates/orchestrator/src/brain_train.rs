@@ -1,33 +1,47 @@
 #![forbid(unsafe_code)]
-//! Training method of a priced climb, brain side (plan rendements R6,
-//! D13, D17): smithing, magic from confuse and the consuming skills
-//! (`training::priced_at_resolve`) pick their method from the TRAINING
-//! GUIDE the guides store precomputed (`guides_store::current()`: the
-//! shared `Arc` of the last cycle, never a build on demand):
+//! Training method of every level climb, brain side (plan rendements R6,
+//! R7, D10, D13, D14, D17): harvest, combat, recipes, spells — a
+//! `reach_level` tranche picks its method from the TRAINING GUIDE the
+//! guides store precomputed (`guides_store::current()`: the shared `Arc`
+//! of the last cycle, never a build on demand):
 //! - the bot's lines: the guide read at its live level, its quests done
-//!   (`GuideSet::training`, filters applied by reading), its skill, only
-//!   the lines a level climb launches (`mapping::map_method`; quest
-//!   shortcuts are quest nodes, never a tranche method);
-//! - each line scored for THIS bot (`train_score`): its ticks per XP plus
-//!   its coins per XP converted at the bot's D17 price (best accessible
-//!   money line of the same bot, read in the money view), the coins
-//!   weighed by the thrift trait (rapide ↔ économe), a market line by
-//!   market_affinity like `choose_market_or_farm`;
-//! - the best score kept (`train_score::choose`: R7's weighted draw takes
-//!   that place), its consumables the bot lacks for one action obtained
-//!   first (`training::missing_inputs`), handed to the resolver
-//!   (`ReadyCtx::training`).
+//!   and its own free stock (`GuideSet::training`: the recipes on its
+//!   stock as `stock` lines, R7 (a) — the alchemy of its own objects),
+//!   its skill, only the lines a level climb launches
+//!   (`mapping::map_method`; quest shortcuts are quest nodes; a melee
+//!   line in the climb's own style, the script fights in it);
+//! - each line judged on the bot's LIVE state (`guide_feasible::
+//!   feasible_for`: levels, combat, quests, stock, free wallet, the
+//!   cycle's asks): feasible now (class 0), after a lot's coins (1), after
+//!   a tool to obtain (2), else never; quarantined, cooled or excluded
+//!   methods never;
+//! - each line scored for THIS bot (`train_score`): ticks per XP plus
+//!   coins per XP converted at its D17 price, weighed by thrift and
+//!   market_affinity;
+//! - the choice: the draw of `train_score::pick` (`guide_pick`: the first
+//!   non-empty class, a weighted draw among the lines within 15 % of its
+//!   best score, D10, the unmeasured lines' 5 % of exploration, D14), the
+//!   bot's seed, node and draw counter; the node's previous pick (its
+//!   block's `blocked_by`) taken again once it works now (the tool it
+//!   blocked on is used); the consumables it lacks for one action
+//!   obtained first (`training::missing_inputs_with`, the measured
+//!   yields), handed to the resolver (`ReadyCtx::training`), the choice
+//!   left in `ReadyCtx::drawn` for the record (`brain_picks`).
 //!
-//! No guide published yet (the first cycle after a start) or no runnable
-//! line: no pick, logged; the static tranche method runs (as without a
-//! market before). Called once per launch of such a climb, right before
-//! `resolve_ready`.
+//! No guide published yet (the first cycle after a start) or no line
+//! within reach: no pick, logged; the static tranche method runs (its
+//! skeleton deps filed: `brain_plan_read::with_plan_read` tells the
+//! skeleton which tranches the guide covers). Called once per launch of
+//! a climb, right before `resolve_ready`.
 
 use lifescape_json::Value;
 use lifescape_planner::expand::ReadyCtx;
-use lifescape_planner::guide_model::{GuideFilter, Supply};
-use lifescape_planner::train_score::{choose, rank_rows, ticks_per_coin, LineScore};
-use lifescape_planner::training::{missing_inputs, priced_at_resolve, TrainPick};
+use lifescape_planner::guide_feasible::{feasible_for, BotState, Feasibility, Pending};
+use lifescape_planner::guide_model::{GuideFilter, Supply, TrainingRow};
+use lifescape_planner::guide_pick::Choice;
+use lifescape_planner::train_score::{pick, rank_classed, ticks_per_coin, Classed, LineScore};
+use lifescape_planner::training::{missing_inputs_with, TrainPick};
+use lifescape_planner::work_rate::RateReader;
 use lifescape_planner::{Life, Node, NodeKind};
 
 use crate::guides_store::GuideSet;
@@ -38,47 +52,133 @@ pub(crate) struct GuidePick {
     pub pick: TrainPick,
     pub supply: Supply,
     pub score: LineScore,
-    /// Runnable lines scored.
+    /// Lines scored within the bot's reach (every class).
     pub scored: usize,
     /// The bot's D17 price (best accessible money line per 6000).
     pub best_profit: Option<f64>,
+    pub choice: Choice,
 }
 
-/// True for a guide line a `skill` level climb can launch.
-fn launchable(method: &str, skill: &str) -> bool {
-    if method.starts_with("quest:") {
+/// One climb to pick for.
+pub(crate) struct Climb<'a> {
+    pub skill: &'a str,
+    /// The bot's live level in the skill.
+    pub level: u8,
+    pub target: u8,
+    /// The node's previous pick (`blocked_by`): taken again once it works
+    /// now.
+    pub previous: Option<&'a str>,
+    /// The food a fight lacks before it can run (`food_gate::food_short`
+    /// on the bot's context: a spot that bites, no food in hand): such a
+    /// line works after its food (class 1 at best), the food obtained
+    /// first. `None`: not judged (offline).
+    pub food: Option<&'a dyn Fn(&str) -> Option<String>>,
+}
+
+/// True for a guide line a `skill` level climb can launch (module doc).
+fn launchable(row: &TrainingRow, skill: &str) -> bool {
+    if row.method.starts_with("quest:") || row.skill != skill {
         return false;
     }
+    // A melee fight runs in the climb's own style (`mapping`: the
+    // script's style follows the climb's skill); hitpoints come of any.
+    if let Some(style) = row.style.strip_prefix("melee:") {
+        if style != skill && skill != "hitpoints" {
+            return false;
+        }
+    }
     let probe = Node::new("probe", NodeKind::ReachLevel { skill: skill.to_string(), level: 99 }, Vec::new(), 0);
-    lifescape_planner::map_method(method, &probe, None).is_some()
+    lifescape_planner::map_method(&row.method, &probe, None).is_some()
 }
 
-/// The pick of a `skill` climb from `level` to `target` for `life`, read
-/// in `set` (module doc). `held`: free units the bot holds.
-pub(crate) fn pick_from_guide(set: &GuideSet, skill: &str, level: u8, target: u8, life: &Life, quests_done: &[String], held: &dyn Fn(&str) -> i64) -> Result<GuidePick, String> {
-    let filter = GuideFilter { skill: Some(skill.to_string()), level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
+/// The class of a line for the bot (`guide_pick::class_order`): feasible
+/// now 0, after a lot's coins 1, after a tool to obtain 2; `None` out of
+/// its reach (a level, a quest, a stock, an object nobody sells...).
+pub(crate) fn class_for(row: &TrainingRow, bot: &BotState) -> Option<u8> {
+    match feasible_for(row, bot) {
+        Feasibility::Feasible => Some(0),
+        Feasibility::AfterPrereqs(pending) if pending.iter().all(Pending::is_supply) => Some(if pending.iter().any(|need| matches!(need, Pending::Tool { .. })) { 2 } else { 1 }),
+        _ => None,
+    }
+}
+
+/// The bot's launchable lines of a `skill` climb at `level`, its quests
+/// and its own `stock` (the stock lines, R7 (a)).
+fn climb_lines(set: &GuideSet, skill: &str, level: u8, quests_done: &[String], stock: &[(String, f64)]) -> Vec<TrainingRow> {
+    let filter = GuideFilter { skill: Some(skill.to_string()), level: Some(level), quests_done: quests_done.to_vec(), held: stock.to_vec(), ..GuideFilter::default() };
     let (rows, _) = set.training(&filter);
-    let lines: Vec<_> = rows.into_iter().filter(|row| row.skill == skill && launchable(&row.method, skill)).collect();
-    let bot = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
-    let best_profit = lifescape_planner::guide_read::best_profit_in(set.money_view(Some(level)), &bot);
-    let reach = |row: &lifescape_planner::guide_model::TrainingRow| lifescape_planner::guide_feasible::with_filter_bot(&bot, |judge| lifescape_planner::guide_feasible::feasible_for(row, judge).within_reach());
-    let ranked = rank_rows(&lines, &life.profile, ticks_per_coin(best_profit), &reach);
-    let Some(row) = choose(&ranked) else {
-        return Err(format!("no runnable {skill} line at {level} in the training guide ({} lines read)", lines.len()));
+    rows.into_iter().filter(|row| launchable(row, skill)).collect()
+}
+
+/// The bot's D17 price at `level` (best accessible money line, read in
+/// the money view of its band with its quests).
+fn d17_of(set: &GuideSet, level: u8, quests_done: &[String]) -> Option<f64> {
+    let filter = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
+    lifescape_planner::guide_read::best_profit_in(set.money_view(Some(level)), &filter)
+}
+
+/// True when the guide holds a line of `skill` from `from` within the
+/// bot's reach (the skeleton's oracle, `brain_plan_read`): the climb will
+/// pick it at resolve.
+pub(crate) fn guide_covers(set: &GuideSet, skill: &str, from: u8, to: u8, profile: &lifescape_planner::Profile, bot: &BotState) -> bool {
+    if from >= to {
+        return false;
+    }
+    let lines = climb_lines(set, skill, from, bot.quests_done, &[]);
+    let per_coin = ticks_per_coin(d17_of(set, from, bot.quests_done));
+    !rank_classed(&lines, profile, per_coin, &|row| class_for(row, bot)).is_empty()
+}
+
+/// Units one action of `method` at `level` burns of each stock input the
+/// bot holds: the batch of a stock line (what its stock casts or makes).
+fn stock_batch(row: &TrainingRow, level: u8, held: &dyn Fn(&str) -> i64, rate: RateReader) -> i64 {
+    row.prereqs
+        .stock
+        .iter()
+        .map(|(item, _)| held(item) / lifescape_planner::sizing::per_action_need_with(rate, &row.method, level, item).unwrap_or(1).max(1))
+        .min()
+        .unwrap_or(0)
+        .max(0)
+}
+
+/// The pick of a climb for `life` read in `set` (module doc). `bot`: the
+/// live judgement; `stock`: its own free stock; `seed`: the draw's
+/// (`guide_pick::seed_for`); `sick`: methods that never launch now.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pick_from_guide(set: &GuideSet, climb: &Climb, life: &Life, bot: &BotState, stock: &[(String, f64)], seed: u64, sick: &dyn Fn(&str) -> bool, rate: RateReader) -> Result<GuidePick, String> {
+    let lines: Vec<TrainingRow> = climb_lines(set, climb.skill, climb.level, bot.quests_done, stock).into_iter().filter(|row| !sick(&row.method)).collect();
+    let best_profit = d17_of(set, climb.level, bot.quests_done);
+    let food_short = |method: &str| climb.food.and_then(|food| food(method));
+    let ranked: Vec<Classed> = rank_classed(&lines, &life.profile, ticks_per_coin(best_profit), &|row| class_for(row, bot).map(|class| if food_short(&row.method).is_some() { class.max(1) } else { class }));
+    let again = climb.previous.and_then(|method| ranked.iter().position(|line| line.class == 0 && line.row.method == method));
+    let (index, drawn, sticky) = match again {
+        Some(index) => (index, lifescape_planner::guide_pick::Drawn { index: 0, band: 1, candidates: ranked.iter().filter(|line| line.class == 0).count(), explored: false }, true),
+        None => {
+            let Some((index, drawn)) = pick(&ranked, seed) else {
+                return Err(format!("no {} line within reach at {} in the training guide ({} lines read)", climb.skill, climb.level, lines.len()));
+            };
+            (index, drawn, false)
+        }
     };
-    let score = ranked.iter().find(|(_, line)| std::ptr::eq(*line, row)).map(|(score, _)| score.clone()).ok_or("chosen line lost its score")?;
+    let chosen = &ranked[index];
+    let row = chosen.row;
+    let held = |item: &str| (bot.held)(item).max(0.0).floor() as i64;
+    let batch = if row.supply == Supply::Stock { stock_batch(row, climb.level, &held, rate) } else { 0 };
+    let mut missing = missing_inputs_with(rate, &row.method, climb.level, climb.target, &held);
+    missing.extend(food_short(&row.method).filter(|food| !missing.contains(food)));
     let pick = TrainPick {
         method: row.method.clone(),
-        batch: 0,
-        missing: missing_inputs(&row.method, level, target, held),
+        batch,
+        missing,
         cost_per_xp: row.coins_per_xp,
         xp_per_tick: row.effective_xp_6000 / lifescape_planner::guide_model::WINDOW_TICKS,
         profit_per_tick: row.coins_6000 / lifescape_planner::guide_model::WINDOW_TICKS,
     };
-    Ok(GuidePick { pick, supply: row.supply, score, scored: ranked.len(), best_profit })
+    let choice = Choice { kind: "training", method: row.method.clone(), score: chosen.score.score, class: chosen.class, drawn, sticky };
+    Ok(GuidePick { pick, supply: row.supply, score: chosen.score.clone(), scored: ranked.len(), best_profit, choice })
 }
 
-/// Fills `ctx.training` for a priced climb about to resolve (module doc),
+/// Fills `ctx.training` for a climb about to resolve (module doc),
 /// logging the pick with its numbers.
 pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value) {
     let NodeKind::ReachLevel { skill, level: target } = &node.kind else { return };
@@ -86,7 +186,7 @@ pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Valu
         return;
     }
     let level = crate::brain_succession::live_level(live, skill);
-    if !priced_at_resolve(skill, level) || level >= *target {
+    if level >= *target {
         return;
     }
     let Some(set) = crate::guides_store::current() else {
@@ -94,11 +194,21 @@ pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Valu
         return;
     };
     let locks = crate::brain_locks::locked_items(&life.account);
-    let held = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item));
-    match pick_from_guide(&set, skill, level, *target, life, &ctx.quests_done, &held) {
+    let held = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item)) as f64;
+    let levels = ctx.levels.clone();
+    let level_of = |name: &str| levels.iter().find(|(known, _)| known == name).map(|(_, known)| *known).unwrap_or(1);
+    let asks = |item: &str| crate::brain_trade::cycle_asks(&set, item);
+    let quests = ctx.quests_done.clone();
+    let bot = BotState { level_of: &level_of, combat: ctx.combat, quests_done: &quests, held: &held, coins: Some(ctx.coins.max(0) as f64), ironman: life.profile.ironman, asks: &asks };
+    let stock = crate::brain_alch::own_stock(live, &life.account, &crate::brain_alch::kept(life, live));
+    let sick = |method: &str| ctx.sick(method).is_some() || node.excluded.iter().any(|excluded| excluded == method);
+    let rate = crate::brain_plan_read::live_rate();
+    let food = |method: &str| lifescape_planner::food_gate::food_short(method, ctx);
+    let climb = Climb { skill, level, target: *target, previous: node.blocked_by.as_deref(), food: Some(&food) };
+    match pick_from_guide(&set, &climb, life, &bot, &stock, ctx.draw_seed, &sick, &rate) {
         Ok(found) => {
             crate::logln!(
-                "brain {}: {} {skill} {level}->{target} trains by {} ({}, score {:.3} = {:.3} ticks/XP + {:.3} coin ticks/XP, thrift {:.2}, affinity {:.2}, {:.1} XP/tick, {:+.2} coins/tick, {} lines, guide {} s old{})",
+                "brain {}: {} {skill} {level}->{target} trains by {} ({}, score {:.3} = {:.3} ticks/XP + {:.3} coin ticks/XP, thrift {:.2}, affinity {:.2}, {:.1} XP/tick, {:+.2} coins/tick, class {}, {} in band of {} drawn, {} lines in reach{}{}, guide {} s old{})",
                 life.account,
                 node.id,
                 found.pick.method,
@@ -110,10 +220,16 @@ pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Valu
                 life.profile.market_affinity,
                 found.pick.xp_per_tick,
                 found.pick.profit_per_tick,
+                found.choice.class,
+                found.choice.drawn.band,
+                found.choice.drawn.candidates,
                 found.scored,
+                if found.choice.drawn.explored { ", exploration" } else { "" },
+                if found.choice.sticky { ", previous pick again" } else { "" },
                 set.age().as_secs(),
                 if found.pick.missing.is_empty() { String::new() } else { format!(", obtains {}", found.pick.missing.join(",")) }
             );
+            *ctx.drawn.borrow_mut() = Some(found.choice);
             ctx.training = Some(found.pick);
         }
         Err(error) => crate::logln!("brain {}: {} {skill} {level}->{target}: {error}, static tranche", life.account, node.id),

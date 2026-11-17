@@ -270,38 +270,20 @@ fn eval_of<'e>(chain: &Chain, evals: &'e [ChainEval]) -> Option<&'e ChainEval> {
 }
 
 /// Money choice (§4.4): best net per 6000 ticks, trend-adjusted like
-/// `rank_money_method`, with a ±2% seed jitter so near-ties vary by
-/// profile instead of herding every bot onto one chain (D22-safe:
-/// the seed is the bot's own).
-pub fn best_for_money<'c>(chains: &[&'c Chain], evals: &[ChainEval], trend: &dyn Fn(&str) -> f64, seed: u64) -> Option<&'c Chain> {
+/// `rank_money_method`. The ±2 % seed jitter is gone (plan rendements
+/// R7): the bots' diversity is the weighted draw of `guide_pick` over
+/// the money guide.
+pub fn best_for_money<'c>(chains: &[&'c Chain], evals: &[ChainEval], trend: &dyn Fn(&str) -> f64) -> Option<&'c Chain> {
     let mut best: Option<&Chain> = None;
     let mut top = f64::NEG_INFINITY;
     for (chain, eval) in chains.iter().zip(evals.iter()) {
-        let jitter = (xorshift(seed ^ hash_id(chain.id)) % 200) as f64 / 100.0 - 1.0;
-        let score = crate::cost::rank_money_method(eval.profit_per_6000, trend(chain.product), eval.final_value.max(1.0), 0.1)
-            + jitter * 0.02 * eval.final_value.max(1.0);
+        let score = crate::cost::rank_money_method(eval.profit_per_6000, trend(chain.product), eval.final_value.max(1.0), 0.1);
         if score > top {
             top = score;
             best = Some(*chain);
         }
     }
     best
-}
-
-fn hash_id(id: &str) -> u64 {
-    let mut hash = 0u64;
-    for byte in id.bytes() {
-        hash = hash.wrapping_mul(31).wrapping_add(byte as u64);
-    }
-    hash.max(1)
-}
-
-fn xorshift(mut word: u64) -> u64 {
-    word = word.max(1);
-    word ^= word << 13;
-    word ^= word >> 7;
-    word ^= word << 17;
-    word
 }
 
 /// Era gate (D64, strict): P1 chains always run; a P2 chain runs when
@@ -597,16 +579,14 @@ mod tests {
     }
 
     #[test]
-    fn money_choice_pays_best_per_6000_with_profile_diversity() {
+    fn money_choice_pays_best_per_6000() {
         let values = evals(10.0);
         let refs: Vec<&Chain> = CHAINS.iter().collect();
         let flat = |_: &str| 0.0;
-        let first = best_for_money(&refs, &values, &flat, 7).expect("a money chain");
-        // Same seed replays; a 10x gap never flips on jitter.
-        assert_eq!(best_for_money(&refs, &values, &flat, 7).map(|chain| chain.id), Some(first.id));
+        let first = best_for_money(&refs, &values, &flat).expect("a money chain");
         let top: f64 = values.iter().map(|eval| eval.profit_per_6000).fold(f64::NEG_INFINITY, f64::max);
         let picked = values.iter().find(|eval| eval.id == first.id).expect("eval");
-        assert!((top - picked.profit_per_6000) / top.max(1.0) < 0.1, "jitter only flips close calls");
+        assert_eq!(picked.profit_per_6000, top, "flat trends: the best net, no jitter (R7)");
     }
 
     #[test]

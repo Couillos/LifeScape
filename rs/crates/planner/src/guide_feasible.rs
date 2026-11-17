@@ -290,6 +290,23 @@ pub fn feasible_for(row: &impl GuideRow, bot: &BotState) -> Feasibility {
     }
 }
 
+/// Order rank of a judgement (D22 Q1): feasible now, after
+/// prerequisites, infeasible.
+pub fn state_rank(found: &Feasibility) -> u8 {
+    match found {
+        Feasibility::Feasible => 0,
+        Feasibility::AfterPrereqs(_) => 1,
+        Feasibility::Infeasible(..) => 2,
+    }
+}
+
+/// The rows a bot can work first (D22 Q1, user 2026-11-17, R7): feasible
+/// now, then after prerequisites, then infeasible; the guide's order
+/// (priced first, then by value) kept within each (stable).
+pub fn feasible_first<T: GuideRow>(rows: &mut [T], bot: &BotState) {
+    rows.sort_by_cached_key(|row| state_rank(&feasible_for(row, bot)));
+}
+
 /// Runs `body` with the bot a guide filter describes: every skill at its
 /// `level` (`levels` overriding a skill), the catalogue (no level) at 99
 /// (each row is read at its own gate: levels and combat pass, a site out

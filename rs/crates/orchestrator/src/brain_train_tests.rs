@@ -11,7 +11,8 @@ use lifescape_planner::guide_model::{Confidence, Family, MoneyRow, Prereqs, Sour
 use lifescape_planner::guide_read::{MoneyView, TrainingView};
 use lifescape_planner::{resolve_ready, Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
 
-use super::pick_from_guide;
+use super::{pick_from_guide, Climb, GuidePick};
+use lifescape_planner::guide_feasible::BotState;
 use crate::guides_store::GuideSet;
 
 fn life_with(market_affinity: f64, thrift: f64) -> Life {
@@ -53,7 +54,7 @@ fn line(skill: &str, method: &str, supply: Supply, xp_6000: f64, coins_6000: f64
         quest_ticks: None,
         flows: Vec::new(),
         routes: Vec::new(),
-        confidence: Confidence::default(),
+        confidence: Confidence { runs: 9, ..Confidence::default() },
         price_confidence: "traded",
         priced: true,
     }
@@ -117,12 +118,12 @@ fn the_brain_picks_its_line_from_the_published_guide() {
         line("firemaking", "fire:yew_logs", Supply::Market, 60_000.0, -30_000.0),
     ]);
     let none = |_: &str| 0;
-    let market = pick_from_guide(&set, "firemaking", 60, 65, &life_with(1.0, 0.5), &[], &none).expect("a line");
+    let market = pick(&set, "firemaking", 60, 65, &life_with(1.0, 0.5), &[], &none).expect("a line");
     assert_eq!((market.pick.method.as_str(), market.supply), ("fire:yew_logs", Supply::Market));
     assert_eq!(market.best_profit, Some(30_000.0), "D17 read in the money view");
     assert_eq!(market.scored, 2, "the quest and the woodcutting line are out");
     assert_eq!(market.pick.missing, vec!["yew_logs".to_string()], "the logs to obtain first");
-    let autarkic = pick_from_guide(&set, "firemaking", 60, 65, &life_with(0.0, 0.5), &[], &none).expect("a line");
+    let autarkic = pick(&set, "firemaking", 60, 65, &life_with(0.0, 0.5), &[], &none).expect("a line");
     assert_eq!((autarkic.pick.method.as_str(), autarkic.supply), ("fire:yew_logs", Supply::Autonomous));
     assert!((autarkic.pick.xp_per_tick - 5.0).abs() < 1e-9, "the line's effective rate");
 }
@@ -141,12 +142,12 @@ fn the_thrift_trait_splits_a_fast_line_from_a_cheap_one() {
         line("magic", "curse:confuse/chickens", Supply::Market, 30_000.0, -3000.0),
     ]);
     let none = |_: &str| 0;
-    let fast = pick_from_guide(&set, "magic", 58, 60, &life_with(0.5, 0.0), &[], &none).expect("a line");
+    let fast = pick(&set, "magic", 58, 60, &life_with(0.5, 0.0), &[], &none).expect("a line");
     assert_eq!(fast.pick.method, "teleport:varrock_teleport");
-    let thrifty = pick_from_guide(&set, "magic", 58, 60, &life_with(0.5, 1.0), &[], &none).expect("a line");
+    let thrifty = pick(&set, "magic", 58, 60, &life_with(0.5, 1.0), &[], &none).expect("a line");
     assert_eq!(thrifty.pick.method, "curse:confuse/chickens");
     let empty = set_with(Vec::new());
-    assert!(pick_from_guide(&empty, "magic", 58, 60, &life_with(0.5, 0.5), &[], &none).is_err());
+    assert!(pick(&empty, "magic", 58, 60, &life_with(0.5, 0.5), &[], &none).is_err());
 }
 
 /// The pick locks like any priced tranche: the resolver blocks on the
@@ -155,7 +156,7 @@ fn the_thrift_trait_splits_a_fast_line_from_a_cheap_one() {
 fn the_resolver_locks_the_guide_pick() {
     let set = set_with(vec![line("firemaking", "fire:yew_logs", Supply::Market, 60_000.0, -30_000.0)]);
     let none = |_: &str| 0;
-    let found = pick_from_guide(&set, "firemaking", 60, 65, &life_with(1.0, 0.5), &[], &none).expect("a line");
+    let found = pick(&set, "firemaking", 60, 65, &life_with(1.0, 0.5), &[], &none).expect("a line");
     let mut node = Node::new("n4", NodeKind::ReachLevel { skill: "firemaking".to_string(), level: 65 }, Vec::new(), 65);
     node.status = NodeStatus::Ready;
     let mut ctx = ReadyCtx::blind(1.0);
@@ -166,6 +167,140 @@ fn the_resolver_locks_the_guide_pick() {
     assert_eq!(node.method.as_deref(), Some("fire:yew_logs"));
     assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:yew_logs".to_string() });
     let logs = |item: &str| if item == "yew_logs" { 27 } else { 0 };
-    let held = pick_from_guide(&set, "firemaking", 60, 65, &life_with(1.0, 0.5), &[], &logs).expect("a line");
+    let held = pick(&set, "firemaking", 60, 65, &life_with(1.0, 0.5), &[], &logs).expect("a line");
     assert!(held.pick.missing.is_empty(), "a load in hand");
+}
+
+/// The pick of a bot at `level` in every skill, its quests and held units
+/// (no wallet judged, the build's asks), seed 1, nothing quarantined.
+fn pick(set: &GuideSet, skill: &str, level: u8, target: u8, life: &Life, quests: &[String], held: &dyn Fn(&str) -> i64) -> Result<GuidePick, String> {
+    pick_seeded(set, skill, level, target, life, quests, held, &[], 1, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pick_seeded(set: &GuideSet, skill: &str, level: u8, target: u8, life: &Life, quests: &[String], held: &dyn Fn(&str) -> i64, stock: &[(String, f64)], seed: u64, previous: Option<&str>) -> Result<GuidePick, String> {
+    let level_of = |_: &str| level;
+    let held_units = |item: &str| held(item) as f64;
+    let asks = |_: &str| None;
+    let bot = BotState { level_of: &level_of, combat: 126, quests_done: quests, held: &held_units, coins: None, ironman: life.profile.ironman, asks: &asks };
+    let never = |_: &str| false;
+    pick_from_guide(set, &Climb { skill, level, target, previous, food: None }, life, &bot, stock, seed, &never, &lifescape_planner::work_rate::prior_rate)
+}
+
+/// R7: two lines within 15 % of each other are both drawn across seeds
+/// (D10), the same seed always the same; a line beyond the band only by
+/// exploration (D14) while it is unmeasured.
+#[test]
+fn the_climb_draws_among_close_lines() {
+    let set = set_with(vec![
+        line("woodcutting", "gather:woodcut/willow_logs", Supply::Autonomous, 60_000.0, 0.0),
+        line("woodcutting", "gather:woodcut/oak_logs", Supply::Autonomous, 56_000.0, 0.0),
+        line("woodcutting", "gather:woodcut/logs", Supply::Autonomous, 20_000.0, 0.0),
+    ]);
+    let life = life_with(0.5, 0.5);
+    let none = |_: &str| 0;
+    let drawn: std::collections::BTreeMap<String, usize> = (0..300u64).fold(Default::default(), |mut tally, seed| {
+        let found = pick_seeded(&set, "woodcutting", 60, 65, &life, &[], &none, &[], seed, None).expect("a line");
+        assert_eq!(found.choice.drawn.band, 2, "willow and oak in the band");
+        *tally.entry(found.pick.method).or_insert(0) += 1;
+        tally
+    });
+    assert!(drawn.get("gather:woodcut/willow_logs").is_some_and(|count| *count > 100) && drawn.get("gather:woodcut/oak_logs").is_some_and(|count| *count > 80), "{drawn:?}");
+    assert_eq!(drawn.get("gather:woodcut/logs"), None, "measured and out of the band: never");
+    let again = pick_seeded(&set, "woodcutting", 60, 65, &life, &[], &none, &[], 41, None).expect("a line").pick.method;
+    assert_eq!(pick_seeded(&set, "woodcutting", 60, 65, &life, &[], &none, &[], 41, None).expect("a line").pick.method, again, "same seed, same line");
+}
+
+/// R7 (c): harvest and combat choose through the guide too; a melee line
+/// trains its own style's skill only (an attack climb never takes a
+/// strength-style fight).
+#[test]
+fn combat_climbs_take_their_own_style_from_the_guide() {
+    let mut strength = line("attack", "fight:melee/cows", Supply::Autonomous, 90_000.0, 500.0);
+    strength.style = "melee:strength".to_string();
+    let mut attack = line("attack", "fight:melee/chickens", Supply::Autonomous, 40_000.0, 100.0);
+    attack.style = "melee:attack".to_string();
+    let set = set_with(vec![strength, attack]);
+    let none = |_: &str| 0;
+    let found = pick(&set, "attack", 58, 60, &life_with(0.5, 0.5), &[], &none).expect("a line");
+    assert_eq!(found.pick.method, "fight:melee/chickens");
+    assert_eq!(found.scored, 1, "the strength-style row never trains an attack climb");
+}
+
+/// The bot works what it can NOW first: a feasible line beats a better
+/// one whose tool it must obtain; once it blocked on that tool for its
+/// previous pick, the previous pick comes back as soon as it is feasible.
+#[test]
+fn feasible_lines_draw_first_and_a_blocked_pick_comes_back() {
+    let mut harpoon = line("fishing", "gather:fishing/raw_swordfish", Supply::Autonomous, 90_000.0, 0.0);
+    harpoon.prereqs.tools = vec!["harpoon".to_string()];
+    let set = set_with(vec![harpoon, line("fishing", "gather:fishing/raw_trout", Supply::Autonomous, 50_000.0, 0.0)]);
+    let life = life_with(0.5, 0.5);
+    let none = |_: &str| 0;
+    for seed in 0..40 {
+        let found = pick_seeded(&set, "fishing", 58, 60, &life, &[], &none, &[], seed, None).expect("a line");
+        assert_eq!((found.pick.method.as_str(), found.choice.class), ("gather:fishing/raw_trout", 0), "feasible now first");
+    }
+    let harpoon_held = |item: &str| i64::from(item == "harpoon");
+    let back = pick_seeded(&set, "fishing", 58, 60, &life, &[], &harpoon_held, &[], 3, Some("gather:fishing/raw_trout")).expect("a line");
+    assert!(back.choice.sticky && back.pick.method == "gather:fishing/raw_trout", "the previous pick, feasible, comes back");
+    let only_tool = set_with(vec![{
+        let mut row = line("fishing", "gather:fishing/raw_swordfish", Supply::Autonomous, 90_000.0, 0.0);
+        row.prereqs.tools = vec!["harpoon".to_string()];
+        row
+    }]);
+    let found = pick(&only_tool, "fishing", 58, 60, &life, &[], &none).expect("after a tool");
+    assert_eq!(found.choice.class, 2, "after a tool: drawn, the resolver blocks on it");
+}
+
+/// R7 (a): the training guide reads the bot's own stock: the alchemy of
+/// the platebodies it holds is a `stock` line (its batch the stock), a
+/// bot without the stock has none.
+#[test]
+fn training_reads_the_bots_own_stock() {
+    let mut recipe = money_line();
+    recipe.family = Family::Recipe;
+    recipe.method = "alch:iron_platebody".to_string();
+    recipe.profit_6000 = 12_000.0;
+    recipe.xp_6000 = vec![("magic".to_string(), 78_000.0)];
+    recipe.prereqs.stock = vec![("iron_platebody".to_string(), 28.0)];
+    recipe.confidence = Confidence { runs: 9, ..Confidence::default() };
+    let mut set = set_with(vec![line("magic", "teleport:varrock_teleport", Supply::Market, 30_000.0, -60_000.0)]);
+    set.money_bands[0].1.rows.push(recipe);
+    set.money_bands[0].1.recipes.push(lifescape_planner::guide_read::RecipePlace { row: 1, ask: Default::default(), answer: Default::default() });
+    let life = life_with(0.5, 0.5);
+    let plates = |item: &str| if item == "iron_platebody" { 40 } else { 0 };
+    let stock = vec![("iron_platebody".to_string(), 40.0)];
+    let found = pick_seeded(&set, "magic", 58, 60, &life, &[], &plates, &stock, 1, None).expect("a line");
+    assert_eq!((found.pick.method.as_str(), found.supply), ("alch:iron_platebody", Supply::Stock));
+    assert_eq!(found.pick.batch, 40, "one cast a platebody, the stock bounds the batch");
+    let none = |_: &str| 0;
+    let without = pick_seeded(&set, "magic", 58, 60, &life, &[], &none, &[], 1, None).expect("a line");
+    assert_eq!(without.pick.method, "teleport:varrock_teleport", "no stock, no stock line");
+}
+
+/// A fight on a spot that bites a bot without food works after its food:
+/// a line feasible now comes first; alone, the biting line is drawn with
+/// its food to obtain first (`food_gate`, like the money nodes).
+#[test]
+fn a_biting_spot_waits_for_its_food() {
+    let mut men = line("attack", "fight:melee/men", Supply::Autonomous, 90_000.0, 800.0);
+    men.style = "melee:attack".to_string();
+    let mut cows = line("attack", "fight:melee/cows", Supply::Autonomous, 30_000.0, 100.0);
+    cows.style = "melee:attack".to_string();
+    let life = life_with(0.5, 0.5);
+    let level_of = |_: &str| 58u8;
+    let none = |_: &str| 0.0;
+    let asks = |_: &str| None;
+    let bot = BotState { level_of: &level_of, combat: 126, quests_done: &[], held: &none, coins: None, ironman: false, asks: &asks };
+    let never = |_: &str| false;
+    let food = |method: &str| (method == "fight:melee/men").then(|| "herring".to_string());
+    let climb = Climb { skill: "attack", level: 58, target: 60, previous: None, food: Some(&food) };
+    let both = set_with(vec![men.clone(), cows]);
+    let found = pick_from_guide(&both, &climb, &life, &bot, &[], 1, &never, &lifescape_planner::work_rate::prior_rate).expect("a line");
+    assert_eq!((found.pick.method.as_str(), found.choice.class), ("fight:melee/cows", 0), "fed lines first");
+    let alone = set_with(vec![men]);
+    let found = pick_from_guide(&alone, &climb, &life, &bot, &[], 1, &never, &lifescape_planner::work_rate::prior_rate).expect("a line");
+    assert_eq!((found.pick.method.as_str(), found.choice.class), ("fight:melee/men", 1));
+    assert!(found.pick.missing.contains(&"herring".to_string()), "the food obtained first: {:?}", found.pick.missing);
 }

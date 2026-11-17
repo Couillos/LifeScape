@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use lifescape_planner::guide_model::{band_of, GuideFilter, GuideWorld, MoneyRow, Quote, RateAsk, TrainingRow, Unrated};
-use lifescape_planner::guide_read::{finish_money, finish_training, MoneyView, TrainingView};
+use lifescape_planner::guide_read::{finish_money, finish_training, finish_training_with, MoneyView, TrainingView};
 use lifescape_store::Store;
 
 /// Period between two builds of the set (module docs).
@@ -236,17 +236,19 @@ impl GuideSet {
     /// own rows only, on the cycle's quotes).
     pub fn money(&self, filter: &GuideFilter) -> Result<(Vec<MoneyRow>, Vec<Unrated>), String> {
         let view = self.money_view(filter.level);
-        let replaced = if filter.held.is_empty() { HashMap::new() } else { self.recipes_on_stock(view, &filter.held)? };
+        let replaced = if filter.held.is_empty() { HashMap::new() } else { self.recipes_on_stock(view, &filter.held, &|_| true)? };
         Ok(finish_money(view, filter, &replaced))
     }
 
     /// The training guide of `filter`: the view of its level read with
     /// it; the D17 price re-read from the money view of the same bot when
-    /// it differs from the view's own (quests done, a lower level).
+    /// it differs from the view's own (quests done, a lower level); with
+    /// `held`, the recipes of the money view on that stock read as
+    /// training lines (`stock_training`, R7).
     pub fn training(&self, filter: &GuideFilter) -> (Vec<TrainingRow>, Vec<Unrated>) {
         let view = self.training_view(filter.level);
-        let exact = filter.quests_done.is_empty() && filter.level == view.level;
-        if exact {
+        let own_d17 = filter.quests_done.is_empty() && filter.level == view.level;
+        if own_d17 && filter.held.is_empty() {
             return finish_training(view, filter, None);
         }
         let memo: RefCell<HashMap<i64, Option<f64>>> = RefCell::new(HashMap::new());
@@ -261,13 +263,44 @@ impl GuideSet {
             memo.borrow_mut().insert(band, found);
             found
         };
-        finish_training(view, filter, Some(&d17))
+        let extra = self.stock_training(filter, &d17);
+        if own_d17 {
+            finish_training_with(view, filter, None, extra)
+        } else {
+            finish_training_with(view, filter, Some(&d17), extra)
+        }
+    }
+
+    /// Training lines on the reader's own stock (R7, decision 2026-11-17
+    /// (a): the alchemy of the bot's own objects, cooking its own catch):
+    /// each recipe row of the money view whose stock the reader holds
+    /// (one unit or more; one lot is the condition `feasible_for` judges),
+    /// read for each skill it trains (`guide_training::stock_rows`), its
+    /// coins converted at the reader's D17 of the row's band. The rows are
+    /// the view's own (a full window on the cycle's quotes), never a
+    /// rebuild.
+    pub fn stock_training(&self, filter: &GuideFilter, d17: &dyn Fn(i64) -> Option<f64>) -> Vec<TrainingRow> {
+        if filter.held.is_empty() {
+            return Vec::new();
+        }
+        let money = self.money_view(filter.level);
+        let holds = |item: &str| filter.held.iter().any(|(name, units)| name == item && *units >= 1.0);
+        let mut out = Vec::new();
+        for place in &money.recipes {
+            let Some(recipe) = money.rows.get(place.row) else { continue };
+            if !recipe.prereqs.stock.iter().any(|(item, _)| holds(item)) {
+                continue;
+            }
+            let level = filter.level.unwrap_or_else(|| lifescape_planner::guide_methods::gate_level(&recipe.method)).clamp(1, 99);
+            out.extend(lifescape_planner::guide_training::stock_rows(recipe, level, d17(recipe.band)));
+        }
+        out
     }
 
     /// Recipe rows of `view` re-evaluated on `held` (R7), by row index,
     /// priced on the cycle's quotes; an object the cycle never quoted is
     /// an error (never a guessed price).
-    fn recipes_on_stock(&self, view: &MoneyView, held: &[(String, f64)]) -> Result<HashMap<usize, MoneyRow>, String> {
+    pub fn recipes_on_stock(&self, view: &MoneyView, held: &[(String, f64)], only: &dyn Fn(&MoneyRow) -> bool) -> Result<HashMap<usize, MoneyRow>, String> {
         let unquoted: RefCell<Vec<String>> = RefCell::new(Vec::new());
         let rate = |ask: &RateAsk| Err(format!("guides store: no yield read for {} on a stock", ask.method));
         let price = |item: &str| match self.quotes.get(item) {
@@ -282,7 +315,12 @@ impl GuideSet {
         let quest_ticks = |_: &str| None;
         let world = GuideWorld { rate: &rate, price: &price, npc_sale: &npc_sale, shop_buy: &shop_buy, market_wait_ticks: self.market_wait_ticks, quest_ticks: &quest_ticks, measured: &[] };
         let engine = lifescape_planner::guide_engine::Engine::new(&world);
-        let replaced: HashMap<usize, MoneyRow> = view.recipes.iter().map(|place| (place.row, lifescape_planner::guide_money::recipe_row(&engine, &place.ask, &place.answer, held))).collect();
+        let replaced: HashMap<usize, MoneyRow> = view
+            .recipes
+            .iter()
+            .filter(|place| view.rows.get(place.row).is_some_and(only))
+            .map(|place| (place.row, lifescape_planner::guide_money::recipe_row(&engine, &place.ask, &place.answer, held)))
+            .collect();
         let missing = unquoted.into_inner();
         if !missing.is_empty() {
             return Err(format!("guides store: held stock prices objects the cycle never quoted: {}", missing.join(", ")));

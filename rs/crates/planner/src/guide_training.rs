@@ -187,6 +187,49 @@ fn row_of(skill: &str, place: &Place, band: i64, supply: Supply, balance: Balanc
     Some(row)
 }
 
+/// Training rows of a recipe on the bot's own stock (R7, decision
+/// 2026-11-17 (a)): the money guide's recipe row of a place (inputs at
+/// their current sale price, D5: the coins are what transforming pays
+/// over selling the stock, often a cost), read for each skill it trains,
+/// coins converted at the bot's D17 (`best_profit`) and ticks to the
+/// band's end from `level`. The row keeps its conditions: one lot of the
+/// stock (`Prereqs::stock`), the consumables it buys; only a bot holding
+/// the lot works it (`guide_feasible`). The full window's economy (the
+/// rate while the bot works), never the share its stock covers: the stock
+/// bounds the batch, not the rate.
+pub fn stock_rows(recipe: &crate::guide_model::MoneyRow, level: u8, best_profit: Option<f64>) -> Vec<TrainingRow> {
+    let mut out = Vec::new();
+    for (skill, xp) in recipe.xp_6000.iter().filter(|(_, xp)| *xp > 0.0) {
+        let mut row = TrainingRow {
+            skill: skill.clone(),
+            band: recipe.band,
+            method: recipe.method.clone(),
+            style: recipe.style.clone(),
+            site: recipe.site,
+            tool: recipe.tool.clone(),
+            supply: Supply::Stock,
+            prereqs: recipe.prereqs.clone(),
+            xp_6000: *xp,
+            coins_6000: recipe.profit_6000,
+            coins_per_xp: -recipe.profit_6000 / xp,
+            converted_ticks_6000: 0.0,
+            effective_xp_6000: 0.0,
+            ticks_to_band_end: None,
+            other_xp_6000: recipe.xp_6000.iter().filter(|(name, _)| name != skill).cloned().collect(),
+            quest_xp: 0.0,
+            quest_ticks: None,
+            flows: recipe.flows.clone(),
+            routes: Vec::new(),
+            confidence: recipe.confidence.clone(),
+            price_confidence: recipe.price_confidence,
+            priced: recipe.priced,
+        };
+        crate::guide_read::convert(&mut row, best_profit, level);
+        out.push(row);
+    }
+    out
+}
+
 /// Quest shortcut rows of `skill` (D20) for the filter's bot.
 pub fn quest_rows(engine: &Engine, skill: &str, filter: &GuideFilter) -> Vec<TrainingRow> {
     let mut out = Vec::new();

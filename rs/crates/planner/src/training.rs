@@ -450,10 +450,15 @@ pub fn best_pick(skill: &str, level: u8, target: u8, prices: &TrainPrices, suppl
 /// (the resolver blocks on them at once). An elemental staff held pays
 /// its rune.
 pub fn missing_inputs(method: &str, level: u8, target: u8, held: &dyn Fn(&str) -> i64) -> Vec<String> {
+    missing_inputs_with(&crate::work_rate::prior_rate, method, level, target, held)
+}
+
+/// `missing_inputs` reading the yields from `rate` (R7, `plan_read`).
+pub fn missing_inputs_with(rate: crate::work_rate::RateReader, method: &str, level: u8, target: u8, held: &dyn Fn(&str) -> i64) -> Vec<String> {
     let staff = |item: &str| crate::tools::tool_family(item).iter().any(|name| name.starts_with("staff_of_") && held(name) > 0);
     let mut out = Vec::new();
-    for (item, _) in crate::sizing::tranche_consumption(method, level, target.max(level.saturating_add(1))) {
-        let first = crate::sizing::per_action_need(method, level, &item).unwrap_or(1).max(1);
+    for (item, _) in crate::sizing::tranche_consumption_with(rate, method, level, target.max(level.saturating_add(1))) {
+        let first = crate::sizing::per_action_need_with(rate, method, level, &item).unwrap_or(1).max(1);
         if !staff(&item) && held(&item) < first {
             out.push(item);
         }

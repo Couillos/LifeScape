@@ -85,6 +85,18 @@ pub struct ReadyCtx {
     /// Free wallet a trade lot may tie up (coins minus what the bot's
     /// resting buys and deals commit).
     pub trade_wallet: i64,
+    /// The money guide's lines this bot may take (plan rendements R7,
+    /// the brain's `brain_money`): a money or coin node draws among them
+    /// (`money_pick`). Empty: no guide published, or no earning line
+    /// within reach: the static money methods rank as before R7 (logged
+    /// by the brain).
+    pub money_guide: Vec<crate::guide_pick::GuideLine>,
+    /// Seed of this resolve's draw (`guide_pick::seed_for`: the bot's
+    /// seed, the node, its draw counter).
+    pub draw_seed: u64,
+    /// What this resolve drew from a guide (money here, training in the
+    /// brain), read back by the brain to log and record it.
+    pub drawn: std::cell::RefCell<Option<crate::guide_pick::Choice>>,
 }
 
 impl ReadyCtx {
@@ -117,6 +129,9 @@ impl ReadyCtx {
             maker_post: None,
             trades: Vec::new(),
             trade_wallet: 0,
+            money_guide: Vec::new(),
+            draw_seed: 0,
+            drawn: std::cell::RefCell::new(None),
         }
     }
 
@@ -189,7 +204,7 @@ fn next_id(counter: &mut usize) -> String {
 /// Reach tranches from the live level `from` (1 when unknown) to `to`:
 /// never a tranche at or below `from` (a level already held is never
 /// replayed), empty when the bot already holds `to`.
-pub(crate) fn reach_chain(skill: &str, from: u8, to: u8, counter: &mut usize, after: &mut String) -> Vec<Node> {
+pub(crate) fn reach_chain(skill: &str, from: u8, to: u8, counter: &mut usize, after: &mut String, rate: crate::work_rate::RateReader) -> Vec<Node> {
     let mut out = Vec::new();
     if to <= from.max(1) {
         return out;
@@ -210,7 +225,7 @@ pub(crate) fn reach_chain(skill: &str, from: u8, to: u8, counter: &mut usize, af
         // `sizing::tranche_ticks`); none without a rate (melee: the
         // skill rides in the node), the resolver's window then.
         let method = reach_method(skill, start);
-        let est_ticks = crate::sizing::tranche_ticks(&method, start, level).map(|ticks| ticks.ceil() as u64).unwrap_or(0);
+        let est_ticks = crate::sizing::tranche_ticks_with(rate, &method, start, level).map(|ticks| ticks.ceil() as u64).unwrap_or(0);
         node.alternatives.push(Alternative { method, est_ticks, est_coins: 0 });
         *after = id.clone();
         out.push(node);
@@ -251,13 +266,20 @@ pub fn expand_goal(goal: &GoalKind, profile: &Profile) -> Vec<Node> {
 /// below what the bot holds is never generated (live 2026-11-13: 40 % of
 /// melee climb ticks replayed reached tranches).
 pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&str) -> u8) -> Vec<Node> {
+    expand_goal_with(goal, profile, level_of, &crate::plan_read::PlanRead::prior())
+}
+
+/// `expand_goal_from` reading `read` (R7: the measured yields size the
+/// tranches and their obtains; a tranche the training guide will choose
+/// files nothing of its static method ahead, `plan_read`).
+pub fn expand_goal_with(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&str) -> u8, read: &crate::plan_read::PlanRead) -> Vec<Node> {
     let mut counter = 0usize;
     let mut nodes = Vec::new();
     match goal {
         GoalKind::MaxSkills { skills, level } => {
             for skill in skills {
                 let mut after = String::new();
-                nodes.extend(crate::skeleton_deps::reach_chain_planned(skill, level_of(skill), *level, &mut counter, &mut after, NESTED_DEPTH));
+                nodes.extend(crate::skeleton_deps::reach_chain_with(skill, level_of(skill), *level, &mut counter, &mut after, NESTED_DEPTH, read));
             }
         }
         GoalKind::Obtain { item, count } => {
@@ -272,7 +294,7 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
             nodes.push(node);
         }
         GoalKind::CompleteQuest { quest } => {
-            nodes.extend(expand_quest_from(quest, profile, &mut counter, level_of));
+            nodes.extend(expand_quest_planned(quest, profile, &mut counter, level_of, NESTED_DEPTH, read));
         }
         GoalKind::EquipBest { style } => {
             // PRD3 lot 5: the resolver's set for a fresh bot (levels and
@@ -305,7 +327,7 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
             nodes.push(node);
         }
         GoalKind::AccessArea { area } => {
-            nodes.extend(expand_access(area, profile, &mut counter, level_of));
+            nodes.extend(expand_access_planned(area, profile, &mut counter, level_of, NESTED_DEPTH, read));
         }
         GoalKind::Produce { item, count } => {
             // A production quota (ambition milestone): production legs
@@ -344,18 +366,18 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
 /// its quest rung; the `access` node depends on all of them. Shared by
 /// `access` goals and `access:<area>` blocks (`record_block_from`).
 pub fn expand_access(area: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8) -> Vec<Node> {
-    expand_access_planned(area, profile, counter, level_of, NESTED_DEPTH)
+    expand_access_planned(area, profile, counter, level_of, NESTED_DEPTH, &crate::plan_read::PlanRead::prior())
 }
 
 /// `expand_access` whose climbs file their skeleton dependencies down to
 /// `depth` nested quest/guild expansions.
-pub fn expand_access_planned(area: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8) -> Vec<Node> {
+pub fn expand_access_planned(area: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8, read: &crate::plan_read::PlanRead) -> Vec<Node> {
     let mut nodes = Vec::new();
     let mut deps = Vec::new();
     if let Some((_, level, uniform)) = lifescape_gamedata::services::GUILDS.iter().find(|entry| entry.0 == area) {
         if let Some(skill) = guild_skill(area) {
             let mut after = String::new();
-            let chain = crate::skeleton_deps::reach_chain_planned(skill, level_of(skill), (*level).min(99) as u8, counter, &mut after, depth);
+            let chain = crate::skeleton_deps::reach_chain_with(skill, level_of(skill), (*level).min(99) as u8, counter, &mut after, depth, read);
             if let Some(last) = chain.last() {
                 deps.push(last.id.clone());
             }
@@ -369,7 +391,7 @@ pub fn expand_access_planned(area: &str, profile: &Profile, counter: &mut usize,
     } else if area == "champions_guild" {
         // The door turns away anyone under 32 quest points
         // (`champions_guild.rs2`): the quest-point ladder.
-        let (rungs, last) = quest_point_rungs(32, "", profile, counter, level_of, depth);
+        let (rungs, last) = quest_point_rungs(32, "", profile, counter, level_of, depth, read);
         nodes.extend(rungs);
         deps.extend(last);
     }
@@ -389,23 +411,23 @@ pub fn expand_quest(quest: &str, profile: &Profile, counter: &mut usize) -> Vec<
 
 /// `expand_quest` with skill gates climbing from the live levels.
 pub fn expand_quest_from(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8) -> Vec<Node> {
-    expand_quest_planned(quest, profile, counter, level_of, NESTED_DEPTH)
+    expand_quest_planned(quest, profile, counter, level_of, NESTED_DEPTH, &crate::plan_read::PlanRead::prior())
 }
 
 /// `expand_quest_from` whose climbs file their skeleton dependencies down
 /// to `depth` nested quest/guild expansions.
-pub fn expand_quest_planned(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8) -> Vec<Node> {
-    expand_quest_inner(quest, profile, counter, level_of, depth, true)
+pub fn expand_quest_planned(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8, read: &crate::plan_read::PlanRead) -> Vec<Node> {
+    expand_quest_inner(quest, profile, counter, level_of, depth, true, read)
 }
 
 /// Quest-point rungs (`quests::quest_point_ladder`) chained in order, each
 /// rung's own requirements expanded (never its own ladder: the order
 /// already reaches its gate). Returns the nodes and the last rung's id.
-fn quest_point_rungs(points: i64, target: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8) -> (Vec<Node>, Option<String>) {
+fn quest_point_rungs(points: i64, target: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8, read: &crate::plan_read::PlanRead) -> (Vec<Node>, Option<String>) {
     let mut nodes: Vec<Node> = Vec::new();
     let mut previous: Option<String> = None;
     for rung in crate::quests::quest_point_ladder(points, target, &[]) {
-        let mut chain = expand_quest_inner(&rung, profile, counter, level_of, depth.saturating_sub(1), false);
+        let mut chain = expand_quest_inner(&rung, profile, counter, level_of, depth.saturating_sub(1), false, read);
         if let (Some(before), Some(last)) = (previous.as_ref(), chain.last_mut()) {
             last.deps.push(before.clone());
         }
@@ -415,13 +437,13 @@ fn quest_point_rungs(points: i64, target: &str, profile: &Profile, counter: &mut
     (nodes, previous)
 }
 
-fn expand_quest_inner(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8, with_ladder: bool) -> Vec<Node> {
+fn expand_quest_inner(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8, with_ladder: bool, read: &crate::plan_read::PlanRead) -> Vec<Node> {
     let mut nodes = Vec::new();
     let mut deps = Vec::new();
     if let Some(required) = lifescape_gamedata::quest_requirements::by_key(quest) {
         for gate in &required.skills {
             let mut after = String::new();
-            let chain = crate::skeleton_deps::reach_chain_planned(&gate.skill, level_of(&gate.skill), gate.level.min(99) as u8, counter, &mut after, depth);
+            let chain = crate::skeleton_deps::reach_chain_with(&gate.skill, level_of(&gate.skill), gate.level.min(99) as u8, counter, &mut after, depth, read);
             if let Some(last) = chain.last() {
                 deps.push(last.id.clone());
             }
@@ -437,7 +459,7 @@ fn expand_quest_inner(quest: &str, profile: &Profile, counter: &mut usize, level
         // Quest-point gate (Black Knights' Fortress 12, Dragon Slayer 32):
         // the real ladder, cheapest points first, each rung expanded.
         if required.quest_points > 0 && with_ladder {
-            let (rungs, last) = quest_point_rungs(required.quest_points, quest, profile, counter, level_of, depth);
+            let (rungs, last) = quest_point_rungs(required.quest_points, quest, profile, counter, level_of, depth, read);
             nodes.extend(rungs);
             deps.extend(last);
         }

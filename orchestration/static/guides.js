@@ -127,8 +127,23 @@ var GuidesView = (function () {
     return true;
   }
 
+  // Order rank of a line's feasibility (D22 Q1): feasible now, after
+  // prerequisites, infeasible, unjudged last.
+  var STATE_RANK = { feasible: 0, after_prereqs: 1, infeasible: 2 };
+  function stateRank(row) {
+    var state = row.feasibility ? row.feasibility.state : '';
+    return STATE_RANK.hasOwnProperty(state) ? STATE_RANK[state] : 3;
+  }
+
+  // True when the filter describes a bot (a level, levels, quests, held
+  // stock, coins): its feasible lines then come first (D22 Q1, R7).
+  function hasProfile(filter) {
+    return ['level', 'levels', 'quests', 'held', 'coins'].some(function (key) { return filter[key] !== undefined && filter[key] !== null && String(filter[key]).trim() !== ''; });
+  }
+
   // Rows the page shows: the feasibility for the profile, the text
-  // search, then the best `limit` (the API already sorts best first).
+  // search, the feasible lines first when a profile is given (the API's
+  // order kept within each state), then the best `limit`.
   function visibleRows(rows, options) {
     var needle = (options.search || '').trim().toLowerCase();
     var out = rows.filter(function (row) {
@@ -136,6 +151,11 @@ var GuidesView = (function () {
       if (!needle) return true;
       return [row.method, row.style, row.site, row.tool, row.family, row.skill, row.supply].filter(Boolean).join(' ').toLowerCase().indexOf(needle) >= 0;
     });
+    if (options.feasibleFirst) {
+      out = out.map(function (row, index) { return { row: row, index: index }; })
+        .sort(function (left, right) { return stateRank(left.row) - stateRank(right.row) || left.index - right.index; })
+        .map(function (entry) { return entry.row; });
+    }
     return options.limit > 0 ? out.slice(0, options.limit) : out;
   }
 
@@ -240,7 +260,9 @@ var GuidesView = (function () {
 
     function render() {
       if (!state.payload) return;
-      var options = { search: value('search'), feasibility: value('feasibility'), limit: parseInt(value('limit'), 10) || 0 };
+      var profile = {};
+      QUERY_KEYS.forEach(function (key) { profile[key] = value(key); });
+      var options = { search: value('search'), feasibility: value('feasibility'), limit: parseInt(value('limit'), 10) || 0, feasibleFirst: hasProfile(profile) };
       var rows = visibleRows(state.rows, options);
       document.getElementById('summary').textContent = state.rows.length + ' line(s), ' + rows.length + ' shown · ' + freshnessText(state.payload) +
         (state.payload.market_wait_ticks ? ' · market wait ' + Math.round(state.payload.market_wait_ticks) + ' ticks/lot' : ' · market wait unmeasured');
@@ -306,7 +328,7 @@ var GuidesView = (function () {
     return [MONEY_COLS, TRAINING_COLS].map(function (cols) { return cols.some(function (col) { return col.key === key && typeof col.fmt === 'function'; }); });
   }
 
-  return { start: start, sortOptions: sortOptions, confidenceText: confidenceText, confidenceHtml: confidenceHtml, columnFormats: columnFormats, queryOf: queryOf, visibleRows: visibleRows, conditionsText: conditionsText, conditionsHtml: conditionsHtml, feasibilityText: feasibilityText, xpText: xpText, number: number, routeText: routeText, freshnessText: freshnessText, retryDelay: retryDelay };
+  return { start: start, hasProfile: hasProfile, sortOptions: sortOptions, confidenceText: confidenceText, confidenceHtml: confidenceHtml, columnFormats: columnFormats, queryOf: queryOf, visibleRows: visibleRows, conditionsText: conditionsText, conditionsHtml: conditionsHtml, feasibilityText: feasibilityText, xpText: xpText, number: number, routeText: routeText, freshnessText: freshnessText, retryDelay: retryDelay };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {

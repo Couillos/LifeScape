@@ -61,7 +61,16 @@ pub(crate) fn guild_only(method: &str) -> Option<&'static str> {
 /// needs filed in front of it (module doc). `depth` bounds nested quest
 /// and guild expansions (a quest's own climbs file their deps once).
 pub fn reach_chain_planned(skill: &str, from: u8, to: u8, counter: &mut usize, after: &mut String, depth: u8) -> Vec<Node> {
-    let tranches = crate::expand::reach_chain(skill, from, to, counter, after);
+    reach_chain_with(skill, from, to, counter, after, depth, &crate::plan_read::PlanRead::prior())
+}
+
+/// `reach_chain_planned` reading `read` (R7, `plan_read`): the tranches'
+/// durations and consumption from its yields; a tranche the training
+/// guide will choose at resolve (`guide_trains`) files no tool and no
+/// consumption of the static method (the pick blocks on what it lacks),
+/// only its quest and guild.
+pub fn reach_chain_with(skill: &str, from: u8, to: u8, counter: &mut usize, after: &mut String, depth: u8, read: &crate::plan_read::PlanRead) -> Vec<Node> {
+    let tranches = crate::expand::reach_chain(skill, from, to, counter, after, read.rate);
     let mut out: Vec<Node> = Vec::new();
     let mut tools_filed: Vec<String> = Vec::new();
     let mut previous: Option<String> = None;
@@ -74,7 +83,8 @@ pub fn reach_chain_planned(skill: &str, from: u8, to: u8, counter: &mut usize, a
         let method = tranche.alternatives.first().map(|alt| alt.method.clone()).unwrap_or_default();
         let wait: Vec<String> = previous.iter().cloned().collect();
         let mut extra: Vec<String> = Vec::new();
-        if let Some(need) = crate::tools::required_tool(&method) {
+        let guided = (read.guide_trains)(skill, start, level);
+        if let Some(need) = crate::tools::required_tool(&method).filter(|_| !guided) {
             // One obtain per tool for the whole chain: the first tranche
             // that needs it waits on it, later ones follow that tranche.
             for tool in &need.tools {
@@ -92,8 +102,8 @@ pub fn reach_chain_planned(skill: &str, from: u8, to: u8, counter: &mut usize, a
         // (`training`): nothing to file ahead, its pick
         // blocks typed on what it lacks. Smithing files the bars of its
         // static product (held bars weigh the pick toward them).
-        let priced_later = skill == "magic" && crate::training::priced_at_resolve(skill, start);
-        for (item, units) in if priced_later { Vec::new() } else { crate::sizing::tranche_consumption(&method, start, level) } {
+        let priced_later = guided || (skill == "magic" && crate::training::priced_at_resolve(skill, start));
+        for (item, units) in if priced_later { Vec::new() } else { crate::sizing::tranche_consumption_with(read.rate, &method, start, level) } {
             if units <= 0 {
                 continue;
             }
@@ -103,14 +113,14 @@ pub fn reach_chain_planned(skill: &str, from: u8, to: u8, counter: &mut usize, a
         }
         if depth > 0 {
             if let Some(quest) = crate::quests::method_quest(&method, None) {
-                let chain = crate::expand::expand_quest_planned(&quest, &neutral_profile(), counter, &|_| 1, depth - 1);
+                let chain = crate::expand::expand_quest_planned(&quest, &neutral_profile(), counter, &|_| 1, depth - 1, read);
                 if let Some(last) = chain.last() {
                     extra.push(last.id.clone());
                 }
                 out.extend(chain);
             }
             if let Some(guild) = guild_only(&method) {
-                let chain = crate::expand::expand_access_planned(guild, &neutral_profile(), counter, &|_| 1, depth - 1);
+                let chain = crate::expand::expand_access_planned(guild, &neutral_profile(), counter, &|_| 1, depth - 1, read);
                 if let Some(last) = chain.last() {
                     extra.push(last.id.clone());
                 }

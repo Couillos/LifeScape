@@ -71,3 +71,26 @@ fn a_measured_rate_drives_ticks_and_consumption() {
     assert!(tranche_ticks("cook/raw_shrimp", 1, 10).is_some_and(|ticks| ticks > 0.0), "the game prior");
     assert!(xp_per_action("fight:melee/cows", 1).is_none(), "a melee fight's skill rides in its node");
 }
+
+/// R7 (b): a block's obtain counts read the reader the brain hands
+/// (`replan::need_count_with`): a measured rate twice as hungry in
+/// feathers asks twice the feathers of the prior.
+#[test]
+fn block_counts_read_the_measured_reader() {
+    let hungry = |method: &str, level: u8| {
+        crate::work_rate::prior_rate(method, level).map(|mut rate| {
+            for flow in &mut rate.flows_6000 {
+                if flow.0 == "feather" {
+                    flow.2 *= 2.0;
+                }
+            }
+            rate
+        })
+    };
+    let mut node = crate::model::Node::new("n1", crate::model::NodeKind::ReachLevel { skill: "fishing".to_string(), level: 30 }, Vec::new(), 30);
+    node.method = Some("gather:fishing/raw_trout".to_string());
+    let prior = crate::replan::need_count_from(&node, "feather", Some(20));
+    let measured = crate::replan::need_count_with(&node, "feather", Some(20), &hungry);
+    assert!(prior > 100 && (measured - 2 * prior).abs() <= 1, "measured {measured} vs prior {prior}");
+    assert_eq!(super::tranche_need_with(&hungry, "gather:fishing/raw_trout", 20, 30, "feather"), Some(measured));
+}

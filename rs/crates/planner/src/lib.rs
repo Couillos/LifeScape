@@ -33,6 +33,7 @@ pub mod guide_flows;
 pub mod guide_methods;
 pub mod guide_model;
 pub mod guide_money;
+pub mod guide_pick;
 pub mod guide_prereq;
 pub mod guide_read;
 pub mod guide_training;
@@ -54,7 +55,9 @@ pub mod method_rate_units;
 pub mod unit_xp;
 pub mod spell_methods;
 pub mod model;
+pub mod money_pick;
 pub mod obtain_legs;
+pub mod plan_read;
 pub mod profit;
 pub mod quest_hold;
 pub mod quests;
@@ -92,7 +95,7 @@ pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, ra
 pub use expand::{expand_goal, expand_goal_from, method_feasible, required_tool, resolve_ready};
 pub use lifecycle_retire::{retire_due, retire_finished, Retirement};
 pub use life_memory::{LifeMemory, Retired, RECENT_CAP};
-pub use lifecycle::{abandon_for_role, max_id_number, complete_node, end_engagement, graph_state, insert_gear_step, insert_ready, park_for_fill, withdraw_gear_step, mark_launched, reached_live, next_id, normalize, record_block, record_block_from, record_contract_error, retry_uncounted, record_failure, record_failure_timed, record_progress, record_xp, retarget_market, retarget_produce, revive_stuck, FailureFold, GraphState, MAX_BLOCKS, MAX_FAILURES, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
+pub use lifecycle::{abandon_for_role, max_id_number, complete_node, end_engagement, graph_state, insert_gear_step, insert_ready, park_for_fill, withdraw_gear_step, mark_launched, reached_live, next_id, normalize, record_block, record_block_from, record_block_with, record_contract_error, retry_uncounted, record_failure, record_failure_timed, record_progress, record_xp, retarget_market, retarget_produce, revive_stuck, FailureFold, GraphState, MAX_BLOCKS, MAX_FAILURES, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
 pub use bans_scope::{banned_scope, market_failed, market_route, market_unfilled_error, rescue_candidates, rescued_before, MARKET_RESCUE_TAG, PRODUCE_RESCUE_TAG};
 pub use bans::{ban_entry, ban_states, banned_skills, quest_lifted_bans, stuck_cause, unban_entry, BanState, StuckCause, SKILL_BAN_TICKS, UNBAN_TAG};
 pub use gear_ladder::{gear_move, next_gear_step, next_ready, next_ready_except, withdraw_dead_steps, withdraw_melee_set, GearMove, GearStep, GEAR_SHARE_PCT, TOOL_SHARE_PCT};
@@ -100,7 +103,7 @@ pub use profit::{chain_profit, ChainProfit, ProfitError};
 pub use quests::{method_quest, missing_quest, quests_done_from, quests_done_in_graph};
 pub use quest_hold::{cooled_quest_nodes, cooled_quests, node_quest, open_quests, quest_ban_key, quest_shortfalls, reserved_quest_objects, withhold_reserved, QuestShortfall, QUEST_BAN_PREFIX};
 pub use side_goal::{goal_feasible, method_banned, side_goal, side_goal_with, steer_for_work, steer_off_bans, WorkSteer, SIDE_PREFIX};
-pub use goals::{append_goal, draw_goal, draw_goal_origin, goal_closed, goal_root_done, goal_skills, lowest_skill_goal, serves_goal, next_goal, NoGoal, DONE_TAG, OVERALL_SKILLS, STUCK_TAG, TRAINABLE};
+pub use goals::{append_goal, append_goal_with, draw_goal, draw_goal_origin, goal_closed, goal_root_done, goal_skills, lowest_skill_goal, serves_goal, next_goal, NoGoal, DONE_TAG, OVERALL_SKILLS, STUCK_TAG, TRAINABLE};
 pub use ambition::{
     achieved, ambition_from_value, describe as describe_ambition, ambition_to_value, drop_stale_products, extend as extend_ambition, goal_for_milestone, mark_drawn, may_change, new_ambition,
     new_ambition_extended, next_milestone, open_count, pinned, pinned_ambition, release_pin, AmbitionError, BotNow, Pin,

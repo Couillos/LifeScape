@@ -18,10 +18,13 @@
 //! - a negative score (the line earns more than its time costs) keeps the
 //!   same order: the weight divides it instead of multiplying.
 //!
-//! Lower score wins. A blocked, inaccessible or XP-less line has none; an
-//! Ironman never scores a market line. The choice among the scored lines
-//! is `choose`: today the best score; R7 replaces it with the weighted
-//! draw D10 (lines within 15 % of the top, D14 exploration).
+//! Lower score wins. An XP-less line has none; an Ironman never scores a
+//! market line. The choice among the scored lines is the draw of R7
+//! (`pick`, `guide_pick`: the lines the bot works now first, then those
+//! it works after a tool or a lot's coins; within that class a weighted
+//! draw among the lines within 15 % of the best score, D10, and the
+//! unmeasured lines' 5 % of exploration, D14); `best` is the head of the
+//! order (the score alone, what the R6 examples state).
 
 use crate::guide_model::{Supply, TrainingRow, WINDOW_TICKS};
 use crate::model::Profile;
@@ -86,11 +89,46 @@ pub fn rank_rows<'a>(rows: &'a [TrainingRow], profile: &Profile, ticks_per_coin:
     out
 }
 
-/// The line a bot trains with among `ranked` (`rank_rows`): the best
-/// score. R7 extension point: the weighted draw (D10, D14) takes this
-/// place, fed the same ranked lines and the bot's seed.
-pub fn choose<'a>(ranked: &[(LineScore, &'a TrainingRow)]) -> Option<&'a TrainingRow> {
+/// The best scored line of `ranked` (`rank_rows`): the head of the
+/// order, what the score alone says (the draw is `pick`).
+pub fn best<'a>(ranked: &[(LineScore, &'a TrainingRow)]) -> Option<&'a TrainingRow> {
     ranked.first().map(|(_, row)| *row)
+}
+
+/// One scored line of a bot with its class (`guide_pick::class_order`:
+/// 0 feasible now, 1 after a lot's coins, 2 after a tool to obtain).
+#[derive(Debug, Clone)]
+pub struct Classed<'a> {
+    pub score: LineScore,
+    pub row: &'a TrainingRow,
+    pub class: u8,
+}
+
+/// The scored lines of `rows` for `profile` with the class `class_of`
+/// gives each (`None`: out of the bot's reach, never drawn), best score
+/// first.
+pub fn rank_classed<'a>(rows: &'a [TrainingRow], profile: &Profile, ticks_per_coin: Option<f64>, class_of: &dyn Fn(&TrainingRow) -> Option<u8>) -> Vec<Classed<'a>> {
+    let mut out: Vec<Classed> = rows.iter().filter_map(|row| Some(Classed { class: class_of(row)?, score: score_row(row, profile, ticks_per_coin)?, row })).collect();
+    out.sort_by(|left, right| left.score.score.total_cmp(&right.score.score));
+    out
+}
+
+/// The line a bot trains with (R7): the draw of `guide_pick` over the
+/// first non-empty class of `ranked`, its score the line's (minus its
+/// weighted ticks per XP), its weight `merit_training`, its runs the
+/// yield's measured runs; with the index of the line in `ranked`.
+pub fn pick(ranked: &[Classed], seed: u64) -> Option<(usize, crate::guide_pick::Drawn)> {
+    let classes: Vec<u8> = ranked.iter().map(|line| line.class).collect();
+    let (_, members) = crate::guide_pick::first_class(&classes);
+    let candidates: Vec<crate::guide_pick::Candidate> = members
+        .iter()
+        .map(|index| {
+            let line = &ranked[*index];
+            crate::guide_pick::Candidate { score: -line.score.score, weight: crate::guide_pick::merit_training(line.score.score), runs: line.row.confidence.runs }
+        })
+        .collect();
+    let drawn = crate::guide_pick::draw(&candidates, seed)?;
+    Some((members[drawn.index], drawn))
 }
 
 #[cfg(test)]

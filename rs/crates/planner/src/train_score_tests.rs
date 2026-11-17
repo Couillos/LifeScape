@@ -1,4 +1,4 @@
-use super::{choose, coin_weight, market_weight, rank_rows, score_row, ticks_per_coin};
+use super::{best as choose, coin_weight, market_weight, rank_rows, score_row, ticks_per_coin};
 use crate::guide_model::{Confidence, Prereqs, SourceGap, Supply, TrainingRow};
 use crate::model::{Archetype, Profile};
 

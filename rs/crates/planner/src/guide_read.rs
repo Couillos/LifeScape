@@ -16,7 +16,9 @@
 //!   quests (its own D17 outside the chains);
 //! - `held`: the money recipe rows re-evaluated on the bot's stock by the
 //!   caller (`guide_money::recipe_row`, `replaced`), every other row
-//!   kept.
+//!   kept; training: the recipe rows of the money view read as training
+//!   on the bot's own stock (`guide_training::stock_rows`, supply
+//!   `stock`, R7) beside the view's rows.
 //!
 //! Then priced rows first (D22: never "usable first", no row is blocked;
 //! an unpriced row has no value to rank by), then by value, ties in
@@ -143,7 +145,14 @@ pub fn convert(row: &mut TrainingRow, profit: Option<f64>, level: u8) {
 /// when it differs from the view's own (quests, a level under the
 /// view's): every method row is then converted again with it.
 pub fn finish_training(view: &TrainingView, filter: &GuideFilter, d17: Option<&dyn Fn(i64) -> Option<f64>>) -> (Vec<TrainingRow>, Vec<Unrated>) {
-    let mut rows: Vec<TrainingRow> = Vec::new();
+    finish_training_with(view, filter, d17, Vec::new())
+}
+
+/// `finish_training` with `extra` rows read for this reader (R7: the
+/// recipes on its own stock, `guide_training::stock_rows`), filtered and
+/// ordered with the view's.
+pub fn finish_training_with(view: &TrainingView, filter: &GuideFilter, d17: Option<&dyn Fn(i64) -> Option<f64>>, extra: Vec<TrainingRow>) -> (Vec<TrainingRow>, Vec<Unrated>) {
+    let mut rows: Vec<TrainingRow> = extra.into_iter().filter(|row| filter.skill.as_ref().is_none_or(|skill| *skill == row.skill) && !gated_out(&row.method, filter)).collect();
     for stored in &view.rows {
         let quest = stored.method.strip_prefix("quest:");
         if filter.skill.as_ref().is_some_and(|skill| *skill != stored.skill) || quest.is_some_and(|key| filter.quests_done.iter().any(|done| done == key)) {

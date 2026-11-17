@@ -242,6 +242,14 @@ pub struct GuideFilter {
     pub coins: Option<f64>,
 }
 
+impl GuideFilter {
+    /// True when the filter describes a bot (D22 Q1, R7): a level, levels,
+    /// quests, a stock or a wallet; its feasible lines then come first.
+    pub fn has_profile(&self) -> bool {
+        self.level.is_some() || !self.levels.is_empty() || !self.quests_done.is_empty() || !self.held.is_empty() || self.coins.is_some()
+    }
+}
+
 /// Money making family (§2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Family {
@@ -453,6 +461,10 @@ pub enum Supply {
     Market,
     /// A quest's fixed XP (D20).
     Quest,
+    /// The bot's own stock transformed (R7: the money guide's recipe row
+    /// read as training, inputs at their sale price, D5): only for a
+    /// reader holding one lot of the stock (`GuideFilter::held`).
+    Stock,
 }
 
 impl Supply {
@@ -461,6 +473,7 @@ impl Supply {
             Supply::Autonomous => "autonomous",
             Supply::Market => "market",
             Supply::Quest => "quest",
+            Supply::Stock => "stock",
         }
     }
 }

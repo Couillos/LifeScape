@@ -18,7 +18,7 @@
 
 use lifescape_json::Value;
 use lifescape_planner::{
-    append_goal, ban_entry, ban_states, draw_goal_origin, goal_closed, mark_drawn, goal_skills, stuck_cause, unban_entry, BanState, GoalKind,
+    ban_entry, ban_states, draw_goal_origin, goal_closed, mark_drawn, goal_skills, stuck_cause, unban_entry, BanState, GoalKind,
     Life, NoGoal, StuckCause, DONE_TAG, SIDE_PREFIX, SKILL_BAN_TICKS,
 };
 
@@ -197,7 +197,10 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     // the bot's own listings are not checked by the fill (b3gybcev).
     let locks = crate::brain_locks::locked_items(&life.account);
     let held_of = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item));
-    append_goal(life, next, &profile, &level_of, &held_of);
+    // R7: tranches sized on the measured yields, nothing of a static
+    // method filed ahead where the training guide will choose.
+    let view = crate::brain_plan_read::BotView::of(life);
+    crate::brain_plan_read::with_plan_read(&view, live, |read| lifescape_planner::append_goal_with(life, next, &profile, &level_of, &held_of, read));
     mark_drawn(life, origin.as_deref());
     let label = match origin.as_deref() {
         Some(side)

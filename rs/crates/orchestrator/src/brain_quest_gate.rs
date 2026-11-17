@@ -263,7 +263,8 @@ pub(crate) fn hold_pass(job: &Job, life: &mut Life, live: &Value) -> (bool, Vec<
             }
             GateMove::Obtain(missing) => {
                 let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
-                let fold = lifescape_planner::record_block_from(life, position, &missing, &level_of);
+                let view = crate::brain_plan_read::BotView::of(life);
+                let fold = crate::brain_plan_read::with_plan_read(&view, live, |read| lifescape_planner::record_block_with(life, position, &missing, &level_of, read));
                 push_history(life, &id, crate::brain_launch::block_outcome(&fold));
                 crate::logln!("brain {}: quest {quest} ({id}) not launched: {} -> obtained first", job.account, reasons.join("; "));
                 lifescape_planner::normalize(life);
