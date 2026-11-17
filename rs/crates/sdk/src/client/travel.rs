@@ -1185,7 +1185,7 @@ impl Bot {
         while self.world.ticks < settled {
             self.pump(1)?;
             if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
-                return Ok(());
+                return self.settle_after_script();
             }
             if self.world.ticks > deadline {
                 return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
@@ -1221,7 +1221,7 @@ impl Bot {
         while self.world.ticks < watched {
             self.pump(1)?;
             if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
-                return Ok(());
+                return self.settle_after_script();
             }
             if self.door_live_open(door) {
                 return self.step_door_through(door, cross_to, deadline);
@@ -1424,7 +1424,7 @@ impl Bot {
                 )));
             }
             if (self.world.x, self.world.z, self.world.level) == (expect.x, expect.z, expect.level) {
-                return Ok(());
+                return self.settle_after_script();
             }
             let jumped = self.world.level != start.2
                 || (self.world.x - start.0).abs().max((self.world.z - start.1).abs()) > 2;
@@ -1551,6 +1551,7 @@ pub(crate) fn test_nav_context() -> (Arc<StaticWorld>, Arc<Tables>) {
     world.set_f2p(zones);
     let tables = Tables::load(&data).expect("tables");
     world.set_sky_floors(tables.sky_floors.clone());
+    world.set_npc_blockers(tables.npc_blockers.clone());
     (world, Arc::new(tables))
 }
 

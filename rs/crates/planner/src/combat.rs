@@ -194,6 +194,9 @@ pub enum SitePick {
     /// the dependency that opens it (`access:crafting_guild` — skill and
     /// uniform —, or the key object to obtain).
     Access(&'static str, Option<&'static str>),
+    /// Every site this bot works safely is cooled for it (`cooldown`,
+    /// P1/D4): the method waits out the cooldown, another one serves.
+    Cooled,
 }
 
 /// Station families whose server way places them (furnace, anvil, range,
@@ -349,48 +352,103 @@ pub const CROWD_TILES: i64 = 40;
 /// same working area as a candidate.
 pub const CROWD_RADIUS: i64 = 15;
 
-/// Crowd penalty of `site`: the bots of `crowd` working within
-/// `CROWD_RADIUS`, each worth `CROWD_TILES`.
-pub fn crowd_penalty(site: (i64, i64, i64), crowd: &[((i64, i64, i64), u32)]) -> i64 {
-    let bots: i64 = crowd
+/// Fleet bots of `crowd` working within `CROWD_RADIUS` of `site`.
+pub fn crowd_bots(site: (i64, i64, i64), crowd: &[((i64, i64, i64), u32)]) -> i64 {
+    crowd
         .iter()
         .filter(|(other, _)| other.2 == site.2 && (other.0 - site.0).abs().max((other.1 - site.1).abs()) <= CROWD_RADIUS)
         .map(|(_, count)| i64::from(*count))
-        .sum();
-    bots * CROWD_TILES
+        .sum()
+}
+
+/// Crowd penalty of `site`: the bots of `crowd` working within
+/// `CROWD_RADIUS`, each worth `CROWD_TILES`.
+pub fn crowd_penalty(site: (i64, i64, i64), crowd: &[((i64, i64, i64), u32)]) -> i64 {
+    crowd_bots(site, crowd) * CROWD_TILES
+}
+
+/// Workers a gathering site holds (plan P7a): its resource nodes (trees,
+/// rocks, fishing spots of the method) within `CROWD_RADIUS`. `None` for
+/// a fight camp or a station (no node count: the crowd penalty alone).
+pub fn site_capacity(method: &str, site: (i64, i64, i64)) -> Option<i64> {
+    let (kind, _) = method_sites(method)?;
+    if kind == "fight" {
+        return None;
+    }
+    let table = method_site_table(method)?;
+    let nodes = table.iter().filter(|row| row.site.2 == site.2 && (row.site.0 - site.0).abs().max((row.site.1 - site.1).abs()) <= CROWD_RADIUS).count();
+    Some(nodes.max(1) as i64)
+}
+
+/// True when the fleet already works every node of the site (P7a, D2:
+/// the Mining Guild's 5 mithril rocks held 23 miners, 2026-11-17).
+pub fn site_full(method: &str, site: (i64, i64, i64), crowd: &[((i64, i64, i64), u32)]) -> bool {
+    site_capacity(method, site).is_some_and(|capacity| crowd_bots(site, crowd) >= capacity)
 }
 
 /// `pick_site_gated` reading the fleet's sites: among equally open
-/// sites, distance plus the crowd penalty picks (guilds still first).
+/// sites, a site with a free node first (`site_full`), then distance
+/// (from the surface tile of an underground site) plus the crowd
+/// penalty. A guild is a site like any other (user decision D2,
+/// 2026-11-17: no guild priority).
 pub fn pick_site_crowded(method: &str, combat: u8, position: Option<(i64, i64, i64)>, fare: Fare, pass: &Pass, crowd: &[((i64, i64, i64), u32)]) -> SitePick {
+    pick_site_avoiding(method, combat, position, fare, pass, crowd, &[])
+}
+
+/// The ready node's site pick: `pick_site_crowded` with the bot's fare,
+/// gates and fleet crowd, never on a site this bot cooled for `method`
+/// (`cooldown`, plan P1/D4).
+pub fn pick_site_for(method: &str, ctx: &crate::expand::ReadyCtx) -> SitePick {
+    let avoid = crate::cooldown::cooled_sites(&ctx.cooled, method);
+    pick_site_avoiding(method, ctx.combat, ctx.position, Fare::of(ctx), &Pass::of(ctx), &ctx.crowd, &avoid)
+}
+
+/// `pick_site_crowded` without the `avoid` sites: when they cover every
+/// site this combat level works, `Cooled` (never a combat need).
+pub fn pick_site_avoiding(
+    method: &str,
+    combat: u8,
+    position: Option<(i64, i64, i64)>,
+    fare: Fare,
+    pass: &Pass,
+    crowd: &[((i64, i64, i64), u32)],
+    avoid: &[(i64, i64, i64)],
+) -> SitePick {
     let Some(table) = method_site_table(method) else {
         return SitePick::Anywhere;
     };
-    let rows: Vec<&SiteRow> = table.iter().filter(|row| row.open_ever).collect();
+    let ever: Vec<&SiteRow> = table.iter().filter(|row| row.open_ever).collect();
+    let rows: Vec<&SiteRow> = ever.iter().copied().filter(|row| !avoid.contains(&row.site)).collect();
+    if !avoid.is_empty() && ever.iter().any(|row| row.required <= combat) && !rows.iter().any(|row| row.required <= combat) {
+        return SitePick::Cooled;
+    }
     let distance = |site: &(i64, i64, i64)| {
+        // Underground sites (the Mining Guild, the Dwarven Mine) read
+        // from their surface entrance, like the bot's own position.
+        let (site_x, site_z, site_level) = lifescape_gamedata::access::surface_of(site.0, site.1, site.2);
         let walk = match position {
-            Some((x, z, level)) => (site.0 - x).abs() + (site.1 - z).abs() + if site.2 == level { 0 } else { 1000 },
+            Some((x, z, level)) => {
+                let (from_x, from_z, from_level) = lifescape_gamedata::access::surface_of(x, z, level);
+                (site_x - from_x).abs() + (site_z - from_z).abs() + if site_level == from_level { 0 } else { 1000 }
+            }
             None => 0,
         };
         walk + crowd_penalty(*site, crowd)
     };
+    let full = |site: &(i64, i64, i64)| site_full(method, *site, crowd);
     let across = |site: &(i64, i64, i64)| position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, *site));
     let safe: Vec<&SiteRow> = rows.iter().copied().filter(|row| row.required <= combat).collect();
     // The Karamja boat opens with its fare (budgeted below, like the toll).
     let passes = |gate: &lifescape_gamedata::access::Gate| pass.opens(gate) || matches!(gate, lifescape_gamedata::access::Gate::Boat { area: "karamja", .. });
     let open: Vec<(i64, i64, i64)> = safe.iter().filter(|row| row.gates.iter().all(passes)).map(|row| row.site).collect();
     let boat = |site: &(i64, i64, i64)| lifescape_gamedata::access::behind_boat(site.0, site.1, site.2);
-    // A guild the bot passes beats the public rocks and ranges (user
-    // 2026-11-15: the Mining Guild's coal and mithril, few miners there,
-    // the Falador bank at the ladder), then the nearest.
-    let public = |site: &(i64, i64, i64)| {
-        !lifescape_gamedata::access::gates_at(site.0, site.1, site.2).iter().any(|gate| matches!(gate, lifescape_gamedata::access::Gate::Guild { .. }))
-    };
-    if let Some(site) = open.iter().filter(|site| !across(site) && !boat(site)).min_by_key(|site| (public(site), distance(site))) {
+    // A site with a free node first, then the nearest (D2: no guild
+    // priority, the crowd lowers a guild like any rock field).
+    if let Some(site) = open.iter().filter(|site| !across(site) && !boat(site)).min_by_key(|site| (full(site), distance(site))) {
         return SitePick::At(*site);
     }
     // Paid sites: the cheapest fares first, then the nearest.
-    if let Some(site) = open.iter().min_by_key(|site| (fare_need(**site, position, fare), distance(site))) {
+    if let Some(site) = open.iter().min_by_key(|site| (full(site), fare_need(**site, position, fare), distance(site))) {
         let need = fare_need(*site, position, fare);
         if fare.wallet < need {
             return SitePick::Fare(need);

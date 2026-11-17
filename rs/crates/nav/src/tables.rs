@@ -149,6 +149,26 @@ pub struct CustomEdge {
     pub reason: String,
 }
 
+/// Footprint tiles of the static player-blocking NPCs (`npc_blockers.json`,
+/// `{"blockers": [{x, z, level, size}]}`); an absent file is none.
+pub fn load_npc_blockers(path: &Path) -> Result<HashSet<(i32, i32, i32)>, String> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Ok(HashSet::new()) };
+    let parsed = lifescape_json::parse(&text).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut out = HashSet::new();
+    for row in parsed.get("blockers").as_arr().cloned().unwrap_or_default() {
+        let (Some(x), Some(z), Some(level)) = (row.get("x").as_i64(), row.get("z").as_i64(), row.get("level").as_i64()) else {
+            return Err(format!("{}: blocker without x/z/level", path.display()));
+        };
+        let size = row.get("size").as_i64().unwrap_or(1).max(1);
+        for dx in 0..size {
+            for dz in 0..size {
+                out.insert(((x + dx) as i32, (z + dz) as i32, level as i32));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Every table `plan` consults, loaded from one data directory.
 pub struct Tables {
     pub transitions: Vec<Transition>,
@@ -166,6 +186,11 @@ pub struct Tables {
     /// the pack leaves OPEN (ship decks, L3 tops) proven live by the prober.
     /// `StaticWorld` keeps them OPEN; everything else upper-OPEN stays void.
     pub sky_floors: HashSet<(i32, i32, i32)>,
+    /// Tiles an NPC that never moves and blocks players stands on
+    /// (`npc_blockers.json`: server `blockwalk=all` + `moverestrict=nomove`,
+    /// the Draynor "nasty tree" at (3138,3352), plan P8). `StaticWorld`
+    /// paints them as a loc; absent file = none.
+    pub npc_blockers: HashSet<(i32, i32, i32)>,
     /// Loc names by id (`locs.json`, index-aligned): what NoRoute and
     /// adjusted plans name. Unknown ids read `loc_<id>`, never empty.
     pub loc_names: Vec<String>,
@@ -181,7 +206,8 @@ impl Tables {
         let (verified, verified_any_level, proven) = load_verified(&data_dir.join("transitions_verified.json"));
         let (requirements, one_way, customs, blocked, sky_floors) = load_overrides(&data_dir.join("nav_overrides.json"))?;
         let loc_names = load_loc_names(&data_dir.join("locs.json"))?;
-        Ok(Tables { transitions, verified, verified_any_level, proven, requirements, one_way, customs, blocked, sky_floors, loc_names })
+        let npc_blockers = load_npc_blockers(&data_dir.join("npc_blockers.json"))?;
+        Ok(Tables { transitions, verified, verified_any_level, proven, requirements, one_way, customs, blocked, sky_floors, npc_blockers, loc_names })
     }
 
     /// Prober verdict for one transition, if it ever rode it.

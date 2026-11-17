@@ -186,6 +186,10 @@ pub fn run_shear(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 }
             }
             if empty >= EMPTY_LIMIT {
+                // Other players took it: contention, never a failure (D4).
+                if let Some(contended) = crate::kit::site::contended_error(step_bot) {
+                    return Err(contended);
+                }
                 return Err(ScriptError::Failed(format!("no sheep near {:?} ({pens_tried} other pens tried)", step_bot.position())));
             }
             step_bot.log("no sheep, waiting for respawns");

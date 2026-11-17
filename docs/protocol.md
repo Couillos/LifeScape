@@ -74,3 +74,10 @@ Modales : `IF_OPEN*` posent `world.modal`, `IF_CLOSE` l'efface
 efface aussi localement, comme `Client.ts closeModal` : le serveur ne
 renvoie aucun `IF_CLOSE` (2026-11-16 : la banque fermée avant un mélange
 d'argile restait « ouverte » et le script lisait une interface fantôme).
+
+Trames serveur (P11, 2026-11-17) : la table des tailles du SDK est testée
+contre `../Client-TS` (branche 274, `src/io/ServerProt.ts`). `read_exact`
+est tout-ou-rien (octets remis en tête du tampon sur timeout) et `recv`
+garde la trame dont l'opcode est lu (ISAAC consommé) jusqu'à son corps
+complet : un timeout au milieu d'une trame ne décale plus le flux.
+« unknown server opcode » nomme les 8 dernières trames décodées.

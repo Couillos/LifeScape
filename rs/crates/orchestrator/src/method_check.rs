@@ -64,12 +64,19 @@ pub fn plan(method: &str, count: i64) -> Result<MethodPlan, String> {
         None => (method, None),
     };
     let way = lifescape_planner::method_way::method_way(leg).or_else(|| lifescape_planner::spell_methods::cast_method_way(leg));
+    // A fight method the health registry names without its object
+    // (`fight:melee/chickens`, plan P4/D1 re-test): a bounded fight
+    // judged on its hitpoints XP, which every combat style earns.
+    let fight = named.is_none() && way.is_none() && leg.starts_with("fight:");
     let product = match (&named, &way) {
         (Some(product), _) => product.clone(),
         (None, Some((product, _))) => product.clone(),
+        (None, None) if fight => String::new(),
         (None, None) => return Err(format!("{method}: no way known to the planner (name the object: {method}@<object>)")),
     };
-    let mut node = if product.is_empty() {
+    let mut node = if fight {
+        lifescape_planner::Node::new("check", lifescape_planner::NodeKind::ReachCombat { level: 126 }, Vec::new(), 126)
+    } else if product.is_empty() {
         let skill = way.as_ref().and_then(|(_, found)| found.skill.clone()).map(|(name, _)| name).unwrap_or_else(|| "magic".to_string());
         let mut climb = lifescape_planner::Node::new("check", lifescape_planner::NodeKind::ReachLevel { skill, level: 99 }, Vec::new(), 99);
         climb.batch = count;
@@ -103,6 +110,7 @@ pub fn plan(method: &str, count: i64) -> Result<MethodPlan, String> {
         lifescape_planner::combat::SitePick::Needs(level) => return Err(format!("{method}: no site a staff bot works safely (combat {level} needed)")),
         lifescape_planner::combat::SitePick::Access(area, key) => return Err(format!("{method}: every site is behind access:{area} (key {key:?})")),
         lifescape_planner::combat::SitePick::Fare(coins) => return Err(format!("{method}: the fares need {coins} coins")),
+        lifescape_planner::combat::SitePick::Cooled => return Err(format!("{method}: every site is cooled")),
         lifescape_planner::combat::SitePick::Anywhere => {}
     }
     // A purchase: the brain's shop (`shop_site::pick_shop`: quests, gates,
@@ -127,14 +135,18 @@ pub fn plan(method: &str, count: i64) -> Result<MethodPlan, String> {
             }
         }
     }
-    let skill = way.as_ref().and_then(|(_, found)| found.skill.clone()).map(|(name, level)| (name, u8::try_from(level.clamp(1, 99)).unwrap_or(99)));
+    let skill = if fight {
+        Some(("hitpoints".to_string(), 1))
+    } else {
+        way.as_ref().and_then(|(_, found)| found.skill.clone()).map(|(name, level)| (name, u8::try_from(level.clamp(1, 99)).unwrap_or(99)))
+    };
     let inputs = way.as_ref().map(|(_, found)| found.inputs.clone()).unwrap_or_default();
     let coins = match &way {
         Some((_, found)) => found.coins,
         None => lifescape_gamedata::obtain::merchant_price(&product).unwrap_or(0),
     };
     let quest = way.as_ref().and_then(|(_, found)| found.quest.clone());
-    let drop_farm = leg.starts_with("farm:") && script == "melee";
+    let drop_farm = (leg.starts_with("farm:") && script == "melee") || fight;
     let mut args = args;
     if drop_farm {
         args.extend(["--budget-min".to_string(), "0".to_string(), "--budget-max".to_string(), DROP_FARM_TICKS.to_string()]);
@@ -533,6 +545,9 @@ pub fn all_methods() -> Vec<String> {
     out
 }
 
+/// Flag of a check that must not disturb a busy staff account.
+pub const IF_IDLE_FLAG: &str = "--if-idle";
+
 /// CLI entry: `check-method <staff> <method> [count]` or
 /// `check-method <staff> --list <file> [count]` (one method per line,
 /// `#` comments). Exit 0 when every check worked.
@@ -552,6 +567,17 @@ pub fn check_method_cli(args: &[String]) -> i32 {
             }
         }
         return 0;
+    }
+    // `--if-idle` (D1 re-test by the daemon): never unload a staff script
+    // an operator is running; exit 3 and leave the account alone.
+    let if_idle = args.iter().any(|arg| arg == IF_IDLE_FLAG);
+    let args: Vec<String> = args.iter().filter(|arg| *arg != IF_IDLE_FLAG).cloned().collect();
+    let args = args.as_slice();
+    if let (true, Some(account)) = (if_idle, args.first()) {
+        if show(account).is_ok_and(|state| running(&state)) {
+            eprintln!("check-method: {account} is running a script, re-test skipped");
+            return 3;
+        }
     }
     let (Some(account), Some(target)) = (args.first(), args.get(1)) else {
         eprintln!("{usage}");
@@ -597,6 +623,12 @@ mod tests {
         assert!(ring.inputs.iter().any(|(name, _)| name == "gold_bar"), "{ring:?}");
         let needs: Vec<&String> = ring.inputs.iter().map(|(name, _)| name).chain(ring.tools.iter()).collect();
         assert!(needs.iter().any(|name| *name == "ring_mould"), "the mould is staged: {needs:?}");
+        // A quarantined fight method (plan P4/D1 re-test) plans a bounded
+        // fight judged on hitpoints XP.
+        let fight = plan("fight:melee/chickens", 5).expect("fight plans");
+        assert_eq!((fight.script.as_str(), fight.product.as_str(), fight.drop_farm), ("melee", "", true));
+        assert_eq!(fight.skill, Some(("hitpoints".to_string(), 1)));
+        assert!(fight.args.windows(2).any(|pair| pair[0] == "--budget-max"), "{:?}", fight.args);
         let strung = plan("string:unstrung_gold_amulet", 5).expect("stringing");
         assert_eq!(strung.script, "stringing");
         assert!(plan("no_such:method", 1).is_err());

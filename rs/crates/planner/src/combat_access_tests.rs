@@ -115,19 +115,34 @@ fn in_mining_guild(pick: &SitePick) -> bool {
     matches!(pick, SitePick::At((x, z, level)) if lifescape_gamedata::access::gates_at(*x, *z, *level).iter().any(|gate| gate.area() == "mining_guild"))
 }
 
-/// User 2026-11-15: a miner who passes the Mining Guild door (mining 60)
-/// works its coal and mithril, even from Edgeville where the Barbarian
-/// Village coal is nearer; below 60, never inside.
+/// The Mining Guild door opens at mining 60 (never below), and the guild
+/// is a site like any other (user decision D2, 2026-11-17): a qualified
+/// miner standing at Falador, by the guild ladder, works it; read from
+/// its surface entrance, never 6 000 tiles away underground.
 #[test]
 fn a_qualified_miner_works_the_mining_guild() {
-    const EDGEVILLE: (i64, i64, i64) = (3094, 3491, 0);
     for ore in ["coal", "mithril_ore"] {
         let method = format!("gather:mining/{ore}");
-        let pick = pick_site_gated(&method, 40, Some(EDGEVILLE), broke(), &miner(63));
-        assert!(in_mining_guild(&pick), "{ore} at 63: {pick:?}");
-        let below = pick_site_gated(&method, 40, Some(EDGEVILLE), broke(), &miner(59));
+        let pick = pick_site_gated(&method, 40, Some(FALADOR), broke(), &miner(63));
+        assert!(in_mining_guild(&pick), "{ore} at 63 from Falador: {pick:?}");
+        let below = pick_site_gated(&method, 40, Some(FALADOR), broke(), &miner(59));
         assert!(!in_mining_guild(&below), "{ore} at 59: {below:?}");
     }
+}
+
+/// Plan P7a red test (D2): six fleet miners on the guild's mithril
+/// rocks fill it; the next qualified miner goes to another mithril site.
+#[test]
+fn a_full_guild_sends_the_next_miner_elsewhere() {
+    let method = "gather:mining/mithril_ore";
+    let SitePick::At(guild) = pick_site_gated(method, 40, Some(FALADOR), broke(), &miner(63)) else { panic!("mithril workable") };
+    assert!(in_mining_guild(&SitePick::At(guild)));
+    let capacity = super::site_capacity(method, guild).expect("a rock field has a capacity");
+    assert!(capacity >= 1 && capacity < 12, "guild mithril rocks: {capacity}");
+    let crowd = [(guild, 6u32.max(capacity as u32))];
+    assert!(super::site_full(method, guild, &crowd));
+    let pick = super::pick_site_crowded(method, 40, Some(FALADOR), broke(), &miner(63), &crowd);
+    assert!(!in_mining_guild(&pick), "a full guild is no pick while other mithril is open: {pick:?}");
 }
 
 /// Lobsters and swordfish are Karamja water: a fisher with the fare goes.

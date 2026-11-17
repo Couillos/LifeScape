@@ -61,6 +61,7 @@ fn tier_spawns(tier: &knowledge::trees::TreeTier, bank: &knowledge::banks::Bank)
             for spawn in entry.spawns {
                 if spawn.level == bank.level
                     && (spawn.x - bank.x).abs() + (spawn.z - bank.z).abs() <= NEAR_BANK_TILES
+                    && knowledge::site_reach::unreachable(spawn.x, spawn.z, spawn.level).is_none()
                 {
                     found.push((spawn.x as i32, spawn.z as i32));
                 }
@@ -78,7 +79,8 @@ fn tier_spawns_wide(tier: &knowledge::trees::TreeTier, level: i64) -> Vec<(i32, 
         let name = entry.name.clone().unwrap_or_default().to_lowercase();
         if tier.trees.iter().any(|tree| *tree == name) {
             for spawn in entry.spawns {
-                if spawn.level == level {
+                // No stand reaches it (P6, `site_reach`): never a pick.
+                if spawn.level == level && knowledge::site_reach::unreachable(spawn.x, spawn.z, spawn.level).is_none() {
                     found.push((spawn.x as i32, spawn.z as i32));
                 }
             }

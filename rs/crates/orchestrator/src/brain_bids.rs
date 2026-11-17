@@ -445,7 +445,14 @@ pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnc
     let owned = crate::brain_plan::live_owned(live);
     // Read at the bot's own level in the method's skill and its best
     // tool tier (plan rendements R2), never a forced band.
+    // A method that never launches for this bot now (quarantine, its own
+    // cooldowns) makes nothing: no bid is answered with it (plan P2).
+    let quarantined = crate::method_health::quarantined();
+    let cooled = crate::brain_cool::active(life);
     let units = |method: &str, item: &str| {
+        if quarantined.iter().any(|known| known == method) || lifescape_planner::cooldown::method_cooled(&cooled, method) {
+            return 0.0;
+        }
         let level = crate::rates_measure::band_skill(method, "").map(|skill| level_of(&skill)).unwrap_or(1);
         let tool = crate::report_meta::best_tools(method, &owned).join("+");
         match units_per_6000_at(&snapshot, method, item, level, &tool) {

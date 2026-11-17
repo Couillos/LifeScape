@@ -293,3 +293,13 @@ Migration des vies d'avant l'équilibrage (2026-11-16) : au chargement,
 `brain <c>: market maker role migrated to the balanced slices: slice
 s/11, common capital target 103000` (une fois par chargement tant que la
 vie n'est pas réécrite) ; indice de tranche, phase et base de P&L gardés.
+
+## Quarantaines, rapports en vol (2026-11-17)
+
+Au démarrage (donc à chaque déploiement), une fois `restore_jobs` fini, le
+daemon re-teste sur `admin` chaque méthode en quarantaine (D1,
+`quarantine_retest.rs`, ligne `quarantine retest: …` par méthode, sortie
+dans `run/logs/method_retest.log`). Un rapport poussé mais pas encore plié
+(`brain_inflight`) n'est jamais un « no report: worker went idle » ; le
+graphe est plié avant l'ingestion des taux. `rates: no profit row` est noté
+une fois par (méthode, bande) et par heure.

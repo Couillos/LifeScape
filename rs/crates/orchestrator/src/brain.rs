@@ -552,21 +552,27 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
                     }
                     let job = orch.jobs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&account).cloned();
                     let Some(job) = job else {
+                        if report.is_some() {
+                            crate::brain_inflight::folded(&account);
+                        }
                         continue;
                     };
                     if let Some(report) = report {
-                        // Rates first (L4 store, raw rows + snapshot buckets),
-                        // then the life graph. Both are bounded file/store
-                        // writes on the brain thread, never the supervisor.
+                        // The life graph first, then the rates (plan P10:
+                        // the rates ingest took up to 35 s under load and
+                        // the idle detector read the run as unreported).
+                        // Both are bounded file/store writes on the brain
+                        // thread, never the supervisor.
                         {
-                            let _phase = crate::cpu_profile::phase("tick.ingest_report");
-                            if let Err(error) = crate::jobs::ingest_report_persisted(&report) {
-                                crate::logln!("job {account}: rates ingest failed: {error}");
-                            }
+                            let _phase = crate::cpu_profile::phase("tick.handle_report");
+                            handle_report(&orch, &job, &report);
                         }
+                        crate::brain_inflight::folded(&account);
                         crate::logln!("brain {}: folded report stop={}", account, report.get("stop").as_str().unwrap_or("?"));
-                        let _phase = crate::cpu_profile::phase("tick.handle_report");
-                        handle_report(&orch, &job, &report);
+                        let _phase = crate::cpu_profile::phase("tick.ingest_report");
+                        if let Err(error) = crate::jobs::ingest_report_persisted(&report) {
+                            crate::logln!("job {account}: rates ingest failed: {error}");
+                        }
                     }
                     let _phase = crate::cpu_profile::phase("tick.maybe_launch");
                     crate::brain_chain::run(&orch, &job);
@@ -600,12 +606,19 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
             return;
         }
     }
+    // Counted before the send: the brain thread may fold it at once.
+    if had_report {
+        crate::brain_inflight::queued(&job.account);
+    }
     let queued = inbox()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .as_ref()
         .map(|senders| senders[shard_of(&job.account, senders.len())].try_send((job.account.clone(), report)))
         .is_some_and(|sent| sent.is_ok());
+    if had_report && !queued {
+        crate::brain_inflight::folded(&job.account);
+    }
     if !queued && !had_report {
         queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&job.account);
     }

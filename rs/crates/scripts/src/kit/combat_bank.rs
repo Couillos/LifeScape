@@ -124,6 +124,16 @@ pub fn food_load(food_target: u32, carried_food: u32, free: usize) -> u32 {
     food_target.min(carried_food + room)
 }
 
+/// Unités de nourriture gardée à redéposer (plan P14, live 2026-11-17 :
+/// 27 choux gardés, banque sans nourriture, « pack too full to hunt »
+/// relancé 3 h) : la garde est bornée par la charge visée et par les
+/// cases, jamais au point de laisser moins de `HUNT_MIN_FREE` cases.
+/// `free` = cases libres avec cette nourriture au sac (une case l'unité).
+pub fn kept_food_surplus(carried_food: u32, food_target: u32, free: usize) -> u32 {
+    let room_without = free.saturating_add(carried_food as usize).saturating_sub(HUNT_MIN_FREE) as u32;
+    carried_food.saturating_sub(food_target.min(room_without))
+}
+
 /// Verdict pur de fin de voyage : un sac sous `HUNT_MIN_FREE` cases
 /// libres renverrait la chasse à la banque au premier kill.
 pub fn trip_verdict(free: usize, pack_labels: &[String]) -> Result<(), ScriptError> {
@@ -222,6 +232,23 @@ pub fn prepare_at_bank_for(bot: &mut Bot, food_target: u32, keep_items: &[(Strin
     let plan = gear_plan(bot, &owned_gear(bot), fight_weapon_style, style_damage_key);
     let keep = combat_keep_ids(bot, &plan, keep_items, crate::kit::survival::bank_stocks_food(bot));
     crate::kit::bank_full::deposit_what_fits(bot, side_bank, &keep)?;
+    // The kept food is bounded too (P14): the surplus goes back, so the
+    // trip can never fail on what the keep itself kept.
+    let mut surplus = kept_food_surplus(crate::kit::survival::food_count(bot), food_target, free_slots(bot));
+    if surplus > 0 {
+        let foods: Vec<u16> = pack_slots(bot).into_iter().map(|(_, (held, _))| held).filter(|held| is_food(bot, *held)).collect();
+        let mut seen: Vec<u16> = Vec::new();
+        for food in foods {
+            if surplus == 0 || seen.contains(&food) {
+                continue;
+            }
+            seen.push(food);
+            let units = pack_total(bot, food).min(surplus);
+            bot.log(&format!("kept food bounded: depositing {units}x {}", crate::kit::pack::obj_label(bot, food)));
+            let gone = bot.bank_deposit(food, units, 25)?;
+            surplus = surplus.saturating_sub(gone);
+        }
+    }
     // A paid run (`toll`) leaves the bank with the fare in the pack.
     let coins = obj_id(bot, "coins").ok();
     if let Some(coins) = coins {

@@ -44,6 +44,28 @@ pub struct TaskTargets {
     pub want_count: Option<u32>,
 }
 
+impl TaskTargets {
+    /// True when the run has an objective the brain can check (XP,
+    /// level, quantity, item, quest).
+    pub fn any(&self) -> bool {
+        self.xp_amount.is_some() || self.level.is_some() || self.count.is_some() || self.quest.is_some() || self.want_count.is_some()
+    }
+}
+
+/// Exit code of a run that ended its own work loop (plan P15, live
+/// 2026-11-17: melee fillers without `--level`/`--want` ended
+/// `goal_reached` on their own criterion, the brain's goal check read
+/// short, 162 failures banned attack). With an objective the loop's end
+/// is the goal (0); without one it is the end of a window
+/// (`BUDGET_EXIT`, `budget_exhausted`): never `goal_reached`.
+pub fn ended_code(spec: &TaskSpec) -> i32 {
+    if spec.targets.any() {
+        0
+    } else {
+        BUDGET_EXIT
+    }
+}
+
 /// Full task specification: what the brain orders, the kit executes.
 #[derive(Debug, Clone)]
 pub struct TaskSpec {
@@ -685,6 +707,13 @@ mod tests {
     #[test]
     fn exit_codes_map_stops() {
         assert_eq!(exit_code(StopReason::GoalReached).unwrap(), 0);
+        // P15: a run without objective never ends `goal_reached`.
+        let bare = parse_cli("melee", &["men".to_string()]).expect("bare melee");
+        assert!(!bare.targets.any());
+        assert_eq!(super::ended_code(&bare), BUDGET_EXIT);
+        let leveled = parse_cli("melee", &["men".to_string(), "--level".to_string(), "attack".to_string(), "20".to_string()]).expect("melee to 20");
+        assert!(leveled.targets.any());
+        assert_eq!(super::ended_code(&leveled), 0);
         assert_eq!(exit_code(StopReason::BudgetExhausted).unwrap(), BUDGET_EXIT);
         assert!(matches!(
             exit_code(StopReason::Blocked { missing: vec!["bronze_axe".to_string()] }),

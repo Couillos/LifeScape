@@ -117,6 +117,10 @@ pub fn run_ground_pickup(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if taken == 0 {
             empty += 1;
             if empty >= EMPTY_SWEEPS_LIMIT {
+                // Other players took it: contention, never a failure (D4).
+                if let Some(contended) = crate::kit::site::contended_error(step_bot) {
+                    return Err(contended);
+                }
                 return Err(ScriptError::Failed(format!("nothing to pick near {here:?} at {:?}", step_bot.position())));
             }
             step_bot.log("sweep empty, waiting for respawns");

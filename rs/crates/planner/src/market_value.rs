@@ -61,7 +61,7 @@ pub fn leg_site(method: &str, dest: (i64, i64, i64), combat: u8, free_pass: bool
         SitePick::Anywhere => return Some(LegSite { site: dest, fare: 0.0 }),
         SitePick::At(site) => return Some(LegSite { site, fare: 0.0 }),
         SitePick::Tolled(site) | SitePick::Boat { site, .. } => site,
-        SitePick::Fare(_) | SitePick::Needs(_) | SitePick::Access(_, _) => return None,
+        SitePick::Fare(_) | SitePick::Needs(_) | SitePick::Access(_, _) | SitePick::Cooled => return None,
     };
     Some(LegSite { site, fare: fares(dest, site, free_pass) })
 }

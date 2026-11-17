@@ -1,0 +1,422 @@
+PLAN DE CORRECTION DES ERREURS DE LA FLOTTE
+Rédigé le 2026-11-17 vers 11:50 (heure locale), en lecture seule (logs, base, API GET, replay-nav).
+
+FENÊTRE ANALYSÉE
+- 10 dernières heures : 01:00 → ~11:30 locale = 00:00 → ~10:30 UTC dans run/orchestrator.log
+  (lignes 97340 → fin) et run/logs/<compte>.log ; base : clock >= 1794873600.
+- Comptes exclus : admin, admin2, bite.
+- TROU À NE PAS COMPTER : flotte arrêtée de 06:28 à 07:38 UTC (07:28 → 08:38 locale, redémarrage
+  machine), puis 5 redémarrages du daemon entre 07:38 et 08:22 UTC, encore 09:39, 09:47 et 10:08 UTC
+  (déploiements). Lancements par heure UTC : 00h 1094, 01h 857, 02h 1401, 03h 1484, 04h 1106,
+  05h 782, 06h 431, 07h 317, 08h 1074, 09h 1041, 10h 712 (partielle).
+- Rythme mesuré : ~60 ms/tick (owen_wood : 707 ticks en 42 s). Les ticks ci-dessous sont des ticks.
+
+TOTAUX
+- error_events (base, hors staff) : 17 307 lignes, 72 comptes (API /api/errors/summary?hours=10 :
+  15 968, run_failure_rate 24,3 %, deals en échec 6,8 %).
+  Par source : brain 9 521 (en grande partie des ÉCHOS : graph_stuck, goal_stuck, skill_banned
+  suivent chaque abandon), task 3 610, nav 2 682, deal 155.
+- Hors base (journal seulement) : 3 423 annonces refusées « seller holds N, needs M » (74 comptes),
+  237 faux « no report: worker went idle », 50 désynchronisations protocole, 10 373 lignes
+  « rates: no profit row for mill:pot_flour », 154 « slow dispatch » (19 > 5 s, max 13 s).
+- Ticks perdus (task_reports failed+blocked) : 2 482 500 ticks sur 37,9 M rapportés (6,5 %) ;
+  mining failed 897 543, melee blocked 336 301, ground_pickup failed 211 880, shear failed 195 523,
+  smelt blocked 143 390, melee failed 119 496, woodcut failed 116 885, curse failed 101 420.
+- Temps cerveau sans script (hors trou d'arrêt) : ~2 h 30 cumulées, dont 55 min cuir/tannage,
+  31 min harpon, 20 min minerai de fer.
+
+TABLEAU DES CAUSES (événements error_events attribués à la cause racine, échos cerveau inclus)
+
+ #   Cause racine                                         Couche        Évén.  Comptes  Ticks/temps   État
+ R01 Quarantaine tan:cow_hide périmée + but d'appoint     cerveau+santé  5 237   30     55 min idle   ACTIF
+     « produce leather » tiré sans être résoluble
+ R02 Garde de nourriture non bornée au dépôt de combat   scripts (C)    3 031    3     hot loop 3 h  latent
+     (« pack too full to hunt ») + relance sans                                                    (stoppé 05h)
+     refroidissement de méthode
+ R03 Disponibilité divergente : outil vendu/verrouillé   cerveau+marché   902   20     393 runs      ACTIF
+     par sa propre annonce, cerveau « holds 1 »,                                       bloqués
+     script « missing bronze_axe » ; + 3 423 annonces
+     refusées « seller holds N, needs M »
+ R04 Cible/site injoignable (arbre, roc, PNJ derrière    données (B)    1 408   46     578 échecs    ACTIF
+     mur ou clôture) : NoRoute Disconnected                                            « site not reached »
+ R05 Pas refusés à point fixe : collision statique         nav B + SDK C 2 040   67     ~20 t/évén.   ACTIF
+     sans le tas de compost 2x2 (3138,3352) ; sortie du
+     péage Al Kharid (3267,3227) marchée trop tôt
+ R06 Contention de ressource (mithril guilde, adamant,    planner sites  1 100   47     ~1,2 M ticks  ACTIF
+     sol, moutons, vaches déjà maudites)
+ R07 Harpon tenu nommé manquant (quarantaine)            cerveau          560   34     31 min idle   CORRIGÉ
+                                                                                                    ce0fde1 (09:46 UTC)
+ R08 Cycle pièces -> combat -> nourriture -> pièces       cerveau          198    1     132 boucles   RÉGRESSION
+     (herring, jim_ellis)                                                              en 20 min     ce0fde1
+ R09 Désynchronisation protocole (opcode inconnu          SDK (C)           50   30     ~7 min idle   ACTIF
+     aléatoire : 86, 63, 98, 224, 2, 136…)                                                         (36 dans 09h UTC)
+ R10 « goal_reached but the goal check is short »         contrat         162   19     bans attack   ACTIF
+ R11 Rapport plié après le détecteur d'inactivité         orchestrateur   237*  15+    faux échecs   ACTIF
+     (faux « no report », comptés comme échecs)                                       -> bans
+ R12 Deals (timeout 62, restart 45, mismatch 30,          marché          157   46     6,5 % deals   en partie
+     short 16, no_show 4)                                                                          normal
+ R13 Portes/rides/timeouts nav dispersés                 nav/SDK          175   52     faible        en partie
+                                                                                                    normal
+ R14 Script market sans erreur typée (« run returned 1 ») scripts          216   38     72 837 t      ACTIF
+     + « trade gave no <objet> »
+ R15 Blocages d'intrants (minerai, runes, seau…)          normal           698   59     143 390 t     ATTENDU
+     dont blocage APRÈS trajet (smelt : ~955 t/run)                                    (smelt)       (+ amélioration)
+ R16 Bruit journal : « no profit row mill:pot_flour »     données/infra 10 373*   -     log           ACTIF
+     ; « slow dispatch » jusqu'à 13 s                                                   lignes
+ * = journal, pas dans error_events.
+ Écho non attribué : 718 « goal stuck -> next goal GetRich » (teneurs de marché, échos de R02/R04).
+
+ERREURS NORMALES / ATTENDUES (pas d'action, ou action de confort)
+- 1 004 dossiers « Interrupted » (fin de budget, unload, stop) : légitimes, déjà non ingérés.
+- 45 deals « daemon restart » : conséquence directe des 8 redémarrages de la fenêtre (lots remis en vente).
+- Portes ouvertes/refermées par un autre joueur, « random event between legs » (20) : transitoires.
+- Blocages d'intrants R15 (coal, iron_ore, runes de sort, seau…) : flux normal, le cerveau crée le sous-nœud.
+- Ordres d'achat non remplis (big_bones, black_robe…) : marché qui ne fournit pas, le cerveau replanifie.
+
+======================================================================================================
+DÉTAIL PAR CAUSE (preuves, extraits exacts)
+======================================================================================================
+
+R01 — Cuir : quarantaine périmée + but d'appoint infaisable (cerveau / santé des méthodes)
+  Preuve : run/method_health.json : tan:cow_hide fail 20 ok 0, quarantined_at 2026-11-15 19:06,
+  last_error « Usage: usage: no F2P leather recipe makes "cow_hide" ». Le script est corrigé depuis
+  (scripts/src/activities/leatherwork.rs : un `tan:<hide>` part vers kit::tan::run_tanning) mais la
+  quarantaine ne se lève que par un check-method live réussi : jamais fait. Avant 09:46 UTC le blocage
+  s'affichait « no method resolvable (no workable source) », après ce0fde1 « quarantined:tan:cow_hide ».
+  Le but d'appoint « produce leather (side:demand:leather) » est re-tiré à chaque passe alors que sa
+  seule méthode est en quarantaine et crafting banni : boucle de 1 à 50 s.
+  Extraits :
+    [09:52:01] brain kevin_ellis: n4028 blocked at resolve (quarantined:tan:cow_hide) -> abandoned
+    [09:52:02] brain kevin_ellis: side goal produce leather 18 while cooking,crafting,fishing banned
+    [06:26:13] brain paul_rhodes: skill crafting banned 6000 ticks: contract error (node n667, no method resolvable (no workable source for this node))
+  Volume : 1 723 goal_stuck leather (16 comptes), 1 286 + 453 bans crafting, ~1 740 graph_stuck ;
+  lara_lane 1 351 lignes, noah_hill 578, thorn_vera 475, paul_rhodes 285.
+  Autres quarantaines vues : fight:melee/chickens (2026-11-17 03:13, causée par R02 : 2 comptes
+  ont empoisonné une quarantaine de flotte), gather:mining/iron_ore (11-16, R06/R09 danger),
+  superheat:mithril_bar (exige smithing 50, donnée B), pottery:pot_unfired (11-16).
+
+R02 — Garde de nourriture non bornée (scripts, kit/combat_bank.rs) + relance chaude
+  Preuve : combat_keep_ids() garde TOUTE la nourriture du sac quand la banque n'en a pas
+  (`if !bank_has_food { keep.extend(... is_food ...) }`), sans borne de cases ; trip_verdict échoue
+  ensuite (< HUNT_MIN_FREE). Erreur déterministe, relancée toutes les ~8 s pendant 3 h.
+  Extraits :
+    [01:44:10] job hill_eric: event melee kind=script_error ... failed: combat bank trip left the pack too full to hunt (1 free): 60x Coins, 22x Cabbage, 4x Beer
+    [04:00:38] brain hill_eric: skill crafting banned 6000 ticks: 3 failures (node n339, Failed: ... pack too full to hunt ...)
+    [04:00:38] brain hill_eric: launching melee men --site 3097,3508,0 --node n340 ...
+  Volume : 3 031 événements (hill_eric 1 644, kai_ellis 1 386), 02h-05h locale. ce0fde1 (bière n'est
+  plus nourriture) supprime CE cas (22 choux laissent 5 cases) mais pas la règle (27 choux = même boucle).
+  Amplificateur commun à R02/R04/R08 : le ban porte sur une COMPÉTENCE (ici « crafting », sans rapport :
+  GetRich n'a pas de compétence, banned_scope en attribue une), jamais sur la MÉTHODE qui échoue ;
+  resolve reprend fight:melee/men aussitôt.
+
+R03 — Disponibilité divergente cerveau / script / marché (cerveau + marché)
+  Preuve : le seul outil utilisable est mis en vente comme « surplus » et verrouillé, le script ne
+  peut pas le retirer, le cerveau le compte comme détenu.
+    orders : luke_hill sell 1349 (iron axe) x1 motive=surplus open/horizon en boucle (04:54, 06:52,
+    09:05, 11:06) ; hana_91 sell 1353 (steel axe) surplus idem ; tim_wolfe sell 1349/1351 x28.
+    [08:50:03] [t=68807 Falador] blocked woodcut missing ["bronze_axe"], brain files a sub-task   (luke_hill)
+    brain tim_wolfe: nN holds 1 bronze_axe, done without launch   (x140)
+    [02:15:25] bank_withdraw 1159: 1 locked by open market orders, nothing usable   (tim_wolfe)
+  Même famille : 3 423 « listing N <objet> refused, holding: market rejected: seller holds N, needs M »
+  (74 comptes) : le cerveau annonce sur un instantané qui n'est pas le registre d'escrow du marché.
+  Volume : 902 événements (bronze_axe 387 sur 6 comptes, bronze_pickaxe, chisel), 393 runs woodcut bloqués.
+
+R04 — Cible ou site injoignable (données B : catalogue de spots/sites)
+  Preuve (replay-nav + route hors ligne) :
+    route 3164 3423 0 3168 3350 0 -> no route ... BudgetExhausted closest=(3163,3355,0) blockers=[loc 'willowtree' loc=1308 at (3168,3350,0); loc 'inviswall_blockrange' loc=85 at (3167,3350,0) ...]
+    (inviswall_blockrange : blockwalk par défaut côté serveur, locs.json identique : le saule de la
+    rivière est réellement inaccessible, mais il reste un site assignable.)
+    [00:00:07] brain jim_ford: skill crafting banned 6000 ticks: 3 failures (node n140, Failed: failed: assigned site (3168,3350) not reached ...)
+    [09:25:43] brain kai_ellis: n371 Travel("Failed: failed: assigned site (3168,3350) not reached from (0, 3164, 3423) ...
+  Dossiers NoRoute (832) : 390 destination isolée (288 = ce saule), 387 « closest = départ » où la
+  destination est une tuile murée à <= 8 cases (arbre dans un jardin clos, roc derrière clôture :
+  (3282,3431) fencing, (3295,3502) fencing, (3268,3171) desertwall de la banque d'Al Kharid) ;
+  par script : woodcut 545, mining 126, essence_run 48, fishing 41, pottery 14, melee 16.
+  Coût : chaque NoRoute épuise la recherche (BudgetExhausted, 3-11 s CPU), lié aux « slow dispatch ».
+
+R05 — Pas refusés à point fixe (nav B pour (3138,3352), SDK C pour le péage)
+  a) (3138,3351±3) : 1 168 dossiers, 31 comptes (oscar_cole 636, nina_rhodes 251 : vaches de la rivière
+     Lum depuis Varrock ouest). replay-nav : « C execution — plan coherent ... aucun mur statique ».
+     Mais le serveur a, dans content/maps/m49_52.jm2, la loc 152 `hauntedcompostheap` (2x2, blockwalk)
+     à (3138,3352) ; notre collision statique la laisse marchable :
+       route 3135 3355 0 3138 3352 0 -> cost 3 (tuile atteinte, aucun ajustement)
+       route 3135 3355 0 3139 3350 0 -> adjusted_dest (3138,3351,0)  (deadtree2 1286 bien présent)
+     => classe B (monde != carte) masquée en C parce que replay-nav ne compare pas aux jm2.
+     Extrait : [09:19:49] nav fail seg 1/3 at (0, 3138, 3353): step refused: ... live=none flags=0x0; walk: timeout: leg to (3148, 3333) stalled at (0, 3138, 3353)
+  b) (3267,3227) sortie du péage Al Kharid : 406 dossiers, 28 comptes ; le pas suivant part 1 tick
+     après « You pay the guard. », pendant le script serveur de la barrière :
+       [20:52:21] nav seg 2/5 OpenDoor loc=2882 stand=(3268,3226,0) cross=(3267,3227,0) -> ok en 10 ticks
+       [20:52:22] nav seg 3/5 ... FAIL step refused ... (re-planifié, même marche réussie ensuite)
+  Les deux sont absorbés par la replanification (~15-20 ticks chacun) mais forment 57 % des dossiers.
+
+R06 — Contention de ressource (planner sites)
+  Preuve : priorité absolue de guilde dans pick_site_crowded (« A guild the bot passes beats the public
+  rocks ... few miners there ») : 23 comptes sur les 5 rocs de mithril de la guilde des mineurs.
+    [10:02:17] [t=6672 ?] 5 mithril_ore rocks mined out, waiting a respawn (<= 400t)   (owen_wood)
+    failed: mine failed at (0, 3046, 9734): no mithril_ore mined (load stalled or hurt), hp 42, 26 free slots
+  Sites : mithril guilde 137 échecs / ~25 comptes ; adamant Al Kharid (3300,3310) 42 / 9 ;
+  ramassage au sol « nothing to pick near » 81 / 17 ; tonte « no progress » 42 + « no sheep near » 13 ;
+  sort curse « Your foe's defence has already been weakened » 110 et « I'm already under attack! » 38
+  (16 comptes, vaches maudites/engagées par d'autres). L'échec compte comme panne de méthode : bans
+  mining/smithing/magic, 897 543 ticks de minage en échec.
+  Cas lié, danger : fer de la Wilderness (3104,3570) : 78 échecs / 13 comptes, « load stalled or hurt »,
+  PV qui descendent d'une relance à l'autre sans soin :
+    10:08:58 arthur_hart ... hp 29 ... / 10:09:22 ... hp 17 ... / 10:09:47 ... hp 9 ...
+
+R07 — Harpon tenu nommé manquant : corrigé par ce0fde1 (09:46 UTC), 0 occurrence après 10:00 UTC.
+  À vérifier seulement (voir P13).
+
+R08 — Cycle pièces / nourriture (régression du jour, ce0fde1 « spots ordonnés qui exigent de la nourriture »)
+    [10:10:59] brain jim_ellis: n476 Blocked(["herring"]) -> pending ... Blocked: missing herring
+    [10:10:59] brain jim_ellis: n477 blocked at resolve (missing:coins:240) -> pending
+    [10:10:59] brain jim_ellis: resolve n478 -> Some("fight:melee/men") (ctx coins=29)
+  132 boucles entre 10:10 et 10:30 UTC : la méthode d'argent exige la nourriture qu'elle doit payer.
+  Une seule victime vue, mais tout bot pauvre sous le seuil de nourriture y tombe ; poulets en
+  quarantaine (R01/R02) retirent l'échappatoire « inoffensif ».
+
+R09 — Désynchronisation protocole (SDK)
+    10:00:40 frank_lane ... sdk: protocol: unknown server opcode 96
+    [09:12:12] idle pump failed: protocol: unknown server opcode 66
+  Opcodes tous différents (86, 63, 98, 224, 2, 136, 66, 51, 4, 236) = trame mal découpée en amont, pas un
+  opcode manquant. 50 événements / 30 comptes, 36 dans l'heure 09 UTC. Aucune trace des derniers paquets.
+
+R10 — Contrat « goal_reached » court (brain_fold.rs::verdict)
+    04:46:04 daisy_hunt skill attack banned 6000 ticks: 3 failures (node n2070, goal_reached but the goal check is short ...)
+  Nœuds melee « men » sans --level/--want (fillers, argent) : le script finit « goal_reached » sur son
+  propre critère, le cerveau n'y voit ni items ni XP comptés. 162 événements / 19 comptes, bans attack.
+  Hypothèse à vérifier (non confirmée) : critère de fin du script melee sans objectif != goal check.
+
+R11 — Rapport plié trop tard (orchestrateur)
+    [00:01:19] job eric_smith: task_report stop=budget_exhausted activity=mining ticks=6921 (push)
+    [00:01:29] brain eric_smith: n1195 no report: worker went idle without reporting (crash or restart)
+    [00:01:54] brain eric_smith: folded report stop=budget_exhausted   (après « rates: stored report »)
+  237 faux échecs (pics 00h-01h UTC, sous charge) ; 3 d'affilée bannissent : bellarhodes magic,
+  mila_wade woodcutting.
+
+R12-R16 : voir tableau ; extraits :
+    deals : handover « lots never landed ... the bank is short », « offer mismatch, refused » ;
+    error_events 01:02:35 locale noah_hill task/exit market « run returned 1 » (71, sans erreur typée, règle 6) ; « trade gave no adamant_battleaxe » (17) ;
+    [09:00:01] rates: no profit row for mill:pot_flour band 21: no rate for mill:pot_flour: unmeasured and no server action timing for mill:pot_flour
+    smelt bloqué après trajet : 150 runs, 143 390 ticks (~955 ticks par blocage).
+
+======================================================================================================
+PLAN DE CORRECTION (ordre = volume x gravité ; une règle générique par classe, aucun cas particulier)
+Protocole AGENTS.md §5 pour chaque point : hypothèse écrite, vérification, test rouge, un seul crate.
+======================================================================================================
+
+P1 — Refroidissement par MÉTHODE (et site) + arrêt des relances chaudes   [cerveau, planner]   R02 R04 R08 R01
+  Cause : un abandon ne refroidit qu'une liste de compétences (vide ou fausse pour GetRich/MakeMoney/
+  appoint), resolve reprend immédiatement la même méthode au même site.
+  Correctif : planner/src/bans.rs + bans_scope.rs : l'entrée d'abandon porte aussi la clé de méthode
+  résolue (ex. fight:melee/men@3097,3508 ; gather:woodcut/willow_logs@3168,3350), refroidie
+  SKILL_BAN_TICKS pour CE bot ; expand/resolve (ReadyCtx) l'écarte pour tout type de but, comme la
+  quarantaine. Même erreur normalisée deux fois de suite en < 100 ticks => abandon immédiat (pas 3 essais).
+  banned_scope ne renvoie plus de compétence absente du sous-arbre (crafting sur un échec melee).
+  Test rouge (planner, pur) : Life but GetRich, nœud fight:melee/men abandonné 3x « pack too full » ->
+  le resolve suivant ne rend pas fight:melee/men ; et banned_scope(nœud melee) ne contient pas crafting.
+  Vérification live : aucun compte avec > 10 lancements/10 min de la même méthode en échec
+  (requête error_events par account+method) ; groupe « goal stuck -> next goal GetRich » < 20/h.
+  Risque : un refroidissement trop large prive un bot de sa seule méthode d'argent -> il doit tomber sur
+  le but d'appoint suivant (P2), pas sur l'inactivité ; le détecteur idle_bot le signale.
+
+P2 — Un but (appoint, demande, jalon) n'est tiré que s'il est résoluble maintenant   [cerveau, planner]   R01 R07
+  Cause : side goal « produce leather » tiré malgré quarantaine + ban ; boucle draw -> stuck -> draw.
+  Correctif : goals::draw_goal / brain_ambition : filtre unique `goal_feasible(goal, ctx)` = résolution
+  à blanc du premier nœud (quarantaine, bans de compétence et de méthode P1, méthode absente, niveau) ;
+  un but rejeté est mémorisé avec sa cause jusqu'à l'expiration de la cause. Aucun cas « cuir ».
+  Test rouge (planner) : demande ouverte de leather, tan:cow_hide en quarantaine -> draw_goal ne rend
+  pas produce leather et rend le but suivant faisable.
+  Vérification live : signature « goal stuck -> next goal produce leather » = 0 ; graph_stuck / h
+  divisé par > 5 (aujourd'hui ~300/h) ; lara_lane, noah_hill, thorn_vera hors du top erreurs.
+  Risque : coût CPU d'une résolution à blanc par passe (borner à un candidat par passe, mémo).
+
+P3 — Cycle pièces -> nourriture -> pièces (régression ce0fde1)   [planner, kit::ladder]   R08
+  Cause : la méthode d'argent choisie exige une nourriture que le bot doit acheter avec l'argent visé.
+  Correctif : règle générique d'obtention : une jambe dont les intrants (nourriture, runes, appât)
+  coûtent des pièces n'est pas éligible pour un nœud `have_coins` si le portefeuille libre ne couvre pas
+  ces intrants ; la méthode d'argent tombe alors sur un spot inoffensif (HARMLESS_HIT_SHARE) ou une
+  récolte sans intrant. Détection de cycle dans expand (nœud qui dépend de son propre ancêtre coins).
+  Test rouge (planner) : bot 29 pièces, men exigent herring à 240 -> have_coins ne résout pas
+  fight:melee/men et rend un spot sans nourriture.
+  Vérification live : jim_ellis sort de la boucle ; « Blocked(["herring"]) » < 5/h fleet.
+  Risque : si les poulets restent en quarantaine (P4), le repli inoffensif se réduit aux vaches.
+
+P4 — Cycle de vie de la quarantaine   [orchestrateur method_health.rs]   R01 (+ chickens, pottery)
+  Cause : quarantaine éternelle après correction du script ; 2 comptes en boucle suffisent à mettre en
+  quarantaine une méthode pour toute la flotte (fight:melee/chickens, last_error = R02).
+  Correctif : (a) seuil compté en COMPTES distincts (>= 3 comptes en échec) et un échec répété
+  identique d'un même compte compte une fois ; (b) levée : voir DÉCISION D1.
+  Test rouge (orchestrateur) : 21 échecs d'un seul compte -> pas de quarantaine ; 3 comptes -> quarantaine.
+  Vérification live : method_health.json ne contient plus fight:melee/chickens après recalcul ;
+  tan:cow_hide levée par la voie choisie en D1 puis taux de succès > 50 %.
+  Risque : seuil plus lent à réagir sur une vraie panne (compensé par P1 au niveau du bot).
+
+P5 — Disponibilité unique (détenu - verrouillé - en deal)   [cerveau brain_tools.rs, marché, SDK bank_withdraw]   R03
+  Cause : « holds N » du cerveau, annonces et retraits du script lisent des quantités différentes ;
+  le dernier outil utilisable d'une famille de travail est annoncé « surplus ».
+  Correctif : une fonction `available(item)` (banque + sac + porté - verrouillé par ses ordres -
+  engagé en deal) utilisée par brain_tools (garde), les annonces (quantité <= available, plus de refus
+  « seller holds ») et le test « holds, done without launch » ; brain_tools : la garde d'une famille
+  retient le meilleur outil UTILISABLE au niveau, et retire toute annonce qui verrouille la dernière
+  copie utilisable (déjà décidé le 2026-11-13, non appliqué ici). Le script qui bute sur un objet
+  verrouillé rend `Blocked: locked:<objet>` (au lieu de missing bronze_axe), le cerveau retire l'annonce.
+  Test rouge (orchestrateur) : bot woodcut 15, seule hache = iron_axe annoncée surplus -> la garde
+  la retient et l'annonce est retirée ; listing de 905 quand l'escrow en voit 891 -> annonce 891.
+  Vérification live : « missing bronze_axe » = 0 ; « listing ... refused, holding » < 20/h (3 423 en 10 h).
+  Risque : faible ; vérifier que les teneurs de marché (lots en stock) gardent leurs annonces.
+
+P6 — Sites et spots prouvés atteignables (catalogue)   [gamedata / nav / kit spots]   R04
+  Cause : sites et cibles (arbres, rocs, spawns, PNJ) retenus sans preuve qu'une tuile de travail est
+  dans la composante connexe statique de la banque du site.
+  Correctif : passe hors ligne unique : pour chaque spot de récolte/combat/ramassage, `operable_stand`
+  joignable depuis la banque servante (même graphe que route) ; sinon le spot sort du catalogue
+  (raison typée dans le dump). Côté script, le choix d'arbre/roc filtre par cette même table.
+  Test rouge (nav ou gamedata) : golden « saule_riviere_lum_inaccessible » : (3168,3350) n'est plus un
+  site woodcut ; golden de balayage : 0 spot du catalogue sans stand joignable.
+  Vérification live : « assigned site ... not reached » = 0 ; NoRoute woodcut/mining < 10/h ;
+  « slow dispatch » en baisse.
+  Risque : retirer à tort un spot joignable par porte/échelle : la preuve doit utiliser le graphe complet
+  (portes, transitions), pas la seule marche.
+
+P7 — Contention : capacité de site, échec de contention = blocage sans ban   [planner combat.rs/site_crowd, kit load]   R06
+  Cause : la pénalité d'affluence ne s'applique pas aux guildes ; un site n'a pas de capacité ;
+  « tous les nœuds épuisés avec d'autres joueurs présents » est compté comme panne de méthode.
+  Correctif : (a) capacité = nombre de nœuds de ressource du site (rocs, arbres, spawns, PNJ) ;
+  au-delà, le site est plein pour le choix (guildes comprises : voir DÉCISION D2) ; (b) kit::load :
+  arrêt sur épuisement avec joueurs proches -> `Blocked: contended:<site>` (ou repick d'un autre site),
+  jamais Failed ; (c) ciblage PNJ (curse, combat) : exclure un PNJ déjà engagé par un autre joueur ou
+  portant l'effet visé (message serveur lu une fois = ban de la cible pour la durée de l'effet).
+  Test rouge (planner) : 6 mineurs notés sur la guilde (5 rocs de mithril) -> pick_site_crowded rend
+  un autre site ; (kit, pur) : apply_outcome sur stall + crowd -> LoadExit::Contended, pas Abort.
+  Vérification live : « no mithril_ore mined » < 5/h ; « took curse in 12 picks » < 5/h ;
+  ticks mining failed / h divisés par 3.
+  Risque : sites secondaires plus lointains (trajet) ; pas de ban mais re-site : surveiller idle_bot.
+
+P8 — Collision statique complète vs serveur, replay-nav qui le voit   [gamedata/nav, outil replay-nav]   R05a
+  Cause : la loc 2x2 hauntedcompostheap (152) en (3138,3352) existe dans m49_52.jm2 mais pas dans notre
+  collision ; replay-nav conclut « C » faute de comparer aux cartes serveur.
+  Hypothèse unique à vérifier d'abord : les locs définies hors du pack principal (fichiers .loc de quête,
+  ici quest_haunted.loc) ne sont pas posées dans la collision statique. Observation qui confirme :
+  balayage jm2 -> autres locs blockwalk de fichiers de quête absentes elles aussi.
+  Correctif : construction de collision depuis toutes les locs jm2 (toutes définitions .loc) ;
+  replay-nav ajoute un diff « statique vs jm2 serveur » le long du chemin et classe B.
+  Test rouge : golden nav « tas_compost_draynor » : route (3135,3355)->(3138,3352) ajuste la destination ;
+  test gamedata : 0 loc blockwalk du jm2 absente de la collision (balayage global).
+  Vérification live : dossiers stall en (3138,3351±3) = 0 ; oscar_cole / nina_rhodes hors du top.
+  Risque : ajout de murs = routes plus longues ; rejouer routes_test.json.
+
+P9 — Attendre la fin d'un script serveur de traversée avant le pas suivant   [SDK nav exec]   R05b R13
+  Cause : OpenDoor/péage déclaré « ok » dès la tuile de traversée atteinte, alors que le script serveur
+  (paiement, marche forcée) tient encore le joueur ; le pas suivant est ignoré.
+  Correctif : primitive générique « settle » après toute traversée scriptée (portes à péage, barrières,
+  portails, rides) : attendre 1 tick sans déplacement forcé ni modale avant d'envoyer la marche
+  (référence de séquence : ../Client-TS, src/client/Client.ts).
+  Test rouge (SDK) : rejouer dossier sara_miller-3215 en test d'exécution simulé : aucun StepRefused au
+  segment suivant ; test unitaire de la condition settle.
+  Vérification live : dossiers en (3267,3227) = 0 ; DoorDidNotOpen 1530 « left us at » en baisse.
+  Risque : +1-2 ticks par traversée.
+
+P10 — Rapport replié avant le détecteur d'inactivité   [orchestrateur brain/rates]   R11
+  Cause : le pli du rapport passe après « rates: stored report » (jusqu'à 35 s) ; le détecteur
+  « worker went idle without reporting » tire avant et compte un échec.
+  Correctif : le détecteur consulte la file des rapports reçus non repliés pour le compte/nœud ; le
+  rapport est plié avant le stockage des taux (taux différés, décision 2026-11-14).
+  Test rouge (orchestrateur) : worker idle + rapport en file -> verdict du rapport, pas Failure.
+  Vérification live : « no report: worker went idle » ne survient plus qu'après un vrai crash/redémarrage.
+  Risque : faible.
+
+P11 — Désynchronisation protocole   [SDK client]   R09
+  Hypothèse : une trame serveur à taille variable (ou fixe mal tabulée) est mal découpée ; l'opcode
+  « inconnu » est l'octet suivant. Observation qui confirmerait : les 3 derniers opcodes avant l'erreur
+  sont toujours le même paquet.
+  Correctif en deux temps : (1) l'erreur porte un anneau des 8 derniers (opcode, taille annoncée,
+  taille lue) ; (2) correction du décodage du paquet incriminé.
+  Test rouge (SDK, hors ligne) : table des tailles du SDK == tailles de ../Client-TS src/io/ServerProt.ts
+  (branche 274) pour chaque opcode ; puis test de décodage du paquet fautif.
+  Vérification live : 0 « unknown server opcode » sur 2 h de flotte.
+  Risque : nul pour (1).
+
+P12 — Danger des sites de récolte, blessure = menace typée   [planner danger, kit load/mine]   R06 (fer Wilderness)
+  Cause : (3104,3570) relancé trois fois de suite avec des PV en baisse (29 -> 17 -> 9).
+  Correctif : « hurt » devient WorkOutcome::Threat (fuite, soin à la banque, ban du spot), jamais un
+  échec relancé à PV bas ; le niveau de danger d'un site de récolte inclut les PNJ agressifs proches
+  (npc_combat.json) : voir DÉCISION D3.
+  Test rouge (kit, pur) : stall avec PV en baisse -> Threat, pas Abort ; (planner) : danger du site fer
+  Wilderness > danger d'un site sans agressif.
+  Vérification live : aucun « hp < 15 » dans les messages « mine failed » ; morts / h en baisse.
+  Risque : sites Wilderness plus souvent refusés aux bas combats (conforme à « danger = exigence de combat »).
+
+P13 — Vérifications des correctifs du jour (aucun code)   R07 R02
+  ce0fde1 : « missing harpoon » / quarantined:farm:raw_swordfish = 0 après 10:00 UTC (constaté) ;
+  surveiller 2 h. R02 : confirmer que la garde bornée de P14 couvre aussi les choux.
+
+P14 — Garde au dépôt bornée par le budget de cases   [scripts kit/combat_bank.rs, kit load]   R02
+  Cause : combat_keep_ids() garde toute la nourriture du sac (aucune borne).
+  Correctif : règle générique : toute liste gardée au dépôt (nourriture, munitions, objets de chasse)
+  est tronquée à food_load()/HUNT_MIN_FREE ; le surplus est déposé ; trip_verdict ne peut plus échouer
+  sur ce que la garde a elle-même gardé.
+  Test rouge (scripts, pur) : sac 1 pièce + 27 choux, banque sans nourriture -> garde <= 28 - 1 - 2 cases.
+  Vérification live : « pack too full to hunt » = 0.
+  Risque : bot avec moins de nourriture qu'avant sur un spot dangereux (borne = charge adaptée aux PV).
+
+P15 — Contrat de fin des scripts sans objectif   [scripts melee + orchestrateur brain_fold]   R10
+  Vérifier d'abord l'hypothèse (lire le critère « goal_reached » du script melee sans --level/--want) ;
+  règle : un script sans objectif ne rend jamais goal_reached (budget_exhausted), ou rend l'unité
+  produite que le cerveau compte. Test : verdict(...) sur rapport melee filler sans XP comptée.
+  Vérification : signature « goal check is short » = 0.
+
+P16 — Erreurs typées des scripts market / boutique   [scripts market]   R14
+  « run returned 1 » (71) -> ScriptError typé (règle 6) ; « trade gave no <objet> » : vérifier stock de
+  la boutique avant le trajet (même règle que P17). Test : chaque sortie non nulle du script market a
+  un type et un message.
+
+P17 — Préconditions vérifiées à la banque AVANT le trajet (généralisation de c2a4065)   [scripts kit::cycle]   R15
+  smelt bloqué après ~955 ticks de trajet (150 runs). Règle kit : intrants, outils, pièces de trajet
+  vérifiés au départ ; blocage typé immédiat. Test : cycle smelt sans charbon -> Blocked avant walk.
+
+P18 — Bruit et charge   [orchestrateur rates_profit.rs, gamedata]   R16
+  « no profit row » journalisé une fois par (méthode, bande) et par heure ; ajouter le timing serveur
+  de mill:pot_flour (donnée B) ou exclure la méthode des guides tant qu'elle n'est pas mesurée.
+  « slow dispatch » : mesurer après P2/P6 (moins de résolutions et de NoRoute épuisants) avant toute action.
+
+======================================================================================================
+DÉCISIONS À PRENDRE PAR L'UTILISATEUR
+======================================================================================================
+D1 — Levée d'une quarantaine après correction (P4).
+  a) Probation automatique : quand le code du script de la méthode change (hash du build au
+     déploiement), une seule exécution d'essai par un bot de flotte ; succès = levée, échec = quarantaine.
+  b) Le daemon lance lui-même `check-method admin <méthode>` après chaque redéploiement pour chaque
+     méthode en quarantaine (staff, tests de dev autorisés).
+  c) Statu quo : levée manuelle par check-method.
+  Recommandation : b) (preuve sur compte staff, aucun risque pour la flotte), a) en secours si admin occupé.
+
+D2 — Priorité des guildes (P7).
+  a) Garder la priorité mais la soumettre à la capacité (plein = site suivant).
+  b) Supprimer la priorité, la guilde devient un site comme les autres avec la pénalité d'affluence.
+  Recommandation : a).
+
+D3 — Danger des sites de récolte (P12).
+  a) Le danger d'un site inclut les PNJ agressifs proches (exigence de combat plus haute, Wilderness
+     toujours ouverte, conforme à la décision « monde ouvert »).
+  b) Pas d'exigence, mais le script fuit et soigne à chaque blessure.
+  c) Les deux.
+  Recommandation : c) (a pour le choix, b comme filet).
+
+D4 — Échec de contention (P7b) : Blocked sans ban (re-site) ou échec compté avec un seuil plus haut ?
+  Recommandation : Blocked `contended:<site>` sans ban, avec refroidissement du site pour ce bot (P1).
+
+
+DECISIONS UTILISATEUR (2026-11-17)
+----------------------------------
+D1 Quarantaine : re-test AUTOMATIQUE au déploiement — après chaque
+   redéploiement, le daemon lance lui-même check-method sur admin pour
+   chaque méthode en quarantaine ; un succès la lève.
+D2 Guildes : PLUS DE PRIORITE — une guilde est un site comme un autre,
+   choisi par rentabilité mesurée (qui baisse d'elle-même avec la foule).
+D3 Danger des sites de récolte : LES DEUX — les PNJ agressifs du site
+   comptent dans l'exigence de combat de la méthode, ET un bot blessé
+   fuit, se soigne (règles de repas) puis revient.
+D4 Contention : BLOCAGE SANS BAN — pas de ban ni de quarantaine, le bot
+   change de site immédiatement ; les vrais échecs restent comptés.
+P3 (cycle pièces ↔ nourriture) est traité à part par un chantier en
+cours (interblocage money/nourriture) : ne pas le refaire.

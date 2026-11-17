@@ -117,6 +117,7 @@ pub(crate) fn wire_nav(bot: &mut Bot) {
     world.set_f2p(zones);
     let tables = lifescape_nav::tables::Tables::load(&data).expect("tables");
     world.set_sky_floors(tables.sky_floors.clone());
+    world.set_npc_blockers(tables.npc_blockers.clone());
     bot.nav_world = Some(world);
     bot.nav_tables = Some(std::sync::Arc::new(tables));
     bot.last_keepalive = Some(std::time::Instant::now());

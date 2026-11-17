@@ -166,4 +166,47 @@ mod tests {
         assert_eq!(server_op(81), Some(("OBJ_ADD", 5)));
         assert_eq!(client_op("NOPE"), None);
     }
+
+    /// Plan P11 (live 2026-11-17: 50 "unknown server opcode" on 30 bots,
+    /// a different opcode each time = a frame cut wrong upstream). The
+    /// reference client (`../Client-TS` branch 274, `src/io/ServerProt.ts`)
+    /// arbitrates: every opcode it names has the same size here, and no
+    /// opcode it does not name is known here.
+    #[test]
+    fn server_sizes_match_the_reference_client() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../lostcity/../Client-TS/src/io/ServerProt.ts");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            panic!("reference client missing at {}", path.display());
+        };
+        let enum_part = text.split("ServerProtSizes").next().unwrap_or("");
+        let mut named: Vec<(String, u8)> = Vec::new();
+        for line in enum_part.lines() {
+            let line = line.trim().trim_end_matches(',');
+            if let Some((name, id)) = line.split_once(" = ") {
+                if let Ok(id) = id.trim().parse::<u8>() {
+                    named.push((name.trim().to_string(), id));
+                }
+            }
+        }
+        assert!(named.len() > 60, "enum parsed: {}", named.len());
+        let sizes_part = text.split("ServerProtSizes = [").nth(1).and_then(|rest| rest.split(']').next()).unwrap_or("");
+        let sizes: Vec<i16> = sizes_part.split(',').filter_map(|cell| cell.trim().parse::<i16>().ok()).collect();
+        assert_eq!(sizes.len(), 257, "size table parsed");
+        let mut mismatches = Vec::new();
+        for (name, id) in &named {
+            match server_op(*id) {
+                Some((_, ours)) if ours == sizes[usize::from(*id)] => {}
+                Some((ours_name, ours)) => mismatches.push(format!("{name}={id}: reference {} ours {ours} ({ours_name})", sizes[usize::from(*id)])),
+                None => mismatches.push(format!("{name}={id}: unknown here")),
+            }
+        }
+        for id in 0..=255u8 {
+            if !named.iter().any(|(_, known)| *known == id) {
+                if let Some((ours_name, _)) = server_op(id) {
+                    mismatches.push(format!("{id}: {ours_name} known here, absent from the reference"));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "server opcode table differs from Client-TS 274:\n{}", mismatches.join("\n"));
+    }
 }

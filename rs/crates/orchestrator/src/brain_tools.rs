@@ -111,6 +111,20 @@ pub fn kept_tools(life: &Life, stacks: &[(String, i64)], levels: &[(&str, i64)])
     kept
 }
 
+/// Kept tools over what the bot may USE (plan P5, live 2026-11-17: the
+/// best held axe was the one its own listing locked, so the iron axe
+/// it could use sold as surplus and woodcutting blocked "missing
+/// bronze_axe"): the best held member of each family, plus the best
+/// member free of the bot's listings and deals (`free` stacks), so a
+/// family always keeps one usable copy.
+pub fn kept_usable_tools(life: &Life, stacks: &[(String, i64)], free: &[(String, i64)], levels: &[(&str, i64)]) -> Vec<String> {
+    let mut kept = kept_tools(life, stacks, levels);
+    kept.extend(kept_tools(life, free, levels));
+    kept.sort();
+    kept.dedup();
+    kept
+}
+
 /// Every name of the needed tool families and of the permanent kit
 /// (consumables excluded): the names whose spare copies beyond one unit
 /// sell.

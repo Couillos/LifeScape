@@ -216,6 +216,36 @@ pub fn max_hitpoints(bot: &Bot) -> u8 {
     bot.world.stats.get(&3).map(|(_, exp)| lifescape_sdk::snapshot::level_for_xp(*exp)).unwrap_or(10)
 }
 
+/// Hurt loads in a row a gatherer heals from before it gives the site up
+/// (decision D3, 2026-11-17: flee, heal, come back; live arthur_hart on
+/// the Wilderness iron rocks relaunched at hp 29, 17, then 9).
+pub const HURT_RETURNS: u32 = 2;
+
+/// What a gatherer does after a load that ended without its resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HurtReturn {
+    /// Not hurt: the load's own failure stands.
+    NotHurt,
+    /// Hurt (under half its hitpoints): bank, heal, come back.
+    HealAndReturn,
+    /// Hurt again past `HURT_RETURNS`: the site is too dangerous now, a
+    /// typed failure (the brain cools the site for this bot).
+    GiveUp,
+}
+
+/// Pure verdict of a failed load: `hp` / `max_hp` now, `streak` = hurt
+/// loads already healed from in a row.
+pub fn hurt_return(hp: u8, max_hp: u8, streak: u32) -> HurtReturn {
+    if u32::from(hp) * 2 >= u32::from(max_hp.max(1)) {
+        return HurtReturn::NotHurt;
+    }
+    if streak >= HURT_RETURNS {
+        HurtReturn::GiveUp
+    } else {
+        HurtReturn::HealAndReturn
+    }
+}
+
 /// True when the server announced death since `seen`: "Oh dear you are
 /// dead!" arrives even when the hitpoints stream lags behind.
 pub fn death_message_seen(bot: &Bot, seen: usize) -> bool {
@@ -266,6 +296,23 @@ pub fn is_walk_abort(error: &ScriptError) -> bool {
 /// re-gear and continue the job rather than failing it.
 pub fn is_death_abort(error: &ScriptError) -> bool {
     error.to_string().contains("died ")
+}
+
+#[cfg(test)]
+mod hurt_tests {
+    use super::{hurt_return, HurtReturn, HURT_RETURNS};
+
+    /// D3 red test: a load that failed at 9/40 hp heals and returns, a
+    /// third hurt load in a row gives the site up; a healthy failure is
+    /// left to the load's own verdict.
+    #[test]
+    fn a_hurt_gatherer_heals_before_it_returns() {
+        assert_eq!(hurt_return(9, 40, 0), HurtReturn::HealAndReturn);
+        assert_eq!(hurt_return(17, 40, 1), HurtReturn::HealAndReturn);
+        assert_eq!(hurt_return(9, 40, HURT_RETURNS), HurtReturn::GiveUp);
+        assert_eq!(hurt_return(30, 40, 0), HurtReturn::NotHurt);
+        assert_eq!(hurt_return(20, 40, 5), HurtReturn::NotHurt, "half health is no hurt");
+    }
 }
 
 #[cfg(test)]

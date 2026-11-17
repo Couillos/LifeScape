@@ -233,6 +233,7 @@ fn compact_history(life: &mut Life) -> usize {
     let mut goal_entries = 0;
     let mut skills_seen: HashSet<String> = HashSet::new();
     let mut node_outcomes: HashSet<(&str, &str)> = HashSet::new();
+    let mut cools_seen: HashSet<&str> = HashSet::new();
     let (mut close_seen, mut non_goal_seen, mut non_graph_seen) = (false, false, false);
     for (index, entry) in life.history.iter().enumerate().rev() {
         let mut wanted = index + HISTORY_TAIL >= total;
@@ -259,6 +260,12 @@ fn compact_history(life: &mut Life) -> usize {
         }
         if live.contains(entry.node.as_str()) {
             wanted |= node_outcomes.insert((entry.node.as_str(), entry.outcome.as_str()));
+        }
+        // The latest cooldown of each key (`cooldown`, P1) outlives the
+        // compaction: an active one still steers the resolve.
+        if entry.node == crate::cooldown::COOL_NODE {
+            let key = entry.outcome.split('|').next().unwrap_or_default();
+            wanted |= cools_seen.insert(key);
         }
         keep[index] = wanted;
     }

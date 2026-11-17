@@ -68,7 +68,8 @@ fn deliver_groups(
             reports.report(bot, group, "failed", "timeout");
         }
         redeposit(bot, &touched, &restore);
-        return Ok(1);
+        // Typed (P16): the lots never reached the pack in time.
+        return Err(ScriptError::Failed(format!("deliver: lots not secured in time for deals {:?}", groups.iter().map(|group| group.ids.clone()).collect::<Vec<_>>())));
     };
     let mut queue: Vec<usize> = Vec::new();
     for (index, (group, covered)) in groups.iter().zip(flags).enumerate() {

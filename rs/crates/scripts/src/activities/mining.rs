@@ -58,12 +58,33 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
         return Err(crate::kit::tools::blocked_tool("bronze_pickaxe"));
     }
     let mut toolless = 0u32;
+    let mut hurt_streak = 0u32;
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
         let until = state.want_goal(step_bot, &spec);
         let (ok, new_level) = crate::kit::mine::mine_load(step_bot, &tiers, &mut bank, coins, level, until)?;
         level = new_level;
         if !ok {
+            // Hurt on the site (D3): bank, heal by the meal rules, come
+            // back; past `HURT_RETURNS` hurt loads the failure below
+            // stands (the brain cools the site for this bot).
+            let hp = crate::kit::survival::hitpoints(step_bot);
+            let max_hp = crate::kit::survival::max_hitpoints(step_bot);
+            if crate::kit::survival::hurt_return(hp, max_hp, hurt_streak) == crate::kit::survival::HurtReturn::HealAndReturn {
+                hurt_streak += 1;
+                step_bot.log(&format!("hurt on the site (hp {hp}/{max_hp}): banking to heal, then back ({hurt_streak}/{})", crate::kit::survival::HURT_RETURNS));
+                let mut keep: Vec<u16> = pick.known_ids(step_bot).into_iter().collect();
+                keep.extend(task_keep.iter().copied());
+                bank_trip(step_bot, &bank, &keep, 0)?;
+                crate::kit::bank::heal_at_bank(step_bot)?;
+                crate::kit::meals::eat_to_full(step_bot)?;
+                return Ok(state.load_done(step_bot, &format!("healed after a hurt load (mining={level})")));
+            }
+            // Other players on the rocks: contention, never a method
+            // failure (D4: the brain moves the bot to another site).
+            if let Some(contended) = crate::kit::site::contended_error(step_bot) {
+                return Err(contended);
+            }
             // Typed context (rule 6, live 2026-11-15: 272 bare "mine
             // failed" over 34 bots could not be classed).
             let ores: Vec<&str> = tiers.iter().map(|tier| tier.product.as_str()).collect();
@@ -76,6 +97,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 crate::kit::pack::free_slots(step_bot)
             )));
         }
+        hurt_streak = 0;
         let mut keep: Vec<u16> = pick.known_ids(step_bot).into_iter().collect();
         keep.extend(task_keep.iter().copied());
         bank_trip(step_bot, &bank, &keep, 0)?;

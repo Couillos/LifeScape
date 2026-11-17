@@ -70,6 +70,10 @@ pub struct ReadyCtx {
     /// live `check-method` proves them again): never resolved, the
     /// quarantine logged, no silent substitute.
     pub quarantined: Vec<String>,
+    /// Method and site keys this bot cooled after an abandonment or a
+    /// contended site (`cooldown`, plan P1/D4): a cooled method is
+    /// unworkable like a quarantined one, a cooled site is skipped.
+    pub cooled: Vec<String>,
     /// A market maker's post by the Varrock fountain (plan Q6,
     /// `market_maker::maker_post`): the site of its `market:make` node.
     pub maker_post: Option<(i64, i64, i64)>,
@@ -101,7 +105,20 @@ impl ReadyCtx {
             training: None,
             crowd: Vec::new(),
             quarantined: Vec::new(),
+            cooled: Vec::new(),
             maker_post: None,
+        }
+    }
+
+    /// Why `method` never launches for this bot now: `quarantined`
+    /// (fleet, `method_health`) or `cooled` (this bot, `cooldown`).
+    pub fn sick(&self, method: &str) -> Option<&'static str> {
+        if self.quarantined.iter().any(|sick| sick == method) {
+            Some("quarantined")
+        } else if crate::cooldown::method_cooled(&self.cooled, method) {
+            Some("cooled")
+        } else {
+            None
         }
     }
 }
@@ -468,8 +485,7 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     let mut needed: Option<u8> = None;
     let mut fare_short: Option<i64> = None;
     let mut gate_need: Option<String> = None;
-    let fare = crate::combat::Fare::of(ctx);
-    let pass = crate::combat::Pass::of(ctx);
+    let mut cooled = false;
     // A shop purchase walks to the nearest shop that stocks the object
     // (the planner's shop, `--shop`), never a gated one.
     if locked == "shop:buy" {
@@ -506,7 +522,7 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
         return;
     }
     for method in &candidates {
-        match crate::combat::pick_site_crowded(method, ctx.combat, ctx.position, fare, &pass, &ctx.crowd) {
+        match crate::combat::pick_site_for(method, ctx) {
             crate::combat::SitePick::Anywhere => {
                 node.method = Some(method.clone());
                 return;
@@ -541,10 +557,14 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
                 gate_need.get_or_insert_with(|| key.map(str::to_string).unwrap_or_else(|| format!("access:{area}")));
             }
             crate::combat::SitePick::Needs(level) => needed = Some(needed.map_or(level, |known| known.min(level))),
+            crate::combat::SitePick::Cooled => cooled = true,
         }
     }
     node.method = None;
     node.status = match (fare_short, needed) {
+        // Every site this bot works was cooled for it (P1/D4): the
+        // method waits out the cooldown, never a combat need.
+        (None, _) if cooled && gate_need.is_none() => NodeStatus::Blocked { reason: format!("cooled:{locked}") },
         // The fare is the cheapest unlock: a `have_coins` dependency
         // earns it, then the node relaunches with `toll`.
         (Some(coins), _) => NodeStatus::Blocked { reason: format!("missing:coins:{coins}") },
@@ -595,11 +615,11 @@ fn resolve_method(node: &mut Node, ctx: &ReadyCtx) {
                             // (quarantine, quest, combat fit), never a held
                             // tool named missing (a buy-held loop).
                             let missing = required_tool(&first.method).and_then(|need| need.missing(ctx));
-                            let sick = ctx.quarantined.iter().any(|method| method == &first.method);
+                            let sick = ctx.sick(&first.method);
                             node.method = None;
-                            node.status = match missing {
-                                Some(tool) if !sick => NodeStatus::Blocked { reason: format!("missing:{tool}") },
-                                _ if sick => NodeStatus::Blocked { reason: format!("quarantined:{}", first.method) },
+                            node.status = match (missing, sick) {
+                                (Some(tool), None) => NodeStatus::Blocked { reason: format!("missing:{tool}") },
+                                (_, Some(why)) => NodeStatus::Blocked { reason: format!("{why}:{}", first.method) },
                                 _ => NodeStatus::Blocked { reason: format!("unworkable:{}", first.method) },
                             };
                         }
@@ -625,7 +645,7 @@ fn lock_training_pick(node: &mut Node, ctx: &ReadyCtx) -> bool {
         return false;
     }
     let Some(pick) = ctx.training.as_ref() else { return false };
-    if node.excluded.contains(&pick.method) || ctx.quarantined.contains(&pick.method) || crate::quests::missing_quest(&pick.method, None, ctx).is_some() {
+    if node.excluded.contains(&pick.method) || ctx.sick(&pick.method).is_some() || crate::quests::missing_quest(&pick.method, None, ctx).is_some() {
         return false;
     }
     let mut missing: Vec<String> = Vec::new();

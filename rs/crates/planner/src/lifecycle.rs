@@ -553,12 +553,25 @@ pub fn withdraw_gear_step(life: &mut Life, index: usize) -> Vec<String> {
 /// A runtime failure (`Failed`, `Sdk`, bad exit): counted, retried with a
 /// fresh resolve until `MAX_FAILURES`, then abandoned.
 pub fn record_failure(life: &mut Life, index: usize, error: &str) -> FailureFold {
+    record_failure_timed(life, index, error, u64::MAX)
+}
+
+/// A failed run shorter than this that repeats the node's previous error
+/// (digits aside) is deterministic: abandoned at once (plan P1).
+pub const FAST_REPEAT_TICKS: u64 = 100;
+
+/// `record_failure` knowing the run's length: the same error twice in a
+/// row from a run under `FAST_REPEAT_TICKS` abandons at once, never a
+/// third identical relaunch (live 2026-11-17: "pack too full to hunt"
+/// relaunched every ~8 s for 3 h).
+pub fn record_failure_timed(life: &mut Life, index: usize, error: &str, run_ticks: u64) -> FailureFold {
     release_active(life, index);
     let node = &mut life.nodes[index];
+    let repeat = run_ticks < FAST_REPEAT_TICKS && node.failures > 0 && crate::cooldown::same_error(&node.last_error, error);
     node.failures = node.failures.saturating_add(1);
     node.last_error = error.to_string();
     node.method = None;
-    if node.failures >= MAX_FAILURES {
+    if node.failures >= MAX_FAILURES || repeat {
         node.status = NodeStatus::Abandoned;
         FailureFold::Abandoned
     } else {

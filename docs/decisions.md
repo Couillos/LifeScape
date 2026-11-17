@@ -1182,3 +1182,28 @@ Rejeté : palier absolu ; financer un outil qui ne paie pas ; viser deux
 fois le prix (part de 50 % du plan d'équipement).
 - 2026-11-17 — Nourriture : les boissons alcoolisées (catégorie serveur `alcoholic_drinks`, vin compris) ne sont jamais de la nourriture ; un spot ordonné (fillers compris) exige de la nourriture sauf vaches, poulets et spots inoffensifs (max hit du PNJ < 5 % des PV de base du bot, `kit::ladder::HARMLESS_HIT_SHARE`). Rejeté : fillers toujours sur vaches/poulets ; vin réadmis.
 - 2026-11-17 — Interblocage argent ↔ nourriture (jim_ellis, utilisateur) : (1) la nourriture d'un combat bloqué se PRODUIT quand elle ne s'achète pas (`food_gate::obtainable_food` : meilleur poisson abordable, sinon le comestible que le bot fait lui-même, le plus de PV par étape) ; (2) tout choix de méthode prend d'abord une méthode faisable maintenant (`ready_now` : nourriture en main sur un spot qui mord), puis le profit publié ; `have_coins` : les drops de pièces ne font plus que départager (remplace « `have_coins` passe d'abord par les drops de pièces » du 2026-11-12, quand rien ne se vendait) ; (3) détection générique de cycle dans `record_block_from` (`lifecycle_cycle`) : cassé au nœud le plus extérieur, chaîne retirée, méthode bloquante exclue du nœud (`Node::excluded`), logué `cycle broken`. Remplace l'abandon typé du cycle de combat (ryan_mason) par une alternative. Rejeté : liste de méthodes interdites à la main, abandon du pas d'outil.
+
+## 2026-11-17 — Plan d'erreurs de la flotte : décisions D1-D4 (utilisateur)
+
+Source : `docs/plan-erreurs.txt` (causes R01-R18, plan P1-P18).
+1. D1 quarantaine : re-test AUTOMATIQUE au déploiement. Après
+   `restore_jobs`, le daemon lance `check-method admin <méthode> 5
+   --if-idle` pour chaque méthode en quarantaine (`quarantine_retest.rs` :
+   8 au plus, la plus ancienne d'abord, aucune déjà testée sur ce
+   binaire, admin occupé = sauté) ; un succès la lève. Une quarantaine
+   n'est jugée qu'avec >= 3 comptes en échec, un échec identique répété
+   par le même compte compte une fois (`method_health::MIN_ACCOUNTS`).
+2. D2 guildes : PLUS DE PRIORITÉ ; une guilde est un site comme un autre
+   (distance depuis son entrée en surface + affluence), un site plein
+   (`combat::site_full` : bots >= nœuds de ressource) n'est choisi que si
+   tous le sont.
+3. D3 danger des sites de récolte : les PNJ agressifs comptent dans
+   l'exigence (déjà `danger::site_requirement`, figé par test) ET un
+   récolteur blessé (< moitié des PV) banque, se soigne (repas) et revient
+   (`survival::hurt_return`, 2 fois au plus d'affilée).
+4. D4 contention : BLOCAGE SANS BAN. `Blocked contended:<x>,<z>,<niv>`
+   (d'autres joueurs travaillent le site) refroidit méthode@site pour ce
+   bot (`brain_cool`), aucun échec, blocage, santé de méthode ni ban ; le
+   prochain resolve choisit un autre site.
+Rejeté : priorité de guilde soumise à capacité (D2 a) ; levée manuelle seule
+(D1 c) ; contention comptée comme échec avec seuil plus haut (D4).

@@ -75,6 +75,7 @@ pub fn load_offline() -> Result<(Arc<StaticWorld>, Tables), String> {
     }
     let tables = Tables::load(&data_dir).map_err(|err| err)?;
     world.set_sky_floors(tables.sky_floors.clone());
+    world.set_npc_blockers(tables.npc_blockers.clone());
     Ok((world, tables))
 }
 

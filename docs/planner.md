@@ -1172,3 +1172,19 @@ nouveau `have_coins` → hommes… 680 nœuds en 50 min, rien gagné.
   log `cycle broken: …`, historique `cycle_broken`. Un nœud d'argent qui se
   résout sous un nœud d'argent bloqué (graphes déroulés avant) s'effondre
   pareil (`coin_regress`, `brain_launch`).
+## Refroidissements par méthode et site (P1, 2026-11-17)
+
+Un nœud abandonné (échecs, contrat, trajet) refroidit, pour CE bot, ce qui
+a échoué : `méthode@x,z,niv` (méthode seule sans site, ou quand un second
+site de la même méthode échoue dans la fenêtre), entrée d'historique
+`cool:<clé>|<ticks>|<cause>` (nœud `cool`, `COOL_TICKS` = 6000), lue dans
+`ReadyCtx::cooled` (`brain_cool::active`). Une méthode refroidie est
+inexploitable comme une méthode en quarantaine (`ReadyCtx::sick`, blocage
+`cooled:<méthode>`), un site refroidi est sauté par `combat::pick_site_for`
+(tous refroidis : `SitePick::Cooled`, jamais un besoin de combat). La même
+erreur (chiffres à part) deux fois de suite sur un run < 100 ticks abandonne
+tout de suite (`record_failure_timed`). Une racine pièces/argent ne bannit
+que la compétence de sa propre méthode (`banned_scope`). Les buts d'appoint
+et les réponses aux offres ne sont tirés que si une jambe de production
+n'est ni en quarantaine ni refroidie (`side_goal_with`, `goal_feasible`, taux
+0 dans `brain_bids`). Capacité de site et guildes : voir décisions D2/D4.

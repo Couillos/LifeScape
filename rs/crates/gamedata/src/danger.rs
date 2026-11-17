@@ -152,7 +152,14 @@ pub fn sites(kind: &str, resource: &str) -> Vec<(i64, i64, i64)> {
             };
             for name in names {
                 for loc in crate::locs_by_name(&name) {
-                    out.extend(loc.spawns.iter().filter(|spawn| spawn.members != Some(true) && free(spawn.x, spawn.z)).map(|spawn| (spawn.x, spawn.z, spawn.level)));
+                    // A spawn no stand reaches (fence, wall, sealed
+                    // pocket) is no work site (plan P6, `site_reach`).
+                    out.extend(
+                        loc.spawns
+                            .iter()
+                            .filter(|spawn| spawn.members != Some(true) && free(spawn.x, spawn.z) && crate::site_reach::unreachable(spawn.x, spawn.z, spawn.level).is_none())
+                            .map(|spawn| (spawn.x, spawn.z, spawn.level)),
+                    );
                 }
             }
         }
@@ -179,6 +186,18 @@ mod tests {
     /// twice their level like surface hunters (before: every underground
     /// hunter read wild, never passive, and no dungeon camp next to one
     /// was ever safe).
+    /// Decision D3 (2026-11-17): the aggressive NPCs of a gathering site
+    /// count in its combat requirement. The Wilderness iron rocks
+    /// (3104,3570) sit among level-22 skeletons: a bot works them from
+    /// combat 45, the Varrock east iron (no hunter) from 3.
+    #[test]
+    fn hunters_of_a_gathering_site_raise_its_requirement() {
+        let wild_iron = super::site_requirement(3104, 3570, 0);
+        assert!(wild_iron >= 45 && wild_iron < NEVER, "wilderness iron: {wild_iron}");
+        assert!(super::sites("mining", "iron_ore").iter().any(|site| *site == (3104, 3570, 0) || (site.0 - 3104).abs() + (site.1 - 3570).abs() <= 4), "the wild iron is a site");
+        assert_eq!(super::site_requirement(3285, 3365, 0), 3, "Varrock east iron: no hunter");
+    }
+
     #[test]
     fn underground_is_wild_only_past_the_server_line() {
         assert!(!in_wilderness(3111, 9837, 0), "Edgeville dungeon hill giants");

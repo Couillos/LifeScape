@@ -46,6 +46,29 @@ pub fn profit_per_6000(revenue_items: &[(f64, f64)], input_cost: f64, pause_tick
     revenue - input_cost - friction + trend_score * revenue * trend_weight
 }
 
+/// Seconds between two notes of the same missing profit row.
+pub const NOTE_EVERY_SECS: i64 = 3600;
+
+type Noted = HashMap<(String, i64), i64>;
+
+fn noted() -> &'static std::sync::Mutex<Noted> {
+    static NOTED: std::sync::OnceLock<std::sync::Mutex<Noted>> = std::sync::OnceLock::new();
+    NOTED.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Pure: true when `(method, band)` was not noted in the last
+/// `NOTE_EVERY_SECS` (and stamps it now).
+pub fn log_due(table: &mut Noted, method: &str, band: i64, now: i64) -> bool {
+    let key = (method.to_string(), band);
+    match table.get(&key) {
+        Some(last) if now - *last < NOTE_EVERY_SECS => false,
+        _ => {
+            table.insert(key, now);
+            true
+        }
+    }
+}
+
 /// One profitability row per (method, style, band).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProfitRow {
@@ -73,7 +96,11 @@ pub fn profit_rows(store: &Store, snapshot: &Snapshot) -> Vec<ProfitRow> {
         let estimate = match crate::rates_read::estimate_key(&snapshot.book, key, now) {
             Ok(estimate) => estimate,
             Err(error) => {
-                crate::logln!("rates: no profit row for {} band {}: {error}", key.method, key.band);
+                // Once per (method, band) per hour (plan P18: 10 373
+                // identical lines in 10 h for one unmeasured method).
+                if log_due(&mut noted().lock().unwrap_or_else(|poisoned| poisoned.into_inner()), &key.method, key.band, now) {
+                    crate::logln!("rates: no profit row for {} band {}: {error} (next note in {NOTE_EVERY_SECS} s)", key.method, key.band);
+                }
                 continue;
             }
         };
@@ -161,6 +188,16 @@ pub fn cached_profit_rows() -> Arc<Vec<ProfitRow>> {
 
 #[cfg(test)]
 mod tests {
+    /// Plan P18: one note per (method, band) per hour.
+    #[test]
+    fn a_missing_profit_row_is_noted_once_an_hour() {
+        let mut table = std::collections::HashMap::new();
+        assert!(super::log_due(&mut table, "mill:pot_flour", 21, 1000));
+        assert!(!super::log_due(&mut table, "mill:pot_flour", 21, 1000 + 59 * 60));
+        assert!(super::log_due(&mut table, "mill:pot_flour", 22, 1000), "another band");
+        assert!(super::log_due(&mut table, "mill:pot_flour", 21, 1000 + super::NOTE_EVERY_SECS));
+    }
+
     use super::*;
     use crate::rates_estimator::{RunSample, YieldKey};
 

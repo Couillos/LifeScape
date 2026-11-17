@@ -26,7 +26,9 @@ pub mod brain_alch;
 pub mod brain_ambition;
 pub mod brain_await;
 pub mod brain_chain;
+pub mod brain_cool;
 pub mod brain_idle;
+pub mod brain_inflight;
 pub mod brain_bids;
 #[cfg(test)]
 mod brain_bids_sim_tests;
@@ -172,6 +174,7 @@ pub mod flow_causes;
 pub mod report_meta;
 pub mod report_contract;
 pub mod purge_cmd;
+pub mod quarantine_retest;
 pub mod rates_rebuild_cmd;
 pub mod guides_store;
 pub mod web_guides;

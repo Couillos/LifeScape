@@ -15,7 +15,7 @@
 //! Pure: levels, bans, demand and holdings come in as arguments.
 
 use crate::ambition_catalog::{group_of_skill, method_skill, DemandItem};
-use crate::combat::{pick_site_paid, Fare, SitePick};
+use crate::combat::SitePick;
 use crate::expand::{method_feasible, ReadyCtx};
 use crate::model::{GoalKind, Node};
 
@@ -42,10 +42,26 @@ pub fn method_banned(method: &str, avoid: &[String]) -> bool {
 /// `(goal, origin)`, or `None` when nothing is workable. `ironman` skips
 /// the market demand (Iron never sells).
 pub fn side_goal(level_of: &dyn Fn(&str) -> u8, avoid: &[String], demand: &[DemandItem], held_of: &dyn Fn(&str) -> i64, ironman: bool) -> Option<(GoalKind, String)> {
+    side_goal_with(level_of, avoid, demand, held_of, ironman, &|_| false)
+}
+
+/// `side_goal` knowing which methods never launch for this bot now
+/// (`sick`: quarantined fleet-wide or cooled for it, plan P2): a demand
+/// whose every production leg is sick is never drawn (live 2026-11-17:
+/// "produce leather" drawn 1 723 times while `tan:cow_hide` sat in
+/// quarantine, draw -> stuck -> draw every 1-50 s).
+pub fn side_goal_with(
+    level_of: &dyn Fn(&str) -> u8,
+    avoid: &[String],
+    demand: &[DemandItem],
+    held_of: &dyn Fn(&str) -> i64,
+    ironman: bool,
+    sick: &dyn Fn(&str) -> bool,
+) -> Option<(GoalKind, String)> {
     if !ironman {
         let mut best: Option<&DemandItem> = None;
         for wanted in demand.iter().filter(|entry| entry.unmet > 0 && entry.weight > 0.0 && entry.margin.is_some_and(|margin| margin > 0.0)) {
-            if held_of(&wanted.item) >= wanted.unmet.clamp(5, 100) || !workable(&wanted.item, level_of, avoid) {
+            if held_of(&wanted.item) >= wanted.unmet.clamp(5, 100) || !goal_feasible(&wanted.item, level_of, avoid, sick) {
                 continue;
             }
             if best.is_none_or(|known| wanted.weight > known.weight) {
@@ -63,15 +79,16 @@ pub fn side_goal(level_of: &dyn Fn(&str) -> u8, avoid: &[String], demand: &[Dema
     money_open.then(|| (GoalKind::MakeMoney, format!("{SIDE_PREFIX}money")))
 }
 
-/// The bot can make `item` now: its quota's ban skill (first production
-/// leg's skill, `goals::goal_skills`) is free and some production leg's
-/// skill gate is met by an unbanned skill (or has none).
-fn workable(item: &str, level_of: &dyn Fn(&str) -> u8, avoid: &[String]) -> bool {
+/// The bot can make `item` now (plan P2's `goal_feasible`): its quota's
+/// ban skill (first production leg's skill, `goals::goal_skills`) is free
+/// and some production leg that is not `sick` (quarantined, cooled) has
+/// its skill gate met by an unbanned skill (or has none).
+pub fn goal_feasible(item: &str, level_of: &dyn Fn(&str) -> u8, avoid: &[String], sick: &dyn Fn(&str) -> bool) -> bool {
     let goal_skills = crate::goals::goal_skills(&GoalKind::Produce { item: item.to_string(), count: 1 });
     if goal_skills.iter().any(|skill| skill_banned(skill, avoid)) {
         return false;
     }
-    let legs = crate::obtain_legs::production_legs(item);
+    let legs: Vec<crate::obtain_legs::ProductionLeg> = crate::obtain_legs::production_legs(item).into_iter().filter(|leg| !sick(&leg.method)).collect();
     let gated: Vec<&(String, i64)> = legs.iter().filter_map(|leg| leg.skill.as_ref()).collect();
     if gated.is_empty() {
         return !legs.is_empty();
@@ -96,7 +113,7 @@ pub fn steer_off_bans(node: &mut Node, ctx: &ReadyCtx, avoid: &[String]) -> Resu
         if method_banned(&method, avoid) || !method_feasible(&method, ctx) {
             continue;
         }
-        match pick_site_paid(&method, ctx.combat, ctx.position, Fare::of(ctx)) {
+        match crate::combat::pick_site_for(&method, ctx) {
             SitePick::Anywhere => {
                 node.method = Some(method);
                 node.site = None;
@@ -125,7 +142,7 @@ pub fn steer_off_bans(node: &mut Node, ctx: &ReadyCtx, avoid: &[String]) -> Resu
                 node.boat = true;
                 return Ok(true);
             }
-            SitePick::Fare(_) | SitePick::Needs(_) | SitePick::Access(..) => continue,
+            SitePick::Fare(_) | SitePick::Needs(_) | SitePick::Access(..) | SitePick::Cooled => continue,
         }
     }
     Err(format!("every workable money method trains a banned skill ({})", avoid.join(",")))

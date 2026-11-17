@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use lifescape_sdk::Bot;
 
-use super::{combat_keep_ids, food_load, kit_to_withdraw, pack_surplus, planned_kit, trip_verdict, GearPlan, HUNT_MIN_FREE};
+use super::{combat_keep_ids, food_load, kept_food_surplus, kit_to_withdraw, pack_surplus, planned_kit, trip_verdict, GearPlan, HUNT_MIN_FREE};
 use crate::kit::gear::{gear_plan, owned_gear, WORN_COM_NAME};
 use crate::kit::pack::obj_id;
 use crate::kit::style::{fight_weapon_style, style_damage_key};
@@ -175,4 +175,16 @@ fn food_load_never_fills_the_pack() {
     assert_eq!(food_load(10, 0, 5), 3);
     assert_eq!(food_load(3, 2, 1), 2);
     assert_eq!(food_load(3, 0, 0), 0);
+}
+
+/// Plan P14 : sac 1 pièce + 27 choux, banque sans nourriture : la garde
+/// ne laisse jamais moins de `HUNT_MIN_FREE` cases (au plus 28 - 1 - 2
+/// choux), et rien n'est redéposé quand la place suffit.
+#[test]
+fn kept_food_is_bounded_by_the_free_slots() {
+    let surplus = kept_food_surplus(27, 27, 0);
+    assert!(27 - surplus <= 28 - 1 - HUNT_MIN_FREE as u32, "kept {} cabbages", 27 - surplus);
+    assert_eq!(kept_food_surplus(27, 10, 0), 17, "the hunt's load only");
+    assert_eq!(kept_food_surplus(5, 10, 20), 0, "room left: nothing deposited");
+    assert_eq!(kept_food_surplus(0, 10, 0), 0);
 }

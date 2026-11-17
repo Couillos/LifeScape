@@ -21,6 +21,7 @@ struct PagedState {
     toll_gates: HashSet<(i32, i32, i32)>,
     f2p: Option<HashSet<(i32, i32)>>,
     sky_floors: HashSet<(i32, i32, i32)>,
+    npc_blockers: HashSet<(i32, i32, i32)>,
 }
 
 /// Static collision over all levels, backed by the server map pack.
@@ -47,6 +48,7 @@ impl StaticWorld {
                 toll_gates: HashSet::new(),
                 f2p: None,
                 sky_floors: HashSet::new(),
+                npc_blockers: HashSet::new(),
             }),
         }))
     }
@@ -81,7 +83,7 @@ impl StaticWorld {
                 return OPEN;
             }
             if !self.has_square(tile_x >> 6, tile_z >> 6) {
-                return if level > 0 { NULL } else { OPEN };
+                return if level > 0 { NULL } else { Self::with_blockers(&state, OPEN, tile_x, tile_z, level) };
             }
             if state.pack.is_loaded(tile_x >> 6, tile_z >> 6) {
                 return Self::painted_flags(&state, tile_x, tile_z, level);
@@ -99,7 +101,22 @@ impl StaticWorld {
         if level > 0 && flags == OPEN && !state.sky_floors.contains(&(tile_x, tile_z, level)) {
             return NULL;
         }
-        flags
+        Self::with_blockers(state, flags, tile_x, tile_z, level)
+    }
+
+    /// A tile a static player-blocking NPC stands on reads as a loc (the
+    /// engine sets `BLOCK_NPC_AND_PLAYERS` there at spawn, plan P8).
+    fn with_blockers(state: &PagedState, flags: u32, tile_x: i32, tile_z: i32, level: i32) -> u32 {
+        if state.npc_blockers.contains(&(tile_x, tile_z, level)) {
+            flags | crate::collision::LOC
+        } else {
+            flags
+        }
+    }
+
+    /// Tiles of static NPCs that block players (`Tables::npc_blockers`).
+    pub fn set_npc_blockers(&self, tiles: HashSet<(i32, i32, i32)>) {
+        self.state.write().expect("static world lock poisoned").npc_blockers = tiles;
     }
 
     fn ensure(&self, tile_x: i32, tile_z: i32) {

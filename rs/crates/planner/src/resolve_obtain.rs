@@ -127,13 +127,13 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
             }
         }
         if !method_feasible(method, ctx) {
-            if ctx.quarantined.iter().any(|sick| sick == method) {
+            if let Some(why) = ctx.sick(method) {
                 // Quarantined (`method_health`): its gear is no gap (live
                 // 2026-11-17, kevin_ellis: `missing:harpoon` with the
                 // harpoon held, `farm:raw_swordfish` quarantined; four
                 // harpoon obtains "held, done", then abandoned and fishing
                 // banned).
-                sick_gap.get_or_insert(method.clone());
+                sick_gap.get_or_insert(format!("{why}:{method}"));
             } else if tool_gap.is_none() {
                 // The tool first; with the tool at hand, the bait it burns
                 // (feathers for trout, fishing bait for pike). Gear held:
@@ -289,7 +289,7 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         } else if let Some(quest) = quest_gap {
             Some(format!("missing:quest:{quest}"))
         } else {
-            access_gap.map(|area| format!("missing:access:{area}")).or_else(|| sick_gap.map(|method| format!("quarantined:{method}")))
+            access_gap.map(|area| format!("missing:access:{area}")).or_else(|| sick_gap)
         };
         if let Some(reason) = reason {
             node.status = NodeStatus::Blocked { reason };

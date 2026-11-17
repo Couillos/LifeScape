@@ -461,7 +461,18 @@ pub struct Connection {
     // Ring of the last ops sent (names only): attached to socket
     // errors so a killed session names the packet that preceded the FIN.
     recent_ops: Vec<String>,
+    /// Frame whose opcode was read (incoming ISAAC consumed) but whose
+    /// length or body has not fully arrived: the next `recv` resumes it
+    /// (plan P11: a read timeout mid-frame used to drop the frame's
+    /// head, the following `recv` decoded body bytes as an opcode).
+    pending: Option<(u8, &'static str, i16, Option<usize>)>,
+    /// Last decoded frames `(opcode, name, length)`, newest last: named in
+    /// a protocol error (which frame cut the stream).
+    recent_frames: std::collections::VecDeque<(u8, &'static str, usize)>,
 }
+
+/// Frames kept in `Connection::recent_frames`.
+const FRAME_RING: usize = 8;
 
 /// Transient read condition: timeout, would-block, or a signal that
 /// interrupted the poll. All three mean "nothing yet", never a dead
@@ -474,7 +485,12 @@ fn read_wait(kind: std::io::ErrorKind) -> bool {
 
 impl Connection {
     pub fn new(timeout: Duration) -> Connection {
-        Connection { stream: None, outgoing: None, incoming: None, buffer: Vec::new(), packet_index: 0, timeout, last_send: None, sent_total: 0, sent_window_start: None, sent_window: 0, last_op: String::new(), recent_ops: Vec::new() }
+        Connection { stream: None, outgoing: None, incoming: None, buffer: Vec::new(), packet_index: 0, timeout, last_send: None, sent_total: 0, sent_window_start: None, sent_window: 0, last_op: String::new(), recent_ops: Vec::new(), pending: None, recent_frames: std::collections::VecDeque::new() }
+    }
+
+    /// The last decoded frames, oldest first (`name op=N len=L`).
+    fn frames_ring(&self) -> String {
+        self.recent_frames.iter().map(|(opcode, name, length)| format!("{name} op={opcode} len={length}")).collect::<Vec<_>>().join(", ")
     }
 
     /// Test hook: a logged-in session on a loopback socket, both ISAAC
@@ -509,6 +525,8 @@ impl Connection {
         stream.set_read_timeout(Some(Duration::from_millis(500))).map_err(Error::from)?;
         self.stream = Some(stream);
         self.buffer.clear();
+        self.pending = None;
+        self.recent_frames.clear();
         Ok(())
     }
 
@@ -623,22 +641,39 @@ impl Connection {
         self.send_raw(&packet)
     }
 
-    /// Decode the next server frame (opcode ISAAC-shifted, then sized body).
+    /// Decode the next server frame (opcode ISAAC-shifted, then sized
+    /// body). Resumable: a read that times out after the opcode keeps
+    /// the frame pending and every byte read (`read_exact` is all or
+    /// nothing), the next call finishes the same frame.
     pub fn recv(&mut self) -> Result<Frame> {
-        let raw = self.read_exact(1)?[0];
-        let shift = self.incoming.as_mut().ok_or_else(|| Error::Login("not logged in".to_string()))?.next_int();
-        let opcode = raw.wrapping_sub(shift as u8);
-        self.packet_index += 1;
-        let (name, size) = server_op(opcode).ok_or_else(|| Error::Protocol(format!("unknown server opcode {opcode}")))?;
-        let length = match size {
-            -1 => usize::from(self.read_exact(1)?[0]),
-            -2 => {
+        let (opcode, name, size, known) = match self.pending {
+            Some(pending) => pending,
+            None => {
+                let raw = self.read_exact(1)?[0];
+                let shift = self.incoming.as_mut().ok_or_else(|| Error::Login("not logged in".to_string()))?.next_int();
+                let opcode = raw.wrapping_sub(shift as u8);
+                self.packet_index += 1;
+                let (name, size) = server_op(opcode).ok_or_else(|| Error::Protocol(format!("unknown server opcode {opcode} after [{}]", self.frames_ring())))?;
+                self.pending = Some((opcode, name, size, None));
+                (opcode, name, size, None)
+            }
+        };
+        let length = match (known, size) {
+            (Some(length), _) => length,
+            (None, -1) => usize::from(self.read_exact(1)?[0]),
+            (None, -2) => {
                 let bytes = self.read_exact(2)?;
                 (usize::from(bytes[0]) << 8) | usize::from(bytes[1])
             }
-            fixed => fixed as usize,
+            (None, fixed) => fixed as usize,
         };
+        self.pending = Some((opcode, name, size, Some(length)));
         let body = if length > 0 { self.read_exact(length)? } else { Vec::new() };
+        self.pending = None;
+        self.recent_frames.push_back((opcode, name, length));
+        if self.recent_frames.len() > FRAME_RING {
+            self.recent_frames.pop_front();
+        }
         if pktlog_enabled() {
             eprintln!("S>C {name} op={opcode} len={} head={} w={:.2} pid={}", body.len(), hex_head(&body), wall_secs(), std::process::id());
         }
@@ -757,6 +792,10 @@ impl Connection {
                         let _ = self.send("NO_TIMEOUT", &[]);
                     }
                     if now > deadline {
+                        // All or nothing: the bytes read so far go back in
+                        // front of the buffer, the next read resumes them.
+                        out.extend(self.buffer.drain(..));
+                        self.buffer = out;
                         return Err(Error::Timeout(format!("read timed out after {}s", self.timeout.min(Self::READ_BUDGET).as_secs())));
                     }
                 }
@@ -796,6 +835,10 @@ fn frame_packet(op_id: u8, size: i16, payload: &[u8], shift: i32) -> Result<Vec<
     packet.extend_from_slice(&frame);
     Ok(packet)
 }
+
+#[cfg(test)]
+#[path = "connection_frame_tests.rs"]
+mod frame_tests;
 
 #[cfg(test)]
 mod tests {

@@ -165,3 +165,18 @@ fn a_ground_pickup_bans_no_skill() {
     node.method = Some("smith:iron_platelegs".to_string());
     assert_eq!(super::node_skill(&node).as_deref(), Some("smithing"));
 }
+
+/// Plan P1 (live 2026-11-17, hill_eric): a coin node failing its melee
+/// money method takes down melee only, never the craft of the leather
+/// purchase waiting on its coins.
+#[test]
+fn a_money_root_bans_only_its_own_method_skill() {
+    let mut coins = node("n339", NodeKind::HaveCoins { amount: 240 }, &[], "fight:melee/men", "Failed: combat bank trip left the pack too full to hunt (1 free)");
+    coins.failures = 3;
+    coins.method = Some("fight:melee/men".to_string());
+    let mut life = burnt_chain(GoalKind::MakeMoney, false);
+    life.nodes = vec![node("n340", obtain("leather"), &["n339"], "tan:cow_hide", "dependency n339 abandoned"), coins];
+    let scope = banned_scope(&life, "n339");
+    assert!(!scope.contains(&"crafting".to_string()), "no craft waits on coins: {scope:?}");
+    assert!(!scope.is_empty(), "the melee method's own skill goes: {scope:?}");
+}
