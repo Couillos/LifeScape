@@ -102,7 +102,11 @@ fn a_trade_method_works_its_recipe_and_maps_to_its_script_with_the_lot() {
     node.method = Some(method.clone());
     node.batch = 14;
     let (script, args) = crate::mapping::map_method(&method, &node, Some((6000, 9000))).expect("mapped");
-    let (plain_script, plain_args) = crate::mapping::map_method(BRONZE, &node, Some((6000, 9000))).expect("recipe mapped");
+    // The recipe on a node without a stock lot (a batch on the recipe
+    // itself is a lot of the bot's own stock: `--use`, `stock_lot`).
+    let plain_node = Node { batch: 0, ..node.clone() };
+    let (plain_script, plain_args) = crate::mapping::map_method(BRONZE, &plain_node, Some((6000, 9000))).expect("recipe mapped");
+    assert!(!args.iter().any(|arg| arg == "--use"), "a trade lot is no stock lot: {args:?}");
     assert_eq!(script, plain_script, "the recipe's own script");
     let want = args.iter().position(|arg| arg == "--want").expect("lot rides as --want");
     assert_eq!(&args[want..want + 3], &["--want".to_string(), "bronze_bar".to_string(), "14".to_string()]);

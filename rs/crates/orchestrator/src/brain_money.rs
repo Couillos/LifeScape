@@ -11,14 +11,19 @@
 //!   (the yields of the bot's own band); rows without a band skill
 //!   (wool, a ground pickup) once, from its lowest level's view;
 //! - the recipes on its OWN stock (`GuideFilter::held`: its free stock
-//!   minus what it keeps, re-evaluated on that stock by the set): the
-//!   alchemy of its objects (`alch:`), the only stock recipe a money node
-//!   launches today;
+//!   minus what it keeps, re-evaluated on that stock by the set, only the
+//!   recipes whose every stock input it holds): the alchemy of its
+//!   objects (`alch:`) and every other transformation a money node
+//!   launches (cook its catch, smelt its ores, smith its bars, spin its
+//!   wool, tan and sew its hides, cut its gems, fire its pots,
+//!   runecraft its essence...: decision 2026-11-17, R7 suite), its lot
+//!   the actions its free stock covers (`stock_lot::lot_of`, the run
+//!   stops once it is used, `--use`);
 //! - each row mapped to the planner method it launches: a farm row its
 //!   own method when a money node maps it (`mapping`), a market row the
 //!   100 % market lot `trade:craft/<recipe>` when the bot has its offer
 //!   (`brain_trade::publish`, its lot sized on the wallet), a recipe on
-//!   stock its `alch:` method; chains are not launched by a money node;
+//!   stock its own method; chains are not launched by a money node;
 //! - each judged on the bot's live state (`guide_feasible::feasible_for`:
 //!   levels, combat, quests, stock, free wallet, the cycle's asks):
 //!   feasible, or within reach after a tool or a lot's coins; priced and
@@ -60,9 +65,17 @@ impl BotRows<'_> {
     }
 }
 
-/// A stock recipe a money node launches (module doc).
-fn stock_recipe(row: &MoneyRow) -> bool {
-    row.family == Family::Recipe && row.method.starts_with("alch:")
+/// A stock recipe a money node launches (module doc): alchemy, or any
+/// transformation of the bot's stock its script runs as a lot.
+pub(crate) fn stock_recipe(row: &MoneyRow) -> bool {
+    row.family == Family::Recipe && (row.method.starts_with("alch:") || (lifescape_planner::stock_lot::stock_inputs(&row.method).is_some() && money_launchable(&row.method)))
+}
+
+/// True when the bot holds some of every stock input of a recipe row:
+/// only those are re-evaluated on its stock (one lot is the condition
+/// `feasible_for` judges after).
+fn holds_stock(row: &MoneyRow, stock: &[(String, f64)]) -> bool {
+    row.prereqs.stock.iter().all(|(item, _)| stock.iter().any(|(name, units)| name == item && *units >= 1.0))
 }
 
 /// The rows of the set a bot reads (module doc), activity order of each
@@ -87,7 +100,7 @@ pub fn bot_rows<'a>(set: &'a GuideSet, level_of: &dyn Fn(&str) -> u8, stock: &[(
         let replaced = if stock.is_empty() {
             Default::default()
         } else {
-            set.recipes_on_stock(view, stock, &|row| stock_recipe(row) && keeps(row)).unwrap_or_else(|error| {
+            set.recipes_on_stock(view, stock, &|row| stock_recipe(row) && holds_stock(row, stock) && keeps(row)).unwrap_or_else(|error| {
                 out.errors.push(error);
                 Default::default()
             })
@@ -121,7 +134,7 @@ fn launched(row: &MoneyRow, ctx: &ReadyCtx) -> Option<String> {
             let method = lifescape_planner::trade_craft::method_of(&row.method);
             ctx.trades.iter().any(|offer| offer.method == method).then_some(method)
         }
-        Family::Recipe => row.method.starts_with("alch:").then(|| row.method.clone()),
+        Family::Recipe => stock_recipe(row).then(|| row.method.clone()),
         Family::Chain => None,
     }
 }
@@ -149,7 +162,9 @@ pub fn lines_for(rows: &[&MoneyRow], ctx: &ReadyCtx, bot: &BotState, stock: &[(S
         };
         // A trade lot ranks on its offer's profit (the lot it can buy).
         let profit = lifescape_planner::trade_craft::offer_in(ctx, &method).map(|offer| offer.profit_6000).unwrap_or(row.profit_6000);
-        let line = GuideLine { method: method.clone(), family: row.family.as_str().to_string(), profit_6000: profit, weight: merit_money(profit, row.family == Family::Market, affinity), runs: row.confidence.runs, feasible };
+        // A recipe on its own stock runs the lot its free stock covers.
+        let lot = if row.family == Family::Recipe { lifescape_planner::stock_lot::lot_of(&method, &stock_held) } else { 0 };
+        let line = GuideLine { method: method.clone(), family: row.family.as_str().to_string(), profit_6000: profit, weight: merit_money(profit, row.family == Family::Market, affinity), runs: row.confidence.runs, feasible, lot };
         let better = best.get(&method).is_none_or(|known| (line.feasible, line.profit_6000) > (known.feasible, known.profit_6000));
         if better {
             best.insert(method, line);
@@ -179,7 +194,9 @@ pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value
     };
     let levels = ctx.levels.clone();
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
-    let stock = crate::brain_alch::own_stock(live, &life.account, &crate::brain_alch::kept(life, live));
+    // Its own candidates (the alternatives a previous resolve left) never
+    // reserve the stock from it.
+    let stock = crate::brain_alch::own_stock(live, &life.account, &crate::brain_alch::kept_except(life, live, Some(&node.id)));
     let read = bot_rows(&set, &level_of, &stock);
     let rows = read.all();
     for error in &read.errors {

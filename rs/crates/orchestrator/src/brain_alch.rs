@@ -123,7 +123,14 @@ pub(crate) fn alch_stock(live: &Value, account: &str, keep: &[String]) -> Vec<(S
 /// its gear (best per slot and better), its graph's obtains, its tools
 /// (the permanent kit and its work's, `brain_tools::kept_tools`).
 pub(crate) fn kept(life: &Life, live: &Value) -> Vec<String> {
-    let mut keep = crate::brain_sales::working_keep(life, &[]);
+    kept_except(life, live, None)
+}
+
+/// `kept` without what the node `skip` plans (a money node reading the
+/// stock it may transform: the inputs of its own candidate lines are no
+/// reserve against itself, R7 recipes on stock).
+pub(crate) fn kept_except(life: &Life, live: &Value, skip: Option<&str>) -> Vec<String> {
+    let mut keep = crate::brain_sales::working_keep_except(life, &[], skip);
     let levels_owned = crate::brain_market::live_levels(live);
     let levels: Vec<(&str, i64)> = levels_owned.iter().map(|(name, level)| (name.as_str(), i64::from(*level))).collect();
     let quests = crate::brain_rescue::quests_done(life);

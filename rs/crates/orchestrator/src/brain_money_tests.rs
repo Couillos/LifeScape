@@ -139,3 +139,44 @@ fn each_activity_reads_the_view_of_the_bots_level_in_its_skill() {
     assert_eq!(yews, vec![900.0], "the woodcutter's own band");
     assert_eq!(rows.iter().filter(|row| row.method == "gather:sheep/wool").count(), 1, "a row without a band skill once");
 }
+
+/// R7, recipes on stock beyond alchemy (2026-11-17): a bot holding 200
+/// raw trout reads "cook:trout on its stock" as a money line it works
+/// now, its lot the 200 trout; a pair recipe is bound by its scarcer ore;
+/// without the stock (or kept out of it) no line.
+#[test]
+fn a_recipe_on_its_own_stock_is_a_money_line_with_its_lot() {
+    let mut trout = row(Family::Recipe, "cook:trout", 3000.0);
+    trout.prereqs.stock = vec![("raw_trout".to_string(), 28.0)];
+    let mut bronze = row(Family::Recipe, "smelt:bronze_bar", 900.0);
+    bronze.prereqs.stock = vec![("copper_ore".to_string(), 14.0), ("tin_ore".to_string(), 14.0)];
+    let owned = [trout, bronze];
+    let rows: Vec<&MoneyRow> = owned.iter().collect();
+    let ctx = ReadyCtx::blind(0.5);
+    let none = |_: &str| 0.0;
+    let stock = vec![("raw_trout".to_string(), 200.0), ("copper_ore".to_string(), 200.0), ("tin_ore".to_string(), 50.0)];
+    let lines = judge(&none, |bot| lines_for(&rows, &ctx, bot, &stock, 0.5));
+    assert_eq!(methods(&lines), vec![("cook:trout", true), ("smelt:bronze_bar", true)]);
+    assert_eq!((lines[0].lot, lines[0].family.as_str()), (200, "recipe"));
+    assert_eq!(lines[1].lot, 50, "the tin binds the bronze");
+    let lines = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 0.5));
+    assert!(lines.is_empty(), "no stock, no recipe line: {:?}", methods(&lines));
+    assert!(super::stock_recipe(&owned[0]) && super::stock_recipe(&owned[1]), "every launchable recipe, not only alchemy");
+}
+
+/// A money node's own candidates (the alternatives a previous resolve
+/// left: cook:trout) never reserve its stock against itself; another
+/// node's plan still does (a cooking climb keeps its raw fish).
+#[test]
+fn a_money_node_reads_its_stock_without_its_own_candidates() {
+    let mut life = crate::brain_sales::tests::life_training(&[("cooking", "cook:trout")]);
+    let mut money = lifescape_planner::Node::new("n9", lifescape_planner::NodeKind::MakeMoney, Vec::new(), 0);
+    money.method = Some("cook:lobster".to_string());
+    money.alternatives = vec![lifescape_planner::Alternative { method: "cook:lobster".to_string(), est_ticks: 0, est_coins: 0 }];
+    life.nodes.push(money);
+    let all = crate::brain_sales::working_keep(&life, &[]);
+    assert!(all.contains(&"raw_lobster".to_string()) && all.contains(&"raw_trout".to_string()), "{all:?}");
+    let for_money = crate::brain_sales::working_keep_except(&life, &[], Some("n9"));
+    assert!(!for_money.contains(&"raw_lobster".to_string()), "its own candidate: {for_money:?}");
+    assert!(for_money.contains(&"raw_trout".to_string()), "the climb's raw fish stays kept: {for_money:?}");
+}

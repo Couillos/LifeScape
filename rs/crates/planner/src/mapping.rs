@@ -271,6 +271,14 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     if node.boat && !matches!(script.as_str(), "walkto" | "equip") && !script.starts_with("quest_") {
         head.push("boat".to_string());
     }
+    // A money lot on the bot's own stock (plan rendements R7, `stock_lot`):
+    // the script stops once its lot of stock is used or the stock is
+    // spent, `goal_reached` (`--use <item> N`, `scripts::kit::stock_use`).
+    if matches!(node.kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) {
+        for (item, units) in crate::stock_lot::uses(method, node.batch) {
+            head.extend(["--use".to_string(), item, units.to_string()]);
+        }
+    }
     head.extend(tail);
     Some((script, head))
 }
@@ -279,7 +287,9 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
 /// `--want <product> <batch>` before the brain flags (no batch: the
 /// recipe's run as is). `None` when the recipe maps to no script.
 fn map_trade(recipe: &str, node: &Node, budget: Option<(u64, u64)>) -> Option<(String, Vec<String>)> {
-    let (script, mut args) = map_method(recipe, node, budget)?;
+    // The lot rides as `--want` below, never as a stock lot (`--use`).
+    let recipe_node = Node { batch: 0, ..node.clone() };
+    let (script, mut args) = map_method(recipe, &recipe_node, budget)?;
     if node.batch > 0 {
         let (product, _) = crate::method_way::method_way(recipe)?;
         let at = args.iter().position(|arg| arg == "--node").unwrap_or(args.len());
