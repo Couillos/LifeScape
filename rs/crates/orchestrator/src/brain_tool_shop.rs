@@ -176,6 +176,20 @@ fn withdraw_unfunded(job: &Job, life: &mut Life, purchases: &[KitPurchase]) -> b
     true
 }
 
+/// Price of the kit purchase the rule names next at this free wallet
+/// (0: none, or the bank not streamed): the part of a donor's reserve
+/// kept for its own tools (`funding_plan`).
+pub(crate) fn next_kit_price(job: &Job, life: &Life, live: &Value) -> i64 {
+    let levels_owned = crate::brain_tools::live_levels(live);
+    if live.get("bank_streamed").as_bool() != Some(true) || levels_owned.is_empty() {
+        return 0;
+    }
+    let levels = crate::brain_tools::level_refs(&levels_owned);
+    let (owned, _) = crate::brain_gear::holdings(job);
+    let coins = crate::brain_gear::free_coins(job, None);
+    KitView::read(job, life, &levels).purchases(&levels, &owned, coins).first().map(|purchase| purchase.price.max(0)).unwrap_or(0)
+}
+
 /// One kit pass. Returns true when the life changed (save it).
 pub(crate) fn tool_shop_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
     let now = wall_now();

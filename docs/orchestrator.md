@@ -330,6 +330,61 @@ Migration des vies d'avant l'équilibrage (2026-11-16) : au chargement,
 s/11, common capital target 103000` (une fois par chargement tant que la
 vie n'est pas réécrite) ; indice de tranche, phase et base de P&L gardés.
 
+## Financement des teneurs : `fund-makers` (2026-11-17)
+
+`orchestrator fund-makers [--dry-run]` (`src/funding_cmd.rs`, plan pur
+`src/funding_plan.rs`, dons `src/funding_gifts.rs`) : les comptes les
+plus riches de la flotte donnent des pièces aux teneurs encore en phase
+de jeu pour qu'ils atteignent la cible commune et basculent. Commande
+ponctuelle, idempotente, qui interroge le daemon EN COURS (ne le démarre
+jamais : il faut la flotte connectée).
+
+- Teneur (vie au rôle `market_maker`, phase earning, connecté, banque
+  streamée) : manque = cible − capital − dons en vol vers lui ; capital =
+  pièces du sac + banque (+ portées) de l'instantané live, lues comme la
+  bascule les lit (`funding_cmd::live_coins` = `brain_plan::holdings_count`).
+  Teneur en cotation, hors ligne ou banque non streamée : listé `skipped`,
+  jamais financé. Un manque < 1 000 pièces est laissé à son jeu.
+- Donateur : compte connecté avec une vie, jamais admin/admin2, bite ni la
+  liste `run/economy-excluded.txt`, jamais un teneur, jamais un Iron
+  (n'échange pas), banque streamée. Réserve nommée gardée : pièces
+  engagées (bids au repos + deals acheteurs en vol,
+  `brain_gear::committed_coins`), prochain achat d'équipement
+  (`brain_gear::next_gear_cost`) et d'outil (`brain_tool_shop::
+  next_kit_price`), marge 10 % des pièces (au moins 5 000), dons déjà dus.
+  Le reste est donnable.
+- Répartition gloutonne : teneurs par manque décroissant, chacun servi par
+  le donateur le plus riche restant, puis le suivant.
+- `--dry-run` imprime le plan (`donateur -> teneur : montant`, réserves,
+  `skipped`) sans rien créer. Sans l'option, chaque don devient un deal
+  « don » (objet coins, prix 0, vendeur = donateur, acheteur = teneur) :
+  convocation place de Varrock comme un deal (fenêtre de regroupement,
+  départs échelonnés par ETA, partie absente ouverte), `market deliver`
+  sur les deux workers (le donateur met les pièces dans la fenêtre, le
+  teneur rien, double écran vérifié, réglé sur « Accepted trade. »), le
+  teneur compte ce que son sac a gagné (`received`). Échec typé
+  (`no_show`, `mismatch` = refus, `short`, `timeout`, `nav_down`) : retenté
+  une fois, puis `abandoned`.
+- Journal : une ligne JSON par événement dans `run/funding.jsonl`, une
+  ligne `funding: gift …` par événement dans le log du daemon ; section
+  « funding » d'`orchestrator economy` (par don : essai, donateur,
+  teneur, montant, état, `received ok` / `MISMATCH`).
+
+Procédure live :
+
+    ./rs/target/release/orchestrator fund-makers --dry-run   # relire le plan
+    ./rs/target/release/orchestrator fund-makers             # créer les dons
+    ./rs/target/release/orchestrator economy 1               # section funding
+    grep -E "funding: gift|market maker slice|market make --post" run/orchestrator.log
+
+À vérifier : chaque don `settled` avec `received ok` ; puis par teneur
+financé `brain <c>: market maker slice s/11: capital … >= target …,
+quoting for good` à sa passe suivante, `launching market make --post
+x,z,0`, ses premières cotations au carnet (motif `market_make`, section
+« market makers » d'`economy` : ordres ouverts, écart, part du carnet)
+et ses livraisons à la fontaine (deals `settled`). Relancer
+`fund-makers --dry-run` ensuite : plus aucun don (idempotence).
+
 ## Quarantaines, rapports en vol (2026-11-17)
 
 Au démarrage (donc à chaque déploiement), une fois `restore_jobs` fini, le

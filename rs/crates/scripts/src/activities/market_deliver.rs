@@ -14,7 +14,7 @@ use crate::market_handover::{
     meet_partner, parse_deliver_args, redeposit, seller_offer, wait_departure, DealWatch, DeliverReports, Meet, SellerOffer, Served,
     MEET_RETRIES, WAIT_PAST_DEADLINE_TICKS,
 };
-use crate::market_lots::{carried_before, group_deals, secure_lots, touched_ids, DealGroup};
+use crate::market_lots::{carried_before, gift_purse, gift_received, group_deals, secure_lots, touched_ids, window_lots, DealGroup};
 use crate::{ScriptError, ScriptResult};
 
 /// `market deliver <depart> <deadline> <deal>=<x>,<y> ...`: bank when
@@ -205,6 +205,10 @@ fn meet_and_trade(bot: &mut Bot, group: &DealGroup, deadline: u64, coins: u16, r
             }
             (vec![(form, group.qty)], vec![(coins, group.coins)])
         };
+        // A gift (`fund-makers`: the object is coins, price 0): the maker
+        // puts nothing in, then counts what its pack gained.
+        let (give, want) = (window_lots(give), window_lots(want));
+        let purse_before = gift_purse(bot, group, coins);
         let left = (deadline + WAIT_PAST_DEADLINE_TICKS).saturating_sub(bot.world.ticks).max(1);
         let (outcome, reason) = match bot.trade_exchange(&group.partner, &give, 0, &want, 0, left.max(600).min(3000))? {
             ExchangeOutcome::Settled => {
@@ -231,7 +235,8 @@ fn meet_and_trade(bot: &mut Bot, group: &DealGroup, deadline: u64, coins: u16, r
                 ("failed", "timeout")
             }
         };
-        reports.report(bot, group, outcome, reason);
+        let received = gift_received(bot, group, coins, purse_before, outcome == "settled")?;
+        reports.report_received(bot, group, outcome, reason, received);
         return Ok(Served::Done(outcome == "settled"));
     }
 }

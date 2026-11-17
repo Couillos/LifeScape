@@ -91,8 +91,13 @@ impl DeliverReports {
     }
 
     pub fn report(&mut self, bot: &Bot, group: &DealGroup, outcome: &str, reason: &str) {
+        self.report_received(bot, group, outcome, reason, None);
+    }
+
+    /// `report` with the coins a gift's maker received (`fund-makers`).
+    pub fn report_received(&mut self, bot: &Bot, group: &DealGroup, outcome: &str, reason: &str, received: Option<i64>) {
         for id in &group.ids {
-            deal_report(&self.account, *id, outcome, reason);
+            deal_report(&self.account, *id, outcome, reason, received);
             if outcome == "trading" {
                 self.trading_since.insert(*id, bot.world.ticks);
             } else {
@@ -116,7 +121,7 @@ impl DeliverReports {
             let since = self.trading_since.get(id).copied();
             let (outcome, reason) = error_verdict(since, &|tick| bot.trade_accepted_since(tick));
             bot.log(&format!("deal {id}: run ended early, reporting {outcome} {reason}"));
-            deal_report(&self.account, *id, outcome, reason);
+            deal_report(&self.account, *id, outcome, reason, None);
             self.finished.insert(*id);
         }
     }

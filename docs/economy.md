@@ -961,6 +961,24 @@ triche (règle 13) : leur stock vient de leurs deals.
 - Opérateur : section « market makers » d'`orchestrator economy` et carte
   « Market makers » de la page `economy` (capital, P&L, écart moyen
   coté, part du carnet, stock par objet ; `market_maker_report`).
+- Financement (utilisateur 2026-11-17, `orchestrator fund-makers`,
+  procédure dans `orchestrator.md`) : les comptes les plus riches de la
+  flotte donnent aux teneurs encore en jeu le manque à la cible commune
+  (capital = pièces sac + banque, lu comme la bascule), chacun gardant
+  une réserve nommée (bids et deals acheteurs engagés, prochain achat
+  d'équipement et d'outil, marge 10 % ≥ 5 000) ; répartition gloutonne
+  du plus riche vers le plus grand manque (`funding_plan`). Un don est un
+  deal de son propre genre (`funding_gifts`) : objet coins, prix 0,
+  vendeur = donateur, acheteur = teneur ; il suit toute la remise
+  physique (convocation, départs échelonnés, partie absente ouverte,
+  `market deliver`, double écran, balayage) mais ne touche ni carnet, ni
+  registre, ni exécution, ni bougie, ni fiabilité, ni relist ; son id
+  (≥ 10^12) n'a pas de ligne en base, l'état vit dans le daemon et le
+  journal `run/funding.jsonl`. Le teneur rapporte les pièces reçues
+  (`received`, comparées au montant). Échec typé retenté une fois, puis
+  abandonné (section « funding » d'`orchestrator economy`). Ce n'est pas
+  de la triche (règles 12-13) : de vrais échanges en jeu entre comptes
+  de la flotte, jamais le staff, jamais un ordre au marché.
 
 ## Front et base
 

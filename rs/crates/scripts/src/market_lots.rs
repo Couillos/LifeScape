@@ -105,16 +105,52 @@ pub fn free_base(bot: &Bot, item: u16) -> u32 {
     }
 }
 
+/// The lots one side puts in the window: a zero lot never reaches it (a
+/// gift's maker owes 0 coins, its donor wants 0 coins back).
+pub fn window_lots(lots: Vec<(u16, u32)>) -> Vec<(u16, u32)> {
+    lots.into_iter().filter(|(_, count)| *count > 0).collect()
+}
+
+/// A gift's maker (`fund-makers`: it "buys" coins at price 0): its pack
+/// coins before the window, to count what it receives.
+pub fn gift_purse(bot: &Bot, group: &DealGroup, coins: u16) -> Option<u32> {
+    (group.buying && group.item == coins).then(|| pack_total(bot, coins))
+}
+
+/// Coins the gift's maker received once the window settled (the pack
+/// update follows the acceptance message by a tick), logged; reported
+/// to the daemon, which checks them against the amount.
+pub fn gift_received(bot: &mut Bot, group: &DealGroup, coins: u16, before: Option<u32>, settled: bool) -> Result<Option<i64>, ScriptError> {
+    let Some(before) = before.filter(|_| settled) else { return Ok(None) };
+    bot.pump(3)?;
+    let received = i64::from(pack_total(bot, coins)) - i64::from(before);
+    bot.log(&format!("gift {:?}: received {received} coins of {}", group.ids, group.qty));
+    Ok(Some(received))
+}
+
+/// Coins a group takes from the purse: a purchase pays its coins, a
+/// gift's donor (`fund-makers`: the deal's object IS coins, price 0)
+/// hands over its quantity; `None` for goods.
+pub fn purse_need(group: &DealGroup, coins_id: u16) -> Option<u32> {
+    if group.buying {
+        Some(group.coins)
+    } else if group.item == coins_id {
+        Some(group.qty)
+    } else {
+        None
+    }
+}
+
 /// Which groups the pack covers, walked in order: each covered group
 /// takes its share, so two groups never count the same coins or stack.
-pub fn covered(groups: &[DealGroup], mut coins: u32, mut stock: BTreeMap<u16, u32>) -> Vec<bool> {
+pub fn covered(groups: &[DealGroup], coins_id: u16, mut coins: u32, mut stock: BTreeMap<u16, u32>) -> Vec<bool> {
     groups
         .iter()
         .map(|group| {
-            if group.buying {
-                let ok = coins >= group.coins;
+            if let Some(need) = purse_need(group, coins_id) {
+                let ok = coins >= need;
                 if ok {
-                    coins -= group.coins;
+                    coins -= need;
                 }
                 ok
             } else {
@@ -213,8 +249,8 @@ pub fn secure_lots(bot: &mut Bot, groups: &[DealGroup], coins: u16) -> Result<Op
     let mut coins_needed = 0u32;
     let mut items: BTreeMap<u16, u32> = BTreeMap::new();
     for group in groups {
-        if group.buying {
-            coins_needed += group.coins;
+        if let Some(need) = purse_need(group, coins) {
+            coins_needed += need;
         } else {
             *items.entry(group.item).or_insert(0) += group.qty;
         }
@@ -277,7 +313,7 @@ pub fn secure_lots(bot: &mut Bot, groups: &[DealGroup], coins: u16) -> Result<Op
     let _ = bot.close_modal();
     bot.pump(3)?;
     let stock: BTreeMap<u16, u32> = items.keys().map(|item| (*item, carried(bot, *item))).collect();
-    let flags = covered(groups, pack_total(bot, coins), stock);
+    let flags = covered(groups, coins, pack_total(bot, coins), stock);
     for (group, ok) in groups.iter().zip(&flags) {
         if !ok {
             bot.log(&format!(
@@ -415,7 +451,23 @@ mod tests {
             group(vec![3], true, 1511, 5, 5),
         ];
         let stock = BTreeMap::from([(317u16, 20u32)]);
-        assert_eq!(covered(&groups, 5, stock), vec![true, false, true], "14 of 20 shrimps taken, 11 more short");
+        assert_eq!(covered(&groups, 995, 5, stock), vec![true, false, true], "14 of 20 shrimps taken, 11 more short");
+    }
+
+    /// A gift (`fund-makers`: coins at price 0) takes its quantity from
+    /// the purse on the donor's side, nothing on the maker's; one purse
+    /// is never counted twice between a gift and a purchase.
+    #[test]
+    fn a_gift_is_paid_from_the_purse() {
+        let group = |buying: bool, item: u16, qty: u32, coins: u32| DealGroup { ids: vec![9], partner: "p".to_string(), buying, item, qty, coins, tile: (0, 0) };
+        let (donor, maker, purchase) = (group(false, 995, 40_000, 0), group(true, 995, 40_000, 0), group(true, 1511, 5, 50));
+        assert_eq!(super::purse_need(&donor, 995), Some(40_000));
+        assert_eq!(super::purse_need(&maker, 995), Some(0), "the maker puts nothing in");
+        assert_eq!(super::purse_need(&group(false, 1511, 5, 50), 995), None, "goods are no purse");
+        assert_eq!(covered(&[donor.clone(), purchase.clone()], 995, 40_049, BTreeMap::new()), vec![true, false], "one purse, counted once");
+        assert_eq!(covered(&[maker], 995, 0, BTreeMap::new()), vec![true]);
+        assert_eq!(super::window_lots(vec![(995, 0)]), Vec::<(u16, u32)>::new(), "the maker offers nothing");
+        assert_eq!(super::window_lots(vec![(995, 40_000)]), vec![(995, 40_000)]);
     }
 }
 

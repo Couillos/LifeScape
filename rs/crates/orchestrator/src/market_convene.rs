@@ -324,9 +324,8 @@ impl MarketService {
 
     pub(crate) fn op_my_deals(&self, request: &Value) -> Value {
         let account = request.get("account").as_str().unwrap_or("");
-        let store = self.lock_store();
-        let rows = store.open_deals_for_account(account).unwrap_or_default();
-        let values: Vec<Value> = rows
+        let rows = self.lock_store().open_deals_for_account(account).unwrap_or_default();
+        let mut values: Vec<Value> = rows
             .iter()
             .map(|row| {
                 object(vec![
@@ -351,6 +350,8 @@ impl MarketService {
                 ])
             })
             .collect();
+        // Gifts to the makers (`funding_gifts`) deliver like deals.
+        values.extend(self.gift_rows(account));
         object(vec![("ok", Value::Bool(true)), ("deals", Value::Arr(values))])
     }
 
@@ -457,6 +458,12 @@ impl MarketService {
             None
         };
         let clock = Self::now_clock();
+        let gift = self.is_gift(deal_id.max(0) as u64);
+        // A gift's maker counts the coins its pack gained, whichever side
+        // settled first (`funding_gifts`).
+        if let (true, Some(received)) = (gift, request.get("received").as_i64()) {
+            self.gift_received(deal_id as u64, account, received);
+        }
         // Snapshot the parties first: the ledger refund below needs them
         // without holding the engine lock across the store calls.
         let (buyer, seller, item, qty, price) = {
@@ -516,7 +523,7 @@ impl MarketService {
             // backed by the same missing stock (live 2026-11-12:
             // lara_lane sold 26 raw shrimps it did not own across three
             // deals, each one dying and relisting forever).
-            if why == FailReason::Short {
+            if why == FailReason::Short && !gift {
                 let side = if account == seller {
                     lifescape_store::OrderSide::Sell
                 } else {
@@ -526,7 +533,11 @@ impl MarketService {
                 crate::logln!("market: {account} short on obj {item}, {cancelled} phantom order(s) cancelled");
             }
         }
-        if next == DealStatus::Settled {
+        if next == DealStatus::Settled && gift {
+            // Never a print, a candle nor a reliability point: no market.
+            self.gift_ended(deal_id as u64);
+            self.note_deal_end(account, (&buyer, &seller), None);
+        } else if next == DealStatus::Settled {
             self.settle_print(deal_id, item, qty, price, clock);
             self.release_convene(deal_id as u64);
             let store = self.lock_store();
@@ -556,6 +567,11 @@ impl MarketService {
         relist_seller: bool,
         reliability: (Option<bool>, Option<bool>),
     ) {
+        // A gift moved no ledger and rests no order: journal, retry once.
+        if self.is_gift(deal_id) {
+            self.gift_ended(deal_id);
+            return;
+        }
         {
             let mut engine = self.lock_engine();
             let cost = qty * price;
