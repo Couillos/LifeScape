@@ -6,7 +6,7 @@
 //! the market absorbs; `market_fit`: saturation, sale lots, coin rate);
 //! this file reads the PUBLIC book (the market engine's resting orders,
 //! the bot's own bids left out, current prices, 24 h volume, the public
-//! claims of the order board), the published rates and the bot's own
+//! claims of the order board), the money guide (its D17 coin rate, `brain_d17`) and the bot's own
 //! state, then hands the draw a production quota (`bid:<item>`) when a
 //! lot beats the ambition, and posts the claim on the board.
 //!
@@ -23,7 +23,7 @@ use std::sync::{Mutex, OnceLock};
 
 use lifescape_json::Value;
 use lifescape_planner::bid_response::{best_opportunity, bid_goal, Opportunity, Producer};
-use lifescape_planner::market_fit::{coin_rate, BookView};
+use lifescape_planner::market_fit::BookView;
 use lifescape_planner::{GoalKind, Life};
 
 /// A market-wide choice is reused this long per account (wall seconds).
@@ -206,101 +206,6 @@ impl MarketReader {
     }
 }
 
-/// Seconds a realizable rate table serves.
-pub const REALIZABLE_TTL_SECS: u64 = 60;
-
-/// Realizable `(script, band, profit per 6000)` rows: the published
-/// profits (rates page) times the share of each product the market
-/// absorbs (live 2026-11-14: a few bronze scimitar gear bids at ~2000
-/// published `smith` band 1 at 65 928 per 6000 ticks, valuing EVERY
-/// bot's time at 11 coins a tick, so no lot ever beat it). Shared and
-/// rebuilt every `REALIZABLE_TTL_SECS` (one book read for the table).
-pub fn rate_rows() -> Vec<(String, i64, f64)> {
-    type Table = Option<(std::time::Instant, Vec<(String, i64, f64)>)>;
-    static CACHE: OnceLock<Mutex<Table>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(None));
-    let mut slot = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some((_, rows)) = slot.as_ref().filter(|(built, _)| built.elapsed().as_secs() < REALIZABLE_TTL_SECS) {
-        return rows.clone();
-    }
-    let published: Vec<(String, i64, f64)> = crate::rates_service::cached_profit_rows().iter().map(|row| (row.method.clone(), row.band, row.profit)).collect();
-    let rows = if crate::market_service::shared().is_some() {
-        let reader = MarketReader::live("");
-        realizable_rows(&published, &crate::rates_service::live_snapshot().yield_rows(), &|item| reader.view(item))
-    } else {
-        published
-    };
-    *slot = Some((std::time::Instant::now(), rows.clone()));
-    rows
-}
-
-/// Debug name of a display name of the rates rows (first object).
-fn debug_of_display(display: &str) -> Option<String> {
-    static TABLE: OnceLock<HashMap<String, String>> = OnceLock::new();
-    let table = TABLE.get_or_init(|| {
-        let mut out = HashMap::new();
-        for obj in lifescape_gamedata::all_objs() {
-            let (Some(name), Some(shown)) = (obj.name, obj.display) else { continue };
-            if name.starts_with("cert_") {
-                continue;
-            }
-            // The object named like its display wins (`coins` over
-            // `fake_coins`), else the first.
-            let key = shown.to_lowercase();
-            let exact = key.replace(' ', "_") == name;
-            if exact || !out.contains_key(&key) {
-                out.insert(key, name.to_string());
-            }
-        }
-        out
-    });
-    table.get(&display.to_lowercase()).cloned().or_else(|| lifescape_gamedata::objs_by_name(display).first().and_then(|obj| obj.name).map(str::to_string))
-}
-
-/// Share of a window's `batch` buyers take: (resting bids + 24 h volume)
-/// over (resting asks + the batch), in [0, 1]. Unlike
-/// `market_fit::saturation_factor`, an object nobody offers AND nobody
-/// buys absorbs nothing: a steady hourly rate needs buyers, not a price
-/// left by one old fill.
-fn absorbed_share(view: Option<&BookView>, batch: f64) -> f64 {
-    let Some(view) = view else { return 0.0 };
-    let buyers = (view.bid_depth() + view.volume_24h.max(0)) as f64;
-    let offered = view.ask_depth() as f64 + batch.max(1.0);
-    (buyers / offered).clamp(0.0, 1.0)
-}
-
-/// Pure: each published row times the share of its products the market
-/// absorbs at their yield (`absorbed_share`, weighted by each product's
-/// value per 6000 ticks: current price, else best bid, else 1). A loss
-/// stays a loss; a row without measured products keeps its profit.
-pub fn realizable_rows(rows: &[(String, i64, f64)], yields: &[crate::rates_service::YieldRow], view: &dyn Fn(&str) -> Option<BookView>) -> Vec<(String, i64, f64)> {
-    rows.iter()
-        .map(|(script, band, profit)| {
-            if *profit <= 0.0 {
-                return (script.clone(), *band, *profit);
-            }
-            let mut value = 0.0;
-            let mut absorbed = 0.0;
-            for row in yields.iter().filter(|row| row.method == *script && row.band == *band && row.mean > 0.0) {
-                // Coins picked up are money, no market to absorb them
-                // (`fake_coins` shares their display name).
-                if row.item.eq_ignore_ascii_case("coins") {
-                    value += row.mean;
-                    absorbed += row.mean;
-                    continue;
-                }
-                let book = debug_of_display(&row.item).and_then(|item| view(&item));
-                let price = book.as_ref().and_then(|known| known.current.or(known.best_bid())).unwrap_or(1).max(1) as f64;
-                let worth = row.mean * price;
-                value += worth;
-                absorbed += worth * absorbed_share(book.as_ref(), row.mean);
-            }
-            let share = if value > 0.0 { absorbed / value } else { 1.0 };
-            (script.clone(), *band, profit * share)
-        })
-        .collect()
-}
-
 /// Units of `item` per 6000 ticks of `method` for a bot at `level` with
 /// `tool` (`rates_read`: n >= 3 blended with the game prior, else the
 /// prior; nothing computable is a typed error).
@@ -402,9 +307,11 @@ pub(crate) fn explain_for(account: &str, item: &str) -> Result<Vec<String>, Stri
         return Err("market service down".to_string());
     }
     let reader = MarketReader::live(account);
-    let rows = rate_rows();
+    let guides = crate::guides_store::current();
     Ok(with_bot_state(&life, &live, |state| {
-        let rate = coin_rate(&rows, state.level_of);
+        let key = key_of(&life, state);
+        let best = guides.as_deref().and_then(|set| crate::brain_d17::best_row(set, &key));
+        let rate = crate::brain_d17::rate_of(best.map(|row| row.profit_6000));
         state.with_producer(&life, rate, |producer| {
             let market = |name: &str| reader.view(name);
             let view = reader.view(item).unwrap_or_default();
@@ -412,25 +319,34 @@ pub(crate) fn explain_for(account: &str, item: &str) -> Result<Vec<String>, Stri
             if view.bids.is_empty() {
                 lines.extend(crate::bid_why::related_bid_lines(item, &market));
             }
-            // What sets that rate: the best money rows the bot's levels open.
-            let mut open: Vec<&(String, i64, f64)> = rows
-                .iter()
-                .filter(|(script, band, _)| lifescape_planner::market_fit::script_skill(script).is_some_and(|skill| i64::from((state.level_of)(skill).max(1)) >= *band))
-                .collect();
-            open.sort_by(|left, right| right.2.total_cmp(&left.2));
-            for (script, band, profit) in open.iter().take(3) {
-                lines.push(format!("  rate row: {script} band {band}: {profit:.0} coins per 6000 ticks"));
-            }
+            // What sets that rate: its D17, the best money guide line
+            // within its reach (`brain_d17`).
+            lines.push(match (&guides, best) {
+                (None, _) => "  D17: no money guide published yet (the floor)".to_string(),
+                (Some(_), None) => "  D17: no earning money guide line within its reach (the floor)".to_string(),
+                (Some(_), Some(row)) => format!("  D17: {} {} band {}: {:.0} coins per 6000 ticks", row.family.as_str(), row.method, row.band, row.profit_6000),
+            });
             lines.extend(lifescape_planner::bid_response::explain(item, &view, &market, producer));
             lines
         })
     }))
 }
 
-/// Pure choice: the lot this life makes now, if any (planner rules),
-/// with the bot's coin rate.
-pub fn choose(life: &Life, reader: &MarketReader, rows: &[(String, i64, f64)], state: &BotState) -> Option<(Opportunity, f64)> {
-    let rate = coin_rate(rows, state.level_of);
+/// What a D17 read knows of this bot (`brain_d17`): its live levels,
+/// combat, quests and Ironman flag.
+pub fn key_of<'a>(life: &Life, state: &'a BotState) -> crate::brain_d17::BotKey<'a> {
+    crate::brain_d17::BotKey { level_of: state.level_of, combat: state.combat, quests_done: &state.quests_done, ironman: life.profile.ironman }
+}
+
+/// Coins one tick of this bot's time is worth: its D17 in the last
+/// published money guide (`brain_d17::coin_rate`, plan rendements D17).
+pub fn bot_rate(life: &Life, state: &BotState) -> f64 {
+    crate::brain_d17::coin_rate(&key_of(life, state))
+}
+
+/// Pure choice: the lot this life makes now, if any (planner rules), at
+/// the bot's coin rate `rate` (`bot_rate`).
+pub fn choose(life: &Life, reader: &MarketReader, rate: f64, state: &BotState) -> Option<(Opportunity, f64)> {
     state.with_producer(life, rate, |producer| {
         let market = |item: &str| reader.view(item);
         let books = reader.value_books(producer.alch_net);
@@ -513,10 +429,9 @@ pub(crate) fn production_costs_for(life: &Life, live: &Value, items: &[(String, 
     if items.is_empty() || crate::market_service::shared().is_none() {
         return HashMap::new();
     }
-    let rows = rate_rows();
     let reader = MarketReader::live(&life.account);
     with_bot_state(life, live, |state| {
-        let rate = coin_rate(&rows, state.level_of);
+        let rate = bot_rate(life, state);
         state.with_producer(life, rate, |producer| {
             let market = |name: &str| reader.view(name);
             items
@@ -558,7 +473,7 @@ pub(crate) fn bid_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, Strin
         Some((at, seen_window, choice)) if now.saturating_sub(at) < CHOICE_TTL_SECS && seen_window == window => choice,
         _ => {
             let reader = MarketReader::live(&life.account);
-            let choice = with_bot_state(life, live, |state| choose(life, &reader, &rate_rows(), state));
+            let choice = with_bot_state(life, live, |state| choose(life, &reader, bot_rate(life, state), state));
             choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(life.account.clone(), (now, window, choice.clone()));
             choice
         }
@@ -608,27 +523,5 @@ mod tests {
         let scimitar = &views["bronze_scimitar"];
         assert_eq!(scimitar.bids, vec![(2961, 1), (2876, 2)]);
         assert_eq!(views["bronze_bar"].asks, vec![(5, 146)], "own asks count, empty rows do not");
-    }
-
-    /// Live 2026-11-14: a few bronze scimitar fills published `smith`
-    /// band 1 at 65 929 per 6000 ticks, the time of every bot then worth 11
-    /// coins a tick. Realizable: the share buyers absorb (3 bids against
-    /// 21 asks and a window's 136 scimitars); coins picked up count whole;
-    /// a product nobody buys is worth nothing per hour.
-    #[test]
-    fn coin_rates_read_what_the_market_absorbs() {
-        let yield_row = |method: &str, item: &str, band: i64, mean: f64| crate::rates_service::YieldRow { method: method.to_string(), item: item.to_string(), band, count: 3, mean, prior: false };
-        let yields = vec![yield_row("smith", "Bronze scimitar", 1, 136.0), yield_row("melee", "Coins", 1, 800.0), yield_row("cook", "Shrimps", 1, 300.0)];
-        let rows = vec![("smith".to_string(), 1, 65_929.0), ("melee".to_string(), 1, 800.0), ("cook".to_string(), 1, 3_000.0), ("woodcut".to_string(), 1, 500.0)];
-        let view = |item: &str| match item {
-            "bronze_scimitar" => Some(lifescape_planner::market_fit::BookView { bids: vec![(2000, 3)], asks: vec![(1149, 21)], current: Some(1149), ..Default::default() }),
-            _ => None,
-        };
-        let realizable = super::realizable_rows(&rows, &yields, &view);
-        let profit = |script: &str| realizable.iter().find(|row| row.0 == script).map(|row| row.2).unwrap_or(f64::NAN);
-        assert!((profit("smith") - 65_929.0 * 3.0 / 157.0).abs() < 1.0, "{realizable:?}");
-        assert_eq!(profit("melee"), 800.0, "coins are money");
-        assert_eq!(profit("cook"), 0.0, "no buyer of shrimps at all");
-        assert_eq!(profit("woodcut"), 500.0, "no measured product: kept");
     }
 }

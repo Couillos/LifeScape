@@ -246,8 +246,9 @@ décision datée dans `docs/decisions.md`.
   la passe dans `brain_bids::with_bot_state`) : l'entraînement d'un lot
   (`training_rows` : actions, intrants brûlés) via `sizing::*_with` ; les
   unités/6000 d'une jambe lisent déjà l'estimateur (`rates_read`, n ≥ 3
-  mélangé au prior, outil du bot). `market_fit::coin_rate` lit les
-  profits publiés du snapshot (mesurés) ; `own_use_items` ne lit que des
+  mélangé au prior, outil du bot). Le taux de pièces du bot est son D17
+  dans le guide money (`brain_d17::coin_rate`, 2026-11-17 : plus la table
+  `rates_profit`) ; `own_use_items` ne lit que des
   NOMS d'intrants (la mesure change les quantités, pas l'ensemble) : prior
   gardé.
 - Trait rapide ↔ économe : ne pèse PAS sur l'argent (décision utilisateur
@@ -985,9 +986,11 @@ Signaux de demande (`market_demand.rs`, lecture seule, données publiques) :
 unmet_qty, best_bid, oldest_age_secs, oldest_age_ticks, weight}` (offres
 d'achat au repos ; poids = meilleure offre × quantité non servie × (1 +
 min(âge/6000 ticks, 5)), âge = celui de la LIGNÉE, t0 gardé par les
-amends), `chain_profits()` (chaînes D58 de `chains.rs`
-évaluées aux prix marché, jamais magasin), `kind_profits()` (chaînes +
-profits mesurés par méthode), `kind_demand()` (entrées du planner :
+amends), `kind_profits()` (meilleure ligne du guide money précalculé
+par type d'ambition, `brain_d17::kind_profits` : catalogue coté, sans
+condition impossible pour tous, chaînes comprises ; vide avant le premier
+jeu ; 2026-11-17 : plus `chain_profits` ni la table `rates_profit`),
+`kind_demand()` (entrées du planner :
 `DemandItem`, `KindDemand` = 1 + part de la demande servie + part du
 meilleur profit).
 

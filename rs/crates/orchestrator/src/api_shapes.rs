@@ -183,38 +183,6 @@ pub fn rate_row_columns(own: &[&str]) -> Vec<String> {
     out
 }
 
-/// One profitability row (matches `rates_payload` `profit` entries).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProfitRowShape {
-    pub method: String,
-    pub style: String,
-    pub band: i64,
-    pub revenue: f64,
-    pub input_cost: f64,
-    pub friction: f64,
-    pub trend_bonus: f64,
-    pub profit: f64,
-    pub price_prior: bool,
-    pub prior: bool,
-}
-
-impl ProfitRowShape {
-    pub fn to_value(&self) -> Value {
-        object(vec![
-            ("method", str_value(&self.method)),
-            ("style", str_value(&self.style)),
-            ("band", Value::Int(self.band)),
-            ("revenue", Value::Float(self.revenue)),
-            ("input_cost", Value::Float(self.input_cost)),
-            ("friction", Value::Float(self.friction)),
-            ("trend_bonus", Value::Float(self.trend_bonus)),
-            ("profit", Value::Float(self.profit)),
-            ("price_prior", Value::Bool(self.price_prior)),
-            ("prior", Value::Bool(self.prior)),
-        ])
-    }
-}
-
 /// One Trading-table row (D44): trading profit per 6000 ticks, settled
 /// deals, execution rate, stock value. DELTA (P1.4): new table, served
 /// beside `rates`; market engagement profit lives here, never in the
@@ -372,7 +340,7 @@ impl HoldingsHistory {
 
 #[cfg(test)]
 mod tests {
-    use super::{Candle, CandleRes, Exec, HoldingsHistory, HoldingsRes, LivesRow, MarketHistory, MarketListRow, ProfitRowShape, TradingRow, LIVES_COLUMNS, TRADING_COLUMNS};
+    use super::{Candle, CandleRes, Exec, HoldingsHistory, HoldingsRes, LivesRow, MarketHistory, MarketListRow, TradingRow, LIVES_COLUMNS, TRADING_COLUMNS};
     use lifescape_json::{object, str_value, Value};
 
     fn keys(value: &Value) -> Vec<String> {
@@ -428,18 +396,6 @@ mod tests {
     /// Rates keys are frozen and sortable columns name exactly them.
     #[test]
     fn rates_keys_match_sortable_columns() {
-        let profit = ProfitRowShape {
-            method: "gather:shrimp".to_string(),
-            style: String::new(),
-            band: 1,
-            revenue: 720.0,
-            input_cost: 0.0,
-            friction: 3.0,
-            trend_bonus: 0.0,
-            profit: 717.0,
-            price_prior: false,
-            prior: false,
-        };
         let trading = TradingRow {
             item: "Feather".to_string(),
             profit_per_6000: 210.0,
@@ -452,7 +408,6 @@ mod tests {
         let mut twant: Vec<String> = TRADING_COLUMNS.iter().map(|key| key.to_string()).collect();
         twant.sort();
         assert_eq!(tkeys, twant);
-        assert_eq!(profit.to_value().get("profit").as_f64(), Some(717.0));
     }
 
     /// Lives rows are flat and countable: one account per line, every

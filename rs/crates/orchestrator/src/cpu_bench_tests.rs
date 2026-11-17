@@ -44,7 +44,10 @@ fn cpu_bench() {
         let snapshot = crate::rates_service::live_snapshot();
         timed("store.list_items (old: once per price)", 20, || store.list_items().map(|rows| rows.len()).unwrap_or(0));
         timed("Store::open", 20, || lifescape_store::Store::open(&crate::market_service::db_path()).is_ok());
-        timed("profit_rows uncached (memoised build)", 3, || crate::rates_service::profit_rows(&store, &snapshot));
+        // The brain reads its coin figures in the money guide (`brain_d17`):
+        // one cycle built on the copy and published, as the daemon does.
+        let set = timed("guides_store::build_set (one cycle)", 1, || crate::guides_store::build_set(&store, &snapshot, &crate::web_guides::StoreWaits::default()));
+        crate::guides_store::publish(set);
     }
     {
         // Current price of every catalogue item (impact clamp 2026-11-14):
@@ -56,7 +59,6 @@ fn cpu_bench() {
         let store = lifescape_store::Store::open(&crate::market_service::db_path()).expect("store copy");
         timed("price_estimate(every item)", 5, || items.iter().map(|item| crate::rates_price::price_estimate(&store, &item.name).0).sum::<f64>());
     }
-    timed("brain_bids::rate_rows (cached)", 20, crate::brain_bids::rate_rows);
     for item in ["iron_bar", "logs", "bronze_bar", "cowhide", "coal", "steel_bar", "leather", "ball_of_wool", "shrimps", "bronze_dagger", "tin_ore"] {
         timed(&format!("production_legs({item})"), 50, || lifescape_planner::obtain_legs::production_legs(item).len());
     }

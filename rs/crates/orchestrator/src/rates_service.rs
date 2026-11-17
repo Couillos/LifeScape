@@ -51,19 +51,6 @@ pub const NORMALIZE_TICKS: f64 = 6000.0;
 pub const LEVEL_BAND: i64 = 5;
 /// Runs from which a measure counts (page AND brain, one threshold).
 pub const MIN_MEASURED_REPORTS: usize = 3;
-/// Weight of the public trend bonus inside profitability.
-pub const TREND_WEIGHT: f64 = 0.1;
-
-/// One gained object of a method band, per 6000 ticks of work.
-#[derive(Clone, Debug, PartialEq)]
-pub struct YieldRow {
-    pub method: String,
-    pub item: String,
-    pub band: i64,
-    pub count: u64,
-    pub mean: f64,
-    pub prior: bool,
-}
 
 /// Whole rates state: the yield estimator and the merchant book.
 #[derive(Clone, Debug, Default)]
@@ -116,23 +103,6 @@ impl Snapshot {
         Some(admission)
     }
 
-    /// Gained objects per 6000 ticks of every (method, style, band)
-    /// roll-up (every site and tool), as the brain's coin rates read
-    /// them: products, loot, pickups (n ≥ 3 blended, else the prior).
-    pub fn yield_rows(&self) -> Vec<YieldRow> {
-        let now = now_secs();
-        let mut rows = Vec::new();
-        for key in self.book.buckets.keys().filter(|key| key.site == crate::rates_estimator::ANY && key.tool == crate::rates_estimator::ANY) {
-            let Ok(estimate) = crate::rates_read::estimate_key(&self.book, key, now) else { continue };
-            for (item, cause, rate) in &estimate.flows {
-                if *rate > 0.0 && matches!(cause.as_str(), "product" | "loot" | "ground_spawn") {
-                    rows.push(YieldRow { method: key.method.clone(), item: item.clone(), band: key.band, count: estimate.confidence.runs, mean: *rate, prior: estimate.prior });
-                }
-            }
-        }
-        rows
-    }
-
     /// Applies an admission to the estimator (rebuild and live share it).
     pub(crate) fn apply(&mut self, admission: &Admission, account: &str) {
         match admission {
@@ -160,9 +130,15 @@ pub fn live_snapshot() -> Arc<Snapshot> {
 
 pub use crate::rates_price::price_estimate;
 
-#[path = "rates_profit.rs"]
-mod profit;
-pub use profit::{cached_profit_rows, generation, profit_per_6000, profit_rows, trend_score, ProfitRow, PROFIT_TTL};
+/// Snapshot generation: bumped by every recorded report (the rates page
+/// index rebuilds when it changes, `web_rates_view`). Moved here when
+/// the old profit table (`rates_profit`) left for the money guide.
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Current snapshot generation.
+pub fn generation() -> u64 {
+    GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Records one report in the live snapshot and marks it dirty: the
 /// `rates-flush` thread persists it at most once per
@@ -174,7 +150,7 @@ pub fn record_snapshot(parsed: &ParsedReport, contract: Option<&ParsedContract>,
         let mut guard = global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         Arc::make_mut(&mut guard).record(parsed, contract, clock);
     }
-    profit::invalidate();
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     crate::rates_flush::mark_dirty();
     Ok(())
 }

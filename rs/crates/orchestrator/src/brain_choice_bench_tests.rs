@@ -116,3 +116,46 @@ fn brain_choice_bench() {
     println!("money:    before {:.3} ms -> R7 {:.3} ms", before_money / count, after_money / count);
     println!("skeleton oracle (15 tranches): {:.3} ms", oracle / count);
 }
+
+/// The brain's coin figures read in the money guide (`brain_d17`,
+/// decision 2026-11-17 « une seule source de profits »), on a COPY of the
+/// live store and rates snapshot (`LIFESCAPE_BENCH_ROOT/run/lifescape.db`,
+/// `run/rates-snapshot.json`; never the live directory): the D17 of bots
+/// at every band, a money node's figures (`brain_market::guide_coins`),
+/// the ambition kinds' profits. Before (the old rates profit table, same
+/// copy, 2026-11-17): the table's build 58.8 ms CPU on every miss (each
+/// report ingest or 10 s), the realizable haircut 2.4 ms per 60 s,
+/// `chain_profits` 1.1 ms per ambition weighing, a coin rate 0.02 ms.
+/// `LIFESCAPE_BENCH_ROOT=/copy cargo test --release -p lifescape-orchestrator --lib profit_reads_bench -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn profit_reads_bench() {
+    let Ok(root) = std::env::var("LIFESCAPE_BENCH_ROOT") else { return };
+    assert!(!root.contains("/home/josh/dev/LifeScape/run"), "bench on a copy only");
+    let store = lifescape_store::Store::open(&std::path::Path::new(&root).join("run/lifescape.db")).expect("store copy");
+    let text = std::fs::read_to_string(std::path::Path::new(&root).join("run/rates-snapshot.json")).expect("snapshot copy");
+    let snapshot = crate::rates_service::snapshot_from_json(&text).expect("snapshot parses");
+    let probe = Probe::start();
+    let set = crate::guides_store::build_set(&store, &snapshot, &crate::web_guides::StoreWaits::default());
+    println!("guide set built on the copy in {:.0} ms cpu (the guides thread, every 300 s)", probe.elapsed().1 as f64 / 1e6);
+    let none: Vec<String> = Vec::new();
+    let mut total = 0.0;
+    let levels = [5u8, 20, 35, 50, 65, 80, 95];
+    for level in levels {
+        let level_of = |_: &str| level;
+        let key = crate::brain_d17::BotKey { level_of: &level_of, combat: level.max(3), quests_done: &none, ironman: false };
+        let best = crate::brain_d17::best_row(&set, &key);
+        println!("--- bot at {level}: D17 {:?} ({:?})", best.map(|row| row.profit_6000), best.map(|row| (row.family.as_str(), row.method.as_str(), row.band, row.confidence.runs)));
+        total += per_call("after: bot_d17 (bids, alchemy, derived demand)", 50, || crate::brain_d17::bot_d17(&set, &key));
+        let mut ctx = ReadyCtx::blind(0.5);
+        ctx.levels = lifescape_planner::guide_methods::SKILLS.iter().map(|skill| (skill.to_string(), level)).collect();
+        let money = Node::new("n1", NodeKind::MakeMoney, Vec::new(), 0);
+        per_call("after: guide_coins (money node: D17 + method profits)", 50, || {
+            let mut filled = ctx.clone();
+            crate::brain_market::guide_coins(&mut filled, &money, &set, level.max(3));
+            filled.method_profit.len()
+        });
+    }
+    per_call("after: kind_profits (ambition weighing)", 50, || crate::brain_d17::kind_profits(&set).len());
+    println!("=== mean bot_d17 over {} bots: {:.3} ms", levels.len(), total / levels.len() as f64);
+}

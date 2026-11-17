@@ -3,15 +3,15 @@
 //! book (resting bids and asks, 24 h volume) and of the bot's own life:
 //! - `saturation_factor`: the share of a new batch the market absorbs
 //!   (bids + a day of volume against resting asks + the batch). A money
-//!   method whose product sits under a wall of asks is worth that share
-//!   of its published profit (`brain_market::fill_ctx`).
+//!   product a producer adds to a book counts at that share
+//!   (`bid_response`).
 //! - `sale_lot`: how much of a spare stack a real player puts up at once
 //!   (what buyers take: bids + a day of volume, at least one inventory).
 //! - `own_use_items`: what the bot's own open milestones will consume
 //!   (logs for its firemaking climb, raw fish for its cooking, ores and
 //!   bars for its smithing, bones for its prayer): kept, never sold.
-//! - `coin_rate`: what one tick of the bot's time is worth, from the
-//!   published method profits it can work at its levels.
+//! - `MIN_COIN_RATE`: the floor of one tick of a bot's time (its rate is
+//!   its D17 in the money guide, `brain_d17` on the orchestrator side).
 //!
 //! No other bot's state: the book is public (D22), the rest is the bot's.
 
@@ -21,8 +21,6 @@ use crate::ambition::{Ambition, MilestoneStatus, Target};
 pub const SALE_LOT_MIN: i64 = 28;
 /// Coins one tick of a bot's time is worth at least (never free time).
 pub const MIN_COIN_RATE: f64 = 0.1;
-/// Ticks the published profits are normalized to.
-pub const RATE_WINDOW_TICKS: f64 = 6000.0;
 
 /// Public book of one object as one bot reads it: other accounts' bids
 /// (best first), every resting ask (cheapest first), units traded in the
@@ -101,38 +99,6 @@ pub fn saturation_factor(view: Option<&BookView>, adding: f64) -> f64 {
 pub fn sale_lot(spare: i64, view: Option<&BookView>) -> i64 {
     let absorbed = view.map(|book| book.bid_depth() + book.volume_24h.max(0)).unwrap_or(0);
     absorbed.max(SALE_LOT_MIN).min(spare.max(0))
-}
-
-/// Skill a rates row trains: a script name (older rows) or a planner
-/// method (`rates_service` keys rows by planner method since R2).
-pub fn script_skill(script: &str) -> Option<&'static str> {
-    Some(match script {
-        "woodcut" => "woodcutting",
-        "mining" => "mining",
-        "fishing" => "fishing",
-        "cook" | "cook_meals" | "meals" => "cooking",
-        "melee" => "attack",
-        "ranged" => "ranged",
-        "magic" | "alchemy" | "enchant" | "enchant_teleport" | "superheat" | "curse" | "telegrab_wine" => "magic",
-        "smith" | "smelt" | "smithing" => "smithing",
-        "firemaking" => "firemaking",
-        "crafting" | "spin" | "jewelry" | "pottery" | "tan" | "leather" => "crafting",
-        "runecraft" => "runecraft",
-        "bury" | "prayer" => "prayer",
-        // The rates key rows by planner method (plan rendements R2).
-        _ => return crate::ambition_catalog::method_skill(script),
-    })
-}
-
-/// Coins per tick the bot's time is worth: the best published profit
-/// (`(script, band, profit per 6000 ticks)`) among the methods it can
-/// work (its level in the script's skill reaches the row's band), at
-/// least `MIN_COIN_RATE`. Trading rows (no skill) never count.
-pub fn coin_rate(rows: &[(String, i64, f64)], level_of: &dyn Fn(&str) -> u8) -> f64 {
-    rows.iter()
-        .filter(|(script, band, _)| script_skill(script).is_some_and(|skill| i64::from(level_of(skill).max(1)) >= *band))
-        .map(|(_, _, profit)| *profit / RATE_WINDOW_TICKS)
-        .fold(MIN_COIN_RATE, f64::max)
 }
 
 /// Objects the bot's own open milestones consume (debug names, sorted):

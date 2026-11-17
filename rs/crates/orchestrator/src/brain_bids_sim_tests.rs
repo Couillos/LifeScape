@@ -5,8 +5,8 @@
 //!   public ask, and its listing fills the bids it counted;
 //! - a firemaker without any willow demand keeps its logs for its own
 //!   fire (never surplus), a plain woodcutter lists only what buyers take,
-//!   and a money draw leaves the saturated willow glut for an
-//!   unsaturated method.
+//!   (a money draw reads the guide's profits, which price the glut, D12:
+//!   `brain_d17_tests`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -79,8 +79,8 @@ fn a_smith_answers_the_scimitar_bids_and_fills_them() {
     let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
     let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &sim_units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None, rate: &lifescape_planner::work_rate::prior_rate };
     let reader = scimitar_market();
-    let (found, rate) = choose(&life, &reader, &[], &state).expect("the bids pay");
-    assert!((rate - lifescape_planner::market_fit::MIN_COIN_RATE).abs() < 1e-9, "no published rate: time at the floor");
+    let (found, rate) = choose(&life, &reader, crate::brain_bids::bot_rate(&life, &state), &state).expect("the bids pay");
+    assert!((rate - lifescape_planner::market_fit::MIN_COIN_RATE).abs() < 1e-9, "no money guide published: time at the floor");
     assert_eq!(found.count, 9, "half the 18 profitable bids: {found:?}");
     let (goal, origin) = bid_goal(&found);
     assert_eq!(origin, format!("{BID_PREFIX}bronze_scimitar"));
@@ -147,8 +147,8 @@ fn a_smith_answers_the_scimitar_bids_and_fills_them() {
 
 /// "Bots play like real players" (2026-11-14): no willow demand, 33 364
 /// willow logs offered at 1 coin. A firemaker keeps its logs for its own
-/// climb; a plain woodcutter lists only what buyers take; a money draw
-/// leaves the willow glut for a method whose product sells.
+/// climb; a plain woodcutter lists only what buyers take (the money
+/// draw reads the guide's profits: `brain_d17_tests`).
 #[test]
 fn without_willow_demand_logs_are_burned_not_dumped() {
     let firemaking = |skill: &str| match skill {
@@ -169,25 +169,6 @@ fn without_willow_demand_logs_are_burned_not_dumped() {
     assert_eq!(sale_lot(2000, Some(&glut)), 2000.min(4_319), "a day of volume");
     let thin = BookView { bids: Vec::new(), asks: vec![(1, 33_364)], volume_24h: 0, ..BookView::default() };
     assert_eq!(sale_lot(2000, Some(&thin)), lifescape_planner::market_fit::SALE_LOT_MIN, "one inventory into a dead market");
-
-    // Money: the published woodcut profit (live 16 732 / 6000) against
-    // cows (3 000, loot of many kinds): saturation flips the pick.
-    let view = |item: &str| (item == "willow_logs").then(|| glut.clone());
-    let units = |_: &str| 180.0;
-    let willow = crate::brain_market::saturated_profit("gather:woodcut/willow_logs", 16_732.0, &view, &units);
-    assert!(willow < 3_000.0, "the glut is worth the share it absorbs: {willow}");
-    assert_eq!(crate::brain_market::saturated_profit("fight:melee/cows", 3_000.0, &view, &units), 3_000.0);
-    let mut ctx = ReadyCtx::blind(0.5);
-    ctx.levels = vec![("woodcutting".to_string(), 35), ("attack".to_string(), 20), ("strength".to_string(), 20), ("defence".to_string(), 20)];
-    ctx.tools = vec!["bronze_axe".to_string()];
-    ctx.method_profit = vec![("gather:woodcut/willow_logs".to_string(), willow), ("fight:melee/cows".to_string(), 3_000.0)];
-    let mut money = lifescape_planner::Node::new("n1", NodeKind::MakeMoney, Vec::new(), 0);
-    resolve_ready(&mut money, &ctx);
-    assert_eq!(money.method.as_deref(), Some("fight:melee/cows"), "{:?}", money.alternatives);
-    ctx.method_profit[0].1 = 16_732.0;
-    let mut blind = lifescape_planner::Node::new("n2", NodeKind::MakeMoney, Vec::new(), 0);
-    resolve_ready(&mut blind, &ctx);
-    assert_eq!(blind.method.as_deref(), Some("gather:woodcut/willow_logs"), "without saturation the glut wins (the old behavior)");
 }
 
 /// The market-wide choice (2026-11-14): bst29bh9 (smithing 22, mining 55,
@@ -212,7 +193,7 @@ fn smiths_weigh_the_whole_market_and_claims_share_it() {
         (0..400u64).find_map(|seed| {
             let life = life_of("smith", seed, &level_of);
             let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &sim_units, tick: 0, combat: 30, position: Some((3185, 3436, 0)), planned: Vec::new(), caster: None, rate: &lifescape_planner::work_rate::prior_rate };
-            choose(&life, &reader, &[], &state).filter(|(found, _)| found.item == "iron_full_helm").map(|(found, _)| found)
+            choose(&life, &reader, lifescape_planner::market_fit::MIN_COIN_RATE, &state).filter(|(found, _)| found.item == "iron_full_helm").map(|(found, _)| found)
         })
     };
     let first = picks(0).expect("a smith answers the helm bids");

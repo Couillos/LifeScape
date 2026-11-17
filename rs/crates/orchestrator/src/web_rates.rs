@@ -13,27 +13,12 @@ use lifescape_json::{object, str_value, Value};
 use lifescape_store::Store;
 
 use super::trading::{trading_rows, trading_value};
-use super::{global_snapshot, profit_rows, ProfitRow, Snapshot};
+use super::{global_snapshot, Snapshot};
 use crate::rates_estimator::{Bucket, YieldKey};
 
 /// Trading-table JSON rows for the dashboard payload.
 pub fn trading_values(store: &Store, snapshot: &Snapshot) -> Vec<Value> {
     trading_rows(store, &snapshot.trades).iter().map(trading_value).collect()
-}
-
-fn profit_value(row: &ProfitRow) -> Value {
-    object(vec![
-        ("method", str_value(&row.method)),
-        ("style", str_value(&row.style)),
-        ("band", Value::Int(row.band)),
-        ("revenue", Value::Float(row.revenue)),
-        ("input_cost", Value::Float(row.input_cost)),
-        ("friction", Value::Float(row.friction)),
-        ("trend_bonus", Value::Float(row.trend_bonus)),
-        ("profit", Value::Float(row.profit)),
-        ("price_prior", Value::Bool(row.price_prior)),
-        ("prior", Value::Bool(row.prior)),
-    ])
 }
 
 /// The key and confidence columns every measure row repeats.
@@ -139,7 +124,7 @@ pub fn trading_api(call: &dyn Fn(Value) -> Value) -> Value {
 
 /// Dashboard payload: opens the daemon store, serves the estimate of
 /// every key (yields and consumption, units, derived XP, confidence,
-/// prior or measured) and profitability, plus engaged counts per script counted from
+/// prior or measured), the trading table, plus engaged counts per script counted from
 /// the status list. Counts are operator eyes only (this page and API),
 /// never read by bots.
 pub fn rates_api(call: &dyn Fn(Value) -> Value) -> Value {
@@ -157,15 +142,14 @@ pub fn rates_api(call: &dyn Fn(Value) -> Value) -> Value {
     rates_payload(&store, &shared, engaged)
 }
 
-/// Full rates payload for the dashboard: yield rows, XP rows,
-/// profitability (priced through the store), the trading table and
+/// Full rates payload for the dashboard: yield rows, XP rows (profit:
+/// the money guide, `/api/guides/money`), the trading table and
 /// engaged counts supplied by the caller (operator eyes only, never read
 /// by bots).
 pub fn rates_payload(store: &Store, snapshot: &Snapshot, engaged: BTreeMap<String, i64>) -> Value {
     let mut prices: BTreeMap<String, f64> = BTreeMap::new();
     let mut price = |item: &str| *prices.entry(item.to_string()).or_insert_with(|| super::price_estimate(store, item).0);
     let (yields, units, xp) = measure_rows(snapshot, crate::rates_service::now_secs(), &mut price);
-    let profits: Vec<Value> = profit_rows(store, snapshot).iter().map(profit_value).collect();
     let trading: Vec<Value> = trading_values(store, snapshot);
     let mut engaged_map = BTreeMap::new();
     for (script, count) in engaged {
@@ -176,7 +160,6 @@ pub fn rates_payload(store: &Store, snapshot: &Snapshot, engaged: BTreeMap<Strin
         ("rates", Value::Arr(yields)),
         ("units", Value::Arr(units)),
         ("xp", Value::Arr(xp)),
-        ("profit", Value::Arr(profits)),
         ("trading", Value::Arr(trading)),
         ("engaged", Value::Obj(engaged_map)),
     ])

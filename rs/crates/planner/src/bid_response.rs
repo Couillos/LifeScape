@@ -91,7 +91,8 @@ pub struct Producer<'a> {
     /// Skills banned now (`bans::banned_skills`).
     pub avoid: &'a [String],
     pub quests_done: &'a [String],
-    /// Coins one tick of its time is worth (`market_fit::coin_rate`).
+    /// Coins one tick of its time is worth (its D17 in the money guide,
+    /// floored at `market_fit::MIN_COIN_RATE`).
     pub coin_rate: f64,
     /// Units per 6000 ticks of a production method for an object
     /// (measured rates, else the cold-start prior).
