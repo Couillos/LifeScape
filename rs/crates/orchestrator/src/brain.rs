@@ -52,11 +52,18 @@ pub fn load_life(account: &str) -> Option<Life> {
 
 /// Parse a life file, its finished nodes retired: files written before
 /// the retirement (2026-11-14) shed them on first read (one log line);
-/// the next save writes the small file.
+/// the next save writes the small file. A market maker role takes the
+/// balanced partition's count and the common target
+/// (`market_maker::migrate_role`, one log line).
 pub(crate) fn read_life_file(path: &std::path::Path) -> Option<Life> {
     let text = std::fs::read_to_string(path).ok()?;
     let value = lifescape_json::parse(&text).ok()?;
     let mut life = life_from_value(&value)?;
+    if crate::market_maker::migrate_role(&mut life) {
+        if let Some(role) = lifescape_planner::maker_role(&life) {
+            crate::logln!("brain {}: market maker role migrated to the balanced slices: slice {}/{}, common capital target {}", life.account, role.slice, role.slices, role.capital_target);
+        }
+    }
     if lifescape_planner::retire_due(&life) {
         let retirement = lifescape_planner::retire_finished(&mut life);
         if retirement.floor_inferred.is_some() || retirement.done.len() + retirement.abandoned.len() > 0 {
@@ -690,7 +697,7 @@ mod tests {
         let (archetype, ambition, goal, origin) = super::maker_start(7, &[0, 1]).expect("slice 2 free");
         let lifescape_planner::Archetype::MarketMaker(role) = archetype else { panic!("a maker") };
         assert_eq!((role.slice, role.slices), (2, 11));
-        assert_eq!(role.capital_target, crate::market_maker::capital_target(2));
+        assert_eq!(role.capital_target, crate::market_maker::common_capital_target(), "one target for every maker");
         assert_eq!(ambition.kind, lifescape_planner::MARKET_MAKER_KIND);
         assert!(lifescape_planner::pinned(&ambition));
         assert_eq!((goal, origin.as_str()), (GoalKind::GetRich, "m1"), "money first (producer methods)");

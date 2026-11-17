@@ -11,7 +11,7 @@ const ITEMS: usize = 40;
 const SPREAD: u64 = 30_000;
 const END: u64 = SPREAD + 36_000;
 /// A maker's capital in the simulator: the order of a slice's target
-/// (`maker::capital_target`, ~100 000 coins for 54 objects).
+/// (`maker::common_capital_target`, 103 000 coins for every slice).
 const CAPITAL: i64 = 100_000;
 
 struct Pooled {

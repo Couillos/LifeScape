@@ -980,6 +980,54 @@ tranche ; ordres de teneur sur la courbe de concession (le teneur
 recote lui-même selon son stock) ; garder la revente marchande en
 parallèle (décision Q6).
 
+## 2026-11-16 — Teneurs de marché : tranches équilibrées par capital, une cible commune
+
+Constat utilisateur (« pourquoi les market makers n'ont pas les mêmes
+target ? c'est débile ») : les 11 tranches (hachage rendez-vous plafonné
+au NOMBRE d'objets) ignoraient la valeur des objets ; besoin propre par
+tranche 60 000 à 290 000 pièces (tranches 0 à 10 : 60, 155, 95, 88, 72,
+109, 98, 88, 130, 90, 289 milliers) : certains teneurs auraient joué 5×
+plus longtemps avant d'être utiles.
+
+- Partition (`lifescape_market::partition`) équilibrée par capital :
+  coût d'un objet = son lot plafonné à 10 % du capital équilibré
+  (`balanced_capital`, point fixe Σ min(lot_i, 10 % T) / 11, arrondi au
+  millier : 100 000) ; objets lourds (une unité > un lot) puis légers,
+  chacun par id croissant vers sa tranche de plus haut poids rendez-vous
+  qui a de la place (≤ 54 objets) sous le plafond de l'étape (capital
+  placé / 11 arrondi au millier, + un lot pour les légers), sinon la
+  moins chargée. Résultat : besoin 98 312 à 102 590 par tranche (écart
+  4,2 % de la cible), 49 à 54 objets par tranche ; au plus 49 types
+  détenus (garde-fou inchangé).
+- Cible commune (`market_maker::common_capital_target`) : plus petit
+  millier T ≥ capital équilibré couvrant le besoin de chaque tranche à T
+  = 103 000 pièces pour les 11 teneurs (épinglée par test : un univers
+  qui change la fait voir).
+- Stabilité retenue (documentée, testée) : un objet léger ajouté après
+  les autres ne déplace rien ; un objet ajouté n'importe où déplace
+  médiane 3, au plus 26 des 575 objets (< 5 %, test sur l'univers réel,
+  seuils : médiane < 2 %, maximum ≤ 10 %).
+- Migration au chargement (`market_maker::migrate_role`, idempotente,
+  testée sur des vies fabriquées) : indice de tranche, phase,
+  `capital_at_switch` et `switched_at` gardés ; cible → commune, nombre de
+  tranches → courant ; contenu de la tranche = nouvelle partition. Les 11
+  vies existantes sont en phase de jeu : rien d'autre ne change. Teneur
+  déjà en cotation (aucun aujourd'hui) : réassigné au redémarrage, sans
+  perte de stock : ses cotations `market_make` sur les objets sortis de
+  sa tranche sont annulées à la passe suivante (`stale_quotes`), ce stock
+  part par la passe de vente comme tout reste hors tranche.
+- `orchestrator economy` : en tête la cible commune, l'étendue des besoins
+  et des tailles de tranche ; par teneur, objets et besoin de sa tranche.
+
+Rejeté : cible propre par tranche (le constat) ; plus grand des besoins
+de l'ancienne partition comme cible commune (290 000 : 3× trop pour la
+plupart) ; LPT (le plus lourd d'abord vers la moins chargée : écart 0,5 %
+mais un objet ajouté déplace jusqu'à 90 % des autres) ; hachage
+rendez-vous plafonné au capital sans étape lourde (tranches pleines en
+nombre avant d'être équilibrées : écart 37 à 47 %) ; tranche figée pour un
+teneur en cotation (garder l'ancienne partition en double pour un cas
+qui n'existe pas).
+
 ## 2026-11-16 — Guides : prix mince borné au volume échangé, achat au moins au meilleur ask
 
 Décisions utilisateur (prix des guides, `planner::guide_engine`,

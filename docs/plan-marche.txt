@@ -738,7 +738,9 @@ Vague 3 : TENEURS DE MARCHE (remplace M8, décision Q6)
   État 2026-11-16 : code et tests faits, sans live (decisions.md
   « Teneurs de marché dédiés ») : univers 575 objets, N = 11 comptes
   (`create-user --role market_maker`, docs/orchestrator.md), capital
-  cible 60 000 à 290 000 par tranche ; revente marchande supprimée.
+  cible 60 000 à 290 000 par tranche (révisé le même jour : tranches
+  équilibrées par capital, cible commune 103 000, decisions.md) ;
+  revente marchande supprimée.
   Simulateur (Q3 pour tous les vendeurs) : part à deux côtés et écart
   médian meilleurs qu'en vague 2 sur les 5 graines (decisions.md).
 

@@ -92,7 +92,8 @@ pub fn row_from(account: &str, role: &MakerRole, held: &std::collections::BTreeM
     }
 }
 
-/// Maker lives on disk: (account, role), by account.
+/// Maker lives on disk: (account, role as the current partition reads
+/// it: `market_maker::current_role`), by account.
 pub fn maker_lives(lives_dir: &std::path::Path) -> Vec<(String, MakerRole)> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(lives_dir) else { return out };
@@ -105,7 +106,7 @@ pub fn maker_lives(lives_dir: &std::path::Path) -> Vec<(String, MakerRole)> {
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
         let Ok(value) = lifescape_json::parse(&text) else { continue };
         if let lifescape_planner::Archetype::MarketMaker(role) = lifescape_planner::market_maker::archetype_from_value(&value.get("profile")) {
-            out.push((account, role));
+            out.push((account, crate::market_maker::current_role(role)));
         }
     }
     out.sort_by(|left, right| left.0.cmp(&right.0));
@@ -147,6 +148,8 @@ pub fn row_value(row: &MakerRow) -> Value {
         ("slices", Value::Int(i64::from(row.slices))),
         ("phase", str_value(if row.quoting { "quoting" } else { "earning" })),
         ("capital_target", Value::Int(row.capital_target)),
+        ("slice_need", Value::Int(crate::market_maker::slice_need(row.slice))),
+        ("slice_objects", Value::Int(crate::market_maker::slice_items(row.slice).len() as i64)),
         ("capital", Value::Int(row.capital)),
         ("pnl", Value::Int(row.pnl)),
         ("stock_value", Value::Int(row.stock_value)),
@@ -163,6 +166,17 @@ pub fn row_value(row: &MakerRow) -> Value {
 /// `orchestrator economy` section.
 pub fn print_rows(rows: &[MakerRow]) {
     println!("market makers (plan marché Q6; operator info, bots never read it):");
+    let count = crate::market_maker::slices().len() as u32;
+    let needs: Vec<i64> = (0..count).map(crate::market_maker::slice_need).collect();
+    let sizes: Vec<usize> = crate::market_maker::slices().iter().map(Vec::len).collect();
+    println!(
+        "  common capital target {} for every maker; {count} slices balanced by capital: need {}..{}, objects {}..{}",
+        crate::market_maker::common_capital_target(),
+        needs.iter().min().copied().unwrap_or(0),
+        needs.iter().max().copied().unwrap_or(0),
+        sizes.iter().min().copied().unwrap_or(0),
+        sizes.iter().max().copied().unwrap_or(0)
+    );
     if rows.is_empty() {
         println!("  none (deploy: create-user --role market_maker, docs/orchestrator.md)");
         return;
@@ -172,8 +186,18 @@ pub fn print_rows(rows: &[MakerRow]) {
         let share = row.book_share.map_or_else(|| "n/a".to_string(), |ratio| format!("{:.1} %", ratio * 100.0));
         let phase = if row.quoting { "quoting" } else { "earning" };
         println!(
-            "  {:<12} slice {}/{} {phase:<8} target {:>7} capital {:>8} P&L {:>+8} (cash {:+}, stock {}) spread {spread} book {share} quotes {}",
-            row.account, row.slice, row.slices, row.capital_target, row.capital, row.pnl, row.cash, row.stock_value, row.open_orders
+            "  {:<12} slice {}/{} ({} objects, need {}) {phase:<8} target {:>7} capital {:>8} P&L {:>+8} (cash {:+}, stock {}) spread {spread} book {share} quotes {}",
+            row.account,
+            row.slice,
+            row.slices,
+            crate::market_maker::slice_items(row.slice).len(),
+            crate::market_maker::slice_need(row.slice),
+            row.capital_target,
+            row.capital,
+            row.pnl,
+            row.cash,
+            row.stock_value,
+            row.open_orders
         );
         let top: Vec<String> = row.stock.iter().take(6).map(|(name, units, value)| format!("{name} {units} ({value})")).collect();
         if !top.is_empty() {

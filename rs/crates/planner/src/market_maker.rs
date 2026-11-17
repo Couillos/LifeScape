@@ -2,7 +2,8 @@
 //! account is born like any bot (`create-user --role market_maker`:
 //! tutorial, then the playing phase, its `market_maker` ambition earning
 //! coins with the producer money methods) until its CAPITAL TARGET (what
-//! quoting its slice costs, `lifescape_market::capital_target`); then it
+//! quoting a slice costs, one common target for every maker,
+//! `lifescape_market::common_capital_target`); then it
 //! switches for good to quoting: every other node abandoned, goal
 //! `MakeMarket`, one `market:make` window after another at its post by
 //! the Varrock fountain. The quotes themselves live daemon-side
@@ -54,7 +55,8 @@ pub struct MakerRole {
     /// Slice index in `0..slices` (`lifescape_market::partition`).
     pub slice: u32,
     pub slices: u32,
-    /// Coins that switch the role (`lifescape_market::capital_target`).
+    /// Coins that switch the role: the common target of every maker
+    /// (`lifescape_market::common_capital_target`).
     pub capital_target: i64,
     pub phase: MakerPhase,
     /// Coins held at the switch (P&L baseline) and its unix second.

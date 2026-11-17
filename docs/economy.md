@@ -593,16 +593,38 @@ triche (règle 13) : leur stock vient de leurs deals.
   strictement sous la ligne du concierge) : aucun bid n'ouvre un 50e
   type, le concierge ne se déclenche jamais sur le stock du teneur (sa
   tranche est en plus dans la liste gardée du concierge).
-- Tranches (`lifescape_market::partition`) : objets pris par id croissant,
-  chacun à la tranche de plus haut poids (hachage rendez-vous) qui a
-  encore de la place (⌈575/11⌉ = 53) : couverture totale, sans
-  recouvrement, déterministe ; un objet ajouté après les autres ne
-  déplace rien. Un compte garde sa tranche à vie (vie : `profile.maker`).
-- Capital cible (`lifescape_market::capital_target`) : de quoi poser un
-  lot d'achat (1000 pièces, ≤ 500 unités) sur chaque objet de la tranche
-  à son ancrage public (valeur boutique), chacun plafonné à 10 % de ce
-  capital (point fixe), arrondi au millier : 60 000 à 290 000 pièces
-  selon la tranche (médiane ~95 000).
+- Tranches (`lifescape_market::partition`) ÉQUILIBRÉES PAR CAPITAL : chaque
+  objet coûte son lot plafonné (ci-dessous) au capital équilibré
+  (`balanced_capital` : point fixe Σ min(lot_i, 10 % × T) / 11, arrondi au
+  millier, 100 000) ; d'abord les objets lourds (une unité vaut plus
+  qu'un lot), puis les légers, chacun par id croissant vers la tranche de
+  plus haut poids (hachage rendez-vous) qui a encore de la place (≤ 54
+  objets) sous le plafond de capital de l'étape (capital déjà placé / 11,
+  arrondi au millier, + un lot pour les légers), sinon vers la tranche la
+  moins chargée qui a de la place. Couverture totale, sans recouvrement,
+  déterministe. Stabilité retenue : un objet léger ajouté après les
+  autres ne déplace rien ; un objet ajouté n'importe où en déplace peu
+  (mesuré sur l'univers réel, 38 ajouts : médiane 3, au plus 26 objets
+  déplacés sur 575, < 5 %).
+  Besoin par tranche à la cible commune : 98 312 à 102 590 pièces (écart
+  4,2 %), 49 à 54 objets. Un compte garde son indice de tranche à vie
+  (vie : `profile.maker`).
+- Capital cible COMMUN (`market_maker::common_capital_target`,
+  `lifescape_market::common_capital_target`) : besoin d'une tranche = un
+  lot d'achat (1000 pièces, ≤ 500 unités) sur chaque objet à son ancrage
+  public (valeur boutique), chacun plafonné à 10 % du capital ; la cible
+  est le plus petit millier T, à partir du capital équilibré, qui couvre
+  le besoin de TOUTES les tranches à T : 103 000 pièces, identique pour
+  les 11 teneurs (avant : 60 000 à 290 000 selon la tranche).
+- Migration (`market_maker::migrate_role`, à chaque chargement de vie,
+  idempotente, une ligne de journal) : un rôle écrit avant l'équilibrage
+  garde son indice de tranche, sa phase et sa base de P&L, prend la cible
+  commune et le nombre de tranches courant ; le contenu de la tranche
+  suit la nouvelle partition. Teneur déjà en cotation : réassigné au
+  redémarrage, sans perte de stock (ses cotations sur les objets sortis
+  de sa tranche sont annulées à la passe suivante, `stale_quotes`, et ce
+  stock part par la passe de vente comme tout reste hors tranche ; les
+  objets entrés sont cotés à la passe suivante).
 - Cycle de vie : le compte naît comme tout bot (`create-user --role
   market_maker`, tutoriel), joue (ambition opérateur `market_maker` :
   échelle de pièces 5 000 → 1 000 000, méthodes d'argent productrices)

@@ -249,20 +249,29 @@ l'admission ») : plus d'enveloppe E1 ni de pas d'ouverture E10, tout
 `orchestrator create-user [pseudo] --role market_maker [--goal kind]
 [--no-tutorial]` (`src/create_user_cmd.rs`) : procédure documentée de
 création, pseudo naturel généré quand omis (`names.rs`), vie écrite
-(rôle, tranche = première libre, capital cible de la tranche), session
+(rôle, tranche = première libre, capital cible commun), session
 ouverte, tutoriel par la porte du cerveau, puis la phase de jeu. Refus
 typés : `--iron` (un Iron n'échange jamais), rôle inconnu, toutes les
 tranches déjà tenues. Univers 575 objets, capacité 54 par compte :
 N = 11 comptes, à créer un par un (chaque création prend la tranche
-libre suivante, 0 à 10) :
+libre suivante, 0 à 10). Les tranches sont équilibrées par capital
+(`lifescape_market::partition`, docs/economy.md) : chaque teneur a la
+MÊME cible, `market_maker::common_capital_target` = 103 000 pièces
+(besoin par tranche 98 312 à 102 590) :
 
     for index in $(seq 11); do ./rs/target/release/orchestrator create-user --role market_maker; done
 
 Les 11 comptes rejoignent la flotte (nommés, hors staff : mesures,
 holdings et hiscores les comptent ; aucune triche, règle 13). Suivi :
-`orchestrator economy [h]` (section « market makers » : tranche, phase,
-cible, capital, P&L, écart moyen coté, part du carnet, stock) et la
+`orchestrator economy [h]` (section « market makers » : en tête la cible
+commune et l'étendue des besoins et tailles de tranche ; par teneur
+tranche, objets et besoin de la tranche, phase, cible, capital, P&L,
+écart moyen coté, part du carnet, stock) et la
 carte « Market makers » de `/economy` (`market_maker_report.rs`).
 Bascule : dans le journal, `brain <c>: market maker slice s/11: capital
 … >= target …, quoting for good` ; puis `launching market make --post
 x,z,0 …` et `market maker <c>: … refused` si un ordre est refusé.
+Migration des vies d'avant l'équilibrage (2026-11-16) : au chargement,
+`brain <c>: market maker role migrated to the balanced slices: slice
+s/11, common capital target 103000` (une fois par chargement tant que la
+vie n'est pas réécrite) ; indice de tranche, phase et base de P&L gardés.

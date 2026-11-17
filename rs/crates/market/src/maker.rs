@@ -28,10 +28,15 @@
 //!
 //! Slices (`partition`): the universe is split over N accounts, N =
 //! universe / slice capacity (F2P bank 60 types + pack 28, minus the
-//! slots a maker keeps, times a fill margin), each object assigned by
-//! highest random weight with a load cap: deterministic, and stable when
-//! an object joins the universe while the load cap holds (only that
-//! object moves).
+//! slots a maker keeps, times a fill margin), BALANCED BY CAPITAL: every
+//! slice asks about the same coins to quote, so one common capital
+//! target (`common_capital_target`) fits every maker. Heavy objects (one
+//! unit worth more than a lot) are placed first, then the cheap ones,
+//! each in id order to its highest random weight slice that stays under
+//! the stage's capital cap and the slice capacity (rendezvous hashing
+//! with bounded loads), else to the least loaded slice. Deterministic;
+//! stable: a cheap object added past the others moves nothing, any
+//! object added moves a few others (≤ 10 % of the universe, tested).
 
 use crate::price::Reference;
 
@@ -76,25 +81,56 @@ fn weight(item: i64, slice: usize) -> u64 {
     word ^ (word >> 31)
 }
 
-/// Splits `universe` (object ids) over `slices` accounts: every object
-/// in exactly one slice, each slice at most `ceil(universe / slices)`
-/// objects. Objects are taken in id order and each goes to its highest
-/// weight slice with room (rendezvous hashing with a load cap): the same
-/// universe always gives the same slices, and an object added past the
-/// others moves nothing else. Each slice is sorted by id.
-pub fn partition(universe: &[i64], slices: usize) -> Vec<Vec<i64>> {
+/// Coins rounded up to the next thousand.
+fn round_up_thousand(coins: i64) -> i64 {
+    (coins.max(0) + 999) / 1000 * 1000
+}
+
+/// Splits `universe` (`(object id, public anchor)`) over `slices`
+/// accounts, every object in exactly one slice, each slice under
+/// `slice_capacity()` objects (when the universe fits) and asking about
+/// the same capital (`slice_need`).
+///
+/// Each object costs its capped lot at the balanced capital
+/// (`balanced_capital`, rounded to 1000: a small universe change keeps
+/// the costs). Two stages, heavy objects (one unit worth more than a
+/// lot) then cheap ones, each in id order: an object goes to its highest
+/// weight slice with room whose load stays under the stage cap (the
+/// capital placed so far over `slices`, rounded up to 1000, plus one lot
+/// in the cheap stage), else to the least loaded slice with room. Each
+/// slice is sorted by id.
+pub fn partition(caps: &MakerCaps, universe: &[(i64, i64)], slices: usize) -> Vec<Vec<i64>> {
     let slices = slices.max(1);
-    let mut items: Vec<i64> = universe.to_vec();
+    let mut items: Vec<(i64, i64)> = universe.to_vec();
     items.sort_unstable();
-    items.dedup();
-    let cap = items.len().div_ceil(slices).max(1);
+    items.dedup_by_key(|(id, _)| *id);
+    let anchors: Vec<i64> = items.iter().map(|(_, anchor)| *anchor).collect();
+    let balanced = balanced_capital(caps, &anchors, slices);
+    let cost = |anchor: i64| item_capital(caps, anchor, balanced);
+    let (heavy, cheap): (Vec<(i64, i64)>, Vec<(i64, i64)>) = items.into_iter().partition(|(_, anchor)| lot_capital(caps, *anchor) > caps.lot_value);
+    let capacity = slice_capacity();
     let mut out: Vec<Vec<i64>> = vec![Vec::new(); slices];
-    for item in items {
-        let mut order: Vec<usize> = (0..slices).collect();
-        order.sort_by_key(|slice| std::cmp::Reverse(weight(item, *slice)));
-        if let Some(slice) = order.into_iter().find(|slice| out[*slice].len() < cap) {
-            out[slice].push(item);
+    let mut load = vec![0_i64; slices];
+    let mut placed = 0_i64;
+    for (stage, slack) in [(heavy, 0), (cheap, caps.lot_value)] {
+        placed += stage.iter().map(|(_, anchor)| cost(*anchor)).sum::<i64>();
+        let cap = round_up_thousand((placed + slices as i64 - 1) / slices as i64) + slack;
+        for (id, anchor) in stage {
+            let price = cost(anchor);
+            let mut room: Vec<usize> = (0..slices).filter(|slice| out[*slice].len() < capacity).collect();
+            if room.is_empty() {
+                // A universe past N x capacity (never: `maker_count`):
+                // every object still lands somewhere.
+                room = (0..slices).collect();
+            }
+            let fits = room.iter().copied().filter(|slice| load[*slice] + price <= cap).max_by_key(|slice| weight(id, *slice));
+            let slice = fits.or_else(|| room.iter().copied().min_by_key(|slice| (load[*slice], std::cmp::Reverse(weight(id, *slice))))).unwrap_or(0);
+            out[slice].push(id);
+            load[slice] += price;
         }
+    }
+    for slice in &mut out {
+        slice.sort_unstable();
     }
     out
 }
@@ -137,23 +173,57 @@ pub fn lot_units(caps: &MakerCaps, fair: i64) -> i64 {
     (caps.lot_value / fair.max(1)).clamp(1, caps.max_stock)
 }
 
-/// Capital target of a slice (the switch from the playing phase to the
-/// maker role): what posting one bid lot on every object of the slice at
-/// once costs at its public anchor, each object capped at its risk share
-/// of that very capital (fixed point of `T = sum(min(lot_i, share * T))`,
-/// rounded up to 1000 coins). `anchors`: public value per object.
-pub fn capital_target(caps: &MakerCaps, anchors: &[i64]) -> i64 {
-    let lots: Vec<f64> = anchors.iter().map(|anchor| (lot_units(caps, *anchor) * (*anchor).max(1)) as f64).collect();
-    let mut target: f64 = lots.iter().sum();
+/// Coins of one quote lot at the public anchor `anchor`.
+pub fn lot_capital(caps: &MakerCaps, anchor: i64) -> i64 {
+    lot_units(caps, anchor) * anchor.max(1)
+}
+
+/// What quoting one object asks of a maker whose capital is `target`:
+/// one bid lot, capped at the per-object risk share of that capital.
+pub fn item_capital(caps: &MakerCaps, anchor: i64, target: i64) -> i64 {
+    lot_capital(caps, anchor).min((caps.max_item_capital_share * target.max(0) as f64) as i64)
+}
+
+/// What quoting a whole slice asks at the capital `target`: one bid lot
+/// on every object at once, each capped at its risk share.
+pub fn slice_need(caps: &MakerCaps, anchors: &[i64], target: i64) -> i64 {
+    anchors.iter().map(|anchor| item_capital(caps, *anchor, target)).sum()
+}
+
+/// Capital of one slice when `anchors` (the whole universe) are split
+/// over `slices` equal ones: fixed point of
+/// `T = sum(min(lot_i, share * T)) / slices`, rounded up to 1000 coins.
+pub fn balanced_capital(caps: &MakerCaps, anchors: &[i64], slices: usize) -> i64 {
+    let lots: Vec<f64> = anchors.iter().map(|anchor| lot_capital(caps, *anchor) as f64).collect();
+    let slices = slices.max(1) as f64;
+    let mut target: f64 = lots.iter().sum::<f64>() / slices;
     for _ in 0..200 {
-        let next: f64 = lots.iter().map(|lot| lot.min(caps.max_item_capital_share * target)).sum();
+        let next: f64 = lots.iter().map(|lot| lot.min(caps.max_item_capital_share * target)).sum::<f64>() / slices;
         if (next - target).abs() < 0.5 {
             target = next;
             break;
         }
         target = next;
     }
-    ((target.ceil() as i64 + 999) / 1000).max(1) * 1000
+    round_up_thousand(target.ceil() as i64).max(1000)
+}
+
+/// THE capital target of every maker (the switch from the playing phase
+/// to quoting): the smallest thousand `T`, from `start` up, that covers
+/// the need of every slice at `T` (`slice_need`; `slices` holds each
+/// slice's anchors). With balanced slices it sits a few % over the
+/// balanced capital.
+pub fn common_capital_target(caps: &MakerCaps, slices: &[Vec<i64>], start: i64) -> i64 {
+    let mut target = round_up_thousand(start).max(1000);
+    for _ in 0..1000 {
+        let need = slices.iter().map(|anchors| slice_need(caps, anchors, target)).max().unwrap_or(0);
+        let next = round_up_thousand(need);
+        if next <= target {
+            return target;
+        }
+        target = next;
+    }
+    target
 }
 
 /// Everything one quote reads: public data (D22) and the maker's own.

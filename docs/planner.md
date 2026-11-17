@@ -342,8 +342,10 @@ Teneur de marché (`--role market_maker`, plan marché Q6, vague 3 ;
 la vie porte `profile.archetype = "market_maker"` et `profile.maker =
 {slice, slices, capital_target, phase, capital_at_switch, switched_at}` ;
 tranche = la première libre parmi les 11 (`market_maker::taken_slices`
-sur `run/lives`), capital cible de la tranche
-(`market_maker::capital_target`) ; refus typé si toutes les tranches ont
+sur `run/lives`), capital cible COMMUN à tous les teneurs
+(`market_maker::common_capital_target`, 103 000 ; tranches équilibrées
+par capital, migration des vies anciennes au chargement :
+`market_maker::migrate_role`, docs/economy.md) ; refus typé si toutes les tranches ont
 leur teneur, si `--iron`, ou rôle inconnu. Phase `earning` : bot normal
 (tutoriel, banque, combat, équipement), ambition opérateur
 `market_maker` (échelle de pièces, tenue pour toujours comme `overall`,

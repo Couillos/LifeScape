@@ -34,44 +34,96 @@ fn slice_capacity_follows_the_f2p_bank_and_pack() {
     assert_eq!(maker_count(55), 2);
 }
 
+/// A synthetic universe shaped like the F2P one: 575 objects, three in
+/// four cheap (a lot is 1000 coins of them), one in four worth more than
+/// a lot per unit (2 000 to 65 000 coins), heavy ids clustered like the
+/// rune and adamant sets.
+fn shaped_universe() -> Vec<(i64, i64)> {
+    let mut out = Vec::new();
+    for index in 0..575_i64 {
+        let id = 1 + index * 3;
+        let anchor = if (300..440).contains(&index) { 2_000 + (index * 7919 % 63) * 1_000 } else { 1 + index * 37 % 900 };
+        out.push((id, anchor));
+    }
+    out
+}
+
+fn needs(slices: &[Vec<i64>], universe: &[(i64, i64)], target: i64) -> Vec<i64> {
+    let anchor_of = |id: &i64| universe.iter().find(|(item, _)| item == id).map(|(_, anchor)| *anchor).unwrap_or(1);
+    slices.iter().map(|slice| slice_need(&MAKER_CAPS, &slice.iter().map(anchor_of).collect::<Vec<i64>>(), target)).collect()
+}
+
+fn assigned(slices: &[Vec<i64>]) -> std::collections::HashMap<i64, usize> {
+    slices.iter().enumerate().flat_map(|(index, slice)| slice.iter().map(move |id| (*id, index))).collect()
+}
+
 #[test]
-fn partition_covers_everything_once_and_is_stable() {
-    let universe: Vec<i64> = (0..575).map(|index| 1 + index * 3).collect();
-    let slices = partition(&universe, maker_count(universe.len()));
+fn partition_covers_everything_once_within_the_bank() {
+    let universe = shaped_universe();
+    let slices = partition(&MAKER_CAPS, &universe, maker_count(universe.len()));
     assert_eq!(slices.len(), 11);
     let mut seen: Vec<i64> = slices.iter().flatten().copied().collect();
     seen.sort_unstable();
-    let mut want = universe.clone();
-    want.sort_unstable();
+    let want: Vec<i64> = universe.iter().map(|(id, _)| *id).collect();
     assert_eq!(seen, want, "every object in exactly one slice");
     assert!(slices.iter().all(|slice| slice.len() <= slice_capacity()), "{:?}", slices.iter().map(Vec::len).collect::<Vec<_>>());
-    assert!(slices.iter().all(|slice| slice.len() >= 45), "balanced (575 - 10 x 53): {:?}", slices.iter().map(Vec::len).collect::<Vec<_>>());
-    // Deterministic, whatever the input order.
+    // Deterministic, whatever the input order (duplicates folded).
     let mut shuffled = universe.clone();
     shuffled.reverse();
-    assert_eq!(partition(&shuffled, 11), slices);
-    // An object added past the others moves nothing else.
-    let mut grown = universe.clone();
-    grown.push(10_000);
-    let after = partition(&grown, 11);
-    for (before, now) in slices.iter().zip(after.iter()) {
-        let kept: Vec<i64> = now.iter().copied().filter(|item| *item != 10_000).collect();
-        assert_eq!(&kept, before, "a new object never reshuffles the slices");
+    shuffled.push(universe[4]);
+    assert_eq!(partition(&MAKER_CAPS, &shuffled, 11), slices);
+}
+
+/// The slices ask the same capital: every slice's need at the common
+/// target is within 10 % of that target of every other one, and the
+/// common target covers the largest.
+#[test]
+fn partition_balances_the_capital_and_one_target_covers_every_slice() {
+    let universe = shaped_universe();
+    let slices = partition(&MAKER_CAPS, &universe, 11);
+    let anchors: Vec<Vec<i64>> = slices.iter().map(|slice| slice.iter().map(|id| universe.iter().find(|(item, _)| item == id).map_or(1, |(_, anchor)| *anchor)).collect()).collect();
+    let all: Vec<i64> = universe.iter().map(|(_, anchor)| *anchor).collect();
+    let balanced = balanced_capital(&MAKER_CAPS, &all, 11);
+    let target = common_capital_target(&MAKER_CAPS, &anchors, balanced);
+    let per_slice = needs(&slices, &universe, target);
+    let (low, high) = (*per_slice.iter().min().expect("slices"), *per_slice.iter().max().expect("slices"));
+    assert!(high <= target, "the common target covers every slice: {per_slice:?} vs {target}");
+    assert!((high - low) * 10 <= target, "balanced within 10 %: {per_slice:?} vs {target}");
+    assert!(target <= balanced * 11 / 10, "the target stays near the balanced need: {target} vs {balanced}");
+    assert_eq!(target % 1000, 0);
+}
+
+/// Stability: a cheap object added past the others moves nothing (the
+/// rounded caps hold). The spread of the moves for an object added
+/// anywhere is measured on the real universe
+/// (`orchestrator::market_maker` tests).
+#[test]
+fn a_cheap_object_added_past_the_others_moves_nothing() {
+    let universe = shaped_universe();
+    let before = assigned(&partition(&MAKER_CAPS, &universe, 11));
+    for anchor in [5, 120, 900] {
+        let mut grown = universe.clone();
+        grown.push((10_000, anchor));
+        let after = assigned(&partition(&MAKER_CAPS, &grown, 11));
+        assert!(before.iter().all(|(id, slice)| after[id] == *slice), "a cheap object at {anchor} past the others moves nothing");
     }
 }
 
 #[test]
-fn capital_target_quotes_one_lot_of_every_object_within_its_share() {
+fn the_balanced_capital_quotes_one_lot_of_every_object_within_its_share() {
     // 50 objects worth 2 coins: lots of 500 units (1000 coins) each.
     let cheap = vec![2; 50];
-    assert_eq!(capital_target(&MAKER_CAPS, &cheap), 50_000);
+    assert_eq!(balanced_capital(&MAKER_CAPS, &cheap, 1), 50_000);
+    assert_eq!(balanced_capital(&MAKER_CAPS, &cheap, 2), 25_000, "split over two accounts");
     // One rune platebody (65 000) next to them cannot take the capital:
     // its lot is capped at 10 % of the target.
     let mut rich = cheap.clone();
     rich.push(65_000);
-    let target = capital_target(&MAKER_CAPS, &rich);
+    let target = balanced_capital(&MAKER_CAPS, &rich, 1);
     assert!((55_000..=56_000).contains(&target), "{target}");
-    assert!(capital_target(&MAKER_CAPS, &[]) >= 1000);
+    assert!(balanced_capital(&MAKER_CAPS, &[], 1) >= 1000);
+    assert_eq!(slice_need(&MAKER_CAPS, &rich, 56_000), 50_000 + 5_600, "the platebody at 10 % of 56 000");
+    assert_eq!(common_capital_target(&MAKER_CAPS, &[rich.clone(), cheap.clone()], 1_000), 56_000, "the largest slice need, a fixed point");
 }
 
 #[test]
