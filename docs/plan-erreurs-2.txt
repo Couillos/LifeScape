@@ -1,0 +1,364 @@
+PLAN DE CORRECTION DES ERREURS DE LA FLOTTE — TOUR 2
+Rédigé le 2026-11-17 vers 13:15 UTC, en lecture seule (logs, base, API GET, route/replay-nav hors ligne).
+Tour 1 : docs/plan-erreurs.txt (R01-R16, P1-P18, D1-D4), fusion 56907c3 + 2a9287f + faea8db.
+
+FENÊTRE MESURÉE
+- 12:02:56 → 13:02:56 UTC (clock 1794916976 → +3600), juste après le redéploiement de toute la flotte
+  (11:57 daemon + re-test des quarantaines, 12:00-12:02 workers). Une seule heure : chiffres « / h ».
+- Sources : base error_events / task_reports / deals (hors admin, admin2, bite), run/orchestrator.log
+  lignes 674664-687473, run/logs/<compte>.log tronqués à la fenêtre, run/failures (2 498 dossiers),
+  run/method_health.json, run/logs/method_retest.log.
+- Base tour 1 ramenée à l'heure (00:00-10:00 UTC) ; les ratios « mêmes requêtes » sont recalculés.
+- ATTENTION mesure : le journal répète la dernière erreur d'un nœud à chaque « EngagementEnd -> ready »
+  (ex. « unknown server opcode 149 » de leo_king toutes les 6 min). Les compteurs journal ci-dessous ne
+  gardent que les événements FRAIS (lignes sans EngagementEnd/Done) ; voir P2-10.
+
+TOTAUX (tour 1 / h  →  fenêtre)
+- error_events : 1 731/h → 4 170 (58 comptes). Par source : brain 952 → 223, task 361 → 517,
+  nav 268 → 2 378, deal 16 → 1 052.
+  => 3 702 (89 %) viennent d'UN SEUL compte bloqué hors carte, bellarhodes (N1), et de ses deals.
+  Hors N1 : 468 (55 comptes) = -73 % ; brain 102 (-89 %), task 217 (-40 %), nav 147 (-45 %), deal 0.
+- Runs (task_reports) : 1 047. Échec 8,2 % (tour 1 : 26,1 % même requête, 24,3 % API), bloqués 29,0 %
+  (tour 1 : 9,3 %), échec+bloqué 37,2 % (tour 1 : 35,4 %). Hors N1 : échec 7,6 %, échec+bloqué 24,7 %.
+  Les « contended » (D4) sont passés d'échec à blocage : 72 runs mining bloqués.
+- Ticks perdus (failed+blocked) : 368 955/h = 9,1 % des 4,06 M rapportés (tour 1 : ~248 000/h, 6,5 %).
+  Dont 270 158 dans des runs qui ont produit de l'XP (travail partiel, surtout mining « contended »)
+  et 98 797 à XP nulle (tour 1 : 52 000/h à XP nulle). Mining failed+blocked : 186 000/h (tour 1 : 85 000/h).
+- Hors base : annonces refusées « seller holds » 0 (342/h) ; faux « no report » frais 21 (24/h) ;
+  désynchronisations protocole 1 incident (5/h) ; « no profit row » 1 (1 037/h) ; « slow dispatch » 1
+  (4,7 s pendant le redéploiement ; 15/h).
+- Deals : hors N1 137 réglés, 0 échec (tour 1 : 6,5 %) ; avec N1 1 052 timeouts (API : 91,7 % d'échec),
+  48 contreparties envoyées au rendez-vous pour rien.
+
+TABLEAU DES CAUSES (événements / h ; échos cerveau inclus)
+
+ #    Cause                                              Tour 1/h  Fenêtre  État
+ N1   Bot échoué sur le pont du bateau de Port Sarim       -       3 702    NOUVEAU (depuis 11:10,
+      (3032,3214,1), composante sans sortie : NoRoute                       toujours actif à 13:11)
+      2 231, deals 1 052, task 298, brain 121
+ R06  Contention (mithril, adamant, or, pêche, moutons,  110       134      PIRE en ticks : mining
+      sorts) — contended 68/h sur 28 comptes                                 186k t/h (×2,2)
+ N3   Banque servante choisie à vol d'oiseau (Manhattan)   2         61      NOUVEAU / RÉGRESSION D2
+      : timeouts de marche 24, NoRoute d'approche 38                        (mine du marais ×14)
+ R13  Portes/timeouts dispersés (hors N3)                 17         23      stable (lucy_rhodes 16)
+ R15  Intrants (normal)                                   70         71      ATTENDU
+ R04  Site/cible injoignable                             141         16      CORRIGÉ (P6) hors N3
+ R03  Disponibilité outil (hors N1)                       90         33      PARTIEL (P5)
+ R11  Faux « no report » (journal, frais)                 24         21      NON CORRIGÉ (autre déclencheur)
+ R14  Market non typé / trade gave no                     22         11      PARTIEL (P16)
+ R10  goal check is short (frais, journal)                16          7      PARTIEL (P15) + formes nouvelles
+ R05  Pas refusés compost (3138,3351) / péage (3267,3227) 204         2      CORRIGÉ (P8, P9)
+ R01  Quarantaine cuir + but d'appoint                   524          4      CORRIGÉ (P2) ; P4 incomplet
+ R09  Désynchronisation protocole (incidents)              5          1      PARTIEL (P11) ; cause de N1
+ R02  Garde de nourriture (pack too full)                303          0      CORRIGÉ (P14)
+ R07  Harpon                                              56          0      CORRIGÉ
+ R08  Cycle pièces/nourriture (herring)                   20          0      CORRIGÉ (2a9287f)
+ R12  Deals (hors N1)                                     16          0      CORRIGÉ
+ R16  no profit row / slow dispatch (journal)          1 052          2      CORRIGÉ (P18)
+
+VÉRIFICATIONS LIVE DU TOUR 1 (point par point)
+ P1  PARTIEL. « cooled » 90 lignes (méthode@site), « goal stuck -> GetRich » 3/h (< 20), graph_stuck
+     52/h (~300/h). KO : (a) la voie FILLER contourne le refroidissement (« its skill sits out the fillers
+     for 500 ticks ») : bellarhodes 34 lancements woodcut en 10 min ; (b) la clé de site est le ROC, pas le
+     site : lily_brook refroidit (3242,3160) puis repart sur (3243,3166), (3243,3167), (3243,3158)…
+ P2  OK. « side goal produce leather » 0, « goal stuck -> next goal produce leather » 0.
+ P3  OK (chantier 2a9287f). « Blocked(["herring"]) » 0.
+ P4  KO. Re-test 11:57 : tan:cow_hide « still quarantined » mais verdict "setup" (check_dispose : « bank
+     still holds leftovers after 12 rounds » = échec du HARNAIS, pas de la méthode) ; pottery:pot_unfired,
+     gather:mining/iron_ore, fight:melee/chickens, superheat:mithril_bar « skipped, admin busy with an
+     operator script », jamais repris. Les 5 quarantaines d'avant P4 (accounts {}) n'ont pas été
+     recalculées : fight:melee/chickens reste en quarantaine sur l'erreur R02 d'un seul compte.
+     Effet vu : eva_dale 12:20 abandonne 12 nœuds sur quarantined:tan:cow_hide (bans magic/crafting/smithing).
+ P5  PARTIEL. Annonces refusées 0 (OK). « missing bronze_axe/pickaxe » hors N1 : 26 lignes / 5 comptes ;
+     luke_hill 12:18 : « n298 holds 1 bronze_axe, done without launch » ×4 puis « missing bronze_axe »,
+     n297 abandonné ; son ordre 505221 iron_axe « surplus » (créé avant le déploiement) est toujours open.
+ P6  OK. « assigned site … not reached » 0 (tour 1 : 578 en 10 h). NoRoute restants = N1 et N3.
+ P7  KO sur l'objectif. Contended sans ban fonctionne (68/h, 0 ban), « no mithril_ore mined » 0 (14/h),
+     MAIS ticks mining failed+blocked 186k/h (cible : 85k/3) ; 19 comptes sur le mithril dans l'heure ;
+     un site plein reste choisi quand TOUS sont pleins ; P7c (PNJ déjà engagé/maudit) : 9 échecs curse/h.
+ P8  OK. Dossiers en (3138,3348-3354) : 0 (tour 1 : 114/h).
+ P9  OK. Dossiers en (3266-3268,3226-3228) : 2 (tour 1 : 40/h) ; StepRefused total 46/h (193/h).
+ P10 KO. 21 « no report » frais ; tous ceux vérifiés suivent « launch refused: busy: market is running »
+     (lucy_rhodes 12:12:04 -> 12:12:49, Zezima 12:12:44 -> 12:13:32, alice_knight 12:16:35 -> 12:17:20).
+ P11 PARTIEL. L'anneau de 8 trames est présent (frank_lane 12:58:34 : « unknown server opcode 238 after
+     [UPDATE_ZONE_FULL_FOLLOWS op=153 len=2 ×4, UPDATE_ZONE_PARTIAL_FOLLOWS op=32 len=2, OBJ_ADD op=81
+     len=5 …] » pendant « Ride ladder_from_cellar_376 »). 1 incident/h, pas 0.
+ P12 PARTIEL. « hurt on the site (hp 12/42): banking to heal, then back (1/2) » vu (tim_wolfe) ; mais
+     fer de la Wilderness (3103,3569) : 6 échecs « hp 17 », tim_wolfe 34 -> 22 -> 12 avant le seuil 50 %.
+ P13 OK. Harpon 0.
+ P14 OK. « pack too full to hunt » 0.
+ P15 PARTIEL. 7 « goal check is short » frais/h (16/h) : formes nouvelles (voir P2-8).
+ P16 PARTIEL. « run returned 1 » frais 2 (alice_knight, wolfe_carl) ; « trade gave no » 6.
+ P17 OK. Smelt bloqué : runs qui ont travaillé jusqu'à l'épuisement des intrants (normal).
+ P18 OK. « no profit row » 1, « slow dispatch » 1.
+
+VERDICT
+Hors N1, la baisse est forte (-73 % d'événements, échecs de runs 26 % -> 7,6 %, deals 0 échec, échos
+cerveau -89 %, 9 causes du tour 1 à 0 ou presque). Mais le critère « presque plus d'erreurs » n'est PAS
+atteint : une cause à très fort volume (N1, 3 702/h, 89 % du total, 91,7 % de deals ratés) et une perte
+de ticks en hausse (9,1 % contre 6,5 %, mining ×2,2) portée par la contention (R06) et une régression
+induite par D2 (N3). Plan du tour 2 ci-dessous.
+
+======================================================================================================
+DÉTAIL DES CAUSES NOUVELLES OU RESTANTES (preuves, extraits exacts)
+======================================================================================================
+
+N1 — Bot échoué hors composante (bellarhodes, depuis 11:10 UTC)
+  Chaîne : désynchronisation pendant le bateau Karamja -> Port Sarim, reconnexion, réapparition sur le
+  pont en (3032,3214,1), composante statique sans sortie.
+    [11:10:45] nav seg 2/4 Custom boat_karamja_to_port_sarim stand=(2954,3147,0) expect=(3032,3217,1) -> FAIL protocol: unknown server opcode 41 en 20 ticks
+    [11:10:46] … walk: protocol: unknown server opcode 193 / 213 / 137   (lecture continuée sur un flux désynchronisé)
+    [11:10:52] fishing reconnect on sdk: io: server closed the socket …
+    [11:10:52] [t=1 Port Sarim] walk blocked: … no route (3032,3214,1) -> (2925,3181,0): Disconnected closest=(3032,3214,1)
+  Hors ligne : route 3032 3214 1 -> 3092 3242 0 = « Disconnected closest=(3032,3214,1) » ;
+  route 3032 3217 1 -> 3092 3242 0 = ok (gangplank_port_sarim_dock) ; route (3032,3216,1)->(3032,3217,1)
+  = « adjusted_dest (3032,3216,1) » : la case d'appui du gangplank (stand de nav_overrides.json
+  custom_edges[3]) est NON marchable dans notre collision ; on ne l'utilise que si le bateau nous y pose.
+  Amplification : le cerveau relance sans fin (fillers woodcut/mining « missing bronze_axe » : outils en
+  banque injoignable ; 10 candidats d'approche de banque = 10 dossiers NoRoute par essai), garde 34
+  annonces de vente + 4 achats au carnet : 1 052 deals « timeout » (53 s chacun) avec 48 contreparties.
+  Aucun garde ne dit « ce bot ne peut aller nulle part » ; idle_bot n'a tiré qu'une fois.
+
+N2 (R06 restant) — Contention : demande > capacité, clé de refroidissement au roc
+  19 comptes sur le mithril en 1 h ; site_full() n'écarte un site que s'il en reste un libre
+  (« un site plein n'est choisi que si tous le sont ») -> quand tout est plein, on y va quand même.
+  Clé « méthode@site » = coordonnées du roc : 7 « sites » contended dans 10 cases au marais de Lumbridge
+  ((3243,3157) (3243,3158) (3242,3160) (3243,3164) (3243,3166) (3243,3167) (3242,3165)), 3 à la guilde.
+    [12:21:05] brain lily_brook: gather:mining/mithril_ore@3242,3160,0 contended, site cooled 6000 ticks …
+    [12:21:06] brain lily_brook: launching mining mithril_ore … --site 3243,3166,0 …
+    [12:21:33] … @3243,3166,0 contended … [12:21:34] launching … --site 3243,3167,0
+  Contention non typée ailleurs : pêche « fish failed » 12/h (35k ticks, Yogosun « no fish spot, waiting
+  for respawns » après 10 saumons), tonte « no progress: shear 87 steps » (« This sheep has already been
+  shorn »), curse « already weakened » / « already under attack » 9/h (P7c non fait).
+
+N3 — Banque servante au plus proche à vol d'oiseau (régression exposée par D2)
+  scripts/src/kit/bank.rs:30 « Nearest free bank booth by Manhattan distance ». Depuis D2 (plus de
+  priorité guilde), la mine du marais de Lumbridge reçoit 140 runs/h (tour 1 : 9,8/h, ×14) ; sa banque
+  « la plus proche » est Al Kharid :
+    route 3244 3165 0 -> 3269 3164 0 : cost 467 (à pied) ; --paid : 311 (péage) ; -> 3092 3243 0 (Draynor) : cost 170
+    [12:13:39] erin_quill nav seg 1/1 Walk tiles=468 (3244,3165,0)->(3269,3164,0) -> FAIL timeout: walk timed out at (0, 3266, 3243) en 321 ticks
+  puis l'approche de la banque essaie des cases murées (route 3264 3170 0 -> 3266 3168 0 : Disconnected,
+  closest = départ) : 38 NoRoute / 6 comptes. Walk timeouts : 24/h (2,3/h au tour 1).
+
+R11 restant — « launch refused: busy » laissé en vol
+    [12:12:04] brain lucy_rhodes: launching cook raw_swordfish … --node n868 …
+    [12:12:04] brain lucy_rhodes: launch refused: busy: market is running
+    [12:12:49] brain lucy_rhodes: n868 no report: worker went idle without reporting (crash or restart)
+  Le lancement refusé laisse le nœud « en vol » ; le détecteur d'inactivité le compte en échec.
+
+R03 restant — « holds » ≠ disponible
+    [12:18:03] brain luke_hill: n297 Blocked(["bronze_axe"]) -> pending … [12:18:04] n298 holds 1 bronze_axe, done without launch
+  (×4, puis n297 abandonné). orders : 505221 Iron axe sell 1 open motive=surplus (créé 11:37, avant P5).
+  Le test « holds -> done » compte le détenu, pas le libre ; l'annonce antérieure n'a jamais été revue.
+
+R10 restant — trois formes de « goal check is short »
+  a) rapport d'un AUTRE run plié sur le nœud : ella_quill n1155 (mining) reçoit le goal_reached d'un
+     run alch:bronze_platebody (report 99456) -> « short » ;
+  b) --want atteint côté script, pas côté cerveau : will_field « stringing … --want strung_emerald_amulet 1 »
+     produit 1 Emerald amulet, goal_reached, « short » (2×, abandon puis « rescued on the market ») ;
+  c) melee « --want naturerune 434 » rend goal_reached à ~6 000 ticks = budget (ryan_mason, 3 fois),
+     alors qu'il a des achats de naturerune ouverts au marché.
+
+R09 restant — désynchronisation sur téléportation scriptée
+  Deux incidents datés, tous deux sur un trajet scripté (bateau 11:10, échelle « Ride
+  ladder_from_cellar_376 » 12:58). L'anneau montre 8 trames valides avant l'opcode inconnu ; la session
+  continue ensuite à lire (opcodes 246, 230…) au lieu de couper : un flux ISAAC désynchronisé ne se
+  rattrape jamais.
+
+======================================================================================================
+PLAN DE CORRECTION TOUR 2 (ordre = volume × gravité ; règles génériques, aucun cas particulier)
+Protocole AGENTS.md §5 pour chaque point : hypothèse écrite, vérification, test rouge, un seul crate.
+======================================================================================================
+
+P2-1 — Bot échoué : garde « aucune sortie » + coupe-circuit marché   [orchestrateur brain, market]   N1
+  Cause : rien n'arrête un bot dont la position n'a de route vers aucune banque ; ses ordres continuent
+  d'être appariés.
+  Correctif (règle unique) : (a) avant chaque lancement, si le dernier rapport/échec est un NoRoute
+  « Disconnected closest=<position du bot> » ou si le service nav ne trouve aucune banque depuis la
+  position, le cerveau passe le compte en état typé `Stranded{pos}` : plus de lancement, une ligne
+  error_events `stranded` (une fois), alerte dashboard, question à l'utilisateur (règle 7 ; récupération
+  = D5) ; (b) marché : un compte `Stranded`, OU 3 deals d'affilée en timeout, met tous ses ordres en
+  `dormant` (colonne existante) jusqu'à un deal réglé ou une levée explicite ; le moteur n'apparie pas
+  un ordre dormant.
+  Test rouge : (orchestrateur) rapport NoRoute Disconnected closest=position -> état Stranded, aucun
+  launch au tick suivant ; (market) 3 timeouts d'un vendeur -> ses ordres dormants, aucun appariement.
+  Vérification live : deals timeout < 5/h ; aucun compte > 50 NoRoute/h ; ligne `stranded` pour
+  bellarhodes tant que N1-b n'est pas corrigé.
+  Risque : faux positif sur un NoRoute ponctuel (exiger 2 positions identiques à 2 essais).
+
+P2-2 — Collision : case d'appui d'une transition marchable et reliée   [gamedata/nav]   N1 (cause B)
+  Hypothèse unique : la case d'appui (3032,3217,1) du gangplank de Port Sarim est marchable côté serveur
+  (m47_50 jm2, pont du navire) mais bloquée dans notre collision statique (empreinte de la loc 2084 ou
+  du bastingage) ; le pont (3032,3214-3216,1) est donc une composante sans sortie.
+  Observation qui confirme : flags de collision serveur de (3032,3217,1) = marchable et (3032,3216,1)
+  -> (3032,3217,1) sans mur ; infirme : la case est bloquée côté serveur aussi (alors l'arête doit être
+  opérable depuis les cases adjacentes, comme toute loc).
+  Correctif : balayage hors ligne de TOUTES les arêtes custom/ride : la case d'appui est marchable, ou
+  l'arête est opérable depuis toute case d'où la loc est atteignable (portée d'interaction) ; aucune
+  composante statique ne contient une case d'arrivée (`expect`/`to`) d'une arête sans autre sortie.
+  Test rouge : golden nav « pont_port_sarim » : route (3032,3214,1) -> (3029,3217,0) trouvée ; test de
+  balayage : 0 arête dont l'appui est hors de la composante de son arrivée.
+  Vérification live : bellarhodes repart seul après redéploiement (si D5 a) ; 0 NoRoute depuis un niveau 1
+  de navire.
+  Risque : faible ; rejouer routes.txt (bateau aller/retour).
+
+P2-3 — Contention : clé de site = site, méthode pleine = méthode écartée   [planner combat/cooldown, kit]   N2
+  Cause : refroidissement au roc ; un site plein reste choisi quand tous le sont ; contention non typée
+  hors mining/sol/tonte.
+  Correctif : (a) la clé de refroidissement et la capacité utilisent le même regroupement (rocs/arbres/
+  spots dans CROWD_RADIUS = un site) ; refroidir un roc refroidit son site ; (b) quand tous les sites
+  d'une méthode sont pleins (site_full partout), `pick_site_for` rend `Full` et resolve écarte la méthode
+  comme un refroidissement (choix suivant : DÉCISION D6), jamais un site plein forcé ; (c) contention
+  typée `contended:<site>` aussi pour la pêche (spot pris/vide avec joueurs proches), la tonte (« already
+  been shorn » avec joueurs proches) et les cibles PNJ (« already under attack », « already been
+  weakened » = cible exclue, P7c), au lieu de Failed / no progress.
+  Test rouge : (planner) roc (3243,3157) refroidi -> (3243,3166) aussi écarté ; 6 mineurs sur chaque site
+  de mithril -> pick_site_for = Full et resolve rend une autre méthode ; (kit, pur) pêche : 0 prise, spot
+  disparu, joueurs proches -> Contended.
+  Vérification live : mining failed+blocked < 60k ticks/h ; contended < 20/h ; « fish failed » < 3/h ;
+  « took curse » < 3/h ; aucun compte > 3 sites contended du même lieu en 1 h.
+  Risque : bots déplacés vers des méthodes moins rentables (attendu, choix par rendement mesuré).
+
+P2-4 — Banque servante par coût de route   [scripts kit/bank.rs + nav service]   N3 (régression exposée par D2)
+  Cause : nearest_bank au Manhattan ; l'approche essaie des cases murées ; timeout de marche fixe.
+  Correctif : nearest_bank = coût de route minimal (requête nav service sur les banques candidates, ou
+  table hors ligne site -> banque dans gamedata) ; candidats d'approche filtrés par la composante statique
+  du bot ; timeout de marche proportionnel au coût du plan.
+  Test rouge : (scripts) nearest_bank depuis (3244,3165,0) = Draynor (3092,3243), pas Al Kharid ;
+  (nav) aucun candidat d'approche hors composante.
+  Vérification live : « walk timed out » < 3/h ; NoRoute d'approche de banque 0 ; trajet banque du marais
+  ~170 cases.
+  Risque : coût CPU d'une requête par choix (mémoriser par site).
+
+P2-5 — Lancement refusé = nœud prêt, pas en vol   [orchestrateur brain launch / brain_inflight]   R11
+  Cause : « launch refused: busy: market is running » laisse le nœud en vol, puis « no report: worker
+  went idle » compte un échec.
+  Correctif : un refus de lancement typé (Busy) remet le nœud prêt sans échec ni rapport attendu ; le
+  cerveau relance quand le worker est libre (état du worker, pas un délai).
+  Test rouge : (orchestrateur) launch -> Busy : aucune entrée inflight, compteur d'échecs inchangé,
+  aucun « no report » au tick d'inactivité suivant.
+  Vérification live : « no report » frais = seulement après crash/redémarrage (< 3/h hors déploiement).
+  Risque : nul.
+
+P2-6 — Fillers soumis aux mêmes refroidissements que les nœuds   [orchestrateur brain fillers, planner]   P1 (trou)
+  Cause : un filler bloqué/en échec ne pose que « its skill sits out the fillers for 500 ticks » ;
+  bellarhodes : 34 lancements woodcut en 10 min, 41 fillers ratés/h.
+  Correctif : le filler passe par la même entrée de refroidissement méthode@site (P1) et la même
+  exclusion « outil manquant » (sous-nœud d'obtention, pas de relance) que le nœud principal.
+  Test rouge : filler gather:woodcut/yew_logs Blocked missing bronze_axe -> le filler suivant n'est pas
+  woodcut tant que l'outil n'a pas changé.
+  Vérification live : aucun compte > 10 lancements/10 min de la même méthode en échec (filler compris).
+  Risque : moins de fillers (le bot attend son fill sans travail : idle_bot le signale).
+
+P2-7 — Disponibilité unique, suite de P5   [orchestrateur brain_tools / brain test « holds »]   R03
+  Cause : le test « holds N, done without launch » et le choix d'outil du filler lisent le détenu ;
+  les annonces de l'outil utilisable créées avant P5 ne sont jamais revues.
+  Correctif : `available(item)` (détenu - verrouillé par ses ordres - en deal) dans « holds -> done » ;
+  à chaque passe, une annonce qui verrouille le dernier exemplaire utilisable d'une famille est retirée,
+  quelle que soit sa date ; le script rend `Blocked: locked:<objet>` quand l'outil est verrouillé.
+  Test rouge : luke_hill : iron_axe annoncé surplus, woodcut 45 -> « holds » faux, annonce retirée.
+  Vérification live : « missing bronze_axe/pickaxe » hors bot échoué = 0 ; « holds … done without
+  launch » suivi d'un Blocked missing du même objet = 0.
+  Risque : faible.
+
+P2-8 — Contrat de fin : un seul comptage du but   [orchestrateur brain_fold + scripts kit/want]   R10
+  Hypothèse à vérifier d'abord (une observation par forme) : (a) brain_fold juge un rapport d'une autre
+  méthode (alch) contre le but du nœud en cours ; (b) kit/want compte le produit du run, le cerveau la
+  détention libre (ou l'inverse) ; (c) melee --want rend goal_reached au budget. Observation : pour
+  chaque forme, la ligne de fin du script (compteur want) et le calcul du cerveau sur le même rapport.
+  Correctif : une fonction de progrès du but partagée (script et cerveau) ; un rapport de run annexe
+  (alch, filler) n'est jamais jugé contre le but du nœud ; goal_reached exige le compteur partagé.
+  Test rouge : verdict(...) sur le rapport 99456 (alch) plié sur un nœud mining -> pas d'échec ;
+  stringing --want 1 avec 1 produit -> succès côté cerveau.
+  Vérification live : « goal check is short » frais = 0.
+  Risque : faible.
+
+P2-9 — Erreur protocole = connexion morte + reprise du trajet scripté   [SDK connection, nav exec]   R09
+  Cause : après un opcode inconnu, recv() continue de lire un flux ISAAC désynchronisé (11:10 :
+  opcodes 41, 193, 213, 137 en 6 s) ; la reconnexion reprend au milieu d'un bateau.
+  Correctif : (1) Error::Protocol ferme la connexion et force la reconnexion immédiate (plus aucune
+  lecture) ; (2) après reconnexion pendant une arête scriptée, la nav relit la position et, si elle est
+  dans la zone d'arrivée de l'arête, enchaîne l'arête suivante (gangplank) ; (3) cause : hypothèse
+  « la désynchronisation naît sur une téléportation scriptée (bateau, échelle) » — capture pktlog d'un
+  aller-retour bateau et d'une échelle sur admin, comparer à ../Client-TS (Client.ts tcpIn) ;
+  observation qui confirme : octets reçus pendant la téléportation non consommés/consommés deux fois.
+  Test rouge : (SDK) flux rejoué avec un opcode inconnu -> erreur fatale, aucune trame lue ensuite ;
+  test de décodage sur la capture.
+  Vérification live : 0 « unknown server opcode » sur 2 h ; aucun NoRoute depuis un pont de navire.
+  Risque : nul pour (1).
+
+P2-10 — Quarantaine : re-test complet et anciennes fiches recalculées   [orchestrateur quarantine_retest, method_health]   P4
+  Cause : re-test sauté quand admin est occupé, jamais repris ; un échec du harnais (verdict "setup",
+  check_dispose « bank still holds leftovers ») garde la quarantaine ; les fiches d'avant P4 (accounts
+  {}) ne sont pas jugées sur 3 comptes.
+  Correctif : (a) file de re-test reprise quand le compte de test est libre (DÉCISION D7) ; (b) verdict
+  "setup" = re-test à refaire, jamais « still quarantined » ; corriger check_dispose (dépôt des restes) ;
+  (c) au chargement, une fiche sans comptes est requalifiée par la règle des 3 comptes (sans comptes
+  connus : levée en probation, D1a).
+  Test rouge : (orchestrateur) re-test « busy » -> remis en file ; verdict setup -> pas de verdict ;
+  fiche fight:melee/chickens accounts {} -> pas quarantinée.
+  Vérification live : method_health.json sans fight:melee/chickens ; tan:cow_hide re-testé jusqu'au bout.
+  Risque : faible.
+
+P2-11 — Journal : la dernière erreur d'un nœud n'est plus répétée   [orchestrateur brain log]   mesure
+  Cause : « nX EngagementEnd -> ready (failures 1/3 …) <dernière erreur> » réimprime une erreur ancienne
+  à chaque fin d'engagement (unknown opcode 149 de leo_king toutes les 6 min, faux « no report »,
+  « goal check is short ») : 22 lignes « unknown server opcode » pour 0 incident frais.
+  Correctif : la ligne porte « last error <âge> ago » ou n'imprime l'erreur que si elle est nouvelle ;
+  les compteurs journal/dashboard ignorent les échos.
+  Test : format de ligne ; compteur d'erreurs sur un journal d'échos = 0.
+  Vérification : grep des signatures = événements frais.
+  Risque : nul.
+
+Points mineurs (à grouper, pas de chantier dédié)
+  - Fer de la Wilderness (3103,3569) : « no iron_ore mined … last game: You manage to mine some coal »
+    (6/h) : vérifier que la cible est bien un roc de fer (donnée B) et que le seuil de soin (50 %) sort
+    avant 3 charges blessées (hp 34 -> 22 -> 12).
+  - felix_rook : 10 NoRoute NeedsRequirement coins:60 (bateau) répétés : un besoin de passage doit
+    refroidir la méthode comme P1 (ou créer le sous-nœud pièces), pas être relancé.
+  - lucy_rhodes : 16 « door loc 2337 at (3016,3514) never swung … I can't reach that! » : porte
+    à classer avec replay-nav (A/B/C) avant toute action.
+
+======================================================================================================
+DÉCISIONS À PRENDRE PAR L'UTILISATEUR
+======================================================================================================
+D5 — Récupération d'un bot échoué (bellarhodes maintenant, et tout futur `Stranded`).
+  a) Ne rien tricher : corriger la carte (P2-2) puis redéployer ; le bot repart par le gangplank.
+  b) Outil opérateur « désenlisement » (téléport staff vers la banque la plus proche) sur un compte de
+     flotte, journalisé : déroge aux règles 12/13 (triche sur un compte nommé), donc accord explicite.
+  c) Mettre le compte en pause (unload) + ordres dormants jusqu'à correction.
+  Recommandation : c) tout de suite (il coûte ~1 000 deals ratés/h à 48 bots), puis a). b) seulement
+  si P2-2 infirme l'hypothèse B.
+
+D6 — Méthode dont tous les sites sont pleins (P2-3b).
+  a) Le cerveau prend la méthode suivante de la même compétence par rendement mesuré (or, adamant,
+     charbon…), la contention baissant d'elle-même.
+  b) Le cerveau passe au but suivant (autre compétence).
+  c) Statu quo (aller quand même sur le site le moins chargé, contended sans ban).
+  Recommandation : a), puis b) si aucune autre méthode de la compétence n'est libre.
+
+D7 — Re-test de quarantaine quand admin est occupé (P2-10a).
+  a) File d'attente : re-test dès qu'admin est libre (peut attendre des heures).
+  b) admin2 sert de second compte de test (staff, autorisé).
+  c) Préempter le script opérateur d'admin.
+  Recommandation : a) + b) (admin2 si admin est occupé, sinon file).
+
+D8 — Coupe-circuit des deals (P2-1b).
+  a) Seuil fixe : 3 timeouts d'affilée -> ordres dormants jusqu'au prochain deal réglé.
+  b) Seulement sur état `Stranded` explicite.
+  Recommandation : a) (couvre aussi un bot échoué non détecté).
+
+
+DECISIONS UTILISATEUR (2026-11-17, tour 2)
+------------------------------------------
+D5 bellarhodes : en pause (hold) jusqu'au correctif de carte (case de
+   la passerelle) ; aucune triche sur un compte de la flotte. Après
+   déploiement du correctif, l'orchestrateur le relance et il sort seul.
+D6 Méthode pleine partout (tous les sites en contention) : passer à la
+   méthode suivante du même skill, classée par rendement mesuré.
+D7 Re-test des quarantaines quand admin est occupé : FILE d'attente
+   reprise dès qu'admin se libère, + admin2 comme second compte de test
+   en parallèle (règles 11-13 inchangées).
+D8 Coupe-circuit des deals : après 3 deals expirés D'AFFILÉE pour un
+   bot, ses ordres sont RETIRÉS (annulés, raison nommée), PAS mis en
+   sommeil ; contreparties rendues au carnet.
