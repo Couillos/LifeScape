@@ -227,13 +227,19 @@ pub struct GuideFilter {
     pub level: Option<u8>,
     pub family: Option<String>,
     /// Quests the bot has done (planner keys): a row needing another is
-    /// not accessible.
+    /// feasible after that quest only (`guide_feasible`).
     pub quests_done: Vec<String>,
     /// Objects the bot holds (debug name, units): a recipe on stock is
-    /// accessible only to a bot holding one lot of its inputs, and is
-    /// evaluated on that stock (R7). Empty: the general guide, where
-    /// nobody is assumed to hold anything.
+    /// evaluated on that stock (R7), and the profile's feasibility
+    /// (`guide_feasible`) reads it for stock, tools and market needs.
+    /// Empty: the general guide, where nobody is assumed to hold anything.
     pub held: Vec<(String, f64)>,
+    /// Per-skill levels of the profile (feasibility only, D22): they
+    /// override `level` for the skills named; the view stays `level`'s.
+    pub levels: Vec<(String, u8)>,
+    /// Free coins of the profile (feasibility only, D22): `None` leaves a
+    /// lot's capital unjudged (no wallet given).
+    pub coins: Option<f64>,
 }
 
 /// Money making family (§2).
@@ -296,7 +302,43 @@ pub struct FlowLine {
     pub basis: PriceBasis,
 }
 
-/// Everything a row needs before a bot can work it (D9).
+/// Availability of one object a row buys (D22): what the market and the
+/// F2P shops held of it when the set was built, against what one lot
+/// needs. Information only: each bot judges it at decision time
+/// (`guide_feasible::feasible_for`, its own stock counted).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MarketNeed {
+    pub item: String,
+    /// `input` (100 % market) or a consumable cause (rune, ammo, bait...).
+    pub cause: String,
+    /// Units bought per 6000 ticks of the row.
+    pub per_6000: f64,
+    /// Units one lot needs (`guide_engine::need_lots`: a pack of the
+    /// non-stackable objects the work moves, else the window).
+    pub per_lot: f64,
+    /// Units resting on the asks at the build.
+    pub asks: f64,
+    /// Units the object's last fills moved ("recently", the D12 window):
+    /// shown, never counted as a supply (D21).
+    pub recent: f64,
+    /// Units the F2P shops sell in one window (stock + restock).
+    pub shops: f64,
+    /// False when nothing prices the object (never traded, no ask, no
+    /// shop): the row's economy is unknown (`MoneyRow::priced`).
+    pub priced: bool,
+}
+
+/// An object a row consumes that no activity makes at its level and
+/// nothing prices (autonomous training: no autonomous source; a chain:
+/// neither farmed nor priced): impossible for every bot today.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SourceGap {
+    pub item: String,
+    pub reason: String,
+}
+
+/// Everything a row needs before a bot can work it (D9, D22): information
+/// carried by the row, judged per bot by `guide_feasible::feasible_for`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Prereqs {
     /// (skill, level).
@@ -316,6 +358,10 @@ pub struct Prereqs {
     /// Stock one lot of a recipe on owned stock transforms (debug name,
     /// units): only a bot holding it can work the row (D5).
     pub stock: Vec<(String, f64)>,
+    /// Every object the row buys, with its availability (D22).
+    pub market: Vec<MarketNeed>,
+    /// Objects nothing makes nor prices (D22: impossible today).
+    pub sources: Vec<SourceGap>,
 }
 
 /// How a row comes by one input or consumable (decision 2026-11-16 §1,
@@ -390,12 +436,12 @@ pub struct MoneyRow {
     pub confidence: Confidence,
     /// "traded" or "book/npc" (`price_confidence`).
     pub price_confidence: &'static str,
-    /// Why no bot of the filter can work the row whatever its levels: a
-    /// recipe's stock it does not hold, an input nothing makes, offers
-    /// or sells. A blocked row is never accessible, ranks after every
-    /// other row and, when an input is missing, carries no profit.
-    pub blocked: Vec<String>,
-    pub accessible: bool,
+    /// False when an object the row buys has no price at all (never
+    /// traded, no ask, no shop: `MarketNeed::priced`) or one it consumes
+    /// has no source (`Prereqs::sources`): revenue, cost and profit are
+    /// then 0 and mean nothing, the row ranks after the priced ones (D22:
+    /// never "blocked", its conditions say why).
+    pub priced: bool,
 }
 
 /// How a training row comes by its inputs (§2).
@@ -456,9 +502,9 @@ pub struct TrainingRow {
     pub confidence: Confidence,
     /// "traded" or "book/npc" (`price_confidence`).
     pub price_confidence: &'static str,
-    /// An input nothing makes, offers or sells (`MoneyRow::blocked`).
-    pub blocked: Vec<String>,
-    pub accessible: bool,
+    /// False as `MoneyRow::priced`: coins and the effective rate then
+    /// mean nothing (0), the row ranks after the priced ones.
+    pub priced: bool,
 }
 
 /// A method the engine could not estimate (no measure, no prior).

@@ -19,10 +19,13 @@
 //! - `Sourcing::Cheapest` (money chains, D16 revised): each one the
 //!   CHEAPER way, farming (its ticks at the bot's D17 price, less the
 //!   other flows of its source) or buying (D15 prices at its volume:
-//!   asks, finite shop stock); a tie farms; neither: missing;
+//!   asks, finite shop stock; only when nothing farms it, the rest at the
+//!   current price, D22: its
+//!   availability a condition of the row); a tie farms; neither farmed
+//!   nor priced: a gap (`SourceGap`, the row unpriced);
 //! - `Sourcing::Farm` (autonomous training, D13: the bot obtains
 //!   everything itself): farmed whenever an activity makes it at the
-//!   level; an input nothing makes is missing (the chain cannot run), a
+//!   level; an input nothing makes is a gap (the chain cannot run), a
 //!   consumable nothing makes is bought (runes of nature or law...).
 //!
 //! Every choice is kept (`InputRoute`) for the guide to show. The value
@@ -32,7 +35,7 @@
 //! (D12/Q3) over the ticks of that stage and its upstream.
 
 use crate::guide_engine::{Engine, InputPricing};
-use crate::guide_model::{InputRoute, Prereqs, RateAsk, Route, Stage, MAX_CHAIN_DEPTH};
+use crate::guide_model::{InputRoute, Prereqs, RateAsk, Route, SourceGap, Stage, MAX_CHAIN_DEPTH};
 
 /// Style a source fight is read in (its drops do not depend on it).
 pub const SOURCE_FIGHT_STYLE: &str = "melee:attack";
@@ -60,7 +63,7 @@ pub enum Sourcing {
     /// The cheaper of farming (ticks at this price) and buying (money
     /// chains, D16 revised 2026-11-16).
     Cheapest(TimePrice),
-    /// Farmed whenever possible; an input nothing makes is missing, a
+    /// Farmed whenever possible; an input nothing makes is a gap, a
     /// consumable nothing makes is bought (autonomous training, D13).
     Farm,
 }
@@ -93,11 +96,12 @@ pub struct ChainUnit {
     pub prereqs: Prereqs,
     /// Some stage rests on a measure.
     pub measured: bool,
-    /// Inputs bought (no source, or buying is cheaper), per unit.
-    pub bought: Vec<(String, f64)>,
-    /// Purchases nobody covers (no source at the level, no ask deep
-    /// enough, no shop), with the reason: the chain cannot run.
-    pub missing: Vec<String>,
+    /// Inputs and consumables bought (no source, or buying is cheaper),
+    /// (item, cause, units per unit), upstream included.
+    pub bought: Vec<(String, String, f64)>,
+    /// What nothing makes at the level and nothing prices, with the
+    /// reason: the chain cannot run (D22: impossible today, unpriced).
+    pub gaps: Vec<SourceGap>,
     /// The way each sourced input and consumable came by, upstream
     /// included (per unit of the consuming stage's product).
     pub routes: Vec<InputRoute>,
@@ -201,7 +205,9 @@ pub fn choose(engine: &Engine, item: &str, cause: &str, need: f64, window_units:
     let input = cause == "input";
     let farmed = if depth < MAX_CHAIN_DEPTH { best_source(engine, item, level, depth + 1, downstream, sourcing) } else { None };
     let buyable = !(input && sourcing == Sourcing::Farm);
-    let bought = if buyable { Some(engine.buy_at(item, window_units)).filter(|priced| priced.available) } else { None };
+    // D22: past the asks and the shops at the current price (the row's
+    // condition says what the market holds); unpriced: not bought.
+    let bought = if buyable { Some(engine.buy_at(item, window_units)).filter(|priced| priced.priced) } else { None };
     let farm_coins = match (&farmed, sourcing) {
         (Some(source), Sourcing::Cheapest(price)) => Some(source.farm_cost(price)),
         _ => None,
@@ -218,7 +224,9 @@ pub fn choose(engine: &Engine, item: &str, cause: &str, need: f64, window_units:
     };
     let buy_wins = match (&farmed, bought) {
         (None, Some(_)) => true,
-        (Some(_), Some(priced)) => farm_coins.is_some_and(|farm| priced.price < farm),
+        // A purchase the asks and shops do not cover never beats a farm
+        // (D22: priced past them only when nothing farms it).
+        (Some(_), Some(priced)) => priced.available && farm_coins.is_some_and(|farm| priced.price < farm),
         _ => false,
     };
     if let (true, Some(priced)) = (buy_wins, bought) {
@@ -238,7 +246,7 @@ pub fn choose(engine: &Engine, item: &str, cause: &str, need: f64, window_units:
             format!("{item}: no autonomous source at level {level}")
         }
     } else {
-        format!("{} (nothing makes it at level {level})", engine.unavailable_reason(item, window_units))
+        format!("{item}: nothing makes it at level {level} and nothing prices it (never traded, no ask, no shop)")
     };
     (Choice::Missing(reason), route)
 }
@@ -267,8 +275,8 @@ pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, lev
     let mut stages: Vec<Stage> = Vec::new();
     let mut prereqs = crate::guide_prereq::prereqs_of(method, style, level, &tool);
     let mut measured = answer.confidence.measured;
-    let mut bought: Vec<(String, f64)> = Vec::new();
-    let mut missing: Vec<String> = Vec::new();
+    let mut bought: Vec<(String, String, f64)> = Vec::new();
+    let mut gaps: Vec<SourceGap> = Vec::new();
     let mut routes: Vec<InputRoute> = Vec::new();
     let mut downstream: Vec<String> = path.to_vec();
     downstream.push(product.to_string());
@@ -295,25 +303,23 @@ pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, lev
                     }
                     crate::guide_prereq::merge(&mut prereqs, &source.prereqs);
                     measured |= source.measured;
-                    bought.extend(source.bought.iter().map(|(name, count)| (name.clone(), count * need)));
+                    bought.extend(source.bought.iter().map(|(name, why, count)| (name.clone(), why.clone(), count * need)));
                     routes.extend(source.routes.iter().map(|upstream| InputRoute { units: upstream.units * need, ..upstream.clone() }));
                 }
                 Choice::Buy(priced) => {
                     value -= need * priced.price;
                     crate::guide_prereq::require_shop(&mut prereqs, priced.need);
-                    // An input rides the chain line as a bought flow; a
-                    // consumable's purchase is in the value only.
-                    if cause == "input" {
-                        bought.push((item.clone(), need));
-                    }
+                    // An input rides the chain line as a bought flow, a
+                    // consumable in the value only; both are conditions.
+                    bought.push((item.clone(), cause.clone(), need));
                 }
-                Choice::Missing(reason) => missing.push(reason),
+                Choice::Missing(reason) => gaps.push(SourceGap { item: item.clone(), reason }),
             }
             continue;
         }
         let priced = engine.flow_price(item, cause, *qty, InputPricing::Stock);
-        if !priced.available {
-            missing.push(engine.unavailable_reason(item, -qty));
+        if !priced.priced {
+            gaps.push(SourceGap { item: item.clone(), reason: format!("{item}: nothing prices it (never traded, no ask, no shop)") });
         }
         // A by-product or drop sold to a shop: its condition (Q7).
         if *qty > 0.0 {
@@ -325,14 +331,14 @@ pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, lev
     for (skill, gained) in level_xp {
         add_xp(&mut xp, &skill, gained / rate);
     }
-    let unit = ChainUnit { method: method.to_string(), product: product.to_string(), ticks_per_unit: ticks, value_consumed: value, xp_per_unit: xp, stages: Vec::new(), prereqs, measured, bought, missing, routes };
+    let unit = ChainUnit { method: method.to_string(), product: product.to_string(), ticks_per_unit: ticks, value_consumed: value, xp_per_unit: xp, stages: Vec::new(), prereqs, measured, bought, gaps, routes };
     let sold = unit.value_sold_at(engine, crate::guide_model::WINDOW_TICKS / ticks);
     stages.push(Stage { method: method.to_string(), product: product.to_string(), ticks_per_unit: ticks, profit_6000: sold / ticks * crate::guide_model::WINDOW_TICKS });
     Ok(ChainUnit { stages, ..unit })
 }
 
 /// Best source of one unit of `item` at `level`, `None` when none can
-/// make it (a source with a purchase nobody covers cannot): the fewest
+/// make it (a source with a gap, `ChainUnit::gaps`, cannot): the fewest
 /// ticks per unit under `Sourcing::Farm`, the cheapest farmed unit (its
 /// ticks at the bot's price, less its other flows) under
 /// `Sourcing::Cheapest`.
@@ -351,7 +357,7 @@ fn compute_best_source(engine: &Engine, item: &str, level: u8, depth: usize, pat
     sources(item)
         .into_iter()
         .filter_map(|(method, style)| chain_unit(engine, &method, &style, item, level, depth, path, sourcing).ok())
-        .filter(|unit| unit.missing.is_empty())
+        .filter(|unit| unit.gaps.is_empty())
         .min_by(|left, right| cost(left).total_cmp(&cost(right)))
 }
 
@@ -369,7 +375,7 @@ pub fn autonomous_gap(engine: &Engine, item: &str, level: u8, depth: usize, path
     for (method, style) in found.iter().take(3) {
         let reason = match chain_unit(engine, method, style, item, level, depth, path, Sourcing::Farm) {
             Err(error) => error,
-            Ok(unit) => format!("{method}: {}", unit.missing.first().cloned().unwrap_or_else(|| "no source".to_string())),
+            Ok(unit) => format!("{method}: {}", unit.gaps.first().map(|gap| gap.reason.clone()).unwrap_or_else(|| "no source".to_string())),
         };
         reasons.push(reason);
     }

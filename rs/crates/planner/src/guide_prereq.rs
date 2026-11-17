@@ -46,7 +46,7 @@ fn compute_prereqs(method: &str, style: &str, band_level: u8, tool: &str) -> Pre
         }
     }
     let combat = crate::combat::min_combat_for_method(method);
-    Prereqs { levels, combat, quests, quest_points: 0, tools, capital: 0.0, ironman: true, stock: Vec::new() }
+    Prereqs { levels, combat, quests, quest_points: 0, tools, capital: 0.0, ironman: true, ..Prereqs::default() }
 }
 
 /// Adds the condition of a shop a row trades with (Q7, user
@@ -62,7 +62,7 @@ pub fn require_shop(into: &mut Prereqs, need: ShopNeed) {
 
 /// Union of two prerequisite sets (a chain's stages): the highest level
 /// per skill, the highest combat and quest points, every quest and
-/// tool, capitals added.
+/// tool, every purchase and source gap (D22), capitals added.
 pub fn merge(into: &mut Prereqs, other: &Prereqs) {
     into.quest_points = into.quest_points.max(other.quest_points);
     for (skill, level) in &other.levels {
@@ -84,6 +84,8 @@ pub fn merge(into: &mut Prereqs, other: &Prereqs) {
     }
     into.capital += other.capital;
     into.ironman &= other.ironman;
+    into.market.extend(other.market.iter().cloned());
+    into.sources.extend(other.sources.iter().cloned());
 }
 
 /// Combat level of a bot with every skill at `level` (hitpoints at

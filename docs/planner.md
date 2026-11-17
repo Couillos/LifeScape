@@ -1220,11 +1220,24 @@ d'une récolte planifiée (plumes, appât de pêche :
   lit `guides_store::current()` (vue money de la tranche du bot dans le
   skill de chaque recette, lignes market seules : `market_rows`), les
   asks du cycle (`GuideSet::quotes`), les unités détenues et la bourse
-  libre (`brain_gear::free_coins`). Une ligne n'est offerte que non
-  bloquée, rentable, produit ≠ pièces et intrants tous achetés au marché
-  (`offer_from_row`), aux niveaux, quêtes et points de quête du bot
-  (`eligible`). Jamais pour un Ironman (ni offre, ni méthode, ni lancement :
-  `space::iron_may_use`).
+  libre (`brain_gear::free_coins`). Une ligne n'est offerte que cotée
+  (`priced`), rentable, produit ≠ pièces et intrants tous achetés au
+  marché (`offer_from_row`), et à la portée du bot (`eligible` =
+  `guide_feasible::feasible_for(ligne, bot).within_reach()`, D22 : bot =
+  niveaux et combat live, quêtes, avoirs, bourse libre, asks du cycle
+  `brain_trade::cycle_asks` ; faisable, ou après un outil ou des pièces
+  seulement — le lot est borné par la bourse ; un intrant détenu compte
+  dans sa disponibilité). Jamais pour un Ironman (ni offre, ni méthode, ni
+  lancement : `space::iron_may_use`).
+- Faisabilité d'une ligne de guide (D22, `planner::guide_feasible`) : les
+  guides ne bloquent rien ; chaque ligne porte ses conditions (niveaux,
+  combat, site à portée de banque, quêtes, points, outils, stock d'un
+  lot, capital, Ironman, disponibilité de chaque objet acheté, sources
+  manquantes) et `feasible_for` les juge pour un bot : `Feasible` |
+  `AfterPrereqs(niveau, combat, quête, points, outil, pièces)` |
+  `Infeasible(raisons)`. Seuls lecteurs du cerveau aujourd'hui : les offres
+  `trade:craft` ci-dessus (brain_plan et brain_train ne lisent pas encore
+  les guides : R7, tirage pondéré, viendra après).
 - Choix : `money_methods` ajoute chaque offre, `resolve_money` la classe sur
   son profit/6000 du guide comme toute méthode d'argent (classe « faisable
   maintenant » quand un lot tient : `workable`, outils détenus, ni

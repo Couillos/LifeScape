@@ -58,6 +58,11 @@ rates-rebuild <copie> --guides-store <dossier>`, hôte chargé) :
 - lecture API : 60-90 ms pour une vue complète (lecture + JSON, 1-1,6
   Mo), quelques ms pour une vue filtrée par skill ; `held` réévalue les
   seules lignes recette (~50 ms).
+- D22 (conditions et faisabilité par ligne, 2026-11-17, même copie) :
+  cycle chaud 3,3-3,8 s CPU (avant 3,3-3,6 s, +3 % dans le bruit), résident du
+  jeu +10 Mio (`MarketNeed` par objet acheté), lecture API 80-85 ms
+  pour une vue complète (conditions et `feasibility` sérialisées, ~2 Mo),
+  42 vues 81 Mio en JSON (avant 61).
 Avant (requête calculée en ligne, mutex tenu pendant le calcul) : money
 level=30 11 s, training level=30 21 s, money sans level 450 s, training
 sans level 349 s, sur un cœur partagé avec la flotte.

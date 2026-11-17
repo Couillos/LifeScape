@@ -27,6 +27,9 @@
 //! economy report (`orchestrator::trade_report`) adds the realized coins
 //! from the deals. Ironman: never (no row, no method, no launch).
 //!
+//! Feasibility (D22): a row is offered to a bot only within its reach
+//! (`eligible`, `guide_feasible::feasible_for`: the guides block nothing).
+//!
 //! R7 extension point: `pick_offer` (today the best profit) is where the
 //! weighted draw of D10/D14 will choose among the offers.
 
@@ -120,15 +123,17 @@ fn bought_cause(cause: &str) -> bool {
 }
 
 /// The offer of one money row, or why it cannot be traded: a market
-/// row, unblocked, earning, whose product is an object (alchemy turns
-/// its object into coins: nothing to craft nor sell) and whose every
-/// purchase is a market one (a shop purchase has no `market:buy` leg).
+/// row, priced (D22: an object nothing prices leaves no economy),
+/// earning, whose product is an object (alchemy turns its object into
+/// coins: nothing to craft nor sell) and whose every purchase is a
+/// market one (a shop purchase has no `market:buy` leg). Whether THIS
+/// bot can work it is `eligible` (`guide_feasible::feasible_for`).
 pub fn offer_from_row(row: &MoneyRow, quote: &dyn Fn(&str) -> Option<Quote>, held: &dyn Fn(&str) -> i64) -> Result<TradeOffer, String> {
     if row.family != Family::Market {
         return Err(format!("{}: not a market row ({})", row.method, row.family.as_str()));
     }
-    if !row.blocked.is_empty() {
-        return Err(format!("{}: blocked ({})", row.method, row.blocked.join("; ")));
+    if !row.priced {
+        return Err(format!("{}: unpriced (an input nothing prices)", row.method));
     }
     if row.profit_6000 <= 0.0 {
         return Err(format!("{}: no profit ({:.0} / 6000)", row.method, row.profit_6000));
@@ -174,28 +179,30 @@ pub fn recipe_offer(method: &str, held: &dyn Fn(&str) -> i64) -> Option<TradeOff
     (!inputs.is_empty()).then(|| TradeOffer { method: method.to_string(), product, profit_6000: 0.0, product_per_6000: 0.0, unit_sale: 0.0, inputs })
 }
 
-/// True when a bot (live `level_of`, `quests_done`, Ironman or not) may
-/// work the row: an Ironman never trades; levels, quests and the quest
-/// points of the shops it deals with (Q7) met.
-pub fn eligible(row: &MoneyRow, level_of: &dyn Fn(&str) -> u8, quests_done: &[String], ironman: bool) -> bool {
-    if ironman || row.family != Family::Market {
+/// True when a bot may work the market row now (D22: the one judgement,
+/// `guide_feasible::feasible_for` on its levels, combat, quests, tools,
+/// free stock, free coins and the asks of the moment): within its reach
+/// (feasible, or once a tool is obtained or coins for a lot are earned:
+/// the lot is bounded by the wallet, `lot_size`, a tool by the usual
+/// obtain legs). An Ironman never trades.
+pub fn eligible(row: &MoneyRow, bot: &crate::guide_feasible::BotState) -> bool {
+    if bot.ironman || row.family != Family::Market {
         return false;
     }
-    let levels = row.prereqs.levels.iter().all(|(skill, level)| level_of(skill) >= *level);
-    let quests = row.prereqs.quests.iter().all(|quest| quests_done.contains(quest));
-    let points = row.prereqs.quest_points <= lifescape_gamedata::quest_requirements::quest_points_of(quests_done);
-    levels && quests && points
+    crate::guide_feasible::feasible_for(row, bot).within_reach()
 }
 
 /// Offers of the market rows a bot may work, one per method (the first
-/// row of a method wins: the reader orders them), best profit first.
-pub fn offers(rows: &[&MoneyRow], quote: &dyn Fn(&str) -> Option<Quote>, held: &dyn Fn(&str) -> i64, level_of: &dyn Fn(&str) -> u8, quests_done: &[String], ironman: bool) -> Vec<TradeOffer> {
+/// row of a method wins: the reader orders them), best profit first; the
+/// units it holds are `bot.held`.
+pub fn offers(rows: &[&MoneyRow], quote: &dyn Fn(&str) -> Option<Quote>, bot: &crate::guide_feasible::BotState) -> Vec<TradeOffer> {
+    let held = |item: &str| (bot.held)(item).max(0.0).floor() as i64;
     let mut out: Vec<TradeOffer> = Vec::new();
     for row in rows {
-        if !eligible(row, level_of, quests_done, ironman) || out.iter().any(|known| known.method == method_of(&row.method)) {
+        if !eligible(row, bot) || out.iter().any(|known| known.method == method_of(&row.method)) {
             continue;
         }
-        if let Ok(offer) = offer_from_row(row, quote, held) {
+        if let Ok(offer) = offer_from_row(row, quote, &held) {
             out.push(offer);
         }
     }

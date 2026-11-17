@@ -464,3 +464,8 @@ D22 (2026-11-17, utilisateur) Les guides ne BLOQUENT plus rien : chaque
     alcher). Cohérence : une même règle d'exigence pour toutes les
     familles (ex. smith:rune_axe chaîne : « no site within bank reach »
     devient une exigence affichée, pas un profit accessible à tous).
+    État 2026-11-17 : code et tests faits, sans live (decisions.md « Guides :
+    plus aucune ligne bloquée ») : `planner::guide_feasible` (conditions
+    structurées, `feasible_for`), lignes non cotées seulement quand rien
+    ne cote un objet acheté, offres trade:craft jugées par bot, API et
+    front (conditions, faisabilité pour un profil).

@@ -22,10 +22,13 @@
 //!   window (Q7, decision 2026-11-16 §2: base stock unit by unit at the
 //!   server price for the stock left, then the window's restock) walked
 //!   together cheapest first for the volume (the current price is a
-//!   floor, never a depth: only asks and shops hold units); past both,
-//!   NOT for sale
-//!   (`available` false: the row needing it is blocked, never priced at
-//!   a made-up figure);
+//!   floor, never a depth: only asks and shops hold units); past both
+//!   (`available` false, D22: the row is never blocked, each bot judges
+//!   the availability, `guide_feasible`), the units still cost the
+//!   current price of a traded object, never less than the last unit
+//!   walked; an object never traded with nothing walked has NO price
+//!   (`priced` false: the row's economy is unknown, never a made-up
+//!   figure);
 //! - a shop behind a condition (an F2P quest, quest points; Q7) buys and
 //!   sells like any other, its condition carried by the walk
 //!   (`Priced::need`) to the row's prerequisites;
@@ -39,7 +42,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::guide_flows::{fold_negligible_drops, OtherDrops};
-use crate::guide_model::{FlowLine, GuideWorld, Outlet, PriceBasis, Quote, RateAnswer, RateAsk, ShopNeed, WINDOW_TICKS};
+use crate::guide_model::{FlowLine, GuideWorld, MarketNeed, Outlet, PriceBasis, Quote, RateAnswer, RateAsk, ShopNeed, WINDOW_TICKS};
 
 /// Causes of the consumables a run buys.
 pub const BOUGHT_CAUSES: [&str; 6] = ["ammo", "rune", "bait", "supply", "food", "fee"];
@@ -54,8 +57,10 @@ pub enum InputPricing {
 }
 
 /// The mean unit price of a volume and where it comes from; `available`
-/// is false for a purchase nobody covers (no fill, asks short of the
-/// volume, no shop): its price is then 0 and means nothing.
+/// is false for a purchase the asks and the shops do not cover (the
+/// rest at the current price, D22); `priced` false when nothing prices
+/// the rest (never traded, nothing walked): the price is then 0 and
+/// means nothing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Priced {
     pub price: f64,
@@ -63,6 +68,7 @@ pub struct Priced {
     pub traded: bool,
     pub basis: PriceBasis,
     pub available: bool,
+    pub priced: bool,
     /// Conditions of the shops the volume trades with (Q7): the row's
     /// prerequisite (`guide_prereq::require_shop`).
     pub need: ShopNeed,
@@ -70,7 +76,7 @@ pub struct Priced {
 
 impl Priced {
     fn own() -> Self {
-        Priced { price: 1.0, outlet: Outlet::Market, traded: true, basis: PriceBasis::Own, available: true, need: ShopNeed::default() }
+        Priced { price: 1.0, outlet: Outlet::Market, traded: true, basis: PriceBasis::Own, available: true, priced: true, need: ShopNeed::default() }
     }
 }
 
@@ -114,12 +120,15 @@ fn book_steps(levels: &[(f64, f64)]) -> impl Iterator<Item = Step> + '_ {
 /// the rest is uncovered (worth nothing for a sale, not for sale for a
 /// purchase). `traded` names the basis of an object priced mostly at its
 /// current price (`Traded` or `Thin`); the others say what the book and
-/// the shop hold of the volume.
-fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>) -> Priced {
+/// the shop hold of the volume. A purchase past every step (D22) costs
+/// `current` (a traded object's current price), never less than the
+/// last unit walked; neither: not priced.
+fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>, current: Option<f64>) -> Priced {
     let units = if units > 0.0 { units } else { 1.0 };
     let (mut remaining, mut value) = (units, 0.0);
     let (mut at_current, mut at_book, mut at_shop) = (0.0, 0.0, 0.0);
     let mut need = ShopNeed::default();
+    let mut last_price: Option<f64> = None;
     // A sale ran past its current price's volume (the price is thin).
     let mut past_current = false;
     for step in steps {
@@ -131,6 +140,7 @@ fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>) -> P
             continue;
         }
         value += taken * step.price;
+        last_price = Some(step.price);
         remaining -= taken;
         need = need.and(step.need);
         match step.tier {
@@ -144,14 +154,19 @@ fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>) -> P
     }
     let uncovered = remaining.max(0.0);
     let available = side == Side::Sell || uncovered <= 1e-9;
+    // D22: a purchase past every step at the current price, at least
+    // the last unit walked.
+    let beyond = if available { None } else { [current, last_price].into_iter().flatten().filter(|price| *price >= 1.0).reduce(f64::max) };
+    let priced = available || beyond.is_some();
+    if let Some(price) = beyond {
+        value += uncovered * price;
+    }
     let basis = match (traded, at_book > 0.0, at_shop > 0.0, uncovered > 1e-9) {
-        (_, _, _, true) if side == Side::Buy => {
-            if at_book + at_current > 0.0 {
-                PriceBasis::BookNone
-            } else {
-                PriceBasis::Nothing
-            }
-        }
+        (_, _, _, true) if side == Side::Buy => match (beyond, traded) {
+            (None, _) => PriceBasis::Nothing,
+            (Some(_), Some(_)) => PriceBasis::Thin,
+            (Some(_), None) => PriceBasis::BookNone,
+        },
         (Some(_), _, _, _) if at_current >= at_book + at_shop + uncovered && past_current => PriceBasis::Thin,
         (Some(basis), _, _, _) if at_current >= at_book + at_shop + uncovered => basis,
         (_, true, false, false) => PriceBasis::Book,
@@ -162,8 +177,8 @@ fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>) -> P
         (_, false, false, _) => PriceBasis::Nothing,
     };
     let outlet = if at_shop > at_book + at_current { Outlet::Shop } else { Outlet::Market };
-    let price = if available { value / units } else { 0.0 };
-    Priced { price, outlet, traded: basis.weakness() == 0, basis, available, need }
+    let price = if priced { value / units } else { 0.0 };
+    Priced { price, outlet, traded: basis.weakness() == 0, basis, available, priced, need }
 }
 
 /// A traded object's median (its price when the quote carries none).
@@ -442,7 +457,7 @@ impl<'a> Engine<'a> {
                 built
             }
         };
-        walk(&steps, units, Side::Sell, quote.traded.then(|| traded_basis(&quote)))
+        walk(&steps, units, Side::Sell, quote.traded.then(|| traded_basis(&quote)), None)
     }
 
     /// Mean purchase price of `units` (`purchase_steps`); `available`
@@ -462,17 +477,19 @@ impl<'a> Engine<'a> {
                 built
             }
         };
-        walk(&steps, units, Side::Buy, quote.traded.then(|| traded_basis(&quote)))
+        walk(&steps, units, Side::Buy, quote.traded.then(|| traded_basis(&quote)), quote.traded.then(|| quote.price.max(1.0)))
     }
 
-    /// Why `units` of `item` cannot be bought (for a blocked row).
-    pub fn unavailable_reason(&self, item: &str, units: f64) -> String {
+    /// The availability of an object a row buys (D22): `per_6000` units a
+    /// window of the row, `per_lot` one lot; what the asks, the last
+    /// fills and the F2P shops held at the build; `priced` as the walk
+    /// said.
+    pub fn market_need(&self, item: &str, cause: &str, per_6000: f64, per_lot: f64, priced: bool) -> MarketNeed {
         let quote = self.quote_shared(item);
-        let depth = quote.asks.iter().fold(0.0, |held, (_, depth)| held + depth.max(0.0));
-        let traded = if quote.traded { "" } else { "never traded, " };
-        let shop: f64 = self.shop_steps_shared(item).iter().map(|(_, units, _)| units.max(0.0)).sum();
-        let shops = if shop > 0.0 { format!("F2P shops {shop:.0} (stock + restock)") } else { "no F2P shop sells it".to_string() };
-        format!("{item}: {traded}asks hold {depth:.0}, {shops}, of {units:.0} per window")
+        let asks = quote.asks.iter().fold(0.0, |held, (_, depth)| held + depth.max(0.0));
+        let shops: f64 = self.shop_steps_shared(item).iter().fold(0.0, |total, (_, units, _)| total + units.max(0.0));
+        let recent = if quote.traded { quote.fill_units.max(0.0) } else { 0.0 };
+        MarketNeed { item: item.to_string(), cause: cause.to_string(), per_6000, per_lot, asks, recent, shops, priced }
     }
 
     /// Mean unit price of one signed flow of `qty` units under `pricing`.
@@ -501,8 +518,11 @@ pub struct PricedFlows {
     pub other: OtherDrops,
     pub revenue: f64,
     pub cost: f64,
-    /// Reasons of the purchases nobody covers (the row is blocked).
-    pub missing: Vec<String>,
+    /// Every object bought, with its availability (D22: a condition of
+    /// the row, never a block).
+    pub market: Vec<MarketNeed>,
+    /// False when a purchase has no price at all (`Priced::priced`).
+    pub priced: bool,
     /// Conditions of the shops the row sells its output to or buys from
     /// (Q7): its prerequisite. A stock input valued at its sale price
     /// (D5) trades with nobody: none.
@@ -519,12 +539,14 @@ pub fn price_flows(engine: &Engine, answer: &RateAnswer, own: Option<&str>, pric
     let (kept, mut other) = fold_negligible_drops(&kept_flows, &|item| own == Some(item), &|item| engine.sale_at(item, 1.0).price);
     other.units_per_6000 *= scale;
     other.value_per_6000 *= scale;
-    let mut out = PricedFlows { revenue: other.value_per_6000.max(0.0), cost: (-other.value_per_6000).max(0.0), other, ..PricedFlows::default() };
+    let mut out = PricedFlows { revenue: other.value_per_6000.max(0.0), cost: (-other.value_per_6000).max(0.0), other, priced: true, ..PricedFlows::default() };
+    let lots = need_lots(answer);
     for (item, cause, qty) in kept {
         let per_6000 = qty * scale;
         let priced = engine.flow_price(&item, &cause, per_6000, pricing);
-        if !priced.available {
-            out.missing.push(engine.unavailable_reason(&item, -per_6000));
+        if per_6000 < 0.0 && item != "coins" && bought(&cause, pricing) {
+            out.priced &= priced.priced;
+            out.market.push(engine.market_need(&item, &cause, -per_6000, whole_units(-qty / lots), priced.priced));
         }
         if per_6000 >= 0.0 || bought(&cause, pricing) {
             out.need = out.need.and(priced.need);
@@ -563,6 +585,19 @@ pub fn lots_per_6000(answer: &RateAnswer) -> f64 {
     slots / crate::guide_model::LOT_SLOTS
 }
 
+/// Lots of one window of work a row's purchases are judged by (D22,
+/// `MarketNeed::per_lot`): the packs of non-stackable inputs it moves
+/// (`lots_per_6000`, the lot of `stock_lot` and of a market row's
+/// capital), else one lot is the window.
+pub fn need_lots(answer: &RateAnswer) -> f64 {
+    let lots = lots_per_6000(answer);
+    if lots > 0.0 {
+        lots
+    } else {
+        1.0
+    }
+}
+
 /// Stock inputs of one window of work: (item, units), summed per item.
 pub fn stock_inputs(answer: &RateAnswer) -> Vec<(String, f64)> {
     let mut out: Vec<(String, f64)> = Vec::new();
@@ -579,5 +614,11 @@ pub fn stock_inputs(answer: &RateAnswer) -> Vec<(String, f64)> {
 /// a pack's worth of work, whole units.
 pub fn stock_lot(answer: &RateAnswer) -> Vec<(String, f64)> {
     let lots = lots_per_6000(answer);
-    stock_inputs(answer).into_iter().map(|(item, units)| (item, if lots > 0.0 { (units / lots).ceil() } else { units.ceil() })).collect()
+    stock_inputs(answer).into_iter().map(|(item, units)| (item, whole_units(if lots > 0.0 { units / lots } else { units }))).collect()
+}
+
+/// Whole units of a lot: `units` rounded up, a float's dust above a
+/// whole number ignored (1000 / (1000 / 28) is a lot of 28, never 29).
+pub fn whole_units(units: f64) -> f64 {
+    (units - 1e-9).ceil().max(0.0)
 }

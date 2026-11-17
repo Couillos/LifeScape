@@ -1300,3 +1300,61 @@ market) ; un nouveau script « trade ».
 Vérification live : `check-method admin trade:craft/<recette> N` ne teste
 que le craft (le staff ne commerce jamais, règle 13) ; la séquence achat →
 craft → vente se lit sur la flotte après déploiement (page economy).
+
+## 2026-11-17 — Guides : plus aucune ligne bloquée, faisabilité par bot (plan rendements D22, utilisateur)
+
+Contexte : 641 des 1028 lignes money du catalogue étaient « blocked »
+(385 recettes sur stock « held 0 », toute l'alchimie faute d'asks de runes
+de nature, runite_bar, adamantite_bar…) et, à l'inverse, la chaîne
+`smith:rune_axe` paraissait accessible (123 393/6000) alors que son minage
+n'a aucun site à portée de banque (`danger::NEVER`, « combat 255 ») : le
+catalogue (sans niveau) ne jugeait que les quêtes.
+Décision (D22, D21 sans objet) :
+1. Le guide ne bloque plus rien. Chaque ligne garde son économie au prix
+   courant ; un achat au-delà des asks et des boutiques coûte le prix
+   courant d'un objet échangé, jamais moins que la dernière unité
+   parcourue (`guide_engine::walk`) ; un objet que rien ne cote (jamais
+   échangé, aucun ask, aucune boutique) laisse la ligne NON COTÉE
+   (`priced` false : profit/coins 0 et `null` à l'API, classée après les
+   lignes cotées), jamais un prix inventé. Une chaîne n'achète au-delà
+   du carnet que si rien ne farme l'intrant (sinon elle farme, comme
+   avant).
+2. Exigences portées par la ligne (`Prereqs`, liste structurée
+   `guide_feasible::conditions`) : niveaux, combat, site (`NoSite` =
+   aucun site à portée de banque, IMPOSSIBLE aujourd'hui pour tous),
+   quêtes, points de quête, outils (boutique ou non), stock d'un lot
+   (recette sur stock), capital d'un lot, pas d'Ironman, disponibilité de
+   CHAQUE objet acheté (`MarketNeed` : unités/6000, unités par lot, asks,
+   flux récents = unités des derniers fills affichées jamais comptées,
+   boutiques, coté ou non), sources manquantes (`SourceGap` : intrant
+   sans source autonome, rien ne le farme ni ne le cote : impossible
+   aujourd'hui). Même règle pour farm, recipe, chain, market et
+   training autonome/marché.
+3. Une fonction pure unique `guide_feasible::feasible_for(ligne, bot)`
+   (niveaux, combat, quêtes, outils détenus/achetables, stock libre,
+   bourse libre, asks du moment) rend `Feasible` | `AfterPrereqs(liste :
+   niveau, combat, quête, points, outil à acheter/obtenir, pièces d'un
+   lot)` | `Infeasible(raisons)` (site, source, stock < un lot, objet
+   acheté dont détenu + asks + boutiques < un lot, objet non coté non
+   détenu, Ironman sur le marché). Lot = un paquet de 28 objets non
+   empilables que la ligne consomme, sinon la fenêtre.
+   `Feasibility::within_reach` (faisable, ou après un outil ou des pièces
+   seulement) remplace l'ancien drapeau `accessible` chez ses lecteurs.
+4. Usages : prix D17 (`best_profit_in`, `best_profit_outside_chains` :
+   meilleure ligne cotée à portée du bot du filtre) ; offres 100 % market
+   du cerveau (`trade_craft::eligible` → `feasible_for` sur le bot live :
+   niveaux, combat, quêtes, avoirs, bourse libre, asks du cycle du jeu de
+   guides) ; API (`conditions` et `feasibility` de chaque ligne pour le
+   profil `level`, `levels`, `quests`, `held`, `coins`) ; front (colonnes
+   conditions et faisabilité, filtre « faisable maintenant / après
+   prérequis » au lieu de « accessible only »). Règle de choix finale
+   inchangée (R7 à venir) ; brain_plan/brain_train ne lisent pas encore
+   les guides.
+5. Supprimés : `MoneyRow::blocked`/`accessible`, `TrainingRow::blocked`/
+   `accessible`, `Engine::unavailable_reason`, `ChainUnit::missing`
+   (→ `gaps`), clés JSON `blocked`, `accessible`, `prereqs` (→
+   `conditions`) ; aucune vue dérivée de compatibilité (seul lecteur : le
+   front des guides, mis à jour).
+Coût (copie du 2026-11-17, 4 mesures alternées, hôte chargé) : cycle chaud
+3,32-3,76 s CPU (avant 3,30-3,64 s, +3 % dans le bruit) ; résident +10 Mio ;
+JSON des 42 vues 81 Mio (avant 61).

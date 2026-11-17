@@ -518,8 +518,13 @@ ticks), jamais le prix d'une unité appliqué à une fenêtre :
   asks au repos (chaque unité à max(prix courant, ask) pour un objet
   échangé, à l'ask seul sinon) et fenêtre des boutiques F2P parcourus
   ENSEMBLE du moins cher pour le volume (boutique d'abord à prix égal) ;
-  au-delà, intrant introuvable : ligne bloquée (raison, aucun profit),
-  objet échangé compris (médiane 7 sous un ask à 35 : achat à 35). Même
+  au-delà (D22, 2026-11-17 : plus aucune ligne bloquée) le prix courant
+  d'un objet échangé, jamais moins que la dernière unité parcourue (un
+  objet jamais échangé : la dernière unité parcourue ; rien parcouru :
+  NON COTÉ, `priced` false, aucun profit inventé) ; ce que carnet et
+  boutiques tiennent est une CONDITION de la ligne (`MarketNeed`), jugée
+  par chaque bot (`guide_feasible::feasible_for`) ; médiane 7 sous un
+  ask à 35 : achat à 35. Même
   logique de volume que la vente : le prix courant n'est qu'un plancher,
   jamais une profondeur (5 fills de 5 000 unités ne vendent pas une
   unité que personne n'offre ; test
@@ -533,9 +538,9 @@ ticks), jamais le prix d'une unité appliqué à une fenêtre :
   unité toutes les `rate` ticks sous la base, `World.ts`, achetée au
   stock 1) ; chacune à son ouvreur F2P le moins cher, `shop_delta` relu des configs
   (`gamedata/data/shop_haggle.json` : param des `.npc`, défaut de
-  `shopkeeper.param`, argument des `~openshop`) ; au-delà, la ligne est
-  bloquée comme au-delà des asks (raison : « asks hold A, F2P shops S
-  (stock + restock), of V per window ») ;
+  `shopkeeper.param`, argument des `~openshop`) ; au-delà, comme au-delà
+  des asks : prix courant, condition « buy X N/lot: asks A, recent R,
+  shops S » (D22) ;
 - BOUTIQUES À CONDITION (Q7, décision 2026-11-16, achat ET vente
   alignés) : toute boutique F2P qu'un non-membre atteint
   (`gamedata::obtain::shop_reach`) est dans la fenêtre d'achat
@@ -566,12 +571,38 @@ ticks), jamais le prix d'une unité appliqué à une fenêtre :
   book+shop, book+none, none, own ; prix courant si la majorité du
   volume y est, sinon ce que carnet et PNJ en portent) et par ligne
   (`price_confidence` : traded | thin | book/npc).
-Recette sur stock (D5) : prérequis `stock` = un lot de chaque intrant
-(paquet de 28 cases) ; guide général (rien détenu) : ligne bloquée,
-jamais accessible, classée après toutes les autres, jamais lue par D17 ;
+Recette sur stock (D5) : condition `stock` = un lot de chaque intrant
+(paquet de 28 cases) ; guide général (rien détenu) : économie d'une
+fenêtre pleine, infaisable pour le bot sans stock (jamais lue par D17) ;
 pour un bot (`held=objet:qté,...`, R7) : évaluée sur SON stock (part de
-la fenêtre que le stock couvre). Lignes bloquées (`blocked`, raisons)
-toujours après les autres.
+la fenêtre que le stock couvre) et jugée sur lui.
+CONDITIONS ET FAISABILITÉ (D22, 2026-11-17, `planner::guide_feasible`,
+décision datée dans `docs/decisions.md`) : aucune ligne n'est bloquée.
+Chaque ligne porte sa liste structurée d'exigences (`conditions`) —
+niveaux, combat, site (`site` : aucun site à portée de banque,
+`danger::NEVER`, IMPOSSIBLE aujourd'hui pour tous, jamais « combat
+255 »), quêtes, points de quête, outils (`shop` : une boutique F2P le
+vend), stock d'un lot, capital d'un lot, pas d'Ironman, disponibilité de
+chaque objet acheté (`market` : unités/6000, unités par lot, asks, flux
+récents = unités des derniers fills, affichés jamais comptés (D21),
+boutiques, coté ou non), sources manquantes (`source` : impossible
+aujourd'hui). Un lot = un paquet de 28 objets non empilables que la
+ligne consomme, sinon la fenêtre. Un objet que rien ne cote (jamais
+échangé, aucun ask, aucune boutique) laisse la ligne NON COTÉE (`priced`
+false, profit `null` à l'API, classée après les lignes cotées).
+`feasible_for(ligne, bot)` (pure, unique) rend `feasible` |
+`after_prereqs` (niveau, combat, quête, points, outil à acheter ou
+obtenir, pièces d'un lot) | `infeasible` (site, source, stock < un lot,
+détenu + asks + boutiques < un lot d'un objet acheté, objet non coté non
+détenu, Ironman sur le marché). « À portée » (`within_reach`) =
+faisable, ou après un outil ou des pièces seulement : ce que lisent D17
+(meilleure ligne cotée à portée) et les offres du cerveau. Exemple JSON
+d'une condition : `{"kind": "market", "text": "buy naturerune 28/lot:
+asks 0, recent 40, shops 0", "impossible": false, "item": "naturerune",
+"cause": "rune", "per_6000": 1000, "per_lot": 28, "asks": 0, "recent":
+40, "shops": 0, "priced": true}` ; faisabilité : `{"state":
+"infeasible", "within_reach": false, "pending": [], "reasons":
+["naturerune: holds 0, asks 0, shops 0 of 28 per lot"]}`.
 - money making, profit/6000 au prix courant = Σ flux signés × prix,
   pauses comptées dans les ticks ; familles farm, recipe (intrants au
   prix de vente, D5), chain (D16 révisé 2026-11-16 §3 : chaque intrant
@@ -586,16 +617,16 @@ toujours après les autres.
   couvre), market
   (D15 : intrants achetés, aller-retour place de Varrock ↔ atelier et
   attente market mesurée par lot, capital d'un lot, Ironman exclu) ;
-  XP/6000 en bonus ; prérequis (niveaux, combat, quêtes, points de
-  quête, outils, capital) ; confiance (mesuré/estimé, n, âge, dispersion, échec, clé
+  XP/6000 en bonus ; conditions (D22 ci-dessus) ; confiance (mesuré/estimé, n, âge, dispersion, échec, clé
   lue) ;
 - entraînement : skill × tranche × activité × site × outil × mode
   (autonome, D13 « le bot fait tout lui-même » : chaque intrant de
   recette OBTENU par sa source autonome la plus rapide, récursive comme
   une chaîne D16 (`guide_chain::Sourcing::Farm` : aucun achat d'intrant
   en amont), temps compté, XP/6000 = XP de l'action ÷ (ticks de l'action
-  + ticks d'obtention) ; intrant sans source autonome au niveau → ligne
-  autonome bloquée avec la raison, jamais achetée ; consommables de
+  + ticks d'obtention) ; intrant sans source autonome au niveau →
+  condition `source` (impossible aujourd'hui), ligne non cotée, jamais
+  achetée ; consommables de
   méthode (runes, munitions, appât, fil, nourriture ; décision
   2026-11-16 §1) PRODUITS de la même façon quand une activité les fait
   au niveau (sources du guide : jambes de production, drops et
@@ -606,16 +637,16 @@ toujours après les autres.
   test `a_rare_drop_is_farmed_in_autonomous_mode_however_slow`) ; seuls ceux
   qu'aucune activité ne fait restent achetés (péages et pièces jamais
   produits) ; la ligne affiche la voie de chacun (`routes`) ; marché : intrants achetés selon la règle d'achat ci-dessus,
-  volume au-delà des asks + boutique → ligne bloquée ; une méthode qui ne
+  volume au-delà des asks + boutique → prix courant et condition (D22) ; une méthode qui ne
   consomme QUE des consommables (téléports, malédictions, munitions,
   appât : aucun intrant de stock) a aussi sa ligne marché (décision
   2026-11-17) : chaque consommable acheté au volume disponible (asks,
-  boutiques), bloquée au-delà (loi introuvable au volume → raison, aucune
-  XP effective), même règle que les autres lignes marché ; aucune ligne
+  boutiques), au-delà au prix courant, sa disponibilité en condition,
+  même règle que les autres lignes marché ; aucune ligne
   marché quand la ligne autonome achète déjà tous ses consommables
   (aucun n'est produit : ce serait sa copie) ; pièces converties
-  en ticks au profit de la meilleure ligne money making accessible, D17) ;
-  ligne bloquée : aucune XP effective (comme aucun profit en money) ;
+  en ticks au profit de la meilleure ligne money making à portée, D17) ;
+  ligne non cotée : aucune XP effective (comme aucun profit en money) ;
   sources d'une chaîne = jambes de production + activités du catalogue
   dont le prior des guides donne l'objet en sous-produit ou drop (gemmes
   brutes : 1 jet de minage sur 256, `mining_gem_table` de `mining.rs2`,
@@ -626,7 +657,11 @@ toujours après les autres.
   XP forfaitaire sur la durée mesurée des runs `quest:<clé>`) ;
 - sans `level`, chaque méthode est lue à son propre seuil (vue
   catalogue) ; avec, un bot à ce niveau dans tous les skills, ses
-  quêtes faites (`quests`) ; une ligne non accessible reste listée ;
+  quêtes faites (`quests`) ; toute ligne reste listée, jugée pour le
+  profil de la requête (`level`, `levels=skill:n,...`, `quests`,
+  `held`, `coins` : clé `feasibility` de chaque ligne ; front : colonnes
+  conditions et faisabilité, filtre « faisable maintenant / après
+  prérequis ») ;
 - MAGASIN PRÉCALCULÉ (2026-11-17, `orchestrator::guides_store`) : aucune
   requête ne construit un guide. Le thread `guides` du daemon construit
   toutes les `REFRESH_PERIOD` (300 s) un jeu complet dans UN moteur
@@ -639,9 +674,9 @@ toujours après les autres.
   `cycle_ms`, `cycle_cpu_ms`, `refresh_s`). Filtres appliqués en LISANT la
   vue (`planner::guide_read`), jamais en reconstruisant : `skill`,
   `family` (lignes retirées, ordre gardé) ; `level` = vue de sa tranche,
-  activités au-dessus du niveau retirées, accessibilité et ticks de fin
+  activités au-dessus du niveau retirées, faisabilité et ticks de fin
   de tranche à ce niveau, rendements du dernier niveau de la tranche
-  (exact à 5, 10, …, 99) ; `quests` = accessibilité, raccourcis de quête
+  (exact à 5, 10, …, 99) ; `quests` = faisabilité, raccourcis de quête
   faits retirés, D17 du training relu dans la vue money avec ces quêtes ;
   une ligne chain garde les choix farmer/acheter du bot sans quête ;
   `held` = les seules lignes recette de la vue réévaluées sur ce stock
@@ -659,7 +694,9 @@ toujours après les autres.
 
 Le guide money dit QUOI faire, `trade:craft/<recette>` le fait
 (`docs/planner.md` § « Exécution 100 % market ») : pour une ligne market
-non bloquée et rentable, le bot achète tous les intrants au marché (jambes
+cotée, rentable et à portée du bot (D22 : `feasible_for` sur ses niveaux,
+combat, quêtes, avoirs, bourse libre et les asks du cycle — un intrant
+qu'il détient compte), le bot achète tous les intrants au marché (jambes
 `market:buy` existantes, au prix et au volume des asks du cycle, lot borné
 par sa bourse libre, la profondeur du carnet et le volume d'une fenêtre de
 la ligne), crafte avec le script de la recette, vend le produit par la
