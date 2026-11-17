@@ -318,6 +318,18 @@ de plusieurs unités). Déjà bornés avant : forge (`press::make_press`),
 fonte (`load_sets`), sorts (`spell_load::casts_left`), tannage, achat en
 dialogue.
 
+`--use <objet> N` (répétable, `kit/stock_use.rs`, 2026-11-17, suite R7) :
+lot d'un nœud argent sur le stock PROPRE du bot (cuire sa pêche, fondre
+ses minerais…). Le but compte l'INTRANT consommé (sac + banque connue
+sous son niveau au départ), jamais le produit : brûlés, fers ratés,
+pots fêlés comptent. Deux fins, toutes deux `goal_reached` (exit 0) :
+`use_met` (un objet a baissé de N, `poll_stop` entre deux charges) et
+`stock_spent` (un pas finit `Blocked` alors qu'un objet du lot est épuisé
+après en avoir consommé au moins un : `cycle::run`, `spell_load::
+run_casts` ; la poterie nomme `clay` quand son argile molle est finie, le
+lot est fini quand même). Bloqué avant toute consommation : le blocage
+reste. Tannage (`run_tanning`) : borné par le lot comme par `--want`.
+
 Étages (2026-11-14, 4-5 bots bloqués au sommet du moulin de Lumbridge
 (3165,3306,2)) : aucune banque F2P n'est à l'étage en rév. 274, donc
 `nearest_bank`/`nearest_bank_at` (`gamedata::banks::nearest_free_bank`)

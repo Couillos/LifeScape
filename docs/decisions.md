@@ -1585,3 +1585,65 @@ Test : `guide_feasible::tests::a_band_row_asks_the_activity_gate_not_the_band_en
 (échouait : attack 75 demandé à 72). Reste après correction : un outil de
 palier non détenu (arme de mêlée de la bande, hache, pioche) classe la
 ligne en 2 (outil à obtenir), comme avant.
+
+## 2026-11-17 — Suite R7 : recettes sur stock en argent, lecture mesurée des bids et de `reach_combat`, rapide ↔ économe hors argent
+
+Décisions prises (coordinateur, suites de R7), sans live :
+1. Recettes sur le stock propre AUTRES que l'alchimie = méthodes d'argent
+   (question ouverte de R7 close). Un bot qui détient du stock (poisson
+   cru, minerai, barres, laine, peaux, gemmes brutes, argile molle,
+   essence…) peut tirer « transformer son stock et vendre », par le même
+   tirage R7 (`money_pick`). `brain_money` : toute ligne `recipe` dont le
+   script se lance en lot (`stock_lot::stock_inputs` + `map_method`)
+   est réévaluée sur le stock libre (seulement si le bot détient chaque
+   intrant), mappée vers sa méthode ; lot = actions que le stock libre
+   couvre (`stock_lot::lot_of`, intrant le plus rare) → `GuideLine::lot`
+   → `node.batch` → `--use <intrant> N` (`mapping`, nœuds argent seuls ;
+   un lot trade garde `--want`). Les candidats du nœud argent lui-même
+   ne réservent plus son stock contre lui (`brain_alch::kept_except`,
+   `brain_sales::working_keep_except`) ; les autres nœuds, si.
+   Arrêt vérifié famille par famille AVANT branchement : les scripts de
+   transformation finissaient `Blocked{intrant}` à sec (cuisson, fonte,
+   forge, filage, couture, poterie (`clay`), taille, bijoux, enfilage,
+   runes, remplissage, teinture, traite, repas, pain) ; superheat et
+   enchantement finissaient `ok` à sec seulement sans but ; le tannage
+   ignorait tout lot. Correction universelle côté kit
+   (`scripts::kit::stock_use`) : `--use <objet> N` est un objectif ; fin
+   `goal_reached` à N consommés (l'intrant compte, brûlés compris) ou
+   quand un pas bloque alors qu'un objet du lot est épuisé après en avoir
+   consommé (`cycle::run`, `spell_load::run_casts`) ; tannage borné par le
+   lot. Bloqué sans rien consommer : le blocage reste. Alchimie,
+   téléports, bananes, malédictions gardent leur compte de lancers
+   (`CAST_COUNTED`), lot 0 en argent comme avant.
+   Tests : `stock_lot::tests::*` (200 truites crues → lot 200, bronze
+   borné par l'étain), `brain_money::tests::a_recipe_on_its_own_stock_is_a_
+   money_line_with_its_lot`, `money_pick::tests::a_recipe_on_its_stock_
+   runs_its_lot` (`--use raw_trout 200`, ni `--want` ni `--level`),
+   `kit::stock_use::tests::*` (fin `goal_reached` à épuisement, blocage
+   sans stock gardé, poterie).
+2. Lecture MESURÉE pour la réponse aux bids et `reach_combat`, même
+   lecteur que R7 (`brain_plan_read::measured_rate`) :
+   `bid_response::Producer::rate`, mémoïsé une fois par (méthode, niveau)
+   et par passe (`brain_bids::with_bot_state`) : l'entraînement d'un lot
+   (`training_rows`) se dimensionne par `sizing::tranche_*_with`. Les
+   unités/6000 d'une jambe lisaient déjà l'estimateur (n ≥ 3 mélangé au
+   prior, à l'outil du bot) : gardé. `market_fit::coin_rate` lit les
+   profits publiés du snapshot (mesurés) ; `own_use_items` ne lit que des
+   noms : prior gardé (la mesure ne change pas l'ensemble des intrants).
+   `reach_combat` : tire son combat du guide d'entraînement
+   (`brain_train::fill_ctx`, `combat_climb_skill` : compétence du style,
+   mêlée la plus basse d'attaque/force/défense, tranche de 5 niveaux),
+   verrouillé par `expand::lock_training_pick` ; sans choix, la méthode
+   statique (poulets). Tests : `bid_response::tests::a_bids_training_
+   reads_the_measured_yields`, `expand::tests::a_combat_level_climb_
+   locks_the_guides_pick`, `brain_train::tests::a_combat_level_climbs_
+   its_styles_lowest_skill`.
+3. Le trait rapide ↔ économe (`thrift`) ne pèse PAS sur l'argent : pas
+   tant que la mesure live ne montre pas de manque. Rien à coder :
+   `merit_money` = profit × affinité marché (ligne market) seule.
+Rejeté : `--want <produit> N` pour un lot sur stock (un brûlé ou un fer
+raté ne l'atteint jamais : le run finirait bloqué) ; réservation du stock
+par les candidats du nœud qui le juge.
+Limites : `--use` est relu entre deux charges (une charge commencée finit,
+comme un sac plein) ; une unité gardée par un autre nœud peut être
+entamée par la dernière charge.

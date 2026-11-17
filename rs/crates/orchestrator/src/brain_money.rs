@@ -100,7 +100,7 @@ pub fn bot_rows<'a>(set: &'a GuideSet, level_of: &dyn Fn(&str) -> u8, stock: &[(
         let replaced = if stock.is_empty() {
             Default::default()
         } else {
-            set.recipes_on_stock(view, stock, &|row| stock_recipe(row) && holds_stock(row, stock) && keeps(row)).unwrap_or_else(|error| {
+            set.recipes_on_stock(view, stock, &|row| row.family == Family::Recipe && holds_stock(row, stock) && stock_recipe(row) && keeps(row)).unwrap_or_else(|error| {
                 out.errors.push(error);
                 Default::default()
             })

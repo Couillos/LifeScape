@@ -194,13 +194,55 @@ décision datée dans `docs/decisions.md`.
   sticky`).
 - Argent : `orchestrator::brain_money::publish` lit les lignes de la vue
   de chaque niveau du bot (compétence de bande de l'activité), recettes
-  `alch:` réévaluées sur SON stock (`GuideFilter::held`, moins ce qu'il
-  garde), mappe chaque ligne vers la méthode lancée (farm : sa méthode si
-  un nœud argent la lance ; market : `trade:craft/<recette>` quand le
-  bot a l'offre ; recette : `alch:` ; chaîne : jamais), cotée et
-  rentable, une par méthode → `ReadyCtx::money_guide` ;
-  `planner::money_pick::resolve_from_guide` tire. Aucun guide ou aucune
-  ligne tirable : classement statique d'avant R7, loggé.
+  réévaluées sur SON stock (`GuideFilter::held`, moins ce qu'il garde, ses
+  propres candidats exceptés : `brain_alch::kept_except`), seulement celles
+  dont il détient chaque intrant ; mappe chaque ligne vers la méthode
+  lancée (farm : sa méthode si un nœud argent la lance ; market :
+  `trade:craft/<recette>` quand le bot a l'offre ; recette sur stock :
+  `alch:` et TOUTE transformation que son script lance en lot, suite R7
+  2026-11-17 ; chaîne : jamais), cotée et rentable, une par méthode →
+  `ReadyCtx::money_guide` ; `planner::money_pick::resolve_from_guide`
+  tire. Aucun guide ou aucune ligne tirable : classement statique d'avant
+  R7, loggé.
+- Recette sur stock (suite R7) : `planner::stock_lot` (pur) :
+  `stock_inputs` (intrants de stock d'une action : recette, sort ou
+  service sur un objet, jamais une rune, une récolte ni un combat ;
+  `None` pour un sort compté en lancers : alchimie, téléports, bananes,
+  malédictions, et pour un lot trade), `lot_of` (actions que le stock
+  libre couvre, l'intrant le plus rare décide : 200 truites crues → 200,
+  200 cuivre + 50 étain → 50), `uses` (les buts `--use` d'un lot).
+  `GuideLine::lot` → `node.batch` au tirage ; `mapping` ajoute
+  `--use <intrant> N` à un nœud argent (jamais à un lot trade, qui porte
+  `--want`) ; le script finit `goal_reached` à N consommés (brûlés et fers
+  ratés compris : l'intrant compte) ou quand un pas bloque alors qu'un
+  intrant du lot est épuisé (`scripts::kit::stock_use`, `cycle::run`,
+  `spell_load::run_casts`, tannage borné par le lot) ; bloqué avant toute
+  consommation : le blocage reste (aucun stock, le jugement du cerveau
+  était faux). Familles : cuisson, repas, pain, fonte, forge, filage,
+  tannage, couture, poterie, taille, bijoux, enfilage, runes, remplissage,
+  teinture, traite, superheat, enchantement.
+- `reach_combat` (suite R7) : le combat se tire du guide d'entraînement
+  comme une montée (`brain_train::fill_ctx`) : compétence du style
+  (distance, magie), mêlée la plus basse d'attaque, force, défense
+  (`combat_climb_skill`, attaque à égalité), tranche de
+  `COMBAT_TRANCHE_LEVELS` (5) niveaux pour ses consommables ;
+  `expand::lock_training_pick` verrouille aussi un `reach_combat` ; sans
+  choix : la méthode statique (`combat::training_method`).
+- Réponse aux bids (suite R7) : `bid_response::Producer::rate` = lecteur
+  mesuré du planificateur (`brain_plan_read::measured_rate`, mémoïsé pour
+  la passe dans `brain_bids::with_bot_state`) : l'entraînement d'un lot
+  (`training_rows` : actions, intrants brûlés) via `sizing::*_with` ; les
+  unités/6000 d'une jambe lisent déjà l'estimateur (`rates_read`, n ≥ 3
+  mélangé au prior, outil du bot). `market_fit::coin_rate` lit les
+  profits publiés du snapshot (mesurés) ; `own_use_items` ne lit que des
+  NOMS d'intrants (la mesure change les quantités, pas l'ensemble) : prior
+  gardé.
+- Trait rapide ↔ économe : ne pèse PAS sur l'argent (décision utilisateur
+  2026-11-17, pas tant que la mesure live ne montre pas de manque) ;
+  seulement sur l'entraînement (`train_score`).
+- Niveau d'une ligne de bande : la condition de sa compétence est la
+  PORTE de l'activité (`guide_prereq::prereqs_of`), jamais le dernier
+  niveau de la bande (correctif live 2026-11-17).
 - Entraînement : `brain_train::fill_ctx` pour TOUTE montée (plus
   seulement `priced_at_resolve`) ; une ligne de mêlée seulement dans le
   style de la compétence de la montée (PV : toutes) ; lignes `stock` du

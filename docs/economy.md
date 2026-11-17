@@ -616,7 +616,14 @@ Recette sur stock (D5) : condition `stock` = un lot de chaque intrant
 (paquet de 28 cases) ; guide général (rien détenu) : économie d'une
 fenêtre pleine, infaisable pour le bot sans stock (jamais lue par D17) ;
 pour un bot (`held=objet:qté,...`, R7) : évaluée sur SON stock (part de
-la fenêtre que le stock couvre) et jugée sur lui.
+la fenêtre que le stock couvre) et jugée sur lui. Un nœud argent lance
+TOUTE recette sur son stock (suite R7, 2026-11-17 : cuire sa pêche,
+fondre ses minerais, forger ses barres, filer sa laine, tanner et coudre
+ses peaux, tailler ses gemmes, cuire ses poteries, ses runes…, plus
+seulement l'alchimie) : lot = actions que son stock libre couvre
+(`planner::stock_lot`, l'intrant le plus rare décide), lancé avec
+`--use <intrant> N` (fin `goal_reached` à N consommés ou au stock épuisé,
+`scripts::kit::stock_use`) ; produits vendus par la vente par défaut.
 CONDITIONS ET FAISABILITÉ (D22, 2026-11-17, `planner::guide_feasible`,
 décision datée dans `docs/decisions.md`) : aucune ligne n'est bloquée.
 Chaque ligne porte sa liste structurée d'exigences (`conditions`) —
@@ -736,7 +743,12 @@ asks 0, recent 40, shops 0", "impossible": false, "item": "naturerune",
   lus sont ceux du cycle. Un profil donné à l'API (`level`, `levels`,
   `quests`, `held`, `coins`) trie les lignes faisables d'abord (D22 Q1),
   le front aussi ; avec `held`, le guide d'entraînement ajoute les lignes
-  `stock` (recettes sur le stock du lecteur, R7 (a)).
+  `stock` (recettes sur le stock du lecteur, R7 (a)). Une ligne de bande
+  demande la PORTE de l'activité dans sa compétence, jamais le dernier
+  niveau de la bande (constat live 2026-11-17 : « attack 72->80: no
+  attack line within reach »). Le trait rapide ↔ économe ne pèse PAS
+  sur l'argent (décision 2026-11-17 : pas tant que la mesure live ne
+  montre pas de manque) : `merit_money` = profit × affinité marché seule.
 
 ### Exécution 100 % market (R5, 2026-11-17)
 
