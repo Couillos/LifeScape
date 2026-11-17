@@ -46,3 +46,32 @@ fn only_a_running_obtain_holds_the_kit_back() {
     assert!(!obtain_in_flight(&life_with_obtain(NodeStatus::Ready), "hammer"));
     assert!(!obtain_in_flight(&life_with_obtain(NodeStatus::Active), "tinderbox"));
 }
+
+/// User 2026-11-17 (jim_ellis): the pass's view routes each family's
+/// planned work to its tool (yews to the axe, nothing to the pickaxe)
+/// and reads every tier's offer: with mithril on the book and no rune
+/// seller, the step targets the mithril axe, funded by a money step.
+#[test]
+fn the_view_targets_the_best_axe_on_offer() {
+    use super::KitView;
+    use lifescape_planner::tool_upgrade::{cheapest, PlannedWork, ToolSource};
+    let mut offers = std::collections::HashMap::new();
+    for tier in ["bronze_axe", "iron_axe", "steel_axe", "mithril_axe", "adamant_axe", "rune_axe", "black_axe"] {
+        let ask = match tier {
+            "mithril_axe" => Some(312),
+            "steel_axe" => Some(120),
+            _ => None,
+        };
+        offers.insert(tier.to_string(), cheapest(lifescape_planner::tool_kit::kit_price(tier), ask, None));
+    }
+    let view = KitView {
+        offers,
+        axe_work: vec![PlannedWork { method: "farm:yew_logs".to_string(), level: 86, units: 4291.0 }],
+        pickaxe_work: Vec::new(),
+        coin_rate: 0.1,
+    };
+    let owned: Vec<String> = ["hammer", "tinderbox", "iron_pickaxe", "bronze_axe", "iron_axe"].iter().map(|name| name.to_string()).collect();
+    let purchases = view.purchases(&[("woodcutting", 86), ("mining", 1)], &owned, 24);
+    assert_eq!(purchases.len(), 1, "{purchases:?}");
+    assert_eq!((purchases[0].item.as_str(), purchases[0].source.clone(), purchases[0].financed), ("mithril_axe", ToolSource::Ask, true));
+}

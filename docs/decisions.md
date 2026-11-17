@@ -1142,3 +1142,41 @@ ligne bloquée sans loi au volume, pas de copie).
 Rejeté : « 5 fills = prix valable pour tout volume » ; fenêtre en temps
 pour « récemment » (la médiane n'en a pas) ; ligne marché identique à
 l'autonome.
+
+## 2026-11-17 — Meilleur outil disponible, financé quand il paie (utilisateur)
+
+Constat live : jim_ellis (allumeur, bûcheronnage 86, forge 1, 24 pièces)
+coupait des ifs depuis des jours à la hache de bronze puis de fer : la
+trousse n'achetait qu'en boutique (≤ acier, 25 % du portefeuille) et la
+liste d'envies visait la hache RUNE (`best_tool`, palier absolu) que
+personne ne forge, alors que des haches mithril reposaient au carnet
+(312) et que Bob vend l'acier. Décisions :
+1. Cible = meilleur palier OBTENABLE MAINTENANT et utilisable au niveau
+   (`tool_upgrade::ToolOffer` : boutique Q7 `kit_price`, meilleur ask du
+   carnet pour 1 unité, Iron exclu ; à défaut de vendeur, production
+   propre si le niveau ouvre une recette, intrants au prix courant, sa
+   jambe ajoutée au pas), palier par palier. Le bid
+   patient sur les paliers introuvables reste tel quel (Q8) ; la liste
+   d'envies ne double plus un objet qu'un pas obtient déjà.
+2. Financement : gain = Σ unités de travail planifiées (nœuds ouverts :
+   obtention dont la méthode verrouillée utilise l'outil, reste =
+   count − progress ; montée bûcheronnage/minage, XP restante / XP de
+   l'unité de tranche) × (ticks par unité avec l'outil qui travaille −
+   avec le candidat), ticks par unité = 6000 / produit du prior
+   (`method_rate::method_prior`). Coût = prix / pièces par tick du bot
+   (`OwnCosts::coins_per_tick`, plancher 0,1). Gain > coût : achat
+   immédiat si le portefeuille libre a le prix, sinon pas `financed` :
+   l'obtention du pas d'outil dépense le portefeuille libre entier
+   (`tool_kit::step_coin_share`, plus la moitié du plan d'équipement),
+   bloque sur `missing:coins:<prix>`, un `have_coins` du prix le précède
+   (méthodes d'argent du cerveau, ventes de surplus toujours actives),
+   puis achète. Gain ≤ coût : aucun financement (le quart du
+   portefeuille reste la règle d'achat sans gain). Un pas d'outil qui
+   attend ses pièces et que la règle ne nomme plus (vendeur parti, gain
+   tombé) est retiré avec son pas d'argent (`waiting_kit_step`).
+Cas jim : mithril (ask 312) économise ~123 000 ticks sur 4 291 ifs
+contre 3 120 ticks de pièces : pas d'argent de 312, puis achat.
+Pioche idem (Nurmof) : 2 000 charbons au niveau 41 financent l'adamant,
+jamais la rune à 32 000.
+Rejeté : palier absolu ; financer un outil qui ne paie pas ; viser deux
+fois le prix (part de 50 % du plan d'équipement).

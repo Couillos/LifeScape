@@ -62,6 +62,7 @@ pub mod skeleton_deps;
 pub mod sizing;
 pub mod space;
 pub mod tool_kit;
+pub mod tool_upgrade;
 pub mod tools;
 pub mod training;
 pub mod training_production;

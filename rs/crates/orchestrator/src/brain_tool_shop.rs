@@ -16,6 +16,15 @@
 //! node, never blocking it. History: 2026-11-14 the pass bought only
 //! pickaxe upgrades for bots whose work needed the family.
 //!
+//! Since 2026-11-17 (user, live jim_ellis): every tier's offer is read
+//! (`KitView`: shop, best ask unless Iron, own make), the planned work of
+//! each family and the bot's coin rate (`OwnCosts`); the rule
+//! (`tool_kit::kit_purchases_in`) targets the best tier on offer and
+//! funds an upgrade that pays for itself (`financed`: the step's obtain
+//! blocks on its price, a `have_coins` node earns it). A kit step still
+//! waiting for its coins that the rule no longer names is withdrawn
+//! (`withdraw_unfunded`).
+//!
 //! Loops: one gear step at a time (`gear_ladder::step_open`); a dead
 //! step cools its piece down (`WITHDRAWN_RETRY_SECS`, `withdraw_dead`);
 //! its failure never bans a skill (`brain_succession`: gear subtree); a
@@ -30,6 +39,8 @@ use std::sync::{Mutex, OnceLock};
 
 use lifescape_json::Value;
 use lifescape_planner::gear_ladder;
+use lifescape_planner::tool_kit::{KitMarket, KitPurchase};
+use lifescape_planner::tool_upgrade::{PlannedWork, ToolOffer, ToolSource};
 use lifescape_planner::{Life, NodeKind, NodeStatus};
 
 use crate::jobs::Job;
@@ -80,6 +91,91 @@ fn cancel_merchant_tool_bids(job: &Job, life: &Life) {
     }
 }
 
+/// Best ask of one unit of `item` on the book (`None`: no seller).
+fn best_ask(service: &crate::market_service::MarketService, item: &str) -> Option<i64> {
+    let id = crate::brain_gear::obj_id(item)?;
+    service.lock_engine().books.get(&id).and_then(|book| book.best().1)
+}
+
+/// Market price of an input the bot would make a tool from (`None`: a
+/// guess, never a priced make).
+fn input_price(store: &lifescape_store::Store, item: &str) -> Option<i64> {
+    let (price, guessed) = crate::rates_price::price_estimate(store, &crate::brain_reserve::display_of(item));
+    (!guessed).then_some(price.max(1.0).round() as i64)
+}
+
+/// Everything the kit rule reads this pass besides levels and holdings
+/// (`tool_kit::KitMarket`): every tier's offer (shop, best ask unless
+/// Iron, own make), the planned work of each family, the bot's rate.
+struct KitView {
+    offers: HashMap<String, Option<ToolOffer>>,
+    axe_work: Vec<PlannedWork>,
+    pickaxe_work: Vec<PlannedWork>,
+    coin_rate: f64,
+}
+
+impl KitView {
+    fn read(job: &Job, life: &Life, levels: &[(&str, i64)]) -> KitView {
+        let level_of = |skill: &str| levels.iter().find(|(name, _)| *name == skill).map(|(_, level)| *level).unwrap_or(1);
+        let level_u8 = |skill: &str| u8::try_from(level_of(skill).clamp(1, 99)).unwrap_or(1);
+        let service = crate::market_service::shared();
+        let mut offers = HashMap::new();
+        let mut tiers: Vec<String> = lifescape_planner::tool_kit::KIT_SINGLES.iter().map(|single| single.to_string()).collect();
+        for (_, canonical) in lifescape_planner::tool_kit::KIT_FAMILIES {
+            tiers.extend(lifescape_planner::tools::tool_family(canonical));
+        }
+        for tier in tiers {
+            let ask = service.as_ref().filter(|_| !life.profile.ironman).and_then(|service| best_ask(service, &tier));
+            let make = service.as_ref().and_then(|service| {
+                let store = service.lock_store();
+                lifescape_planner::tool_upgrade::own_make(&tier, &level_of, &|input| input_price(&store, input))
+            });
+            let offer = lifescape_planner::tool_upgrade::cheapest(lifescape_planner::tool_kit::kit_price(&tier), ask, make);
+            offers.insert(tier, offer);
+        }
+        let coin_rate = service
+            .as_ref()
+            .map(|service| crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account).coins_per_tick)
+            .unwrap_or(lifescape_planner::market_fit::MIN_COIN_RATE);
+        KitView {
+            offers,
+            axe_work: lifescape_planner::tool_upgrade::planned_work(life, "bronze_axe", &level_u8),
+            pickaxe_work: lifescape_planner::tool_upgrade::planned_work(life, "bronze_pickaxe", &level_u8),
+            coin_rate,
+        }
+    }
+
+    fn purchases(&self, levels: &[(&str, i64)], owned: &[String], coins: i64) -> Vec<KitPurchase> {
+        let offer = |item: &str| self.offers.get(item).cloned().flatten();
+        let saved = |from: &str, to: &str| {
+            let work = if to.ends_with("_pickaxe") { &self.pickaxe_work } else { &self.axe_work };
+            lifescape_planner::tool_upgrade::ticks_saved(work, from, to)
+        };
+        lifescape_planner::tool_kit::kit_purchases_in(levels, owned, coins, &KitMarket { offer: &offer, saved: &saved, coin_rate: self.coin_rate })
+    }
+}
+
+/// A kit step still waiting for its coins whose tool the rule no longer
+/// names (its seller left, it no longer pays) leaves the graph with its
+/// money step (user 2026-11-17: never funded for nothing). Returns true
+/// when the life changed.
+fn withdraw_unfunded(job: &Job, life: &mut Life, purchases: &[KitPurchase]) -> bool {
+    let Some((index, item)) = lifescape_planner::tool_kit::waiting_kit_step(life) else { return false };
+    if purchases.iter().any(|purchase| purchase.item == item) {
+        return false;
+    }
+    let removed = lifescape_planner::withdraw_gear_step(life, index);
+    if removed.is_empty() {
+        return false;
+    }
+    crate::logln!("brain {}: kit step {item} withdrawn ({}): no longer on offer or no longer paying", job.account, removed.join(", "));
+    for id in &removed {
+        crate::brain::push_history(life, id, "gear_withdrawn");
+    }
+    lifescape_planner::normalize(life);
+    true
+}
+
 /// One kit pass. Returns true when the life changed (save it).
 pub(crate) fn tool_shop_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
     let now = wall_now();
@@ -94,7 +190,7 @@ pub(crate) fn tool_shop_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
         cancel_merchant_tool_bids(job, life);
     }
     // A bank not streamed yet hides banked tools: never buy a second one.
-    if gear_ladder::step_open(life) || live.get("bank_streamed").as_bool() != Some(true) {
+    if live.get("bank_streamed").as_bool() != Some(true) {
         return false;
     }
     let levels_owned = crate::brain_tools::live_levels(live);
@@ -102,18 +198,39 @@ pub(crate) fn tool_shop_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
         return false;
     }
     let levels = crate::brain_tools::level_refs(&levels_owned);
+    let waiting = lifescape_planner::tool_kit::waiting_kit_step(life).is_some();
+    if gear_ladder::step_open(life) && !waiting {
+        return false;
+    }
     let (owned, _) = crate::brain_gear::holdings(job);
     let coins = crate::brain_gear::free_coins(job, None);
-    let purchases = lifescape_planner::tool_kit::kit_purchases(&levels, &owned, coins);
+    let view = KitView::read(job, life, &levels);
+    let purchases = view.purchases(&levels, &owned, coins);
+    if gear_ladder::step_open(life) {
+        return withdraw_unfunded(job, life, &purchases);
+    }
     let Some(purchase) = purchases
         .into_iter()
         .find(|purchase| !obtain_in_flight(life, &purchase.item) && !crate::brain_gear::recently_withdrawn(&job.account, &purchase.item, now))
     else {
         return false;
     };
-    let kind = if purchase.base { "missing kit tool" } else { "kit upgrade" };
-    let why = format!("{kind}, shop price {}, free wallet {coins}", purchase.price);
-    crate::brain_gear::file_step(job, life, Some(&purchase.item), crate::brain_gear::goal_style(life), &why);
+    let kind = match (purchase.base, purchase.financed) {
+        (true, _) => "missing kit tool",
+        (false, false) => "kit upgrade",
+        (false, true) => "kit upgrade, funded by a money step",
+    };
+    let why = format!(
+        "{kind}, {:?} price {}, free wallet {coins}, saves {} ticks of planned work at {:.2} coins/tick",
+        purchase.source, purchase.price, purchase.saved_ticks, view.coin_rate
+    );
+    let ids = crate::brain_gear::file_step(job, life, Some(&purchase.item), crate::brain_gear::goal_style(life), &why);
+    // Own make: the step's obtain lists the bot's production leg too.
+    if let (ToolSource::Make(method), Some(obtain)) = (&purchase.source, ids.first()) {
+        if let Some(node) = life.nodes.iter_mut().find(|node| &node.id == obtain) {
+            node.alternatives.push(lifescape_planner::Alternative { method: method.clone(), est_ticks: 0, est_coins: 0 });
+        }
+    }
     true
 }
 

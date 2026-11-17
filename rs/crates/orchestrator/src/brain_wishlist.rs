@@ -186,7 +186,14 @@ pub fn maybe_bid_wishes(job: &Job, life: &Life) -> usize {
     }
     let Some(service) = crate::market_service::shared() else { return 0 };
     let wishes = wishlist(job, life);
-    let top: Vec<Wish> = wishes.into_iter().filter(|wish| biddable(&wish.item, crate::brain_sales::tradeable)).take(WISH_BIDS).collect();
+    // A tier the kit already obtains through a step (on offer, funded:
+    // `brain_tool_shop`, 2026-11-17) is the step's: never a second bid.
+    let stepping = wanted_names(life);
+    let top: Vec<Wish> = wishes
+        .into_iter()
+        .filter(|wish| biddable(&wish.item, crate::brain_sales::tradeable) && !stepping.contains(&wish.item))
+        .take(WISH_BIDS)
+        .collect();
     let gear_wishes = top.iter().filter(|wish| !is_tool_wish(wish)).count();
     let mut placed = 0;
     for wish in &top {

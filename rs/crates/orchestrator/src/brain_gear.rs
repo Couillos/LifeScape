@@ -282,13 +282,16 @@ fn withdraw_dead_steps_logged(job: &Job, life: &mut Life) -> bool {
     true
 }
 
-pub(crate) fn file_step(job: &Job, life: &mut Life, item: Option<&str>, style: Style, why: &str) {
+/// Files a gear step (`insert_gear_step`); returns its ids (the obtain
+/// first when `item` is named).
+pub(crate) fn file_step(job: &Job, life: &mut Life, item: Option<&str>, style: Style, why: &str) -> Vec<String> {
     let ids = lifescape_planner::insert_gear_step(life, item, style_name(style));
     crate::logln!("brain {}: gear step {} ({why}): {}", job.account, item.unwrap_or("equip"), ids.join(", "));
     for id in &ids {
         push_history(life, id, "gear_step");
     }
     lifescape_planner::normalize(life);
+    ids
 }
 
 fn style_name(style: Style) -> &'static str {

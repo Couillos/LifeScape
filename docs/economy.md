@@ -1221,6 +1221,15 @@ La Dwarven Mine est un étage de boutiques routé
 (`access::shop_floor_routed`, trappe de Falador) : la cueillette et les
 fermes de drop y restent refusées.
 
+Depuis le 2026-11-17 (décision utilisateur, cas jim_ellis, decisions.md) :
+la cible d'une famille est le meilleur palier OBTENABLE MAINTENANT
+(boutique, meilleur ask du carnet, production propre au niveau ;
+`planner::tool_upgrade`), jamais le palier absolu ; au-dessus du quart du
+portefeuille, l'outil s'achète quand les ticks qu'il économise sur le
+travail planifié dépassent son prix en ticks du bot, financé par un pas
+`have_coins` du prix si les pièces manquent (`tool_kit::kit_purchases_in`,
+`brain_tool_shop`). Le bid patient sur les paliers introuvables reste (Q8).
+
 ## Producteurs : entraînement pour une offre (2026-11-14)
 
 Constat live : personne ne forgeait de cimeterre à 2 812 pièces parce
