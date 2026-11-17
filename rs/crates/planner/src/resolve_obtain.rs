@@ -25,8 +25,9 @@
 //!    the Duke's air talisman).
 //!
 //! Coin and money nodes pick the most profitable money method the bot
-//! can work at its levels (published rates, market prices), not the
-//! fastest one.
+//! can work NOW at its levels (published rates, market prices; a hunt
+//! that needs food it does not hold comes after, `food_gate`), not the
+//! fastest one; coin drops only break ties for a coin target.
 
 use crate::cost::{cost_farm, cost_market_buy};
 use crate::expand::ReadyCtx;
@@ -193,7 +194,14 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     let budget = market_coins(ctx);
     let ask_covered = market_ok && ctx.best_ask.is_some_and(|ask| ask * need <= budget);
     let ask_partial = market_ok && ctx.best_ask.is_some_and(|ask| ask <= budget);
-    let producible = workable.iter().min_by_key(|alt| alt.est_ticks).cloned();
+    // A production the bot works now (food in hand where its hunt
+    // bites) before one whose prerequisite is still to obtain.
+    let producible = workable
+        .iter()
+        .filter(|alt| crate::food_gate::ready_now(&alt.method, ctx))
+        .min_by_key(|alt| alt.est_ticks)
+        .or_else(|| workable.iter().min_by_key(|alt| alt.est_ticks))
+        .cloned();
     // A light quest that unlocks a way (essence behind Rune Mysteries) or
     // hands the object over (the Duke's air talisman) comes before a
     // resting bid: without the quest nobody fills it (live 2026-11-14:
@@ -381,6 +389,9 @@ pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
             methods.push(alt.method.clone());
         }
     }
+    // A method a dependency cycle went through never comes back
+    // (`lifecycle_cycle`: its prerequisite needs the coins it earns).
+    methods.retain(|method| !node.excluded.contains(method));
     let ranked: Vec<Alternative> = methods
         .iter()
         .map(|method| {
@@ -391,17 +402,30 @@ pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
             Alternative { method: method.clone(), est_ticks: est, est_coins: 0 }
         })
         .collect();
-    // A coin target is met by coins in the wallet: goods only turn into
-    // coins when a buyer shows up, a coin drop is coins at once. Coin
-    // spots lead (most coins per kill first); the site pick falls back
-    // down the list when the bot's combat level cannot work them yet.
+    // Order (user 2026-11-17, jim_ellis: a 10-HP bot sent to hunt men for
+    // coins, food required, none owned, none affordable): a method the
+    // bot works NOW first (`food_gate::ready_now`: tools held, food in
+    // hand where the spot bites), then a feasible one whose prerequisite
+    // is still to obtain, then the rest; within a class the published
+    // profit (saturated rates). A coin target breaks ties by coin drops
+    // (a coin drop is coins at once, goods wait for a buyer): unmeasured
+    // methods still send a coin target to men first.
     let coin_first = matches!(node.kind, crate::model::NodeKind::HaveCoins { .. });
-    let mut keyed: Vec<(f64, Alternative)> =
-        ranked.into_iter().map(|alt| (if coin_first { coins_per_kill(&alt.method) } else { 0.0 }, alt)).collect();
-    keyed.sort_by(|(left_coins, left), (right_coins, right)| {
-        right_coins.total_cmp(left_coins).then_with(|| left.est_ticks.cmp(&right.est_ticks))
+    let class = |method: &str| {
+        if crate::food_gate::ready_now(method, ctx) {
+            0
+        } else if method_feasible(method, ctx) {
+            1
+        } else {
+            2
+        }
+    };
+    let mut keyed: Vec<(u8, f64, Alternative)> =
+        ranked.into_iter().map(|alt| (class(&alt.method), if coin_first { coins_per_kill(&alt.method) } else { 0.0 }, alt)).collect();
+    keyed.sort_by(|(left_class, left_coins, left), (right_class, right_coins, right)| {
+        left_class.cmp(right_class).then_with(|| left.est_ticks.cmp(&right.est_ticks)).then_with(|| right_coins.total_cmp(left_coins))
     });
-    let ranked: Vec<Alternative> = keyed.into_iter().map(|(_, alt)| alt).collect();
+    let ranked: Vec<Alternative> = keyed.into_iter().map(|(_, _, alt)| alt).collect();
     node.method = ranked.iter().find(|alt| method_feasible(&alt.method, ctx)).map(|alt| alt.method.clone());
     if node.method.is_none() {
         if let Some(first) = ranked.first() {
@@ -425,9 +449,10 @@ mod tests {
     use crate::expand::ReadyCtx;
     use crate::model::{Node, NodeKind};
 
-    /// NPC shops never buy (PRD3): coins enter only as drops. A coin
-    /// target goes to the spot that drops the most coins; the site pick
-    /// falls back down the list when combat is too low.
+    /// NPC shops never buy (PRD3): coins enter only as drops. Between
+    /// methods of equal published profit (unmeasured), a coin target goes
+    /// to the spot that drops the most coins (user 2026-11-17: the profit
+    /// ranks first, coin drops only break ties).
     #[test]
     fn alching_own_stock_is_a_money_method_with_its_runes() {
         let mut ctx = ReadyCtx::blind(0.5);

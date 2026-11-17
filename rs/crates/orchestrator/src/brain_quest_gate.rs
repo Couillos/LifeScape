@@ -264,10 +264,16 @@ pub(crate) fn hold_pass(job: &Job, life: &mut Life, live: &Value) -> (bool, Vec<
             GateMove::Obtain(missing) => {
                 let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
                 let fold = lifescape_planner::record_block_from(life, position, &missing, &level_of);
-                push_history(life, &id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "blocked" });
+                push_history(life, &id, crate::brain_launch::block_outcome(&fold));
                 crate::logln!("brain {}: quest {quest} ({id}) not launched: {} -> obtained first", job.account, reasons.join("; "));
                 lifescape_planner::normalize(life);
                 changed = true;
+                if let lifescape_planner::FailureFold::CycleBroken(line) = &fold {
+                    // Nodes may have left the graph: the positions below
+                    // are stale, the next pass sees the rest.
+                    crate::logln!("brain {}: {line}", job.account);
+                    break;
+                }
             }
         }
     }

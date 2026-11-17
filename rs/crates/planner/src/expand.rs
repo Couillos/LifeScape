@@ -426,6 +426,10 @@ fn expand_quest_inner(quest: &str, profile: &Profile, counter: &mut usize, level
 /// and quest leaves keep their single method; only the estimate fills.
 pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
     node.batch = 0;
+    // A method a dependency cycle went through never resolves again
+    // (`lifecycle_cycle`).
+    let excluded = node.excluded.clone();
+    node.alternatives.retain(|alt| !excluded.contains(&alt.method));
     resolve_method(node, ctx);
     place_on_site(node, ctx);
     crate::resolve_obtain::prefer_purchase_over_combat(node, ctx);
@@ -576,7 +580,13 @@ fn resolve_method(node: &mut Node, ctx: &ReadyCtx) {
                 // workable method locks; otherwise block typed on the
                 // tool so the obtain chain funds it (never a substitute
                 // method, never a doomed dispatch).
-                let workable = node.alternatives.iter().find(|alt| method_feasible(&alt.method, ctx)).map(|alt| alt.method.clone());
+                // Workable now (food in hand where the spot bites) first.
+                let workable = node
+                    .alternatives
+                    .iter()
+                    .find(|alt| crate::food_gate::ready_now(&alt.method, ctx))
+                    .or_else(|| node.alternatives.iter().find(|alt| method_feasible(&alt.method, ctx)))
+                    .map(|alt| alt.method.clone());
                 match workable {
                     Some(method) => node.method = Some(method),
                     None => {
@@ -615,7 +625,7 @@ fn lock_training_pick(node: &mut Node, ctx: &ReadyCtx) -> bool {
         return false;
     }
     let Some(pick) = ctx.training.as_ref() else { return false };
-    if ctx.quarantined.contains(&pick.method) || crate::quests::missing_quest(&pick.method, None, ctx).is_some() {
+    if node.excluded.contains(&pick.method) || ctx.quarantined.contains(&pick.method) || crate::quests::missing_quest(&pick.method, None, ctx).is_some() {
         return false;
     }
     let mut missing: Vec<String> = Vec::new();

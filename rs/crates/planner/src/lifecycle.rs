@@ -59,6 +59,10 @@ pub enum FailureFold {
     Retry,
     /// The failure budget is spent (or the error can never heal).
     Abandoned,
+    /// The block would close a dependency cycle: broken by an
+    /// alternative (`lifecycle_cycle`), the line to log. The blocked
+    /// node may have left the graph: never index it afterwards.
+    CycleBroken(String),
 }
 
 fn is_terminal(status: &NodeStatus) -> bool {
@@ -597,21 +601,6 @@ pub fn record_xp(life: &mut Life, index: usize, gained: i64) {
     }
 }
 
-/// The open `reach_combat` among `waiting` (the blocked node's
-/// dependents) that already trains at least the combat level `need`
-/// asks: that climb waits on this node, this node waits on the level —
-/// a cycle whatever the methods. Items and skill levels are left out: a
-/// climb blocked on bars while the next tranche's bar obtain waits on it
-/// (owen_wood n11/n16) is the normal reach chain, a fresh obtain serves.
-fn cycle_twin(life: &Life, waiting: &[String], need: &str) -> Option<String> {
-    let level = need.strip_prefix("combat:").and_then(|raw| raw.parse::<u8>().ok())?;
-    life.nodes
-        .iter()
-        .filter(|node| waiting.contains(&node.id) && !is_terminal(&node.status))
-        .find(|node| matches!(node.kind, NodeKind::ReachCombat { level: aimed } if aimed >= level))
-        .map(|node| node.id.clone())
-}
-
 /// `record_block_from` with every live level unknown (level 1): offline
 /// replays and tests. The brain passes the live levels.
 pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> FailureFold {
@@ -625,9 +614,23 @@ pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> Failur
 /// node is abandoned.
 pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], level_of: &dyn Fn(&str) -> u8) -> FailureFold {
     release_active(life, index);
+    // A need a node waiting on this one already works toward (the same
+    // object, coins, a level, a quest): a cycle, directly or through the
+    // coins, broken at once by an alternative (`lifecycle_cycle`; live
+    // 2026-11-14 ryan_mason, 2026-11-17 jim_ellis: one fresh pair every
+    // pass, forever).
+    if let Some((need, twins)) = missing.iter().find_map(|need| {
+        let found = crate::lifecycle_cycle::twins(life, index, need);
+        (!found.is_empty()).then(|| (need.clone(), found))
+    }) {
+        return crate::lifecycle_cycle::break_cycle(life, index, &need, &twins);
+    }
     let blocks = life.nodes[index].blocks.saturating_add(1);
     life.nodes[index].blocks = blocks;
     life.nodes[index].last_error = format!("Blocked: missing {}", missing.join(", "));
+    // The method whose run raised the block: a later cycle through this
+    // node excludes it (`lifecycle_cycle`).
+    life.nodes[index].blocked_by = life.nodes[index].method.clone();
     // The blocked method sizes the input batches (`replan::need_count`):
     // it clears once the sub-tasks are filed.
     if blocks > MAX_BLOCKS {
@@ -644,17 +647,6 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
     // `normalize` abandoned with the whole chain).
     let me = life.nodes[index].id.clone();
     let waiting: Vec<String> = crate::bans_scope::dependents(life, &me).into_iter().map(|position| life.nodes[position].id.clone()).collect();
-    // A combat level a climb waiting on this node already trains is a
-    // cycle: filing a fresh twin repeats the pair forever (live 2026-11-14,
-    // ryan_mason: `reach_combat 43` blocked on air runes, the rune
-    // obtain blocked on `combat:43`, one fresh pair every pass for 30+
-    // minutes). Abandoned typed at once: the stuck path sees it.
-    if let Some((need, twin)) = missing.iter().find_map(|need| cycle_twin(life, &waiting, need).map(|twin| (need.clone(), twin))) {
-        life.nodes[index].method = None;
-        life.nodes[index].status = NodeStatus::Abandoned;
-        life.nodes[index].last_error = format!("cycle: {me} needs {need}, which {twin} already works toward while waiting on {me}");
-        return FailureFold::Abandoned;
-    }
     for need in missing {
         // A combat level is a dependency like an item: one `reach_combat`
         // node trains it (goal style, a site safe for fresh bots), reused

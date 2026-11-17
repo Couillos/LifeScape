@@ -336,7 +336,10 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             // A missing level climbs from the reported live level.
             let level_of = |skill: &str| reach_level(report, skill).unwrap_or(1);
             let fold = record_block_from(&mut life, index, needs, &level_of);
-            push_history(&mut life, &id, if fold == FailureFold::Abandoned { "abandoned" } else { "blocked" });
+            push_history(&mut life, &id, crate::brain_launch::block_outcome(&fold));
+            if let FailureFold::CycleBroken(line) = &fold {
+                crate::logln!("brain {account}: {line}");
+            }
         }
         Verdict::Contract(text) => {
             record_contract_error(&mut life, index, text);
@@ -357,16 +360,18 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             push_history(&mut life, &id, if fold == FailureFold::Abandoned { "abandoned" } else { "failed" });
         }
     }
-    let node = &life.nodes[index];
-    crate::logln!(
-        "brain {account}: {id} {:?} -> {} (failures {}/{} blocks {}) {}",
-        decision,
-        node.status.as_str(),
-        node.failures,
-        lifescape_planner::MAX_FAILURES,
-        node.blocks,
-        node.last_error
-    );
+    // A broken cycle may have dropped the node: read it by id.
+    if let Some(node) = life.nodes.iter().find(|node| node.id == id) {
+        crate::logln!(
+            "brain {account}: {id} {:?} -> {} (failures {}/{} blocks {}) {}",
+            decision,
+            node.status.as_str(),
+            node.failures,
+            lifescape_planner::MAX_FAILURES,
+            node.blocks,
+            node.last_error
+        );
+    }
     for change in normalize(&mut life) {
         crate::logln!("brain {account}: normalize {change}");
     }

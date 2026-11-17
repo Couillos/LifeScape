@@ -108,15 +108,9 @@ pub fn plan_of(rung: &Rung, clusters: &[(i64, i64, i64, usize)], food: Option<u3
     }
 }
 
-/// Share of the bot's base hitpoints under which a spot's NPC max hit
-/// is harmless (user 2026-11-17): fought foodless, like cows.
-pub const HARMLESS_HIT_SHARE: f64 = 0.05;
-
-/// True when a foe max hit is harmless for a bot of `max_hp` base
-/// hitpoints (under `HARMLESS_HIT_SHARE` of them).
-pub fn harmless(foe_max_hit: i64, max_hp: i64) -> bool {
-    (foe_max_hit as f64) < HARMLESS_HIT_SHARE * max_hp as f64
-}
+/// Harmless-spot rule (user 2026-11-17), shared with the planner's
+/// money choice (`gamedata::melee_ladder::spot_food_required`).
+pub use knowledge::melee_ladder::{harmless, HARMLESS_HIT_SHARE};
 
 /// True when an ordered spot (`melee goblins`, a drop farm, a ranged or
 /// magic hunt, a filler) must not be fought without food: every spot but
@@ -124,13 +118,9 @@ pub fn harmless(foe_max_hit: i64, max_hp: i64) -> bool {
 /// and chickens", applied to ordered spots since 2026-11-17: live, 57
 /// `fight:melee/men` runs ended in a death, foodless) and the harmless
 /// ones for this bot's base hitpoints `max_hp` (men, max hit 1, for a
-/// 30-HP bot; `kit::meals::foe_max_hit`, server stats).
+/// 30-HP bot; server stats).
 pub fn ordered_food_required(spot_key: &str, max_hp: i64) -> bool {
-    if knowledge::melee_ladder::rung_by_key(spot_key).is_some_and(|rung| rung.food_exempt) {
-        return false;
-    }
-    let names: &[&str] = knowledge::combat_spots::by_key(spot_key).map(|spot| spot.npc_names).unwrap_or(&[]);
-    !harmless(crate::kit::meals::foe_max_hit(names), max_hp)
+    knowledge::melee_ladder::spot_food_required(spot_key, max_hp)
 }
 
 /// Load of an ordered spot: the ladder's sized load when the spot is a

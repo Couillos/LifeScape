@@ -28,7 +28,7 @@ pub const SAFETY_HITS: i64 = 2;
 /// The emergency line never sits under this share of max hitpoints.
 pub const EMERGENCY_FRACTION: f64 = 0.35;
 /// Foe max hit assumed when the spot's NPCs have no melee block.
-pub const UNKNOWN_FOE_MAX_HIT: i64 = 3;
+pub use lifescape_gamedata::melee_ladder::UNKNOWN_FOE_MAX_HIT;
 
 /// Hitpoints at or under which the fight eats its biggest heal, waste or
 /// not (and a foodless biting hunt leaves): two foe max hits, at least
@@ -93,7 +93,7 @@ pub fn carry_rank(heal: i64, max_hp: u8) -> (u8, i64) {
 /// Biggest melee max hit among a spot's NPCs (`UNKNOWN_FOE_MAX_HIT`
 /// when none has a melee block).
 pub fn foe_max_hit(npc_names: &[&str]) -> i64 {
-    npc_names.iter().filter_map(|name| lifescape_gamedata::melee_math::npc_max_hit(name)).max().unwrap_or(UNKNOWN_FOE_MAX_HIT)
+    lifescape_gamedata::melee_ladder::foe_max_hit(npc_names)
 }
 
 /// Edible stacks of the pack: (slot, obj, heal).

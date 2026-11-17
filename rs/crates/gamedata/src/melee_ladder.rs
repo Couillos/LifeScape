@@ -169,6 +169,37 @@ pub fn rung_by_key(key: &str) -> Option<Rung> {
     RUNGS.iter().find(|entry| entry.key == key).copied()
 }
 
+/// Share of the bot's base hitpoints under which a spot's NPC max hit
+/// is harmless (user 2026-11-17): fought foodless, like cows. One rule
+/// for the scripts (`kit::ladder`) and the planner (`food_gate`).
+pub const HARMLESS_HIT_SHARE: f64 = 0.05;
+/// Foe max hit assumed when the spot's NPCs have no melee block.
+pub const UNKNOWN_FOE_MAX_HIT: i64 = 3;
+
+/// Biggest melee max hit among a spot's NPCs (`UNKNOWN_FOE_MAX_HIT`
+/// when none has a melee block).
+pub fn foe_max_hit(npc_names: &[&str]) -> i64 {
+    npc_names.iter().filter_map(|name| crate::melee_math::npc_max_hit(name)).max().unwrap_or(UNKNOWN_FOE_MAX_HIT)
+}
+
+/// True when a foe max hit is harmless for a bot of `max_hp` base
+/// hitpoints (under `HARMLESS_HIT_SHARE` of them).
+pub fn harmless(foe_max_hit: i64, max_hp: i64) -> bool {
+    (foe_max_hit as f64) < HARMLESS_HIT_SHARE * max_hp as f64
+}
+
+/// True when the spot `spot_key` must not be fought without food by a
+/// bot of `max_hp` base hitpoints: every spot but the exempt rungs
+/// (cows, chickens) and the harmless ones (men, max hit 1, for a 30-HP
+/// bot).
+pub fn spot_food_required(spot_key: &str, max_hp: i64) -> bool {
+    if rung_by_key(spot_key).is_some_and(|rung| rung.food_exempt) {
+        return false;
+    }
+    let names: &[&str] = crate::combat_spots::by_key(spot_key).map(|spot| spot.npc_names).unwrap_or(&[]);
+    !harmless(foe_max_hit(names), max_hp)
+}
+
 /// What the bot owns that the gates and the food rule read.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Holdings {

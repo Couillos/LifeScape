@@ -58,7 +58,16 @@ pub fn combat_level(levels: &BaseLevels) -> u8 {
 /// True for a method that hunts a combat spot: a `fight:` or a drop
 /// farm (`farm:naturerune` at the goblins).
 pub fn is_fight_method(method: &str) -> bool {
-    matches!(method_sites(method), Some(("fight", _))) && !method.starts_with("curse:")
+    fight_spot(method).is_some()
+}
+
+/// Combat spot a fight hunts (`fight:melee/men` → `men`, a drop farm's
+/// spot); `None` for anything else (curses cast, never fight back).
+pub fn fight_spot(method: &str) -> Option<String> {
+    match method_sites(method) {
+        Some(("fight", spot)) if !method.starts_with("curse:") => Some(spot),
+        _ => None,
+    }
 }
 
 /// Site family and resource a method works (`None`: no site in the data,

@@ -10,7 +10,7 @@
 //!   the blocked node (a dependency cycle), unrolled forever.
 
 use crate::expand::{resolve_ready, ReadyCtx};
-use crate::lifecycle::{record_block, FailureFold};
+use crate::lifecycle::{normalize, record_block, FailureFold};
 use crate::model::{Alternative, Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
 
 const LUMBRIDGE: (i64, i64, i64) = (3232, 3293, 0);
@@ -84,23 +84,28 @@ fn mage_life(nodes: Vec<Node>) -> Life {
 }
 
 /// The ryan_mason chain: a combat climb blocked on air runes files an
-/// obtain; that obtain blocked on the same combat level is a cycle. It
-/// is abandoned typed at once (the stuck path and the dashboard see it),
-/// never a fresh `reach_combat` that repeats the pair forever.
+/// obtain; that obtain blocked on the same combat level is a cycle,
+/// never a fresh `reach_combat` that repeats the pair forever. Broken at
+/// once by an alternative (user 2026-11-17): the obtain leaves the graph,
+/// the climb drops the method that needed the runes and resolves again.
 #[test]
 fn a_block_that_needs_what_waits_on_it_is_a_cycle_never_unrolled() {
     let mut climb = Node::new("n6", NodeKind::ReachCombat { level: 43 }, Vec::new(), 43);
     climb.alternatives.push(Alternative { method: "fight:magic/chickens".to_string(), est_ticks: 0, est_coins: 0 });
     climb.status = NodeStatus::Ready;
+    climb.method = Some("fight:magic/chickens".to_string());
     let mut life = mage_life(vec![climb]);
     assert_eq!(record_block(&mut life, 0, &["airrune".to_string()]), FailureFold::Retry);
     let obtain_at = life.nodes.iter().position(|node| matches!(&node.kind, NodeKind::ObtainItems { item, .. } if item == "airrune")).expect("obtain filed");
     let before = life.nodes.len();
     let fold = record_block(&mut life, obtain_at, &["combat:43".to_string()]);
-    assert_eq!(fold, FailureFold::Abandoned, "a cycle never heals");
-    assert_eq!(life.nodes.len(), before, "no fresh reach_combat filed");
-    assert_eq!(life.nodes[obtain_at].status, NodeStatus::Abandoned);
-    assert!(life.nodes[obtain_at].last_error.starts_with("cycle:"), "{}", life.nodes[obtain_at].last_error);
+    let FailureFold::CycleBroken(line) = fold else { panic!("a cycle is broken, got {fold:?}") };
+    assert!(line.contains("broken at n6 (fight:magic/chickens)"), "{line}");
+    assert_eq!(life.nodes.len(), before - 1, "the rune obtain left, no fresh reach_combat filed");
+    assert!(life.nodes[0].deps.is_empty(), "{:?}", life.nodes[0].deps);
+    assert_eq!(life.nodes[0].excluded, vec!["fight:magic/chickens".to_string()]);
+    normalize(&mut life);
+    assert_eq!(life.nodes[0].status, NodeStatus::Ready, "the climb resolves another method");
 }
 
 /// Not a cycle: a smithing climb blocked on bars while the next

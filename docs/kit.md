@@ -569,7 +569,9 @@ sans gâcher, se soigner à la banque, emporter la nourriture adaptée.
   règle que l'échelle (`kit::ladder::ordered_plan`) : nourriture requise
   partout sauf vaches, poulets et spots inoffensifs (max hit du PNJ sous
   `HARMLESS_HIT_SHARE` = 5 % des PV de base du bot : hommes, max hit 1,
-  pour un bot à 30 PV ; décision utilisateur 2026-11-17, fillers compris),
+  pour un bot à 30 PV ; décision utilisateur 2026-11-17, fillers compris ;
+  règle unique `gamedata::melee_ladder::spot_food_required`, lue aussi par
+  le planner pour préférer une méthode faisable maintenant),
   charge dimensionnée par le barreau ;
   sans nourriture en banque ⇒ `Blocked: <food_to_ask>` (avant : plan
   « plain », combat sans nourriture jusqu'à la mort : 57 runs `men` morts).

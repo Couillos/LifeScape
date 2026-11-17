@@ -43,6 +43,16 @@ fn seconds_since_history(life: &Life, node: &str, outcome: &str) -> Option<i64> 
     life.history.iter().rev().find(|entry| entry.node == node && entry.outcome == outcome).map(|entry| now - entry.ended)
 }
 
+/// History outcome of a block fold: `cycle_broken` when the block would
+/// have closed a dependency cycle (`planner::lifecycle_cycle`).
+pub(crate) fn block_outcome(fold: &lifescape_planner::FailureFold) -> &'static str {
+    match fold {
+        lifescape_planner::FailureFold::Abandoned => "abandoned",
+        lifescape_planner::FailureFold::CycleBroken(_) => "cycle_broken",
+        lifescape_planner::FailureFold::Retry => "blocked",
+    }
+}
+
 /// A `coins:N` need computed on the free wallet: the wallet to earn adds
 /// back the coins the bot's other resting buys commit, so the
 /// `have_coins` target it files really frees `N` (other needs unchanged).
@@ -441,6 +451,20 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             return;
         }
     }
+    // Earning coins never waits on earning coins: a coin node under a
+    // blocked one is a cycle through the coins (graphs unrolled before
+    // the breaker, live jim_ellis): the outermost takes over, logged.
+    let regress = lifescape_planner::lifecycle_cycle::coin_regress(&life, position);
+    if !regress.is_empty() {
+        let id = life.nodes[position].id.clone();
+        if let lifescape_planner::FailureFold::CycleBroken(line) = lifescape_planner::lifecycle_cycle::break_cycle(&mut life, position, "coins", &regress) {
+            crate::logln!("brain {}: {line}", job.account);
+            push_history(&mut life, &id, "cycle_broken");
+        }
+        lifescape_planner::normalize(&mut life);
+        save_or_log(&life);
+        return;
+    }
     {
         let node = &mut life.nodes[position];
         crate::cpu_profile::timed("resolve", || resolve_ready(node, &ctx));
@@ -485,9 +509,14 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         } else {
             let level_of = |skill: &str| crate::brain_succession::live_level(&live, skill);
             let fold = lifescape_planner::record_block_from(&mut life, position, &missing, &level_of);
-            push_history(&mut life, &id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "blocked" });
+            push_history(&mut life, &id, block_outcome(&fold));
+            if let lifescape_planner::FailureFold::CycleBroken(line) = &fold {
+                crate::logln!("brain {}: {line}", job.account);
+            }
         }
-        crate::logln!("brain {}: {id} blocked at resolve ({reason}) -> {}", job.account, life.nodes[position].status.as_str());
+        // A broken cycle may have dropped the node: read it by id.
+        let status = life.nodes.iter().find(|node| node.id == id).map_or_else(|| "dropped".to_string(), |node| node.status.as_str());
+        crate::logln!("brain {}: {id} blocked at resolve ({reason}) -> {status}", job.account);
         lifescape_planner::normalize(&mut life);
         save_or_log(&life);
         return;

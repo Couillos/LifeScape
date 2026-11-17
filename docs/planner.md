@@ -1138,3 +1138,37 @@ voie (goldens nav `lundail_hors_f2p`, `arene_mages_hors_f2p`). Davon
   outil tenu comme manquant : le blocage dit `quarantined:<méthode>`
   (avant : `missing:harpoon` harpon en main, quatre obtentions « déjà
   tenu », abandon, pêche et cuisine bannies — kevin_ellis, espadon).
+
+## Cycles de dépendances, nourriture produite (2026-11-17)
+
+Cas live jim_ellis (10 PV, 29 pièces) : pas d'argent d'une hache financée →
+`fight:melee/men` (max hit 1 = 10 % de ses PV : nourriture requise) →
+`Blocked: herring` → obtention de hareng achat seul → `missing:coins:240` →
+nouveau `have_coins` → hommes… 680 nœuds en 50 min, rien gagné.
+- Choix de méthode (`planner::food_gate::ready_now`, argent, obtention,
+  tranche) : d'abord une méthode faisable MAINTENANT (outil tenu, nourriture
+  en main si le spot mord pour ses PV de base :
+  `gamedata::melee_ladder::spot_food_required`, la règle des scripts),
+  puis une faisable dont un prérequis reste à obtenir, puis le reste ; à
+  classe égale le profit publié (taux saturés). `have_coins` : les drops de
+  pièces ne départagent plus qu'à profit égal (avant : hommes/gobelins
+  toujours en tête).
+- Nourriture d'un combat bloqué (`food_gate::obtainable_food`, via
+  `brain_food`) : le meilleur poisson ≤ soin adapté dont la bourse paie une
+  charge ; sinon l'aliment (tout comestible) que le bot PRODUIT lui-même
+  (`production_steps` : niveau, outils tenus ou achetables, intrants
+  tenus/achetables/produits, chasse seulement sur un spot qu'il combat sans
+  nourriture), le plus de PV par étape de production ; sinon l'aliment
+  demandé. L'obtention de l'aliment choisi prend sa voie comme toute
+  obtention.
+- Cycle (`planner::lifecycle_cycle`, appelé par `record_block_from`) : un
+  besoin qu'un nœud qui ATTEND le nœud bloqué vise déjà (même objet, pièces,
+  niveau, quête, zone ; nœud bloqué lui-même, sauf montée de combat) est un
+  cycle. Cassé au nœud le plus extérieur (jumeaux et répétitions du nœud
+  bloqué, méthode bloquante connue d'abord) : sa chaîne jusqu'au nœud bloqué
+  quitte le graphe, sa méthode bloquante (`Node::blocked_by`, ou celle du
+  nœud bloqué pour une répétition) entre dans `Node::excluded` (jamais
+  re-résolue), il se résout autrement. `FailureFold::CycleBroken(ligne)`,
+  log `cycle broken: …`, historique `cycle_broken`. Un nœud d'argent qui se
+  résout sous un nœud d'argent bloqué (graphes déroulés avant) s'effondre
+  pareil (`coin_regress`, `brain_launch`).

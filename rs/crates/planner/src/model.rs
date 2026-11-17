@@ -172,6 +172,13 @@ pub struct Node {
     /// (an alchemy batch: casts the stock and runes cover, 2026-11-14);
     /// 0 = until the node's own target. Reset at every resolve.
     pub batch: i64,
+    /// Method whose run raised the node's last block (`record_block_from`):
+    /// the method a dependency cycle through this node goes by.
+    pub blocked_by: Option<String>,
+    /// Methods this node never resolves to again: a dependency cycle went
+    /// through them (`lifecycle_cycle`: the prerequisite they lack can
+    /// only be obtained with what the node itself must produce).
+    pub excluded: Vec<String>,
 }
 
 impl Node {
@@ -194,6 +201,8 @@ impl Node {
             toll: false,
             boat: false,
             batch: 0,
+            blocked_by: None,
+            excluded: Vec::new(),
         }
     }
 
@@ -428,6 +437,8 @@ fn node_to_value(node: &Node) -> Value {
         ("toll", Value::Bool(node.toll)),
         ("boat", Value::Bool(node.boat)),
         ("batch", Value::Int(node.batch)),
+        ("blocked_by", node.blocked_by.as_deref().map_or(Value::Null, str_value)),
+        ("excluded", Value::Arr(node.excluded.iter().map(|method| str_value(method)).collect())),
     ])
 }
 
@@ -475,6 +486,13 @@ fn node_from_value(value: &Value) -> Option<Node> {
         toll: value.get("toll").as_bool() == Some(true),
         boat: value.get("boat").as_bool() == Some(true),
         batch: value.get("batch").as_i64().unwrap_or(0).max(0),
+        // Absent in files written before the cycle breaker: none.
+        blocked_by: value.get("blocked_by").as_str().map(str::to_string),
+        excluded: value
+            .get("excluded")
+            .as_arr()
+            .map(|rows| rows.iter().filter_map(|row| row.as_str().map(str::to_string)).collect())
+            .unwrap_or_default(),
     })
 }
 
