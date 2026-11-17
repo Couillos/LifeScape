@@ -3,12 +3,14 @@
 //! history window snapping plus the `/api/market/<op>` bridge used by handle_get.
 
 use lifescape_json::{Value, str_value};
+use lifescape_store::YieldCandleResolution;
 use crate::web::{Dispatch, Response, ok_json, parse_query};
 
-/// Candle width of a history resolution: `1d` days, anything else hours
-/// (same mapping as the market `history` op).
+/// Candle width of a history resolution: `15m` quarters, `1h` hours,
+/// `1d` days, anything unknown hours (same mapping as the market
+/// `history` op).
 fn res_width(res: &str) -> i64 {
-    if res == "1d" { 86400 } else { 3600 }
+    YieldCandleResolution::from_code(res).unwrap_or(YieldCandleResolution::Hour1).width_seconds()
 }
 
 /// Snap a requested history window to candle boundaries: `from` floors to
@@ -79,6 +81,26 @@ mod tests {
         assert_eq!(snap_range(3601, 7201, "bogus"), (3600, 10800));
         // Degenerate spans keep at least one candle.
         assert_eq!(snap_range(5000, 5000, "1h"), (3600, 7200));
+        // Quarter hours (24 h view, user 2026-11-17): 900 s edges.
+        assert_eq!(snap_range(900, 1800, "15m"), (900, 1800));
+        assert_eq!(snap_range(1000, 1801, "15m"), (900, 2700));
+        assert_eq!(snap_range(1000, 1000, "15m"), (900, 1800));
+        let now = 20_500 * 86_400 + 13 * 3600 + 7 * 60;
+        let live = (now / 900) * 900;
+        assert_eq!(snap_range(live - 95 * 900, now, "15m"), (live - 95 * 900, live + 900), "96 quarters, live one inside");
+    }
+
+    #[test]
+    fn market_history_snaps_quarter_hours() {
+        fn echo_dispatch(request: Value) -> Value {
+            object(vec![("from", request.get("from").clone()), ("to", request.get("to").clone()), ("res", request.get("res").clone())])
+        }
+        let dispatch: Dispatch = Arc::new(echo_dispatch);
+        let reply = crate::web::handle_get("/api/market/history", "item=7&res=15m&from=1000&to=87401", &dispatch);
+        let payload = json::parse(&String::from_utf8(reply.body).expect("json body")).expect("json parses");
+        assert_eq!(payload.get("from").as_i64(), Some(900));
+        assert_eq!(payload.get("to").as_i64(), Some(88200));
+        assert_eq!(payload.get("res").as_str(), Some("15m"));
     }
 
     #[test]

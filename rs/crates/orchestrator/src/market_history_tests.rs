@@ -54,7 +54,7 @@ fn history_runs_flat_up_to_the_live_window() {
         })
         .expect("prints");
     let now = MarketService::now_clock();
-    for (res, width) in [("1h", 3600), ("1d", 86400)] {
+    for (res, width) in [("15m", 900), ("1h", 3600), ("1d", 86400)] {
         let history = op(&service, vec![("op", str_value("history")), ("item", Value::Int(FEATHER)), ("res", str_value(res))]);
         assert_eq!(history.get("prev_close").as_i64(), Some(17), "{res}");
         let candles = history.get("candles").as_arr().cloned().unwrap_or_default();
@@ -121,5 +121,45 @@ fn trades_feed_survives_a_restart() {
     assert_eq!(prices, vec![16, 12, 20], "oldest first, like before the restart");
     let tick = op(&reopened, vec![("op", str_value("tick")), ("since", Value::Int(0))]);
     assert_eq!(tick.get("trades").as_arr().map(|rows| rows.len()), Some(3));
+    cleanup(&path);
+}
+
+/// Market 24 h view in quarter hours (user 2026-11-17): the window the
+/// front asks for (`liveSlots(now, 900, 96)`) serves 96 chained 15-minute
+/// candles, the live quarter last, each traded quarter with its own
+/// execution count; the `15m` cache is rebuilt from executions on demand.
+#[test]
+fn day_view_serves_96_quarter_hour_candles() {
+    let path = temp_db("quarters");
+    let service = MarketService::open(&path, catalogue()).expect("opens");
+    let now = MarketService::now_clock();
+    let live = (now / 900) * 900;
+    let traded = live - 12 * 900;
+    for (clock, price) in [(live - 200 * 900, 10), (traded + 10, 13), (traded + 900 + 10, 9)] {
+        service
+            .lock_store()
+            .record_execution(&NewExecution { item_id: FEATHER, quantity: 2, price, clock, server_tick: clock, taker_side: None })
+            .expect("prints");
+    }
+    let history = op(&service, vec![
+        ("op", str_value("history")),
+        ("item", Value::Int(FEATHER)),
+        ("res", str_value("15m")),
+        ("from", Value::Int(live - 95 * 900)),
+        ("to", Value::Int(live + 900)),
+    ]);
+    assert_eq!(history.get("res").as_str(), Some("15m"));
+    assert_eq!(history.get("prev_close").as_i64(), Some(10));
+    let candles = history.get("candles").as_arr().cloned().unwrap_or_default();
+    assert_eq!(candles.len(), 96, "one candle per quarter over 24 h");
+    let starts: Vec<i64> = candles.iter().map(|row| row.get("t").as_i64().unwrap_or(-1)).collect();
+    assert_eq!(starts.first().copied(), Some(live - 95 * 900));
+    assert_eq!(starts.last().copied(), Some(live), "the live quarter closes the view");
+    let row = |at: i64| candles.iter().find(|row| row.get("t").as_i64() == Some(at)).cloned().unwrap_or(Value::Null);
+    let shape = |at: i64| ["o", "h", "l", "c", "v", "n"].map(|key| row(at).get(key).as_i64().unwrap_or(-1));
+    assert_eq!(shape(traded - 900), [10, 10, 10, 10, 0, 0], "flat at the close before");
+    assert_eq!(shape(traded), [10, 13, 10, 13, 2, 1]);
+    assert_eq!(shape(traded + 900), [13, 13, 9, 9, 2, 1], "opens on the previous quarter's close");
+    assert_eq!(shape(live), [9, 9, 9, 9, 0, 0]);
     cleanup(&path);
 }

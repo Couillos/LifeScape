@@ -705,9 +705,9 @@ fn live_fill_repaints_history_candles() {
     // A match alone paints nothing (a promise, not a trade)...
     let before = service.handle(&request(vec![("op", str_value("history")), ("item", Value::Int(314)), ("res", str_value("1h"))]));
     assert!(before.get("candles").as_arr().map_or(true, |rows| rows.is_empty()), "no candle before the handover");
-    // ...the settled handover repaints both resolutions, no manual rebuild.
+    // ...the settled handover repaints every resolution, no manual rebuild.
     assert_eq!(crate::market_test_support::settle_matched(&service), 1);
-    for res in ["1h", "1d"] {
+    for res in ["15m", "1h", "1d"] {
         let history = service.handle(&request(vec![
             ("op", str_value("history")),
             ("item", Value::Int(314)),

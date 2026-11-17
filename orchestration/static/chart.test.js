@@ -142,6 +142,16 @@ test('axisLabel dates hourly slots once the view spans several days', () => {
   assert.equal(LifeChart.axisLabel(start, 86400, 183), '12/11');
 });
 
+test('quarter-hour slots (24 h view) label their quarter, tooltip spans 15 minutes', () => {
+  const start = new Date(2026, 10, 12, 14, 15, 0).getTime() / 1000;
+  assert.equal(LifeChart.axisLabel(start, 900, 96), '14:15', '96 quarters fit in one day: bare time');
+  assert.equal(LifeChart.periodLabel(start, 900), '12/11 14:15–14:30');
+  assert.match(LifeChart.candleTooltip(start, 900, { o: 1, h: 1, l: 1, c: 1, v: 0 })[0], /14:15–14:30$/);
+  const slots = LifeChart.liveSlots(start + 420, 900, 96);
+  assert.equal(slots.length, 96);
+  assert.equal(slots[95], start, 'the live quarter is drawn');
+});
+
 test('the hover snaps to the nearest slot with data (sparse 7 d / 30 d views)', () => {
   const rows = [null, null, 5, null, null, null, 9, null];
   assert.equal(LifeChart.nearestFilled(rows, 2), 2, 'a filled slot answers itself');
