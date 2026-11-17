@@ -124,3 +124,15 @@ fn a_locked_best_tool_keeps_the_best_free_one() {
     assert!(kept.contains(&"iron_axe".to_string()), "the usable axe stays: {kept:?}");
     assert!(kept.contains(&"steel_axe".to_string()), "the locked best one too (its listing is withdrawn): {kept:?}");
 }
+
+/// Tour 2 P2-7 red test (luke_hill): one iron axe held, listed as
+/// surplus: the bronze_axe obtain is not "done" on a locked copy; the
+/// listing goes first. A free copy is done; nothing held launches.
+#[test]
+fn a_listed_copy_is_no_held_copy() {
+    use super::{held_verdict, HeldVerdict};
+    assert_eq!(held_verdict(1, 1, 0), HeldVerdict::WithdrawListings);
+    assert_eq!(held_verdict(1, 1, 1), HeldVerdict::Done);
+    assert_eq!(held_verdict(1, 0, 0), HeldVerdict::Launch);
+    assert_eq!(held_verdict(28, 30, 20), HeldVerdict::WithdrawListings, "a quota counts free units only");
+}

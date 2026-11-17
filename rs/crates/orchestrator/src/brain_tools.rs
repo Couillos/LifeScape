@@ -164,6 +164,50 @@ pub fn listing_locks_needed_tool(name: &str, listed_qty: i64, stacks: &[(String,
     held - listed_qty < 1
 }
 
+/// What an obtain met by the holdings does (tour 2 P2-7): the copies
+/// the bot holds count only when free of its own listings.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HeldVerdict {
+    /// Free copies cover the need: done without launch.
+    Done,
+    /// Held, but the bot's own listings lock what the need wants: the
+    /// listings are withdrawn, then done (live 12:18 luke_hill: its only
+    /// axe listed as surplus, "n298 holds 1 bronze_axe, done without
+    /// launch" four times, then woodcut blocked "missing bronze_axe").
+    WithdrawListings,
+    /// Not held: the obtain runs.
+    Launch,
+}
+
+/// Pure verdict over the family counts: `held` (pack, bank, worn) and
+/// `free` (held minus what the bot's resting sells lock).
+pub fn held_verdict(count: i64, held: i64, free: i64) -> HeldVerdict {
+    if free >= count {
+        HeldVerdict::Done
+    } else if held >= count {
+        HeldVerdict::WithdrawListings
+    } else {
+        HeldVerdict::Launch
+    }
+}
+
+/// Units of `name` the bot's own resting sell orders lock.
+pub fn listed_units(account: &str, name: &str) -> i64 {
+    let (Some(service), Some(id)) = (crate::market_service::shared(), crate::brain_gear::obj_id(name)) else { return 0 };
+    service.resting_rows(account, id, lifescape_store::OrderSide::Sell).iter().map(|row| row.remaining.max(0)).sum()
+}
+
+/// Cancels the bot's resting sells of every member of `item`'s family;
+/// returns how many closed.
+pub fn withdraw_family_listings(account: &str, item: &str) -> usize {
+    let Some(service) = crate::market_service::shared() else { return 0 };
+    lifescape_planner::tools::tool_family(item)
+        .iter()
+        .filter_map(|name| crate::brain_gear::obj_id(name))
+        .map(|id| service.cancel_open_because(account, id, lifescape_store::OrderSide::Sell, "need_held"))
+        .sum()
+}
+
 #[cfg(test)]
 #[path = "brain_tools_tests.rs"]
 mod tests;

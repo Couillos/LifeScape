@@ -431,7 +431,24 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // An obtain the holdings already meet closes without a launch
     // (positive proof: pack, bank, worn), like a met coin target below.
     if let NodeKind::ObtainItems { item, count } = &life.nodes[position].kind {
-        if ctx.held >= *count {
+        // Only the copies free of the bot's own listings count (P2-7).
+        let exact = lifescape_planner::gear_ladder::is_gear_obtain(&life, position)
+            || matches!(&life.goal, lifescape_planner::GoalKind::Produce { item: made, .. } if made == item);
+        let free_of = |name: &str| (holdings_count(job, name) - crate::brain_tools::listed_units(&job.account, name)).max(0);
+        let free_now = |exact: bool| if exact { free_of(item) } else { lifescape_planner::tools::family_held(item, i64::MAX / 4, &free_of) };
+        let mut free = if ctx.held < *count { 0 } else { free_now(exact) };
+        if crate::brain_tools::held_verdict(*count, ctx.held, free) == crate::brain_tools::HeldVerdict::WithdrawListings {
+            let withdrawn = crate::brain_tools::withdraw_family_listings(&job.account, item);
+            // A copy still in a deal stays locked: the obtain runs.
+            free = free_now(exact);
+            crate::logln!(
+                "brain {}: {} holds {} {item} but its listings locked them: {withdrawn} listing(s) withdrawn, {free} free now",
+                job.account,
+                life.nodes[position].id,
+                ctx.held
+            );
+        }
+        if crate::brain_tools::held_verdict(*count, ctx.held, free) == crate::brain_tools::HeldVerdict::Done {
             let (id, item) = (life.nodes[position].id.clone(), item.clone());
             crate::brain_market::cancel_open_buys(&job.account, &item);
             lifescape_planner::complete_node(&mut life, position, ctx.held);
