@@ -65,7 +65,7 @@ mod tests {
         let spec = parse_cli("cook", &["raw_trout", "--use", "raw_trout", "200"].map(String::from)).expect("cook parses");
         assert_eq!(spec.targets.uses, vec![("raw_trout".to_string(), 200)]);
         assert!(spec.targets.any());
-        assert_eq!(crate::kit::cycle::ended_code(&spec), 0);
+        assert_eq!(crate::kit::cycle::ended_code_for(&spec, true), 0, "a met lot is the goal");
         let smelt = parse_order("smelt", &["bronze_bar", "--use", "copper_ore", "14", "--use", "tin_ore", "14", "--node", "n3"].map(String::from)).expect("smelt parses");
         assert_eq!(smelt.targets.uses, vec![("copper_ore".to_string(), 14), ("tin_ore".to_string(), 14)]);
         assert!(parse_cli("cook", &["--use", "raw_trout"].map(String::from)).is_err(), "a count is due");
