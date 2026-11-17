@@ -197,6 +197,11 @@ fn full_sets(bot: &Bot, inputs: &[SetInput]) -> i64 {
 /// set (copper banked without tin names the tin; the brain files one
 /// obtain per name).
 fn restock(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], inputs: &[SetInput], recipe_inputs: &[(String, i64)], wanted: i64) -> Result<(), ScriptError> {
+    // Pack + known bank short of one set: blocked here, before the walk
+    // (P17).
+    if let Some(blocked) = crate::kit::withdraw::preflight_blocked(bot, recipe_inputs) {
+        return Err(blocked);
+    }
     bank_trip(bot, bank, keep, 0)?;
     fill_sets(bot, bank, inputs, wanted)?;
     let carried = |name: &str| inputs.iter().find(|input| input.name == name).map(|input| i64::from(pack_total(bot, input.id))).unwrap_or(0);

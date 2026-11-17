@@ -23,6 +23,28 @@ pub const BOOTH_REACH: i32 = 12;
 /// trip transit slice x 2).
 pub const BANK_FETCH_WALK_TICKS: u64 = 3000;
 
+/// Inputs `(name, per action)` that pack + known bank cannot cover for
+/// one action (plan P17, generalising c2a4065: check at the start, never
+/// after the trip; live 2026-11-17: 150 smelt runs walked ~955 ticks to
+/// block on coal the bank never had). Empty while the bank was never
+/// seen (`bank_known` false): the trip itself finds out.
+pub fn preflight_short(inputs: &[(String, i64)], held: &dyn Fn(&str) -> i64, bank_known: bool) -> Vec<String> {
+    if !bank_known {
+        return Vec::new();
+    }
+    inputs.iter().filter(|(name, each)| held(name) < (*each).max(1)).map(|(name, _)| name.clone()).collect()
+}
+
+/// `preflight_short` on the live bot: pack plus the last known bank.
+pub fn preflight_blocked(bot: &Bot, inputs: &[(String, i64)]) -> Option<ScriptError> {
+    let bank_known = (bot.tables.com_id)("bank_main:inv").is_some_and(|com| bot.world.inv_known(com).is_some());
+    let held = |name: &str| -> i64 {
+        crate::kit::pack::obj_id(bot, name).map(|obj| i64::from(pack_total(bot, obj)) + i64::from(banked_usable(bot, obj))).unwrap_or(0)
+    };
+    let missing = preflight_short(inputs, &held, bank_known);
+    (!missing.is_empty()).then_some(ScriptError::Blocked { missing })
+}
+
 /// True when the bank is out of booth reach from `(x, z)`.
 pub fn bank_far(bank: &knowledge::banks::Bank, x: i32, z: i32) -> bool {
     (x - bank.x as i32).abs() + (z - bank.z as i32).abs() > BOOTH_REACH
@@ -183,6 +205,18 @@ pub fn ensure_tool(bot: &mut Bot, bank: &knowledge::banks::Bank, tool: u16, tool
 
 #[cfg(test)]
 mod tests {
+    /// Plan P17: a smelt cycle without coal blocks before any walk when
+    /// the bank is known; an unseen bank never concludes.
+    #[test]
+    fn inputs_are_checked_before_the_trip() {
+        let steel = vec![("iron_ore".to_string(), 1), ("coal".to_string(), 2)];
+        let no_coal = |name: &str| if name == "iron_ore" { 10 } else { 0 };
+        assert_eq!(super::preflight_short(&steel, &no_coal, true), vec!["coal".to_string()]);
+        assert!(super::preflight_short(&steel, &no_coal, false).is_empty(), "bank unseen: the trip finds out");
+        let stocked = |name: &str| if name == "iron_ore" { 10 } else { 20 };
+        assert!(super::preflight_short(&steel, &stocked, true).is_empty());
+    }
+
     use super::{bank_far, fetch_walk_needed};
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
