@@ -8,7 +8,7 @@
 //!   gathering and coin spots, only when the cast beats selling
 //!   (`publish`), its runes gated by `tools::required_tool`;
 //! - draw: a stock worth alching (net ≥ `BID_MIN_PROFIT`, rate ≥
-//!   `BID_PREEMPT` × the bot's own coin rate, runes held) draws a
+//!   `BID_PREEMPT` × the bot's own coin rate (its D17), runes held) draws a
 //!   `MakeMoney` goal of origin `alch:<object>` (`alch_goal_for`);
 //! - sales: a caster never lists what alchs for more than it sells
 //!   (`alch_keep`), never sells under the cast's net (`alch_floor`: the
@@ -171,6 +171,14 @@ fn natures_held(live: &Value) -> i64 {
     crate::brain_ambition::live_count(live, NATURE_RUNE)
 }
 
+/// Coins one tick of the caster's time is worth: its D17 in the money
+/// guide (`brain_d17::coin_rate`: live levels, combat, quests).
+fn own_coin_rate(life: &Life, live: &Value) -> f64 {
+    let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
+    let quests = crate::brain_rescue::quests_done(life);
+    crate::brain_d17::coin_rate(&crate::brain_d17::BotKey { level_of: &level_of, combat: crate::brain_plan::live_combat(live), quests_done: &quests, ironman: life.profile.ironman })
+}
+
 /// The alchemy goal of a draw: the best stock to alch, worth the bot's
 /// time like a bid (`bid_response::preempts` numbers), its nature runes
 /// held for at least `MIN_ALCH_CASTS`. Origin `alch:<object>`: no
@@ -182,8 +190,7 @@ pub(crate) fn alch_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, Stri
     if casts < lifescape_planner::alchemy::MIN_ALCH_CASTS {
         return None;
     }
-    let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
-    let own_rate = lifescape_planner::market_fit::coin_rate(&crate::brain_bids::rate_rows(), &level_of);
+    let own_rate = own_coin_rate(life, live);
     let rate = pick.profit_each / lifescape_planner::alchemy::CAST_TICKS;
     let profit = casts as f64 * (pick.profit_each - lifescape_planner::alchemy::CAST_TICKS * own_rate);
     let bid = lifescape_planner::bid_response::BID_PREEMPT;
@@ -316,8 +323,7 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
     if let Some(id) = obj_id(NATURE_RUNE) {
         claim(&job.account, id);
     }
-    let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
-    let own_rate = lifescape_planner::market_fit::coin_rate(&crate::brain_bids::rate_rows(), &level_of);
+    let own_rate = own_coin_rate(life, live);
     let coins = crate::brain_gear::free_coins(job, None);
     let natures = natures_held(live);
     let mut placed = 0;

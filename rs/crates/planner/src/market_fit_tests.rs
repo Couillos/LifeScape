@@ -1,6 +1,6 @@
 //! Market fit: saturation, sale lots, own downstream use, coin rate.
 
-use super::{coin_rate, own_use_items, sale_lot, saturation_factor, BookView, MIN_COIN_RATE, SALE_LOT_MIN};
+use super::{own_use_items, sale_lot, saturation_factor, BookView, SALE_LOT_MIN};
 use crate::ambition::{new_ambition, BotNow, MilestoneStatus, Stamp, Target};
 
 /// Live 2026-11-14: 33 364 willow logs offered at 1 coin, 4 319 traded
@@ -27,21 +27,6 @@ fn a_lot_is_what_buyers_take_at_least_an_inventory() {
     assert_eq!(sale_lot(24_310, Some(&feathers)), 350);
     assert_eq!(sale_lot(24_310, None), SALE_LOT_MIN);
     assert_eq!(sale_lot(10, Some(&feathers)), 10, "never more than the stack");
-}
-
-/// The bot's time: the best published profit it can work at its levels.
-#[test]
-fn coin_rate_reads_the_methods_the_bot_can_work() {
-    let rows = vec![
-        ("woodcut".to_string(), 36, 16_732.0),
-        ("cook".to_string(), 1, 3_000.0),
-        ("market".to_string(), 1, 90_000.0),
-    ];
-    let cook = |skill: &str| if skill == "cooking" { 10 } else { 1 };
-    assert!((coin_rate(&rows, &cook) - 0.5).abs() < 1e-9, "woodcut 36 out of reach, flips never count");
-    let lumberjack = |skill: &str| if skill == "woodcutting" { 40 } else { 1 };
-    assert!(coin_rate(&rows, &lumberjack) > 2.7);
-    assert_eq!(coin_rate(&[], &cook), MIN_COIN_RATE, "time is never free");
 }
 
 /// A firemaker keeps the logs its own climb burns, a smith the bars and

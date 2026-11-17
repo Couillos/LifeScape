@@ -60,6 +60,7 @@ pub mod brain_succession;
 pub mod brain_stuck;
 pub mod brain_train;
 pub mod brain_money;
+pub mod brain_d17;
 pub mod brain_picks;
 pub mod brain_plan_read;
 pub mod brain_trade;

@@ -13,11 +13,10 @@
 //!   age is the LINEAGE's (t0 kept by every amend, plan marché M1 C1): a
 //!   bid walked for 6 h is 6 h old, not one patience window.
 //!   Empty while the market service is down (no data, no decision).
-//! - `chain_profits()`: every D58 chain (`planner::chains`) evaluated at
-//!   market prices (`rates_price::price_estimate`, never a shop price),
-//!   with the ambition kind it serves.
-//! - `kind_profits()`: best profit per ambition kind from the chains and
-//!   the measured method profits (`rates_service::profit_rows`).
+//! - `kind_profits()`: best profit per ambition kind, read in the
+//!   precomputed money guide (`brain_d17::kind_profits`: its catalogue
+//!   rows, chains included, under the kind of their band skill); none
+//!   before the first set.
 //! - `demand_items()` / `kind_demand()`: the planner inputs; each item
 //!   carries its per-unit `margin` at the best bid against its inputs at
 //!   their current market price (`planner::chain_profit`; median of the
@@ -27,8 +26,7 @@
 
 use std::collections::BTreeMap;
 
-use lifescape_planner::ambition_catalog::{kind_for_skill, method_skill};
-use lifescape_planner::{kind_weights, ChainPrices, DemandItem, KindDemand, CHAINS};
+use lifescape_planner::{kind_weights, DemandItem, KindDemand};
 use lifescape_store::{Order, OrderSide};
 
 /// Ticks over which a bid's age doubles its pull (capped at ×6).
@@ -47,15 +45,6 @@ pub struct DemandSignal {
     pub oldest_age_secs: i64,
     pub oldest_age_ticks: u64,
     pub weight: f64,
-}
-
-/// One chain at today's prices.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ChainProfit {
-    pub chain: String,
-    pub product: String,
-    pub kind: Option<String>,
-    pub profit_per_6000: f64,
 }
 
 /// Pure aggregation of resting orders (buy side, remaining > 0). A market
@@ -182,36 +171,9 @@ fn display_of(item: &str) -> String {
     lifescape_gamedata::objs_by_name(item).into_iter().next().and_then(|obj| obj.display.or(obj.name)).unwrap_or(item).to_string()
 }
 
-/// Every D58 chain at today's market prices (28 final units). Empty when
-/// the store cannot be opened.
-pub fn chain_profits() -> Vec<ChainProfit> {
-    let Ok(store) = lifescape_store::Store::open(&crate::market_service::db_path()) else { return Vec::new() };
-    let market = |item: &str| crate::rates_service::price_estimate(&store, &display_of(item)).0;
-    // D-A: a shop price never values a product (nobody sells to merchants).
-    let shop = |_: &str| 0.0;
-    let prices = ChainPrices { market: &market, shop: &shop, trip_ticks: crate::brain_plan::TRIP_TICKS };
-    // R7 (b): each step's time and XP from the measured yields (the
-    // prior below three runs), never the prior alone.
-    let rate = crate::brain_plan_read::live_rate();
-    CHAINS
-        .iter()
-        .map(|chain| {
-            let eval = lifescape_planner::eval_chain_with(chain, 28.0, &prices, &rate);
-            let kind = chain.steps.last().and_then(|step| kind_for_skill(step.skill)).map(str::to_string);
-            ChainProfit { chain: chain.id.to_string(), product: chain.product.to_string(), kind, profit_per_6000: eval.profit_per_6000 }
-        })
-        .collect()
-}
-
-/// Best profit per ambition kind: chains plus measured method profits.
+/// Best profit per ambition kind: the money guide's (module doc).
 pub fn kind_profits() -> Vec<(String, f64)> {
-    let mut out: Vec<(String, f64)> = chain_profits().into_iter().filter_map(|row| Some((row.kind?, row.profit_per_6000))).collect();
-    for row in crate::rates_service::cached_profit_rows().iter() {
-        if let Some(kind) = method_skill(&row.method).and_then(kind_for_skill) {
-            out.push((kind.to_string(), row.profit));
-        }
-    }
-    out
+    crate::guides_store::current().map(|set| crate::brain_d17::kind_profits(&set)).unwrap_or_default()
 }
 
 /// Both planner inputs at once: demand items and kind weights.

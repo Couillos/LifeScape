@@ -31,8 +31,9 @@ fn obj_id(item: &str) -> Option<i64> {
 }
 
 /// Fills the market and level inputs of `ctx` for `node`: best ask of
-/// the node's object, base levels, and the published profit of every
-/// money method the bot could work (keyed by the planner method).
+/// the node's object, base levels, and the bot's coin figures read in
+/// the precomputed money guide (`guide_coins`); none before the first
+/// set (the blind context's).
 pub fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, live: &Value) {
     ctx.levels = live_levels(live);
     if let NodeKind::ObtainItems { item, .. } = &node.kind {
@@ -41,52 +42,32 @@ pub fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, live: &Value) {
             ctx.price = service.reference(id).price.max(1);
         }
     }
+    if let Some(set) = crate::guides_store::current() {
+        guide_coins(ctx, node, &set, crate::brain_plan::live_combat(live));
+    }
+}
+
+/// The bot's coin figures read in the money guide `set` (one source,
+/// `brain_d17`), from `ctx`'s levels, quests and Ironman flag: its D17
+/// prices the grind of a purchase (`coins_per_tick`, every node), and a
+/// money node's methods carry their guide profit (`method_profit`: the
+/// best priced row of the method's activity in the bot's own band rows).
+/// The guide already prices what the market absorbs (D12): no saturation
+/// on top.
+pub fn guide_coins(ctx: &mut ReadyCtx, node: &Node, set: &crate::guides_store::GuideSet, combat: u8) {
+    let levels = ctx.levels.clone();
+    let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
+    let quests = ctx.quests_done.clone();
+    let key = crate::brain_d17::BotKey { level_of: &level_of, combat, quests_done: &quests, ironman: ctx.ironman };
+    let read = crate::brain_money::bot_rows(set, &level_of, &[]);
+    ctx.coins_per_tick = crate::brain_d17::rate_of(crate::brain_d17::best_row_in(&read.rows, &key).map(|row| row.profit_6000));
     if matches!(node.kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) {
-        let snapshot = crate::rates_service::live_snapshot();
-        // Shared table (an unopenable store serves it empty: no profit
-        // pushed, as the early return did).
-        let rows = crate::rates_service::cached_profit_rows();
-        if rows.is_empty() {
-            return;
-        }
-        // Saturation (user rule 2026-11-14): a product under a wall of
-        // asks is worth the share the market absorbs (public book only).
-        // Every bid counts as absorption here (own ones too: a buyer is
-        // a buyer); no account is left out.
-        let reader = crate::brain_bids::MarketReader::live("");
         for method in lifescape_planner::resolve_obtain::money_methods(ctx) {
-            let Some(script) = crate::brain_plan::rate_key(&method, node) else { continue };
-            let best = rows.iter().filter(|row| row.method == script).map(|row| row.profit).fold(f64::MIN, f64::max);
-            if best > f64::MIN {
-                ctx.method_profit.push((method.clone(), saturated_profit(&method, best, &|item| reader.view(item), &|item| crate::brain_bids::units_per_6000(&snapshot, &method, item))));
+            if let Some(profit) = crate::brain_d17::method_profit_in(&read.rows, &method) {
+                ctx.method_profit.push((method, profit));
             }
         }
     }
-}
-
-/// Object a money method sells (`gather:woodcut/willow_logs` →
-/// `willow_logs`, `gather:sheep/wool` → `wool`); fights loot a mix and
-/// name none.
-pub fn money_product(method: &str) -> Option<&str> {
-    let rest = method.strip_prefix("gather:")?;
-    rest.rsplit('/').next().filter(|item| !item.is_empty())
-}
-
-/// A money method's published profit weighed by the saturation of its
-/// product (`market_fit::saturation_factor`: bids + a day of volume over
-/// resting asks + one window's batch). A loss stays a loss; a method
-/// naming no product keeps its profit.
-pub fn saturated_profit(
-    method: &str,
-    profit: f64,
-    view: &dyn Fn(&str) -> Option<lifescape_planner::market_fit::BookView>,
-    units: &dyn Fn(&str) -> f64,
-) -> f64 {
-    let Some(item) = money_product(method) else { return profit };
-    if profit <= 0.0 {
-        return profit;
-    }
-    profit * lifescape_planner::market_fit::saturation_factor(view(item).as_ref(), units(item))
 }
 
 /// D-B: a production leg launched for a tradeable object keeps a bid on
@@ -157,7 +138,7 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn 
 /// Reservation price of what the obtain node at `index` gets, when it
 /// feeds a product the bot's graph makes (derived demand, public values:
 /// others' best bid or the current price; other inputs at the best ask or
-/// current price; the bot's own rates and coin rate). `None` otherwise.
+/// current price; the bot's own rates and its D17 coin rate). `None` otherwise.
 pub(crate) fn derived_reserve(life: &lifescape_planner::Life, index: usize, live: &Value) -> Option<f64> {
     let node = life.nodes.get(index)?;
     let consumed = life.nodes.iter().any(|other| other.deps.contains(&node.id) && matches!(other.kind, NodeKind::ObtainItems { .. }));
@@ -166,9 +147,8 @@ pub(crate) fn derived_reserve(life: &lifescape_planner::Life, index: usize, live
     }
     let _phase = crate::cpu_profile::phase("market.derived_reserve");
     let reader = crate::brain_bids::MarketReader::live(&life.account);
-    let rows = crate::brain_bids::rate_rows();
     crate::brain_bids::with_bot_state(life, live, |state| {
-        let rate = lifescape_planner::market_fit::coin_rate(&rows, state.level_of);
+        let rate = crate::brain_bids::bot_rate(life, state);
         let value_of = |item: &str| reader.view(item).and_then(|view| view.best_bid().max(view.current)).map(|price| price as f64);
         let input_price = |item: &str| reader.view(item).and_then(|view| view.best_ask().or(view.current)).unwrap_or(1) as f64;
         let prices = lifescape_planner::derived_demand::DerivedPrices { value_of: &value_of, input_price: &input_price, units_per_6000: state.units, coin_rate: rate };

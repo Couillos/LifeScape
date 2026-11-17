@@ -147,7 +147,9 @@ fn payload_serves_every_key() -> Result<(), lifescape_store::Error> {
     let units = payload.get("units").as_arr().cloned().unwrap_or_default();
     assert_eq!(units.first().map(keys), Some(crate::api_shapes::rate_row_columns(crate::api_shapes::UNIT_COLUMNS)));
     assert_eq!(xp.first().map(keys), Some(crate::api_shapes::rate_row_columns(crate::api_shapes::XP_COLUMNS)));
-    assert!(payload.get("profit").as_arr().is_some_and(|rows| rows.len() == 1), "one profit row per method band");
+    // Profit is the money guide's (`/api/guides/money`, decision
+    // 2026-11-17 « une seule source de profits »): never served here.
+    assert!(matches!(payload.get("profit"), lifescape_json::Value::Null), "no profit table");
     Ok(())
 }
 

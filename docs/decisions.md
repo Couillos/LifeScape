@@ -1647,3 +1647,62 @@ par les candidats du nœud qui le juge.
 Limites : `--use` est relu entre deux charges (une charge commencée finit,
 comme un sac plein) ; une unité gardée par un autre nœud peut être
 entamée par la dernière charge.
+
+## 2026-11-17 — Une seule source de profits : le guide money (plan rendements D12, D17, R4, R7)
+
+Constat : l'ancienne table `rates_profit` (`rates_service::cached_profit_
+rows`, rentabilité par activité × tranche calculée avant les guides, avec
+ses aberrations : `enchant:strung_sapphire_amulet` à 21,8 M/6000) pesait
+encore sur les DÉCISIONS en parallèle des guides : taux de pièces de la
+réponse aux bids (`brain_bids::rate_rows` → `market_fit::coin_rate`), de
+l'alchimie et de la demande dérivée ; `method_profit` des nœuds argent
+(`brain_market::fill_ctx`, × `saturated_profit`) ; `ReadyCtx::coins_per_
+tick` (meilleure ligne de toute la table, la même pour tous les bots) ;
+poids des ambitions par type (`market_demand::kind_profits` = table +
+`chain_profits`).
+Décision : chaque lecteur lit le guide money précalculé
+(`guides_store::current()`, jamais un calcul à la demande) par
+`brain_d17`, sémantique R7 :
+1. D17 d'un bot (`bot_d17`/`best_row`) = meilleur profit/6000 des lignes
+   cotées et gagnantes de SES vues (`brain_money::bot_rows` : vue de bande
+   de son niveau dans chaque compétence) à sa portée (`feasible_for(..).
+   within_reach()`, jugé comme `guide_read::best_profit_in` : sans stock,
+   sans bourse, asks du cycle ; Ironman : jamais une ligne marché). Test :
+   un bot au même niveau partout lit exactement le D17 de `brain_train`
+   (jeu des priors, niveaux 1 à 99, avec et sans quête).
+2. Taux de pièces (`coin_rate`, `brain_bids::bot_rate`) = D17 / 6000,
+   plancher `MIN_COIN_RATE` (aucun jeu ou aucune ligne : le plancher) :
+   bids (`choose` prend le taux), `production_costs_for`, `bid-why` (ligne
+   « D17 : famille méthode tranche profit »), alchimie, demande dérivée.
+3. `coins_per_tick` = ce taux, posé par `brain_market::guide_coins` (dans
+   `fill_ctx`) pour tout nœud ; `method_profit` = meilleure ligne cotée de
+   l'activité de la méthode dans les lignes du bot. Plus de saturation par
+   méthode : le guide valorise déjà le volume absorbé (D12).
+4. `kind_profits` = meilleure ligne du catalogue par type d'ambition
+   (cotée, sans condition impossible pour tous, type de sa compétence de
+   bande, chaînes comprises).
+Supprimés : `rates_profit.rs` (`profit_rows`, `cached_profit_rows`,
+`ProfitRow`, `PROFIT_TTL`, `trend_score`, `profit_per_6000`), `TREND_WEIGHT`,
+`brain_bids::rate_rows`/`realizable_rows`/`REALIZABLE_TTL_SECS`,
+`Snapshot::yield_rows`/`YieldRow`, `brain_market::saturated_profit`/
+`money_product`, `brain_plan::rate_key`, `market_demand::chain_profits`/
+`ChainProfit`, `market_fit::coin_rate`/`script_skill`/`RATE_WINDOW_TICKS`,
+le champ `profit` de `/api/rates/table` (le front ne l'affichait pas) et
+`api_shapes::ProfitRowShape`. Un test interdit tout retour d'un lecteur de
+l'ancienne table dans `orchestrator/src`.
+Coût CPU (bench ignoré `brain_picks::bench::profit_reads_bench`, copie du
+store et du snapshot live du 2026-11-17 17:34) : avant, la reconstruction
+de la table 58,8 ms à chaque invalidation (chaque rapport ingéré, au plus
+tard 10 s), la table réalisable 2,4 ms par 60 s, `chain_profits` 1,1 ms
+par pesée d'ambitions, un taux 0,02 ms ; après, aucune reconstruction (le
+jeu de guides est déjà construit par le thread `guides`, ~9-10 s CPU sur
+cette copie toutes les 300 s, inchangé), un D17 0,12 à 0,63 ms selon la
+tranche (moyenne 0,55 ms, 7 bots de 5 à 95), `guide_coins` d'un nœud
+argent 0,07 à 0,71 ms, `kind_profits` 0,9 à 1,2 ms par pesée.
+Constat à suivre (guide, pas ce lot) : sur cette copie, le D17 d'un bot
+de 80 vient de `smith:adamant_axe` (chaîne, 0 mesure) à ~151 000/6000,
+soit ~25 pièces/tick ; à 50, `smelt:mithril_bar` (ligne market, capital
+non jugé dans le D17 comme dans R7) à ~56 600. Ces lignes du guide
+fixent désormais le prix du temps des bots (bids, alchimie) : une
+aberration du guide s'y propage comme elle se propageait déjà au D17 de
+l'entraînement.

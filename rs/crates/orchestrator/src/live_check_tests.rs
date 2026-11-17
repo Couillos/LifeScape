@@ -15,7 +15,7 @@
 //! fills of the copy, else the high alchemy value) and the bids they
 //! open at; then, on the copy's book plus those bids, the lot each bot
 //! would make (the planner's `choose`: every valued object, its own coin
-//! rate from the copy's published profits, the snapshot's rates, its
+//! rate from the copy's money guide (D17), the snapshot's rates, its
 //! position, its ambition's levels; claims of the bots before it on the
 //! board), the input bids that lot would post (derived demand), and the
 //! fleet's ambition weights. Read-only on the copies.
@@ -88,7 +88,8 @@ fn live_check() {
         .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|text| crate::rates_service::snapshot_from_json(&text))
         .unwrap_or_default();
-    let published: Vec<(String, i64, f64)> = crate::rates_service::profit_rows(&store, &snapshot).into_iter().map(|row| (row.method, row.band, row.profit)).collect();
+    // The coin rates read the money guide of the copy (one cycle, `brain_d17`).
+    let guides = crate::guides_store::build_set(&store, &snapshot, &crate::web_guides::StoreWaits::default());
     // The copy's resting book by debug name.
     let mut owners: Vec<(String, String, bool, i64, i64)> = Vec::new();
     for order in store.resting_orders().expect("orders") {
@@ -96,19 +97,9 @@ fn live_check() {
         owners.push((name, order.account.clone(), order.side == lifescape_store::OrderSide::Buy, order.price, order.remaining));
     }
     let traded = prices_of(&store, &owners);
-    // The coin rates read the realizable profits (fleet view of the book).
-    let mut fleet = crate::brain_bids::views_from(&owners, "");
-    for (item, (price, volume)) in &traded {
-        let view = fleet.entry(item.clone()).or_default();
-        view.current = Some(*price);
-        view.volume_24h = *volume;
-    }
-    let rows = crate::brain_bids::realizable_rows(&published, &snapshot.yield_rows(), &|item| fleet.get(item).cloned());
-    for (label, table) in [("published", &published), ("realizable", &rows)] {
-        let mut best = table.clone();
-        best.sort_by(|left, right| right.2.total_cmp(&left.2));
-        eprintln!("== best {label} profits (script, band, per 6000): {:?}", best.iter().take(6).map(|(script, band, profit)| format!("{script}/{band} {profit:.0}")).collect::<Vec<_>>());
-    }
+    let mut best: Vec<&lifescape_planner::guide_model::MoneyRow> = guides.money_catalog.rows.iter().filter(|row| row.priced).collect();
+    best.sort_by(|left, right| right.profit_6000.total_cmp(&left.profit_6000));
+    eprintln!("== best money guide lines (catalogue, per 6000): {:?}", best.iter().take(6).map(|row| format!("{}/{} {:.0}", row.method, row.band, row.profit_6000)).collect::<Vec<_>>());
     let price_of = |item: &str| -> i64 {
         traded.get(item).map(|(price, _)| *price).unwrap_or_else(|| lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.alch_high).unwrap_or(1)).max(1)
     };
@@ -168,7 +159,7 @@ fn live_check() {
             caster,
             rate: &lifescape_planner::work_rate::prior_rate,
         };
-        let rate = lifescape_planner::market_fit::coin_rate(&rows, state.level_of);
+        let rate = crate::brain_d17::rate_of(crate::brain_d17::bot_d17(&guides, &crate::brain_bids::key_of(&life, &state)));
         // Every valued lot (spread ignored), best rate first; `*` preempts.
         let mut lots: Vec<lifescape_planner::bid_response::Opportunity> = state.with_producer(&life, rate, |producer| {
             let market = |item: &str| reader.view(item);
@@ -202,7 +193,7 @@ fn live_check() {
             })
             .collect();
         let started = std::time::Instant::now();
-        let chosen = crate::brain_bids::choose(&life, &reader, &rows, &state);
+        let chosen = crate::brain_bids::choose(&life, &reader, rate, &state);
         let spent_ms = started.elapsed().as_secs_f64() * 1000.0;
         let chosen_text = match &chosen {
             Some((lot, _)) => {
@@ -248,7 +239,7 @@ fn live_check() {
     let orders = store.resting_orders().unwrap_or_default();
     let signals = crate::market_demand::signals_from(&orders, crate::market_service::MarketService::now_clock(), &name_of, &|secs| secs.max(0) as u64 * 10);
     let items = crate::market_demand::demand_items_with(&signals, &|item| price_of(item) as f64);
-    let mut weights = lifescape_planner::kind_weights(&items, &[]);
+    let mut weights = lifescape_planner::kind_weights(&items, &crate::brain_d17::kind_profits(&guides));
     weights.sort_by(|left, right| right.weight.total_cmp(&left.weight));
     for row in weights {
         eprintln!("{:<12} weight {:.2} top {:?}", row.kind, row.weight, row.top_item);

@@ -42,14 +42,6 @@ fn shop_floor(item_debug: &str) -> i64 {
     lifescape_gamedata::obtain::merchant_price(item_debug).unwrap_or(1).max(1)
 }
 
-/// Rate key of a planner method: the yields are keyed by the ACTIVITY
-/// the method works (plan rendements R2.1, `planner::activity`: a drop
-/// farm reads its fight's row, a fishing leg its spot option's). `None`
-/// for an empty method.
-pub(crate) fn rate_key(method: &str, _node: &Node) -> Option<String> {
-    (!method.is_empty()).then(|| lifescape_planner::activity::activity_of_method(method))
-}
-
 /// Debug names of everything the live bot owns (pack, bank, worn).
 pub(crate) fn live_owned(live: &Value) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
@@ -103,14 +95,8 @@ pub(crate) fn ready_ctx(life: &Life, node: &Node, live: &Value) -> ReadyCtx {
     };
     let snapshot = crate::rates_service::live_snapshot();
     if let Ok(store) = lifescape_store::Store::open(&crate::market_service::db_path()) {
-        // Best published coin rate prices the grind (fallback 0.5); the
-        // shared table, never rebuilt per context (CPU 2026-11-14).
-        let profits = crate::rates_service::cached_profit_rows();
-        if let Some(top) = profits.iter().map(|row| row.profit).max_by(|left, right| left.total_cmp(right)) {
-            if top > 0.0 {
-                ctx.coins_per_tick = (top / crate::rates_service::NORMALIZE_TICKS).max(0.01);
-            }
-        }
+        // The grind's coin rate is the bot's D17 in the money guide,
+        // read with its levels and quests (`brain_market::fill_ctx`).
         if !item_debug.is_empty() {
             let display = display_of(&item_debug);
             let (price, _) = crate::rates_service::price_estimate(&store, &display);
@@ -395,10 +381,10 @@ mod tests {
     /// method nothing estimates is an error, never the old blind 200.
     #[test]
     fn farm_yield_reads_planner_keyed_rates() {
-        use super::{farm_yield, rate_key};
-        let node = Node::new("n1", NodeKind::ObtainItems { item: "raw_shrimp".to_string(), count: 100 }, Vec::new(), 100);
-        assert_eq!(rate_key("farm:raw_shrimp", &node).as_deref(), Some("gather:fishing/raw_shrimp"), "keyed by activity (R2.1)");
-        assert_eq!(rate_key("farm:feather", &node).as_deref(), Some("fight:melee/chickens"));
+        use super::farm_yield;
+        let activity = lifescape_planner::activity::activity_of_method;
+        assert_eq!(activity("farm:raw_shrimp"), "gather:fishing/raw_shrimp", "keyed by activity (R2.1)");
+        assert_eq!(activity("farm:feather"), "fight:melee/chickens");
         let empty = crate::rates_service::Snapshot::new();
         let live = lifescape_json::parse(r#"{"skills":[{"id":8,"level":1}]}"#).expect("live");
         let low = farm_yield(&empty, "gather:woodcut/logs", "Logs", &live).expect("prior");

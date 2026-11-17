@@ -790,15 +790,38 @@ plafonnées aux produits faits ; réalisé = ventes − achats ; statut
   tirage pondéré de R7 (`train_score::pick`, `guide_pick`) ; le guide
   money making est lu par les nœuds argent (R7, `brain_money`).
 
-Rentabilité d'une (activité, style, tranche), cumul tous sites et outils :
-Σ flux positifs × prix courant (médiane des 5 derniers fills bornée par
-le carnet, `rates_price` ; sinon le carnet, sinon 1 pièce — jamais un
-VWAP 24 h ; règle propre aux guides ci-dessus, plus stricte) − Σ flux négatifs × prix (intrants, runes, munitions, appât,
-nourriture, péages, pertes : le bilan signé, §8 ; échanges et
-`unattributed` exclus) − friction des pauses market (valorisées au taux
-de l'activité) + bonus de tendance (score public × chiffre × 0,1), lue
-par le cerveau (`cached_profit_rows`, plus affichée : la page money
-making la remplace pour l'opérateur).
+Une seule source de profits (2026-11-17, `decisions.md` « Une seule
+source de profits ») : le guide money précalculé. L'ancienne table
+`rates_profit` (rentabilité par activité × tranche tous sites et outils,
+calculée avant les guides, avec ses aberrations : `enchant:strung_
+sapphire_amulet` à 21,8 M/6000) est SUPPRIMÉE, avec `cached_profit_rows`,
+`brain_bids::rate_rows`/`realizable_rows`, `market_demand::chain_profits`,
+`brain_market::saturated_profit`, `market_fit::coin_rate` et le champ
+`profit` de `/api/rates/table`. Chaque lecteur du cerveau lit
+`guides_store::current()` via `brain_d17` (jamais un calcul à la
+demande), sémantique R7 :
+- D17 d'un bot (`brain_d17::bot_d17`) = meilleur profit/6000 des lignes
+  cotées et gagnantes de SES vues (`brain_money::bot_rows` : la vue de
+  bande de son niveau dans chaque compétence) à sa portée
+  (`feasible_for(..).within_reach()`, jugé comme `guide_read::
+  best_profit_in` : sans stock, sans bourse, asks du cycle ; Ironman :
+  aucune ligne marché) ; un bot au même niveau partout lit exactement le
+  D17 de `brain_train` ;
+- taux de pièces d'un bot (`brain_d17::coin_rate`) = D17 / 6000, plancher
+  `market_fit::MIN_COIN_RATE` (0,1 ; aucun jeu publié ou aucune ligne :
+  le plancher) : réponse aux bids (`brain_bids::bot_rate`), alchimie
+  (`brain_alch`), demande dérivée (`brain_market::derived_reserve`) ;
+- `ReadyCtx::coins_per_tick` (temps d'un achat) = ce même taux, posé par
+  `brain_market::guide_coins` (dans `fill_ctx`) pour tout nœud ; avant le
+  premier jeu, le 0,5 du contexte aveugle ;
+- profit d'une méthode d'un nœud argent/pièces (`method_profit`) = sa
+  meilleure ligne cotée dans les lignes du bot (`brain_d17::
+  method_profit_in`, clé d'activité) ; le guide valorise déjà ce que le
+  marché absorbe (D12) : plus de saturation par-dessus ;
+- poids des ambitions par type (`market_demand::kind_profits`) =
+  meilleure ligne du catalogue par type (`brain_d17::kind_profits` :
+  lignes cotées sans condition impossible pour tous, type de leur
+  compétence de bande, chaînes comprises).
 
 ## Tendances
 
@@ -984,8 +1007,8 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
   (une charge par blocage est le rythme normal).
 - Demande (2026-11-13) : `market_demand::signals()` (offres d'achat au
   repos par objet : nombre, acheteurs, quantité non servie, meilleure
-  offre, âge, poids) et `chain_profits()`/`kind_profits()` nourrissent les
-  ambitions (voir `docs/planner.md` § Ambitions) ; lecture seule.
+  offre, âge, poids) et `kind_profits()` (guide money, `brain_d17`)
+  nourrissent les ambitions (voir `docs/planner.md` § Ambitions) ; lecture seule.
 - Couverture : pièces et stock en banque comptent (banque connue gardée
   par le SDK après fermeture, voir `docs/protocol.md`) côté cerveau
   (`holdings_count`) et registre (`market_service::ledger_holdings`).
@@ -1106,7 +1129,7 @@ fills) ou publiques (carnet, prints) ; jamais l'état privé d'un autre.
   d'achat. Plafond partagé avec la réponse aux offres : la réserve ne
   dépasse jamais le coût de FABRICATION que `bid_response` donne au bot
   (`bid_response::production_cost` = chemin « make » de `unit_cost`,
-  pièces + ticks × `market_fit::coin_rate` ; calculé une fois par passe
+  pièces + ticks × taux du bot (son D17, `brain_d17::coin_rate`) ; calculé une fois par passe
   par `brain_bids::production_costs_for`, mêmes niveaux, bans, quêtes,
   rendements et carnet que le tirage), arrondi bas, ≥ 1 : un quota compte
   les bids au-dessus de ce coût, le producteur ne garde donc jamais le
@@ -1198,10 +1221,10 @@ d'achat que ce bot sait fabriquer avec profit :
   fabrication / 200 récolte ; chaque intrant à SON coût unitaire). Un
   stock détenu coûte ce que sa vente rapporterait (meilleur bid public)
   et aucun temps. Total = pièces + ticks × taux du bot.
-- Taux du bot (`market_fit::coin_rate`) : meilleur profit publié (page
-  rates) parmi les scripts que ses niveaux ouvrent (bande ≤ niveau),
-  plancher 0,1 pièce/tick (le temps n'est jamais gratuit) ; les
-  engagements de marché ne comptent pas.
+- Taux du bot (`brain_bids::bot_rate` → `brain_d17::coin_rate`) : son
+  D17 / 6000, le meilleur profit du guide money à sa portée (niveaux,
+  combat, quêtes, Ironman), plancher 0,1 pièce/tick (le temps n'est
+  jamais gratuit).
 - Profondeur : bids qui paient plus que le coût total ; moins les asks au
   repos à ≤ 125 % du meilleur bid (offre déjà en route : ces vendeurs
   descendent vers les bids) ; moins le stock libre du bot (il le vend
@@ -1233,12 +1256,11 @@ d'achat que ce bot sait fabriquer avec profit :
 `planner/src/market_fit.rs` (pur, carnet public + état du bot) :
 - `saturation_factor(vue, lot)` = (profondeur des bids + volume 24 h) /
   (asks au repos + lot), borné [0, 1] ; 1 sans ask (le premier vendeur
-  fixe le prix) ou sans donnée. Les méthodes d'argent récoltées
-  (`gather:<…>/<objet>`) valent leur profit publié × ce facteur
-  (`brain_market::fill_ctx` → `saturated_profit`) : 33 364 bûches de
-  saule à 1 pièce pour 4 319 échangées par jour ⇒ ×0,13, une méthode
-  dont le produit se vend passe devant. Les combats (butin mêlé) gardent
-  leur profit.
+  fixe le prix) ou sans donnée. Lu par `bid_response` (ce qu'un lot
+  ajoute à un carnet) ; les méthodes d'argent n'appliquent plus ce
+  facteur (2026-11-17) : leur profit est leur ligne du guide money, qui
+  valorise déjà le volume absorbé (D12 : le prix courant ne vaut que pour
+  le volume de ses 5 derniers fills, puis bids, PNJ, sinon 0).
 - `own_use_items(ambition)` : ce que les jalons ouverts du bot
   consommeront (chaque tranche d'un jalon de niveau, de son niveau live à
   la cible, `sizing::tranche_consumption` : bûches de l'allumeur, poisson
@@ -1527,16 +1549,14 @@ d'alchimie du bot lanceur) qu'une jambe de production fabrique :
   objets sans jambe de production écartés avant toute lecture du store ;
   volume lu seulement pour un objet avec bids, prix échangé ou alchimie.
 
-Taux du bot réalisable (`brain_bids::rate_rows`, `realizable_rows`) :
-le taux de `market_fit::coin_rate` lit les profits publiés MULTIPLIÉS par
-la part que le marché absorbe de chaque produit de la ligne ((bids +
-volume 24 h) / (asks + rendement d'une fenêtre), pondéré par la valeur ;
-pièces ramassées entières ; un produit sans aucun acheteur ne vaut rien
-à l'heure). Live : quelques fills de cimeterres de bronze publiaient
-`smith` tranche 1 à 65 929 / 6000 ticks, soit 11 pièces/tick pour TOUS
-les bots (forge ≥ 1) : aucun lot ne battait ce temps. Table partagée,
-reconstruite toutes les 60 s (une lecture du carnet). La page rates
-reste brute (information opérateur).
+Taux du bot (2026-11-17) : son D17 dans le guide money précalculé
+(`brain_bids::bot_rate`, `brain_d17`), plus la table `rates_profit`
+« réalisable » (`rate_rows`/`realizable_rows`, supprimées) : le guide
+valorise déjà ce que le marché absorbe (D12) ; le cas live de 2026-11-14
+(`smith` tranche 1 à 65 929 / 6000 sur quelques fills de cimeterres,
+11 pièces/tick pour tous) ne peut plus se produire, chaque ligne étant
+cotée au volume de ses fills. `orchestrator bid-why` affiche la ligne D17
+du bot (famille, méthode, tranche, profit).
 
 Tableau des commandes (`market_claims.rs`) : un bot qui prend un lot
 publie « N unités de X réclamées » ; tout bot lit le total réclamé par

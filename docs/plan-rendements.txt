@@ -228,6 +228,10 @@ R4  Moteur de guides (pur, testable hors ligne) + guide money making.
       Ironman exclu ;
     - une seule table publiée, remplace rates_profit, realizable_rows,
       units_per_6000, farm_yield (doublons).
+      Fait 2026-11-17 pour rates_profit et realizable_rows (decisions.md
+      « Une seule source de profits ») : D17, taux de pièces, profit des
+      méthodes et poids des ambitions lus dans le guide money
+      (`brain_d17`) ; units_per_6000 et farm_yield restent.
 
 R5  Exécution 100 % market.
     - méthode planificateur dédiée (nom proposé "trade:craft/<recette>")
