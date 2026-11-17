@@ -349,7 +349,11 @@ Postes et combat : niveau manquant = `blocked{level:...}` (plus de
 Usage), Rune Mysteries = `blocked{quest:runemysteries}`, le `--site` du
 brain choisit le poste (`kit::produce`), `pottery <produit>` (pot, plat
 à tarte, bol), `ground_pickup <objet>` au site, `bury_loot [os]` depuis la
-banque. Un spot de combat nommé n'est jamais remplacé après une mort
+banque. Un site de ramassage vide est GUETTÉ en ticks jusqu'à la repousse
+la plus lente des objets voulus (`respawnrate` du dump + 10, plafond 3000 ;
+épée d'acier 1000, viande cuite 200) avant de finir : avec des joueurs
+autour `contended:<site>` (D4), seul `Failed` sinon (2026-11-17 : l'ancien
+garde « 5 balayages » de `pump(2)` rendait la main en ~40 ticks). Un spot de combat nommé n'est jamais remplacé après une mort
 (banque puis erreur de danger) et un spot derrière le péage sans `toll`
 donne `blocked{access:al_kharid_toll}`. Les achats (`market shopbuy`,
 accepte `toll` et `--site`) ne vont jamais seuls en Wilderness, sous
@@ -586,6 +590,14 @@ rentrent en banque (jamais deux dans le sac). Un outil porté reste porté
 le serveur s'en sert. Verrous du marché respectés (`banked_usable`).
 Pêche exclue : un outil par palier (filet, canne, harpon, casier), pas un
 rang (`fish_gear::ensure_gear` retire l'outil exact du palier).
+
+Sac plein au retrait d'un outil (2026-11-17, owen_wood : un filler poulets
+finit son budget sac plein, chaque run mining/essence pressait « retirer
+la pioche de rune », lisait « You don't have enough inventory space. » et
+bloquait « missing bronze_pickaxe » en boucle) : `restore_banked_tool` et
+`restore_from_bank` libèrent d'abord les cases nécessaires (1 outil, 2
+pièces) en déposant les piles les plus larges (`room_deposits`), jamais
+un outil de famille, marteau, briquet, ciseau ni un objet tenu du script.
 
 ## Repas et nourriture de combat (2026-11-17)
 

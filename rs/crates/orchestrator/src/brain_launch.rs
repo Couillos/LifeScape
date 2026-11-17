@@ -449,7 +449,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let free_now = |exact: bool| if exact { free_of(item) } else { lifescape_planner::tools::family_held(item, i64::MAX / 4, &free_of) };
         let mut free = if ctx.held < *count { 0 } else { free_now(exact) };
         if crate::brain_tools::held_verdict(*count, ctx.held, free) == crate::brain_tools::HeldVerdict::WithdrawListings {
-            let withdrawn = crate::brain_tools::withdraw_family_listings(&job.account, item);
+            let withdrawn = crate::brain_tools::release_own_locks(orch, &job.account, std::slice::from_ref(item));
             // A copy still in a deal stays locked: the obtain runs.
             free = free_now(exact);
             crate::logln!(

@@ -2,11 +2,13 @@
 //! Market makers for the operator (plan marché Q6): `orchestrator
 //! economy` and the dashboard economy page, never read by a bot. Per
 //! maker account (life files with the `market_maker` role): slice and
-//! phase, capital (coins at the switch plus P&L), stock by object, mean
+//! phase, capital (earning: the live wallet the switch reads; quoting:
+//! coins at the switch plus P&L), stock by object, mean
 //! quoted spread (ask over bid of its two-sided objects), P&L (realized
 //! coins of its deals since the switch plus the stock they left, marked
 //! at the current price) and its share of the resting units of its
-//! slice's books (both sides). Read from the store and the life files
+//! slice's books (both sides). Read from the store, the life files and
+//! the merged views (`run/users/<account>.json`, wallets)
 //! only: offline, the daemon may be down.
 
 use std::collections::HashMap;
@@ -31,8 +33,10 @@ pub struct MakerRow {
     /// Stock bought as a maker, marked at the current price.
     pub stock_value: i64,
     pub pnl: i64,
-    /// Coins at the switch plus P&L.
-    pub capital: i64,
+    /// The capital the switch compares to its target: an earning maker's
+    /// wallet (pack, bank, worn coins), a quoting one's coins at the
+    /// switch plus P&L. `None`: an earning maker with no snapshot.
+    pub capital: Option<i64>,
     /// (object, units, marked value), largest value first.
     pub stock: Vec<(String, i64, i64)>,
     pub mean_spread: Option<f64>,
@@ -46,7 +50,7 @@ fn resting(order: &Order) -> bool {
 
 /// One row from its inputs (pure): own positions, own resting orders,
 /// all resting units per slice object (both sides), marks per object.
-pub fn row_from(account: &str, role: &MakerRole, held: &std::collections::BTreeMap<i64, Position>, own: &[Order], slice_units: i64, marks: &HashMap<i64, i64>) -> MakerRow {
+pub fn row_from(account: &str, role: &MakerRole, held: &std::collections::BTreeMap<i64, Position>, own: &[Order], slice_units: i64, marks: &HashMap<i64, i64>, wallet: Option<i64>) -> MakerRow {
     let name_of = |id: i64| lifescape_gamedata::obj_by_id(usize::try_from(id).unwrap_or(0)).and_then(|obj| obj.name).unwrap_or("?").to_string();
     let cash: i64 = held.values().map(Position::cash).sum();
     let mut stock: Vec<(String, i64, i64)> = held
@@ -84,12 +88,28 @@ pub fn row_from(account: &str, role: &MakerRole, held: &std::collections::BTreeM
         cash,
         stock_value,
         pnl,
-        capital: role.capital_at_switch + pnl,
+        capital: if role.phase == MakerPhase::Quoting { Some(role.capital_at_switch + pnl) } else { wallet },
         stock,
         mean_spread,
         book_share,
         open_orders: quotes.len(),
     }
+}
+
+/// Coins of a live snapshot (pack, bank, worn): the wallet the switch
+/// reads (`brain_plan::holdings_count`, same `live_items` rule).
+pub fn wallet_of(snapshot: &Value) -> i64 {
+    crate::live_items::live_units(snapshot, "coins")
+}
+
+/// An account's wallet from its merged view on disk
+/// (`run/users/<account>.json`, written by the daemon from the pushed
+/// snapshot): `None` when absent, unreadable or without inventories.
+fn wallet_on_disk(account: &str) -> Option<i64> {
+    let (merged, _, _) = crate::paths::user_paths(account);
+    let text = std::fs::read_to_string(merged).ok()?;
+    let value = lifescape_json::parse(&text).ok()?;
+    (!value.get("bank").is_null() || !value.get("inv").is_null()).then(|| wallet_of(&value))
 }
 
 /// Maker lives on disk: (account, role as the current partition reads
@@ -135,7 +155,8 @@ pub fn maker_rows(store: &Store, lives_dir: &std::path::Path) -> Vec<MakerRow> {
                 Some((*item, lifescape_market::median_price(&prices)?))
             })
             .collect();
-        rows.push(row_from(&account, &role, &held, &own, slice_units, &marks));
+        let wallet = if role.phase == MakerPhase::Quoting { None } else { wallet_on_disk(&account) };
+        rows.push(row_from(&account, &role, &held, &own, slice_units, &marks, wallet));
     }
     rows
 }
@@ -150,7 +171,7 @@ pub fn row_value(row: &MakerRow) -> Value {
         ("capital_target", Value::Int(row.capital_target)),
         ("slice_need", Value::Int(crate::market_maker::slice_need(row.slice))),
         ("slice_objects", Value::Int(crate::market_maker::slice_items(row.slice).len() as i64)),
-        ("capital", Value::Int(row.capital)),
+        ("capital", row.capital.map(Value::Int).unwrap_or(Value::Null)),
         ("pnl", Value::Int(row.pnl)),
         ("stock_value", Value::Int(row.stock_value)),
         ("mean_spread", row.mean_spread.map(Value::Float).unwrap_or(Value::Null)),
@@ -193,7 +214,7 @@ pub fn print_rows(rows: &[MakerRow]) {
             crate::market_maker::slice_items(row.slice).len(),
             crate::market_maker::slice_need(row.slice),
             row.capital_target,
-            row.capital,
+            row.capital.map_or_else(|| "n/a".to_string(), |capital| capital.to_string()),
             row.pnl,
             row.cash,
             row.stock_value,
@@ -224,10 +245,10 @@ mod tests {
         held.insert(feather, Position { units: 300, cost: 600, bought_units: 500, bought_coins: 1000, sold_units: 200, sold_coins: 700 });
         let own = vec![order(feather, OrderSide::Buy, 2, 100), order(feather, OrderSide::Sell, 3, 100), Order { motive: "surplus".to_string(), ..order(feather, OrderSide::Sell, 9, 5) }];
         let marks: HashMap<i64, i64> = [(feather, 2)].into_iter().collect();
-        let row = row_from("maker_two", &role, &held, &own, 800, &marks);
+        let row = row_from("maker_two", &role, &held, &own, 800, &marks, Some(1_234));
         assert_eq!(row.cash, -300);
         assert_eq!(row.stock_value, 600, "300 feathers at the current 2");
-        assert_eq!((row.pnl, row.capital), (300, 95_300));
+        assert_eq!((row.pnl, row.capital), (300, Some(95_300)), "a quoting maker: coins at the switch plus P&L");
         assert_eq!(row.mean_spread, Some(1.5), "ask 3 over bid 2; the surplus listing is no quote");
         assert_eq!(row.book_share, Some(0.25), "200 of 800 resting units");
         assert_eq!(row.open_orders, 2);
@@ -235,5 +256,28 @@ mod tests {
         let value = row_value(&row);
         assert_eq!(value.get("phase").as_str(), Some("quoting"));
         assert_eq!(value.get("capital").as_i64(), Some(95_300));
+    }
+
+    /// Live 2026-11-17: `economy` printed `capital 0 … cash +0, stock 0`
+    /// for the 11 earning makers (carl_miller 42 541 coins, luke_hill
+    /// 10 878): an earning maker has no switch nor P&L yet, its capital is
+    /// the wallet the switch compares to the target (`holdings_count`
+    /// coins: pack, bank, worn), read from the same live snapshot shape.
+    #[test]
+    fn an_earning_maker_reports_the_wallet_the_switch_reads() {
+        use lifescape_json::{object, Value};
+        let role = MakerRole::new(2, 11, 103_000);
+        let coins = lifescape_gamedata::objs_by_name("coins")[0].obj_id as i64;
+        let stack = |count: i64| object(vec![("id", Value::Int(coins)), ("name", str_value("Coins")), ("count", Value::Int(count))]);
+        let users_file = object(vec![("inv", Value::Arr(vec![stack(1_541)])), ("bank", Value::Arr(vec![stack(41_000)]))]);
+        let wallet = wallet_of(&users_file);
+        assert_eq!(wallet, 42_541, "pack plus bank coins");
+        let row = row_from("carl_t", &role, &std::collections::BTreeMap::new(), &[], 0, &HashMap::new(), Some(wallet));
+        assert_eq!(row.capital, Some(42_541), "the wallet, never 0");
+        assert_eq!(lifescape_planner::switch_due(&role, wallet), false, "42 541 < 103 000: still earning");
+        assert!(lifescape_planner::switch_due(&role, 103_000), "the switch fires on the same wallet at the target");
+        let unknown = row_from("carl_t", &role, &std::collections::BTreeMap::new(), &[], 0, &HashMap::new(), None);
+        assert_eq!(unknown.capital, None, "no snapshot: unknown, never 0");
+        assert!(row_value(&unknown).get("capital").is_null());
     }
 }

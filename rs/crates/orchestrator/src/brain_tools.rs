@@ -199,13 +199,36 @@ pub fn listed_units(account: &str, name: &str) -> i64 {
 
 /// Cancels the bot's resting sells of every member of `item`'s family;
 /// returns how many closed.
-pub fn withdraw_family_listings(account: &str, item: &str) -> usize {
-    let Some(service) = crate::market_service::shared() else { return 0 };
+fn withdraw_family_on(service: &crate::market_service::MarketService, account: &str, item: &str) -> usize {
     lifescape_planner::tools::tool_family(item)
         .iter()
         .filter_map(|name| crate::brain_gear::obj_id(name))
         .map(|id| service.cancel_open_because(account, id, lifescape_store::OrderSide::Sell, "need_held"))
         .sum()
+}
+
+/// Withdraws the bot's listings of every `items` family and, when any
+/// went, hands its worker the new locks at once (`push`), never at the
+/// next market round: the relaunch a second later read the old lock and
+/// blocked twice more (live 2026-11-17, noah_hill/Zezima `locked:gold_ore`).
+pub fn release_own_locks_with(
+    service: &crate::market_service::MarketService,
+    account: &str,
+    items: &[String],
+    push: &mut dyn FnMut(&crate::market_service::MarketService, &str),
+) -> usize {
+    let withdrawn: usize = items.iter().map(|item| withdraw_family_on(service, account, item)).sum();
+    if withdrawn > 0 {
+        push(service, account);
+    }
+    withdrawn
+}
+
+/// `release_own_locks_with` on the shared market, pushing through the
+/// daemon's `set_locks`.
+pub(crate) fn release_own_locks(orch: &crate::daemon::Orchestrator, account: &str, items: &[String]) -> usize {
+    let Some(service) = crate::market_service::shared() else { return 0 };
+    release_own_locks_with(&service, account, items, &mut |service, account| orch.push_locks(service, &[account.to_string()]))
 }
 
 /// Tag of a block need the bot's own market locks hold

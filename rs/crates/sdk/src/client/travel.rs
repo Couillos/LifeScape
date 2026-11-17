@@ -1089,7 +1089,12 @@ impl Bot {
         // One click only: the swing shows in the live loc within a few
         // ticks. A second click would toggle a swapped door shut again,
         // so never re-click for the walk-through model; the teleport
-        // model moves us instead, which the watch below sees first.
+        // model moves us instead, which the watch below sees first —
+        // unless the bot already stood on the door tile (a stale
+        // step-through parked it there): then only the swing counts
+        // (`travel_door_watch`).
+        let door_tile = (door.x, door.z, door.level);
+        let clicked_from_door = (self.world.x, self.world.z, self.world.level) == door_tile;
         self.op_loc(open_op, door.x, door.z, door.loc)?;
         // The plan names toll gates: only then is a pay dialog expected.
         // A dialog on a free door is unexpected — never auto-pay it, the
@@ -1098,18 +1103,17 @@ impl Bot {
             return self.finish_door(door, cross_to, deadline);
         }
         let watched = self.world.ticks + DOOR_SWING_WAIT;
+        let target = (cross_to.x, cross_to.z, cross_to.level);
         while self.world.ticks < watched {
             self.pump(1)?;
-            if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
-                return Ok(());
-            }
-            if (self.world.x, self.world.z) == (door.x, door.z) && self.world.level == door.level {
+            let at = (self.world.x, self.world.z, self.world.level);
+            match super::travel_door_watch::door_watch(at, door_tile, target, clicked_from_door, self.door_live_open(door)) {
+                super::travel_door_watch::DoorWatch::Crossed => return Ok(()),
                 // Teleported onto the tile: one more click goes through.
-                return self.finish_teleport_door(door, open_op, cross_to, deadline);
-            }
-            if self.door_live_open(door) {
+                super::travel_door_watch::DoorWatch::Teleported => return self.finish_teleport_door(door, open_op, cross_to, deadline),
                 // Swapped open: step through at once, before it re-closes.
-                return self.step_door_through(door, cross_to, deadline);
+                super::travel_door_watch::DoorWatch::Swung => return self.step_door_through(door, cross_to, deadline),
+                super::travel_door_watch::DoorWatch::Wait => {}
             }
             if self.world.ticks > deadline {
                 return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));

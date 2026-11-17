@@ -153,6 +153,25 @@ pub fn nothing_hunted_error(bot: &Bot, style: &str, spots: &[&str]) -> ScriptErr
     ScriptError::Failed(format!("{style} {}: nothing killed, no cluster reached from {:?}", spots.join(","), bot.position()))
 }
 
+/// True when a hunt must refuse a spot whose camp of record is
+/// underground (`has_entrance`): without the ladder's clusters (route
+/// verified offline) and without a brain site on the surface. A surface
+/// `--site` (the Wilderness hill giants, user 2026-11-16: open to every
+/// bot) hunts the surface spawns of the same foes.
+pub fn underground_refused(has_entrance: bool, has_clusters: bool, site: Option<(i32, i32, i32)>) -> bool {
+    let surface_site = site.is_some_and(|(_, z, _)| !knowledge::underground::is_underground(i64::from(z)));
+    has_entrance && !has_clusters && !surface_site
+}
+
+/// Clusters on the brain site's side of the surface (a surface site
+/// never walks to a dungeon camp, which needs the ladder's route); no
+/// site: unchanged.
+pub fn site_side_clusters(clusters: Vec<(i32, i32, usize)>, site: Option<(i32, i32, i32)>) -> Vec<(i32, i32, usize)> {
+    let Some((_, site_z, _)) = site else { return clusters };
+    let below = knowledge::underground::is_underground(i64::from(site_z));
+    clusters.into_iter().filter(|(_, z, _)| knowledge::underground::is_underground(i64::from(*z)) == below).collect()
+}
+
 /// The pre-ladder hunt (`HuntPlan::plain`).
 pub fn run_spot(
     bot: &mut Bot,
@@ -173,9 +192,10 @@ pub fn run_spot_with(
     ticks_limit: u64,
     no_bank: bool,
 ) -> Result<(u32, bool, bool), ScriptError> {
-    if spot.entrance.is_some() && plan.clusters.is_none() {
+    if underground_refused(spot.entrance.is_some(), plan.clusters.is_some(), bot.assigned_site) {
         // Underground camps only ride with the ladder's clusters (route
         // verified offline, approach rated); a bare key never walks down.
+        // A surface site of the same foes hunts there (`underground_refused`).
         return Err(ScriptError::Usage(format!(
             "spot {} is underground, not traversable from {:?}",
             spot.key,
@@ -194,7 +214,7 @@ pub fn run_spot_with(
     };
     let targets = match &plan.clusters {
         Some(clusters) => clusters.clone(),
-        None => crate::kit::foes::ranked_clusters(bot, spot),
+        None => site_side_clusters(crate::kit::foes::ranked_clusters(bot, spot), bot.assigned_site),
     };
     if targets.is_empty() {
         bot.log(&format!("no spawn for {}", spot.key));
@@ -320,6 +340,26 @@ pub fn run_spot_with(
 #[cfg(test)]
 mod tests {
     use super::{food_blocked, foodless, level_reached, stop_level_of, HuntPlan};
+
+    /// Live 2026-11-17 (george_97, lucy_rhodes, ryan_park, frank_lane…):
+    /// `melee hill_giants --site 3308,3661,0` (the Wilderness surface
+    /// giants, open to every bot) was refused "spot hill_giants is
+    /// underground, not traversable" because the spot's camp of record is
+    /// the Edgeville dungeon: 21 Usage, abandons, attack/defence bans in
+    /// 40 minutes. A surface site hunts the surface spawns; only a hunt
+    /// that would go underground without the ladder's route is refused.
+    #[test]
+    fn a_surface_site_of_an_underground_spot_hunts_on_the_surface() {
+        use super::{site_side_clusters, underground_refused};
+        assert!(!underground_refused(true, false, Some((3308, 3661, 0))), "surface Wilderness giants: hunt");
+        assert!(underground_refused(true, false, Some((3100, 9830, 0))), "dungeon site without the ladder route: refused");
+        assert!(underground_refused(true, false, None), "no site: the camp of record is underground, refused");
+        assert!(!underground_refused(true, true, None), "the ladder's clusters ride down");
+        assert!(!underground_refused(false, false, None), "a surface spot");
+        let clusters = vec![(3300, 3650, 4), (3105, 9830, 9), (3100, 3850, 3)];
+        assert_eq!(site_side_clusters(clusters.clone(), Some((3308, 3661, 0))), vec![(3300, 3650, 4), (3100, 3850, 3)], "surface site: no dungeon camp");
+        assert_eq!(site_side_clusters(clusters.clone(), None), clusters, "no site: unchanged");
+    }
 
     /// `farm:cowhide --want cowhide 2`: the fight stops between foes once
     /// the looted hides meet the order (before: a whole spot visit, a

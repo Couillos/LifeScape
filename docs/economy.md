@@ -870,8 +870,15 @@ triche (règle 13) : leur stock vient de leurs deals.
 - Cycle de vie : le compte naît comme tout bot (`create-user --role
   market_maker`, tutoriel), joue (ambition opérateur `market_maker` :
   échelle de pièces 5 000 → 1 000 000, méthodes d'argent productrices)
-  jusqu'au capital cible, puis bascule pour toujours
-  (`market_maker::maybe_switch`, `lifescape_planner::become_quoting`) :
+  jusqu'au capital cible (pièces live sac + banque + porté,
+  `brain_plan::holdings_count`, comparées par `switch_due`), puis bascule
+  pour toujours
+  (`market_maker::maybe_switch`, `lifescape_planner::become_quoting`).
+  `orchestrator economy` et le tableau de bord affichent comme capital
+  d'un teneur en phase `earning` CETTE bourse (lue dans
+  `run/users/<compte>.json`, « n/a » sans instantané), celui d'un teneur
+  en cotation = pièces à la bascule + P&L (2026-11-17 : la phase earning
+  lisait 0, bascule + P&L n'existant pas encore). À la bascule :
   achats ouverts et annonces de sa tranche annulés (`role`), nœuds
   abandonnés, but `MakeMarket` = un nœud `market:make` après l'autre (le
   script `market make --post x,z,niveau` se tient à son poste, une case

@@ -97,6 +97,7 @@ pub fn restore_banked_tool(
     // One tool in the pack: withdraw the best banked one, never a second.
     let rank = |name: &str| spec.rank(name);
     if let Some((slot, held)) = best_banked_by_rank(&slots, &known, rank) {
+        make_room_for_tool(bot, 1)?;
         bot.inv_button(1, held, slot, main_com)?;
         bot.pump(10)?;
         bot.close_modal()?;
@@ -162,6 +163,7 @@ pub fn restore_from_bank(
         return Ok(false);
     };
     let head = slots[&head_slot].0;
+    make_room_for_tool(bot, 2)?;
     bot.inv_button(1, handle, handle_slot, main_com)?;
     bot.pump(5)?;
     bot.inv_button(1, head, head_slot, main_com)?;
@@ -173,6 +175,57 @@ pub fn restore_from_bank(
         return Ok(true);
     }
     Ok(false)
+}
+
+/// Standing-kit tools besides the ranked families (docs/kit.md): never
+/// banked to make room for another tool.
+const STANDING_TOOLS: [&str; 3] = ["hammer", "tinderbox", "chisel"];
+
+/// Objects to deposit (whole stacks, widest first: one press frees the
+/// most slots) so `need` pack slots are free, never one of `protected`.
+/// Empty when the room is already there or nothing may go. Pure.
+pub fn room_deposits(slots: &[(u8, (u16, u32))], protected: &[u16], need: usize) -> Vec<u16> {
+    let mut free = crate::kit::pack::BACKPACK_SIZE.saturating_sub(slots.len());
+    if free >= need {
+        return Vec::new();
+    }
+    let mut widths: HashMap<u16, usize> = HashMap::new();
+    for (_, (held, _)) in slots {
+        if !protected.contains(held) {
+            *widths.entry(*held).or_insert(0) += 1;
+        }
+    }
+    let mut ranked: Vec<(u16, usize)> = widths.into_iter().collect();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+    let mut deposits = Vec::new();
+    for (held, width) in ranked {
+        if free >= need {
+            break;
+        }
+        deposits.push(held);
+        free += width;
+    }
+    deposits
+}
+
+/// With the bank open, deposit what `room_deposits` names so a tool
+/// withdrawal has `need` free slots (a full pack answered "You don't
+/// have enough inventory space." and read as a missing tool).
+fn make_room_for_tool(bot: &mut Bot, need: usize) -> Result<(), ScriptError> {
+    let mut protected: Vec<u16> = Vec::new();
+    for spec in [&AXE_SPEC, &PICK_SPEC, &FISH_SPEC] {
+        protected.extend(spec.known_ids(bot));
+    }
+    for name in STANDING_TOOLS {
+        protected.extend(obj_id(bot, name).ok());
+    }
+    protected.extend(bot.pack_holds());
+    let deposits = room_deposits(&crate::kit::pack::pack_slots(bot), &protected, need);
+    for held in deposits {
+        bot.log(&format!("pack full: banking {} to make room for the tool", crate::kit::pack::obj_label(bot, held)));
+        bot.bank_deposit(held, u32::MAX, 50)?;
+    }
+    Ok(())
 }
 
 /// Axe recovery, free sources only (pack reattach, bank restore): the
@@ -446,6 +499,38 @@ mod tests {
             panic!("blocked carries missing");
         };
         assert_eq!(missing, vec!["bronze_pickaxe".to_string()]);
+    }
+
+    /// Live 2026-11-17 (owen_wood, 16:04-16:10): a chicken filler ended
+    /// its budget with a full pack (raw chicken, feathers, bucket); every
+    /// mining and essence run then pressed "withdraw Rune pickaxe", got
+    /// "You don't have enough inventory space." and blocked "missing
+    /// bronze_pickaxe" (24 blocks, 4 abandons, mining banned). The
+    /// restore frees the slots it needs first, never a tool.
+    #[test]
+    fn a_full_pack_makes_room_for_the_tool_without_banking_a_tool() {
+        use super::room_deposits;
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        let id = |name: &str| crate::kit::pack::obj_id(&bot, name).expect("obj in tables");
+        let (chicken, feather, bucket, axe, hammer) = (id("raw_chicken"), id("feather"), id("bucket_empty"), id("rune_axe"), id("hammer"));
+        let mut slots: Vec<(u8, (u16, u32))> = Vec::new();
+        for slot in 0..24u8 {
+            slots.push((slot, (chicken, 1)));
+        }
+        slots.push((24, (feather, 40)));
+        slots.push((25, (bucket, 1)));
+        slots.push((26, (axe, 1)));
+        slots.push((27, (hammer, 1)));
+        let protected = vec![axe, hammer];
+        let deposits = room_deposits(&slots, &protected, 1);
+        assert!(!deposits.is_empty(), "a full pack must free a slot");
+        assert!(!deposits.contains(&axe) && !deposits.contains(&hammer), "tools never banked: {deposits:?}");
+        assert_eq!(deposits, vec![chicken], "the widest stack frees the most slots in one press");
+        let two = room_deposits(&slots[..26], &protected, 2);
+        assert!(two.is_empty(), "two free slots already: nothing to bank, got {two:?}");
+        let tools_only: Vec<(u8, (u16, u32))> = (0..28u8).map(|slot| (slot, (axe, 1))).collect();
+        assert!(room_deposits(&tools_only, &protected, 1).is_empty(), "nothing bankable: no deposit");
     }
 }
 

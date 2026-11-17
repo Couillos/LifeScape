@@ -81,6 +81,17 @@ ouvert ne fait plus refuser le pas suivant (avant : ~5000 refus/jour
 aux portails Falador/Lumbridge, replan identique, aller-retour par le
 portail). Goldens : `rs/crates/nav/tests/gate_swing.rs`.
 
+Clic d'ouverture depuis la tuile de la porte (2026-11-17, portail 1551
+du champ de blé de Draynor, 75 dossiers « door did not open … left us
+at (3107,3273), want (3106,3273) », classe C) : un pas « déjà ouvert »
+sur une lecture live périmée laisse le bot SUR la tuile du portail ; le
+clic l'ouvre, mais le guet prenait « sur la tuile » pour le modèle
+téléport (`doors.rs2`) avant de lire le battant, recliquait l'id fermé
+disparu (sans effet) et échouait, le replan passant ensuite sans clic.
+`travel_door_watch::door_watch` : la tuile de la porte ne vaut téléport
+que si le clic y a amené le bot ; cliqué depuis elle, seul le battant
+compte (pas immédiat vers `cross_to`).
+
 Portes simples (catégorie `door_closed`, id 19, mur droit) : ouverte
 (500 ticks, `doors.rs2`), la porte réapparaît une tuile vers son angle
 (`door_open`), tournée `angle+1` : un battant sur un bord de la tuile

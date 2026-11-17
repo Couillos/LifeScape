@@ -13,11 +13,17 @@ use crate::kit::loot::TAKE_TICKS;
 use crate::kit::pack::obj_id;
 use crate::kit::survival::{check_events, is_death_abort, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
+use lifescape_gamedata as knowledge;
 
 /// Sweep radius around the bot (same reach as the kill loot).
 pub const PICKUP_RADIUS: i32 = 6;
-/// Empty sweeps before the run ends loud instead of idling on bare floor.
-pub const EMPTY_SWEEPS_LIMIT: u32 = 5;
+/// Slack past the table respawn (server tick jitter).
+pub const RESPAWN_MARGIN_TICKS: u64 = 10;
+/// Longest watch of a bare site: past it the progress guard
+/// (`kit::progress::IDLE_TICKS`) would end the run anyway.
+pub const WATCH_CAP_TICKS: u64 = crate::kit::progress::IDLE_TICKS;
+/// Ticks between two looks at the floor while watching.
+const WATCH_POLL_TICKS: u64 = 5;
 /// Floor resources besides coins (catalogue §4 + §6, all F2P in the dump):
 /// starter tools, spider eggs, big bones, gold ore spawns.
 pub const WANTED: [&str; 12] = [
@@ -34,6 +40,30 @@ pub const WANTED: [&str; 12] = [
     "big_bones",
     "gold_ore",
 ];
+
+/// Ticks a bare spawn site is watched before the run ends: the slowest
+/// wanted object's respawn (`respawnrate`, `ObjType` default 100) plus a
+/// margin, capped. Live 2026-11-17: the old bound (5 sweeps of
+/// `pump(2)`, ~40 ticks) gave up on a steel sword (respawn 1000), a
+/// cooked meat (200) or big bones (50) emptied by the previous take: 26
+/// `nothing to pick` failures in 20 minutes.
+pub fn respawn_watch_ticks(names: &[&str]) -> Result<u64, ScriptError> {
+    let mut slowest = 0u64;
+    for name in names {
+        let row = knowledge::objs_by_name(name)
+            .into_iter()
+            .next()
+            .ok_or_else(|| ScriptError::Failed(format!("no obj row for {name}: respawn unknown")))?;
+        slowest = slowest.max(row.respawn_ticks.max(0) as u64);
+    }
+    Ok((slowest + RESPAWN_MARGIN_TICKS).min(WATCH_CAP_TICKS))
+}
+
+/// True once a site bare since `empty_since` has been watched for
+/// `watch` ticks (the respawn bound): only then does the run end.
+pub fn watch_over(empty_since: u64, now: u64, watch: u64) -> bool {
+    now.saturating_sub(empty_since) >= watch
+}
 
 /// Coins-first, nearest-first order (the loot policy, minus its bones
 /// skip: big bones ARE wanted here). Pure so the order stays testable.
@@ -63,19 +93,19 @@ pub fn run_ground_pickup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     wait_pack_streamed(bot)?;
     check_events(bot)?;
     let coins = obj_id(bot, "coins")?;
-    let wanted: Vec<u16> = match resource.as_deref() {
-        Some(item) => vec![obj_id(bot, item)?],
-        None => {
-            let mut wanted = vec![coins];
-            for name in WANTED {
-                wanted.push(obj_id(bot, name)?);
-            }
-            wanted
-        }
+    let wanted_names: Vec<&str> = match resource.as_deref() {
+        Some(item) => vec![item],
+        None => std::iter::once("coins").chain(WANTED).collect(),
     };
+    let mut wanted: Vec<u16> = Vec::new();
+    for name in &wanted_names {
+        wanted.push(obj_id(bot, name)?);
+    }
+    let watch = respawn_watch_ticks(&wanted_names)?;
     let mut bank = nearest_bank(bot)?;
     bot.log(&format!("bank at ({},{})", bank.x, bank.z));
-    let mut empty = 0u32;
+    // First tick the site was seen bare (reset by every take).
+    let mut empty_since: Option<u64> = None;
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
         // The brain's spawn site first: never sweep wherever the bot stands.
@@ -115,21 +145,24 @@ pub fn run_ground_pickup(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
         if taken == 0 {
-            empty += 1;
-            if empty >= EMPTY_SWEEPS_LIMIT {
+            let since = *empty_since.get_or_insert(step_bot.world.ticks);
+            if watch_over(since, step_bot.world.ticks, watch) {
                 // Other players took it: contention, never a failure (D4).
                 if let Some(contended) = crate::kit::site::contended_error(step_bot) {
                     return Err(contended);
                 }
-                return Err(ScriptError::Failed(format!("nothing to pick near {here:?} at {:?}", step_bot.position())));
+                return Err(ScriptError::Failed(format!(
+                    "nothing to pick near {here:?} at {:?} after watching {} ticks (respawn bound {watch})",
+                    step_bot.position(),
+                    step_bot.world.ticks.saturating_sub(since)
+                )));
             }
-            step_bot.log("sweep empty, waiting for respawns");
-            for _ in 0..10 {
-                step_bot.pump(2)?;
-            }
+            step_bot.log(&format!("sweep empty, waiting for respawns (<= {watch}t)"));
+            step_bot.intend("waiting for a ground spawn to respawn");
+            watch_floor(step_bot, here, &wanted, since + watch)?;
             return Ok(StepControl::Continue);
         }
-        empty = 0;
+        empty_since = None;
         let keep: Vec<u16> = task_keep.clone();
         match bank_trip_resilient(step_bot, &mut bank, &keep, 0, &wanted) {
             Ok(_) => {}
@@ -144,9 +177,32 @@ pub fn run_ground_pickup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     })
 }
 
+/// Watches the floor around `here` until a wanted object lies there, the
+/// bot gets hurt (the next step decides) or the tick `until`; waits in
+/// server ticks, events checked on the way.
+fn watch_floor(bot: &mut Bot, here: (i32, i32), wanted: &[u16], until: u64) -> Result<(), ScriptError> {
+    let hitpoints_before = crate::kit::survival::hitpoints(bot);
+    let mut polled = bot.world.ticks;
+    while bot.world.ticks < until {
+        lifescape_sdk::waits::wait_ticks(bot, WATCH_POLL_TICKS)?;
+        if bot.world.ticks >= polled + 20 {
+            polled = bot.world.ticks;
+            check_events(bot)?;
+        }
+        if crate::kit::survival::hitpoints(bot) < hitpoints_before {
+            return Ok(());
+        }
+        let level = bot.world.level;
+        if bot.world.ground_items(here.0, here.1, level, PICKUP_RADIUS, None).keys().any(|(_, oid)| wanted.contains(oid)) {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{rank_pickups, EMPTY_SWEEPS_LIMIT, PICKUP_RADIUS, WANTED};
+    use super::{rank_pickups, respawn_watch_ticks, watch_over, PICKUP_RADIUS, RESPAWN_MARGIN_TICKS, WANTED};
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
     use lifescape_gamedata as knowledge;
@@ -200,11 +256,26 @@ mod tests {
         assert!(spec.resource.is_empty(), "no resource positional");
     }
 
-    /// Bounds: the sweep reaches as far as the kill loot, and an empty
-    /// floor ends the run after a few waits, never idles.
+    /// Bounds: the sweep reaches as far as the kill loot.
     #[test]
-    fn sweep_bounds_are_sane() {
+    fn sweep_reach_is_the_loot_reach() {
         assert_eq!(PICKUP_RADIUS, crate::kit::loot::LOOT_RADIUS, "same reach as the kill loot");
-        assert!(EMPTY_SWEEPS_LIMIT <= 10, "empty floor ends fast: {EMPTY_SWEEPS_LIMIT}");
+    }
+
+    /// Live 2026-11-17 (tim_ford, luke_hill): a bare spawn site ended the
+    /// run after ~40 ticks while the steel sword respawns in 1000 ticks,
+    /// the cooked meat in 200, big bones in 50. The watch covers the
+    /// slowest wanted respawn (`respawnrate`) plus a margin.
+    #[test]
+    fn bare_site_is_watched_for_the_respawn() {
+        let sword = respawn_watch_ticks(&["steel_sword"]).expect("sword row");
+        assert_eq!(sword, 1000 + RESPAWN_MARGIN_TICKS, "steel sword respawns in 1000 ticks");
+        let meat = respawn_watch_ticks(&["cooked_meat"]).expect("meat row");
+        assert_eq!(meat, 200 + RESPAWN_MARGIN_TICKS);
+        let sweep: Vec<&str> = std::iter::once("coins").chain(WANTED).collect();
+        let slowest = respawn_watch_ticks(&sweep).expect("sweep rows");
+        assert!(slowest >= 500 + RESPAWN_MARGIN_TICKS, "gold ore (500) bounds the full sweep, got {slowest}");
+        assert!(!watch_over(100, 100 + 40, sword), "40 ticks bare is not the end");
+        assert!(watch_over(100, 100 + sword, sword), "a full respawn watched bare ends the run");
     }
 }
