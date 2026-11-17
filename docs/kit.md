@@ -349,7 +349,11 @@ Postes et combat : niveau manquant = `blocked{level:...}` (plus de
 Usage), Rune Mysteries = `blocked{quest:runemysteries}`, le `--site` du
 brain choisit le poste (`kit::produce`), `pottery <produit>` (pot, plat
 à tarte, bol), `ground_pickup <objet>` au site, `bury_loot [os]` depuis la
-banque. Un spot de combat nommé n'est jamais remplacé après une mort
+banque. Un site de ramassage vide est GUETTÉ en ticks jusqu'à la repousse
+la plus lente des objets voulus (`respawnrate` du dump + 10, plafond 3000 ;
+épée d'acier 1000, viande cuite 200) avant de finir : avec des joueurs
+autour `contended:<site>` (D4), seul `Failed` sinon (2026-11-17 : l'ancien
+garde « 5 balayages » de `pump(2)` rendait la main en ~40 ticks). Un spot de combat nommé n'est jamais remplacé après une mort
 (banque puis erreur de danger) et un spot derrière le péage sans `toll`
 donne `blocked{access:al_kharid_toll}`. Les achats (`market shopbuy`,
 accepte `toll` et `--site`) ne vont jamais seuls en Wilderness, sous
