@@ -20,25 +20,16 @@ pub const SITE_WALK_TICKS: u64 = 6000;
 /// Kharid toll gate and the brain did not pass `toll`.
 pub const TOLL_AREA: &str = "al_kharid_toll";
 
-/// Bank serving the run when the brain fixed a site: the free bank with
-/// the cheapest ROUTE from the site (tour 2 N3: the swamp mine is 27
-/// tiles from Al Kharid as the crow flies, 467 walked; Draynor 170),
-/// else `None` (the caller keeps its own pick). A Karamja site prices
-/// from the Port Sarim dock its boat lands on.
+/// Bank serving the run when the brain fixed a site: the bank of the
+/// offline route table (`gamedata::site_banks`, tour 3 point 2; tour 2
+/// N3: the swamp mine is 27 tiles from Al Kharid as the crow flies, 467
+/// walked; Draynor 170), the same bank the planner's site requirement
+/// read (its danger included), else `None` (the caller keeps its own
+/// pick). A Karamja site reads from the Port Sarim dock its boat lands
+/// on.
 pub fn site_bank(bot: &mut Bot) -> Option<knowledge::banks::Bank> {
     let (x, z, level) = bot.assigned_site?;
-    let (anchor_x, anchor_z, anchor_level) = knowledge::access::mainland_anchor(i64::from(x), i64::from(z), i64::from(level));
-    let mut banks = crate::kit::bank_route::free_banks_for_level(anchor_level);
-    // Same danger rule as `nearest_bank`: a booth a hunter that can kill
-    // this bot covers is never priced while a safe one exists.
-    let threats = crate::kit::danger::threats(bot);
-    let safe: Vec<knowledge::banks::Bank> =
-        banks.iter().filter(|bank| crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_none()).cloned().collect();
-    if !safe.is_empty() {
-        banks = safe;
-    }
-    let from = lifescape_sdk::plan::Tile { x: anchor_x as i32, z: anchor_z as i32, level: anchor_level as i32 };
-    crate::kit::bank_route::cheapest_route_bank(bot, from, (anchor_x, anchor_z), &banks)
+    knowledge::site_banks::serving(i64::from(x), i64::from(z), i64::from(level)).map(|served| served.bank)
 }
 
 /// True when the bot stands inside the assigned site's working area (or

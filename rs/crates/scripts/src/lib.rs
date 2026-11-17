@@ -348,7 +348,13 @@ pub fn run(name: &str, bot: &mut Bot, args: &[String]) -> ScriptResult {
             if guards_the_fare(name) {
                 kit::stranded::earn_fare_if_stranded(bot)?;
             }
-            execute(bot, args)
+            // A need the bot holds only under its own market locks names
+            // the lock (`locked:<object>`, plan P5): the brain withdraws
+            // the listing, never buys it again.
+            match execute(bot, args) {
+                Err(ScriptError::Blocked { missing }) => Err(ScriptError::Blocked { missing: kit::locked::tag_locked(bot, missing) }),
+                other => other,
+            }
         }
         None => Err(ScriptError::Usage(format!("unknown script {name:?}"))),
     }

@@ -100,9 +100,39 @@ pub fn by_com(com: &str) -> Vec<Spell> {
         .collect()
 }
 
+/// Impact graphic (spotanim id) a landed debuff shows on its foe, to
+/// every client (`player_magic.rs2` `spotanim_npc(spotanim_target)`,
+/// `magic_combat_spells.dbrow`, ids from `content/pack/spotanim.pack`):
+/// a foe showing it was lowered by someone and refuses the same curse
+/// until it regenerates. `None` for any other spell.
+pub fn impact_graphic(spell: &str) -> Option<u16> {
+    match spell.trim_start_matches('^') {
+        "confuse" => Some(104),
+        "weaken" => Some(107),
+        "curse" => Some(110),
+        "bind" => Some(181),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{affects, all_spells, by_com, by_name, target_param};
+    use super::{affects, all_spells, by_com, by_name, impact_graphic, target_param};
+
+    /// The impact graphics match the server's packed ids and spell rows
+    /// (read-only: `../lostcity/content`).
+    #[test]
+    fn debuff_impact_graphics_match_the_server() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../lostcity/content");
+        let pack = std::fs::read_to_string(root.join("pack/spotanim.pack")).expect("spotanim.pack");
+        let rows = std::fs::read_to_string(root.join("scripts/skill_combat/configs/magic/magic_combat_spells.dbrow")).expect("spell rows");
+        for (spell, graphic) in [("confuse", "confuse_impact"), ("weaken", "weaken_impact"), ("curse", "curse_impact"), ("bind", "bind_impact")] {
+            let id = pack.lines().find_map(|line| line.split_once('=').filter(|(_, name)| *name == graphic).and_then(|(id, _)| id.parse::<u16>().ok()));
+            assert_eq!(impact_graphic(spell), id, "{spell}: {graphic}");
+            assert!(rows.contains(&format!("data=spotanim_target,{graphic},")), "{graphic} is a spell impact");
+        }
+        assert_eq!(impact_graphic("wind_strike"), None);
+    }
 
     /// Crumble undead is a damage spell like the strikes (its missing
     /// display name never hides it) and hits the undead only.

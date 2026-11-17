@@ -136,3 +136,15 @@ fn a_listed_copy_is_no_held_copy() {
     assert_eq!(held_verdict(1, 0, 0), HeldVerdict::Launch);
     assert_eq!(held_verdict(28, 30, 20), HeldVerdict::WithdrawListings, "a quota counts free units only");
 }
+
+/// Tour 3 point 3 (P5): a script block `locked:<object>` names what the
+/// bot's own listings lock; the brain withdraws them (no buy), and a
+/// lock it cannot free reads as the plain need.
+#[test]
+fn a_locked_block_names_the_listed_object() {
+    use super::{locked_needs, plain_needs};
+    let needs = vec!["locked:iron_axe".to_string(), "coal".to_string()];
+    assert_eq!(locked_needs(&needs), vec!["iron_axe".to_string()]);
+    assert_eq!(plain_needs(&needs), vec!["iron_axe".to_string(), "coal".to_string()]);
+    assert!(locked_needs(&["bronze_axe".to_string(), "locked:".to_string()]).is_empty());
+}

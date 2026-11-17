@@ -109,6 +109,57 @@ pub fn keys_for_abandon(cooled: &[String], method: &str, site: Option<(i64, i64,
     keys
 }
 
+/// History outcome of a node waiting out its cooled methods (tour 3,
+/// point 1): `cool_wait:<method>`.
+pub const WAIT_TAG: &str = "cool_wait:";
+
+/// The method a resolve block names when every site of every candidate
+/// is full (`full:<method>`, D6) or cooled (`cooled:<method>`): a block
+/// the node waits out, never an abandonment.
+pub fn resolve_wait(reason: &str) -> Option<&str> {
+    reason.strip_prefix("full:").or_else(|| reason.strip_prefix("cooled:")).filter(|method| !method.is_empty())
+}
+
+/// What a resolve block on a method does (live 2026-11-17: 14:19
+/// alice_knight `blocked at resolve (full:gather:mining/mithril_ore) ->
+/// abandoned`, 13:00 owen_wood `cooled:farm:adamantite_ore`): the method
+/// not cooled yet cools for this bot and the node resolves again at once
+/// (its next method, D6); already cooled (every candidate is), the node
+/// stays open and waits until the method's cooldown lapses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveWait {
+    /// Cool the method itself, the next resolve picks another method.
+    CoolAndRetry,
+    /// Nothing left to try: the node waits on the method's cooldown.
+    Wait,
+}
+
+/// `ResolveWait` for a block on `method` with `cooled` keys active.
+pub fn resolve_wait_step(cooled: &[String], method: &str) -> ResolveWait {
+    if method_cooled(cooled, method) {
+        ResolveWait::Wait
+    } else {
+        ResolveWait::CoolAndRetry
+    }
+}
+
+/// Nodes that wait on a cooled method: their latest history entry is a
+/// `cool_wait:<method>` and `<method>` is still cooled. A lapsed cooldown
+/// (or any later entry of the node) releases the node.
+pub fn waiting_nodes(history: &[HistoryEntry], cooled: &[String]) -> Vec<String> {
+    let mut latest: Vec<(&str, &str)> = Vec::new();
+    for entry in history.iter().filter(|entry| entry.node != COOL_NODE) {
+        match latest.iter_mut().find(|(node, _)| *node == entry.node) {
+            Some(slot) => slot.1 = &entry.outcome,
+            None => latest.push((&entry.node, &entry.outcome)),
+        }
+    }
+    latest
+        .into_iter()
+        .filter_map(|(node, outcome)| outcome.strip_prefix(WAIT_TAG).filter(|method| method_cooled(cooled, method)).map(|_| node.to_string()))
+        .collect()
+}
+
 /// Same error twice, the digits aside (positions, counts, ticks): the
 /// deterministic failure test of `lifecycle::record_failure_timed`.
 pub fn same_error(left: &str, right: &str) -> bool {

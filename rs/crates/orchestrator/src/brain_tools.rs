@@ -208,6 +208,21 @@ pub fn withdraw_family_listings(account: &str, item: &str) -> usize {
         .sum()
 }
 
+/// Tag of a block need the bot's own market locks hold
+/// (`kit::locked::LOCKED_TAG`, plan P5).
+pub const LOCKED_TAG: &str = "locked:";
+
+/// Objects a block names as locked by the bot's own orders.
+pub fn locked_needs(needs: &[String]) -> Vec<String> {
+    needs.iter().filter_map(|need| need.strip_prefix(LOCKED_TAG)).filter(|item| !item.is_empty()).map(str::to_string).collect()
+}
+
+/// The block's needs with the lock tag dropped (a lock no listing
+/// withdrawal frees, a deal in flight: the plain need).
+pub fn plain_needs(needs: &[String]) -> Vec<String> {
+    needs.iter().map(|need| need.strip_prefix(LOCKED_TAG).unwrap_or(need).to_string()).collect()
+}
+
 #[cfg(test)]
 #[path = "brain_tools_tests.rs"]
 mod tests;

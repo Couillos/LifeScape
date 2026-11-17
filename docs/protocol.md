@@ -29,6 +29,14 @@ dégâts (0x1/0x10) remplissent `NpcInfo.face_entity` / `hit_tick`.
 `Bot::npc_engaged_by_other(slot)` = le PNJ cible un autre joueur, ou a pris
 un coup depuis < 8 ticks sans cibler de joueur (miroir de « Someone else is
 fighting that. », `player_combat.rs2`) : la chasse l'écarte avant la marche.
+Le masque SPOTANIM des PNJ (0x40 : graphique u16 + hauteur/délai u32,
+Client-TS `NpcUpdate.SPOTANIM`) est lu, plus sauté : `NpcInfo.spotanim` =
+(graphique, tick vu) ; `World::npc_showed_graphic(slot, graphiques,
+fenêtre)`. Une malédiction posée montre son impact à tous les clients
+(`player_magic.rs2`, `gamedata::spells::impact_graphic` : confuse 104,
+weaken 107, curse 110, bind 181) : le script `curse` écarte une cible
+maudite par n'importe qui ou engagée par un autre joueur (tour 3, P7c),
+et rend `contended:<site>` quand seules de telles cibles restent.
 
 Joueurs visibles (`PLAYER_INFO`, `World::player_info`) : le serveur ne
 suit un autre joueur qu'à 15 cases au plus (Chebyshev, `withinDistanceSw`,

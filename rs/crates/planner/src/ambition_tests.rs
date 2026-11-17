@@ -3,7 +3,7 @@
 
 use super::{
     achieved, goal_for_milestone, mark_drawn, may_change, new_ambition, next_milestone, on_goal_closed, refresh, revise,
-    BotNow, CloseOutcome, MilestoneStatus, Stamp, Target, AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS,
+    BotNow, CloseOutcome, Milestone, MilestoneStatus, Stamp, Target, AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS,
 };
 use crate::ambition_catalog::{fit, kind_weights, products, spec, DemandItem, Then, GROUPS, specs};
 use crate::market_maker::MARKET_MAKER_KIND;
@@ -237,6 +237,43 @@ fn banned_skills_are_skipped_and_goals_follow_milestones() {
     assert!(matches!(goal_for_milestone(produce), GoalKind::Produce { .. }));
     life.ambition = None;
     assert_eq!(crate::goals::draw_goal_origin(&life, &|_| 1, &|_| 0), Err(crate::goals::NoGoal::NoAmbition), "never a silent fallback");
+}
+
+/// Tour 3 point 5 (plan P2 for milestones): a quota milestone whose
+/// every production leg is quarantined or cooled is skipped like a side
+/// goal; the next open milestone is drawn, the skipped one stays open.
+#[test]
+fn an_unworkable_milestone_hands_over_to_the_next() {
+    let mut life = life_with("smith");
+    let ambition = life.ambition.as_mut().expect("smith");
+    let item = "bronze_bar".to_string();
+    let quota = Milestone {
+        id: "m_quota".to_string(),
+        label: "make bronze_bar".to_string(),
+        target: Target::Produce { item: item.clone(), count: 5, skill: "smithing".to_string() },
+        status: MilestoneStatus::Pending,
+        progress: (0, 5),
+        blocked_count: 0,
+        origin: "demand:bronze_bar".to_string(),
+    };
+    ambition.milestones.insert(0, quota);
+    let legs: Vec<String> = crate::obtain_legs::production_legs(&item).into_iter().map(|leg| leg.method).collect();
+    assert!(!legs.is_empty(), "bronze bars are made");
+    let ambition = life.ambition.as_ref().expect("smith");
+    let first = crate::ambition::next_feasible_milestone(ambition, &[], &|_| false).expect("open");
+    assert_eq!(first.id, "m_quota", "workable: drawn first");
+    let next = crate::ambition::next_feasible_milestone(ambition, &[], &|method| legs.iter().any(|leg| leg == method)).expect("the next one");
+    assert_ne!(next.id, "m_quota", "every leg quarantined: the next milestone");
+    let sick_legs = legs.clone();
+    let (goal, origin) = crate::goals::draw_goal_origin_with(&life, &|_| 1, &|_| 0, &|method| sick_legs.iter().any(|leg| leg == method)).expect("a goal");
+    assert_ne!(origin.as_deref(), Some("m_quota"), "drew {goal:?}");
+    // Cooled for this bot (its history): skipped the same way.
+    for method in &legs {
+        life.history.push(crate::model::HistoryEntry { node: crate::cooldown::COOL_NODE.to_string(), started: 1, ended: 1, outcome: crate::cooldown::cool_entry(method, crate::cooldown::COOL_TICKS, "test") });
+    }
+    let (_, origin) = crate::goals::draw_goal_origin(&life, &|_| 1, &|_| 0).expect("a goal");
+    assert_ne!(origin.as_deref(), Some("m_quota"));
+    assert!(life.ambition.as_ref().expect("smith").milestones.iter().any(|stone| stone.id == "m_quota" && stone.status == MilestoneStatus::Pending), "stays open");
 }
 
 /// Refresh closes met levels and keeps three milestones open; a ladder

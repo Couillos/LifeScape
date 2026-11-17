@@ -118,9 +118,13 @@ pub(crate) fn gained_toward(report: &Value, kind: &NodeKind) -> i64 {
         NodeKind::HaveCoins { .. } | NodeKind::MakeMoney => "coins",
         _ => return 0,
     };
-    // Report rows carry the display name ("Coins", "Yew logs").
+    // Report rows carry the display name ("Coins", "Yew logs"), shared by
+    // homonyms ("Emerald amulet": strung and unstrung): a display row is
+    // the target only when the run's method names it so (`debug_in`, the
+    // guides' rule, tour 3 point 7).
     let display = lifescape_gamedata::objs_by_name(wanted).first().and_then(|obj| obj.display);
-    let named = |name: &str| name == wanted || Some(name) == display;
+    let method = report.get("planner_method").as_str().unwrap_or("");
+    let named = |name: &str| name == wanted || (Some(name) == display && crate::rates_names::debug_in(method, name, false) == wanted);
     report
         .get("items")
         .as_arr()
@@ -392,14 +396,27 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             push_history(&mut life, &id, "contended");
         }
         Verdict::Blocked(needs) => {
-            // A missing level climbs from the reported live level.
-            let level_of = |skill: &str| reach_level(report, skill).unwrap_or(1);
-            let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(lifescape_json::Value::Null);
-            let view = crate::brain_plan_read::BotView::of(&life);
-            let fold = crate::brain_plan_read::with_plan_read(&view, &live, |read| lifescape_planner::record_block_with(&mut life, index, needs, &level_of, read));
-            push_history(&mut life, &id, crate::brain_launch::block_outcome(&fold));
-            if let FailureFold::CycleBroken(line) = &fold {
-                crate::logln!("brain {account}: {line}");
+            // A need its own listings lock (P5, `locked:<object>`): the
+            // listings go, the node relaunches, no block counted, no buy.
+            let locked = crate::brain_tools::locked_needs(needs);
+            let withdrawn: usize = locked.iter().map(|item| crate::brain_tools::withdraw_family_listings(&account, item)).sum();
+            if withdrawn > 0 {
+                crate::logln!("brain {account}: {id} blocked on its own listings ({}): {withdrawn} listing(s) withdrawn, relaunch", locked.join(", "));
+                retry_uncounted(&mut life, index);
+                push_history(&mut life, &id, "locked_released");
+            } else {
+                // A missing level climbs from the reported live level. A
+                // lock no withdrawal freed (a deal in flight) is the plain
+                // need. The block reads the measured plan (R7).
+                let needs = crate::brain_tools::plain_needs(needs);
+                let level_of = |skill: &str| reach_level(report, skill).unwrap_or(1);
+                let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(lifescape_json::Value::Null);
+                let view = crate::brain_plan_read::BotView::of(&life);
+                let fold = crate::brain_plan_read::with_plan_read(&view, &live, |read| lifescape_planner::record_block_with(&mut life, index, &needs, &level_of, read));
+                push_history(&mut life, &id, crate::brain_launch::block_outcome(&fold));
+                if let FailureFold::CycleBroken(line) = &fold {
+                    crate::logln!("brain {account}: {line}");
+                }
             }
         }
         Verdict::Contract(text) => {
@@ -579,6 +596,13 @@ mod tests {
         let alch = report(vec![row("Coins", 1216), row("Bronze platebody", -19)]);
         assert_eq!(super::gained_toward(&alch, &lifescape_planner::NodeKind::HaveCoins { amount: 40_000 }), 1216);
         assert_eq!(super::gained_toward(&alch, &obtain), 0, "another object is no progress");
+        // Tour 3 point 7: the display row "Emerald amulet" is the strung
+        // amulet for the stringing run, the UNSTRUNG one for a jewelry
+        // smelt: homonyms are told apart by the run's method.
+        let shown = |method: &str| lifescape_json::object(vec![("planner_method", lifescape_json::str_value(method)), ("items", lifescape_json::Value::Arr(vec![row("Emerald amulet", 1)]))]);
+        assert_eq!(super::gained_toward(&shown("string:unstrung_emerald_amulet"), &obtain), 1);
+        let unstrung = lifescape_planner::NodeKind::ObtainItems { item: "unstrung_emerald_amulet".to_string(), count: 8 };
+        assert_eq!(super::gained_toward(&shown("string:unstrung_emerald_amulet"), &unstrung), 0, "the stringing run consumed it");
         let progressed = super::gained_toward(&strung, &obtain) > 0;
         assert_eq!(verdict("goal_reached", None, &[], false, false, progressed), Verdict::EngagementEnd);
         assert!(matches!(verdict("goal_reached", None, &[], false, false, false), Verdict::Failure(_)), "nothing brought stays short");

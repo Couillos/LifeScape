@@ -236,7 +236,9 @@ pub enum HurtReturn {
 /// Pure verdict of a failed load: `hp` / `max_hp` now, `streak` = hurt
 /// loads already healed from in a row.
 pub fn hurt_return(hp: u8, max_hp: u8, streak: u32) -> HurtReturn {
-    if u32::from(hp) * 2 >= u32::from(max_hp.max(1)) {
+    // The meal rule's eat line (tour 3 point 8: half health let tim_wolfe
+    // relaunch at 22/42 on the Wilderness iron before the rule saw 12).
+    if !should_eat(hp, max_hp.max(1), EAT_FRACTION) {
         return HurtReturn::NotHurt;
     }
     if streak >= HURT_RETURNS {
@@ -311,7 +313,10 @@ mod hurt_tests {
         assert_eq!(hurt_return(17, 40, 1), HurtReturn::HealAndReturn);
         assert_eq!(hurt_return(9, 40, HURT_RETURNS), HurtReturn::GiveUp);
         assert_eq!(hurt_return(30, 40, 0), HurtReturn::NotHurt);
-        assert_eq!(hurt_return(20, 40, 5), HurtReturn::NotHurt, "half health is no hurt");
+        assert_eq!(hurt_return(23, 40, 5), HurtReturn::NotHurt, "above the eat line is no hurt");
+        // Tour 3 point 8 (tim_wolfe 12:54): 22/42 is under the eat line
+        // (0.55): heal now, not at 12.
+        assert_eq!(hurt_return(22, 42, 0), HurtReturn::HealAndReturn);
     }
 }
 

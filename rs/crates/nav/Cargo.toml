@@ -12,3 +12,6 @@ lifescape-json = { path = "../json" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+lifescape-gamedata = { path = "../gamedata" }

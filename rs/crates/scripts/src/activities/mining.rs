@@ -34,6 +34,17 @@ pub fn ordered_rock_tiers(resource: Option<&str>, level: i64) -> Result<Vec<know
 }
 
 /// Mine banked loads in the open session (0 = forever).
+/// Hurt on the site (D3): bank (the pickaxe and the task's objects kept),
+/// heal by the meal rules, then the next load walks back.
+fn heal_hurt(bot: &mut Bot, bank: &knowledge::banks::Bank, pick: &crate::kit::tools::ToolSpec, task_keep: &[u16]) -> Result<(), ScriptError> {
+    let mut keep: Vec<u16> = pick.known_ids(bot).into_iter().collect();
+    keep.extend(task_keep.iter().copied());
+    bank_trip(bot, bank, &keep, 0)?;
+    crate::kit::bank::heal_at_bank(bot)?;
+    crate::kit::meals::eat_to_full(bot)?;
+    Ok(())
+}
+
 pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("mining", args)?;
     crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat, spec.site)?;
@@ -61,6 +72,20 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut hurt_streak = 0u32;
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
+        // Under the eat line before the walk out (tour 3 point 8, live
+        // tim_wolfe 12:54 on the Wilderness iron: runs relaunched at hp
+        // 34, then 22, before the hurt rule saw 12): heal first, by the
+        // same rule as a hurt load; still hurt past `HURT_RETURNS`, typed.
+        let (hp, max_hp) = (crate::kit::survival::hitpoints(step_bot), crate::kit::survival::max_hitpoints(step_bot));
+        if crate::kit::survival::hurt_return(hp, max_hp, 0) != crate::kit::survival::HurtReturn::NotHurt {
+            if crate::kit::survival::hurt_return(hp, max_hp, hurt_streak) == crate::kit::survival::HurtReturn::GiveUp {
+                return Err(ScriptError::Failed(format!("hurt on the site: hp {hp}/{max_hp} after {hurt_streak} heals at {:?}, too dangerous now", step_bot.position())));
+            }
+            hurt_streak += 1;
+            step_bot.log(&format!("hurt before the load (hp {hp}/{max_hp}): banking to heal first ({hurt_streak}/{})", crate::kit::survival::HURT_RETURNS));
+            heal_hurt(step_bot, &bank, pick, &task_keep)?;
+            return Ok(state.load_done(step_bot, &format!("healed before a load (mining={level})")));
+        }
         let until = state.want_goal(step_bot, &spec);
         let (ok, new_level) = crate::kit::mine::mine_load(step_bot, &tiers, &mut bank, coins, level, until)?;
         level = new_level;
@@ -73,11 +98,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
             if crate::kit::survival::hurt_return(hp, max_hp, hurt_streak) == crate::kit::survival::HurtReturn::HealAndReturn {
                 hurt_streak += 1;
                 step_bot.log(&format!("hurt on the site (hp {hp}/{max_hp}): banking to heal, then back ({hurt_streak}/{})", crate::kit::survival::HURT_RETURNS));
-                let mut keep: Vec<u16> = pick.known_ids(step_bot).into_iter().collect();
-                keep.extend(task_keep.iter().copied());
-                bank_trip(step_bot, &bank, &keep, 0)?;
-                crate::kit::bank::heal_at_bank(step_bot)?;
-                crate::kit::meals::eat_to_full(step_bot)?;
+                heal_hurt(step_bot, &bank, pick, &task_keep)?;
                 return Ok(state.load_done(step_bot, &format!("healed after a hurt load (mining={level})")));
             }
             // Other players on the rocks: contention, never a method

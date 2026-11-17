@@ -55,13 +55,15 @@ pub(crate) fn live_owned(live: &Value) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for key in ["inv", "bank", "worn"] {
         for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
-            let shown = match &entry {
-                Value::Obj(_) => entry.get("name").as_str().unwrap_or("").to_string(),
-                Value::Str(name) => name.clone(),
+            // By object id (tour 3 point 7); a bare name as before.
+            let owned = match &entry {
+                Value::Obj(_) if entry.get("id").as_i64().is_some() => live_debug_name(&entry).unwrap_or_default(),
+                Value::Obj(_) => crate::rates_names::debug_of(entry.get("name").as_str().unwrap_or("")),
+                Value::Str(name) => crate::rates_names::debug_of(name),
                 _ => String::new(),
             };
-            if !shown.is_empty() {
-                names.push(crate::rates_names::debug_of(&shown));
+            if !owned.is_empty() {
+                names.push(owned);
             }
         }
     }
@@ -154,27 +156,10 @@ pub(crate) fn holdings_count(job: &Job, item_debug: &str) -> i64 {
 
 /// Every unit held, listed or not (pack, bank, worn).
 pub(crate) fn raw_holdings_count(job: &Job, item_debug: &str) -> i64 {
-    let display = display_of(item_debug).to_lowercase();
-    let debug = item_debug.to_lowercase();
     let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
-    let mut total = 0i64;
-    for key in ["inv", "bank", "worn"] {
-        for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
-            match &entry {
-                Value::Obj(_) => {
-                    let name = entry.get("name").as_str().unwrap_or("").to_lowercase();
-                    if name == display || name == debug {
-                        total += entry.get("count").as_i64().unwrap_or(1).max(0);
-                    }
-                }
-                Value::Str(name) if name.to_lowercase() == display || name.to_lowercase() == debug => {
-                    total += 1;
-                }
-                _ => {}
-            }
-        }
-    }
-    total
+    // By object id, never by the shared display (tour 3 point 7: 7
+    // unstrung emerald amulets read as 7 strung ones).
+    crate::live_items::live_units(&live, item_debug)
 }
 
 /// Distinct banked types with a positive count (the space-pressure gauge,

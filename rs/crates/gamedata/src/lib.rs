@@ -41,6 +41,7 @@ pub mod shop_buy;
 pub mod shop_sale;
 pub mod shops;
 pub mod site_reach;
+pub mod site_banks;
 pub mod spawns;
 pub mod spells;
 pub mod stations;

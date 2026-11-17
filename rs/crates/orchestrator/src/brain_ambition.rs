@@ -159,29 +159,8 @@ fn fleet_view(life: &Life) -> (Vec<String>, bool) {
 /// snapshot, by debug or display name. Listed stock stays on the bot
 /// until its deal is delivered, so it counts.
 pub(crate) fn live_count(live: &Value, item: &str) -> i64 {
-    let debug = item.to_lowercase();
-    let display = lifescape_gamedata::objs_by_name(item)
-        .into_iter()
-        .next()
-        .and_then(|entry| entry.display.or(entry.name))
-        .unwrap_or(item)
-        .to_lowercase();
-    let mut total = 0;
-    for key in ["inv", "bank", "worn"] {
-        for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
-            match &entry {
-                Value::Obj(_) => {
-                    let name = entry.get("name").as_str().unwrap_or("").to_lowercase();
-                    if name == debug || name == display {
-                        total += entry.get("count").as_i64().unwrap_or(1).max(0);
-                    }
-                }
-                Value::Str(name) if name.to_lowercase() == debug || name.to_lowercase() == display => total += 1,
-                _ => {}
-            }
-        }
-    }
-    total
+    // By object id: homonym displays never mix (tour 3 point 7).
+    crate::live_items::live_units(live, item)
 }
 
 /// Coins on the bot (pack + bank + worn) from the live snapshot.

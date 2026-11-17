@@ -35,11 +35,24 @@ pub fn engaged_by_other(npc: &NpcInfo, self_slot: Option<u16>, now: u64) -> bool
     }
 }
 
+/// Pure verdict: the npc showed one of `graphics` (SPOTANIM mask) within
+/// the last `window` ticks, whoever caused it (a landed curse's impact
+/// graphic: the foe is lowered for a regeneration period).
+pub fn showed_graphic(npc: &NpcInfo, graphics: &[u16], window: u64, now: u64) -> bool {
+    npc.spotanim.is_some_and(|(graphic, tick)| graphics.contains(&graphic) && now.saturating_sub(tick) < window)
+}
+
 impl World {
     /// True when the npc in `slot` is fighting another player (see
     /// `engaged_by_other`); false for an unknown slot.
     pub fn npc_engaged_by_other(&self, slot: u16) -> bool {
         self.npcs.get(&slot).is_some_and(|npc| engaged_by_other(npc, self.self_slot, self.ticks))
+    }
+
+    /// True when the npc in `slot` showed one of `graphics` within
+    /// `window` ticks (see `showed_graphic`); false for an unknown slot.
+    pub fn npc_showed_graphic(&self, slot: u16, graphics: &[u16], window: u64) -> bool {
+        self.npcs.get(&slot).is_some_and(|npc| showed_graphic(npc, graphics, window, self.ticks))
     }
 }
 
@@ -57,7 +70,7 @@ mod tests {
     use crate::world::{NpcInfo, World};
 
     fn chicken(face_entity: Option<u16>, hit_tick: Option<u64>) -> NpcInfo {
-        NpcInfo { npc_type: 41, x: 3230, z: 3298, level: 0, name: None, anim: None, face_entity, hit_tick }
+        NpcInfo { npc_type: 41, x: 3230, z: 3298, level: 0, name: None, anim: None, face_entity, hit_tick, spotanim: None }
     }
 
     #[test]
@@ -117,5 +130,32 @@ mod tests {
         assert_eq!(world.npcs.get(&5).and_then(|npc| npc.face_entity), Some(face));
         assert!(world.npc_engaged_by_other(5), "fights player 12, not us (7)");
         assert!(!world.npc_engaged_by_other(6), "unknown slot");
+        // Tour 3 point 4: a known npc's SPOTANIM mask (0x40: graphic u16
+        // + height/delay u32) is read, not skipped: the confuse impact
+        // (graphic 104) another player's curse put on it.
+        world.ticks = 50;
+        // 8 bits: 1 known npc; then update 1, kind 0 (extended only),
+        // end marker 16383 (14 bits); bits packed MSB first.
+        let mut bits: Vec<u8> = Vec::new();
+        let mut push = |value: u32, width: u32| {
+            for shift in (0..width).rev() {
+                bits.push(((value >> shift) & 1) as u8);
+            }
+        };
+        push(1, 8);
+        push(1, 1);
+        push(0, 2);
+        push(16383, 14);
+        while bits.len() % 8 != 0 {
+            bits.push(0);
+        }
+        let mut body: Vec<u8> = bits.chunks(8).map(|byte| byte.iter().fold(0u8, |acc, bit| (acc << 1) | bit)).collect();
+        body.extend([0x40, 0x00, 104, 0x00, 124, 0x00, 0x00]);
+        world.feed("NPC_INFO", &body).expect("npc info with a spotanim");
+        assert_eq!(world.npcs.get(&5).and_then(|npc| npc.spotanim), Some((104, 50)));
+        assert!(world.npc_showed_graphic(5, &[104, 107], 100), "cursed by someone: out of the picks");
+        assert!(!world.npc_showed_graphic(5, &[110], 100), "another graphic");
+        world.ticks = 200;
+        assert!(!world.npc_showed_graphic(5, &[104], 100), "regenerated past the window");
     }
 }

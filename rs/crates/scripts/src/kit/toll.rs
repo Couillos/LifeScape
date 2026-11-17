@@ -65,6 +65,15 @@ pub fn reserve_short(bot: &Bot, carried: u32) -> u32 {
     pack_reserve(bot).saturating_sub(carried)
 }
 
+/// Pure: coins a bank trip withdraws AT the booth: the trip's own
+/// request, raised to what the pack lacks of its `reserve` now (tour 3
+/// point 8, felix_rook 14:10: the reserve was priced on Karamja before the
+/// boat back paid 30, the bank topped 30 up to 30, and every walk out
+/// planned NeedsRequirement coins:60 then fetched again).
+pub fn top_up(requested: u32, reserve: u32, carried_now: u32) -> u32 {
+    requested.max(reserve.saturating_sub(carried_now))
+}
+
 /// Close the run's paid paths and drop its reserve: a session's Bot
 /// outlives one run, and the next run decides its own fares.
 pub fn disarm(bot: &mut Bot) {
@@ -273,6 +282,12 @@ mod tests {
         assert_eq!(restock_reserve(&mut bot, (3092, 3245, 0), 0).expect("no plan"), 0, "a free cycle carries nothing");
         bot.fare_reserve = 10;
         assert_eq!(restock_reserve(&mut bot, (3092, 3245, 0), 4).expect("no plan"), 6);
+        // Tour 3 point 8 (felix_rook): 30 asked on Karamja, the boat back
+        // paid 30, the booth tops the pack up to the whole 60.
+        assert_eq!(super::top_up(30, 60, 0), 60);
+        assert_eq!(super::top_up(0, 60, 60), 0, "a full reserve withdraws nothing");
+        assert_eq!(super::top_up(7, 60, 60), 7, "the caller's own request stands");
+        assert_eq!(super::top_up(0, 0, 0), 0, "an unpaid run carries nothing");
         disarm(&mut bot);
         assert!(!bot.allow_paid && bot.fare_reserve == 0 && bot.fare_bank.is_none(), "the next run decides its own fares");
     }

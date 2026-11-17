@@ -22,7 +22,6 @@ const NEAR_BANK_TILES: i64 = 150;
 
 const LIVE_RADIUS: i32 = 40;
 
-const BANK_TREK_LIMIT: i64 = 150;
 
 /// Chebyshev radius around a spot that reads as worked when another
 /// player stands inside it (stands ring the spot at distance 1-2; 3
@@ -367,12 +366,19 @@ fn fish_candidates(bot: &Bot, category: &str) -> Vec<(i32, i32, i32)> {
     cands
 }
 
-/// Bank trek gate of a fish spot: within `BANK_TREK_LIMIT` of its bank,
-/// unless the brain assigned the site (the pickers already keep only its
-/// spots). A Karamja site banks across the boat at Draynor, 230 tiles
-/// away: the order is the proof the trip is worth it, never the limit.
-fn bank_trek_ok(bot: &Bot, spot_x: i32, spot_z: i32, bank: &knowledge::banks::Bank) -> bool {
-    bot.assigned_site.is_some() || (i64::from(spot_x) - bank.x).abs() + (i64::from(spot_z) - bank.z).abs() <= BANK_TREK_LIMIT
+/// Bank trek gate of a fish spot: its bank's ROUTE within
+/// `danger::BANK_TREK_LIMIT` (the offline table, tour 3 point 2), unless
+/// the brain assigned the site (the pickers already keep only its spots).
+/// A Karamja site banks across the boat: the order is the proof the trip
+/// is worth it, never the limit.
+fn bank_trek_ok(bot: &Bot, spot_x: i32, spot_z: i32, spot_level: i32) -> bool {
+    bot.assigned_site.is_some() || bank_route_cost(spot_x, spot_z, spot_level).is_some_and(|cost| cost <= knowledge::danger::BANK_TREK_LIMIT)
+}
+
+/// Route cost from the site at (`x`, `z`, `level`) to the bank serving it
+/// (`site_banks`), `None` when no route serves it.
+pub(crate) fn bank_route_cost(x: i32, z: i32, level: i32) -> Option<i64> {
+    knowledge::site_banks::serving(i64::from(x), i64::from(z), i64::from(level)).map(|served| served.cost)
 }
 
 /// Near-bank pool for one tier: the woodcut shape (local filters, one
@@ -405,7 +411,7 @@ pub(crate) fn pick_near_fish_spot(
         if (i64::from(bank.x) - pinned.x).abs() + (i64::from(bank.z) - pinned.z).abs() > 12 {
             continue;
         }
-        if !bank_trek_ok(bot, spot_x, spot_z, &bank) {
+        if !bank_trek_ok(bot, spot_x, spot_z, spot_level) {
             continue;
         }
         if (spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs() > 400 {
@@ -459,11 +465,8 @@ pub(crate) fn pick_hop_fish_spot(
         if crate::kit::bans::across_toll((bot.world.x, bot.world.z), (spot_x, spot_z), fence) {
             continue;
         }
-        let bank = match nearest_bank_at(spot_x, spot_z, spot_level) {
-            Some(bank) => bank,
-            None => continue,
-        };
-        if !bank_trek_ok(bot, spot_x, spot_z, &bank) {
+        // A spot no bank route serves is never a hop target.
+        if nearest_bank_at(spot_x, spot_z, spot_level).is_none() || !bank_trek_ok(bot, spot_x, spot_z, spot_level) {
             continue;
         }
         if (spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs() > 400 {
@@ -528,11 +531,13 @@ pub(crate) fn pick_fish_spot(
     None
 }
 
+/// The bank serving the site at (`x`, `z`, `level`): the cheapest ROUTE
+/// of the offline table (`site_banks`, tour 3 point 2), never the
+/// nearest booth as the crow flies. A Karamja site reads from the Port
+/// Sarim dock, an upper floor banks through its stairs; `None` when no
+/// route serves the site.
 pub(crate) fn nearest_bank_at(x: i32, z: i32, level: i32) -> Option<knowledge::banks::Bank> {
-    // A Karamja site banks from the Port Sarim dock its boat lands on.
-    let (x, z, level) = knowledge::access::mainland_anchor(i64::from(x), i64::from(z), i64::from(level));
-    // Upper floors (the mill's hopper floor) bank on the surface.
-    knowledge::banks::nearest_free_bank(x, z, level)
+    knowledge::site_banks::serving(i64::from(x), i64::from(z), i64::from(level)).map(|served| served.bank)
 }
 
     /// Mapless worker against a real nav service (repo dumps): no painted
@@ -642,9 +647,9 @@ mod tests {
             (i64::from(spot_x) - pinned.x).abs() + (i64::from(spot_z) - pinned.z).abs() > 12,
             "hopped away from the bank, got ({spot_x},{spot_z})"
         );
-        // Sane trek from its own bank, and F2P like every tree hop.
+        // Sane trek (route) from its own bank, and F2P like every tree hop.
         assert!(
-            (i64::from(spot_x) - bank.x).abs() + (i64::from(spot_z) - bank.z).abs() <= super::BANK_TREK_LIMIT,
+            super::bank_route_cost(spot_x, spot_z, 0).is_some_and(|cost| cost <= knowledge::danger::BANK_TREK_LIMIT),
             "trek sane from ({},{}) to ({spot_x},{spot_z})",
             bank.x,
             bank.z
@@ -668,11 +673,10 @@ mod tests {
         let banned = crate::kit::bans::BanSet::new();
         let pinned = super::nearest_bank_at(3092, 3242, 0).expect("a Draynor bank");
         let found = super::pick_fish_spot(&mut bot, 1, &banned, 0, &pinned);
-        let (_, spot_x, spot_z, _) = found.expect("crowded home water still picks");
-        assert!(
-            (spot_x - 3092).abs() + (spot_z - 3242).abs() <= 60,
-            "stays near home water, got ({spot_x},{spot_z})"
-        );
+        let (_, spot_x, spot_z, bank) = found.expect("crowded home water still picks");
+        // Home water = the pinned bank's pool (tour 3 point 2: every spot
+        // whose ROUTE bank is Draynor, the Port Sarim shore included).
+        assert!((bank.x, bank.z) == (pinned.x, pinned.z), "stays in the Draynor pool, got ({spot_x},{spot_z}) banked at ({},{})", bank.x, bank.z);
     }
 
     /// The north Draynor spot sits in the young dark wizards' aggro square

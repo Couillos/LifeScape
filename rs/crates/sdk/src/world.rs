@@ -49,6 +49,11 @@ pub struct NpcInfo {
     pub face_entity: Option<u16>,
     /// Tick of the last damage mask (0x1/0x10, any hitter, misses too).
     pub hit_tick: Option<u64>,
+    /// Last SPOTANIM mask (0x40, Client-TS `NpcUpdate.SPOTANIM`): the
+    /// graphic id and the tick it was seen. A landed curse shows its
+    /// impact graphic on the foe to every client, whoever cast it
+    /// (`player_magic.rs2` `spotanim_target`).
+    pub spotanim: Option<(u16, u64)>,
 }
 
 /// Hint arrow target: npc slot, coord, player slot, or cleared.
@@ -781,7 +786,7 @@ impl World {
             let _ = jump;
             self.npcs.insert(
                 nid,
-                NpcInfo { npc_type: ntype, x: self.x + dx, z: self.z + dz, level: self.level, name: None, anim: None, face_entity: None, hit_tick: None },
+                NpcInfo { npc_type: ntype, x: self.x + dx, z: self.z + dz, level: self.level, name: None, anim: None, face_entity: None, hit_tick: None, spotanim: None },
             );
             if !self.npc_order.contains(&nid) {
                 self.npc_order.push(nid);
@@ -907,6 +912,15 @@ impl World {
                 if self.npc_hits.len() < 256 {
                     self.npc_hits.push(crate::client::run_events::NpcHit { slot, npc_type, damage, hit_type, hp, max_hp, tick });
                 }
+            }
+        } else if !player && bit == 0x40 {
+            // NpcInfoSpotanim: u16 graphic (65535 = none) + u32 height and
+            // delay (Client-TS `getNpcPosExtended`).
+            let graphic = data.u16()?;
+            data.raw(4)?;
+            let tick = self.ticks;
+            if let Some(npc) = pid.and_then(|nid| self.npcs.get_mut(&nid)) {
+                npc.spotanim = (graphic != 65535).then_some((graphic, tick));
             }
         } else if player && bit == 0x2 {
             data.raw(3)?;

@@ -394,6 +394,7 @@ pub fn bank_trip(
     let bank_level = bank.level as i32;
     // Fares come from the pack, never the bank: a paid run keeps what
     // its routes from this bank cost (`kit::toll::reserve_at_bank`).
+    let requested_coins = withdraw_coins;
     let withdraw_coins = crate::kit::toll::reserve_at_bank(bot, (bank_x, bank_z, bank_level), &mut keep, withdraw_coins)?;
     // True no-op: nothing to deposit and nothing to withdraw. Walking
     // anyway would send every clean pack on a pointless (and sometimes
@@ -516,6 +517,10 @@ pub fn bank_trip(
     crate::kit::bank_full::deposit_what_fits(bot, side_com, &keep)?;
     // A kept axe or pickaxe yields to a better banked one (`tool_upgrade`).
     crate::kit::tool_upgrade::upgrade_kept(bot, &keep)?;
+    // The walk here may have paid a fare (the boat back from Karamja):
+    // the reserve tops up on what the pack holds NOW (tour 3 point 8).
+    let carried_now = obj_id(bot, "coins").map(|coins| pack_total(bot, coins)).unwrap_or(0);
+    let withdraw_coins = crate::kit::toll::top_up(requested_coins, crate::kit::toll::pack_reserve(bot), carried_now);
     if withdraw_coins > 0 {
         if let Ok(coins) = obj_id(bot, "coins") {
             let _ = bot.bank_withdraw(coins, withdraw_coins, 50);

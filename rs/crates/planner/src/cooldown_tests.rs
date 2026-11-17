@@ -1,7 +1,7 @@
 //! Tests of `cooldown.rs` (plan P1): an abandoned method cools for the
 //! bot that failed it, for every goal kind.
 
-use super::{cool_entry, cooled_keys, cooled_sites, keys_for_abandon, method_cooled, same_error, split_key, COOL_NODE, COOL_TICKS};
+use super::{cool_entry, cooled_keys, cooled_sites, keys_for_abandon, method_cooled, resolve_wait, resolve_wait_step, same_error, split_key, waiting_nodes, ResolveWait, COOL_NODE, COOL_TICKS, WAIT_TAG};
 use crate::expand::{method_feasible, resolve_ready, ReadyCtx};
 use crate::model::{Alternative, HistoryEntry, Node, NodeKind, NodeStatus};
 
@@ -128,4 +128,70 @@ fn a_full_method_hands_over_to_the_next_one() {
     ];
     crate::expand::place_on_site(&mut node, &ctx);
     assert_eq!(node.method.as_deref(), Some(next), "status {:?}", node.status);
+}
+
+/// Tour 3 point 1: a resolve block `full:` / `cooled:` names the method
+/// the node waits out; any other block is not a wait.
+#[test]
+fn full_and_cooled_blocks_are_waits() {
+    assert_eq!(resolve_wait("full:gather:mining/mithril_ore"), Some("gather:mining/mithril_ore"));
+    assert_eq!(resolve_wait("cooled:farm:adamantite_ore"), Some("farm:adamantite_ore"));
+    assert_eq!(resolve_wait("missing:coins:60"), None);
+    assert_eq!(resolve_wait("unworkable:gather:mining/mithril_ore (no site)"), None);
+    assert_eq!(resolve_wait("full:"), None);
+}
+
+/// Live 2026-11-17 14:19 alice_knight `blocked at resolve
+/// (full:gather:mining/mithril_ore) -> abandoned`: the method cools and
+/// the node resolves again (next method, D6); once every method is
+/// cooled, the node waits, open, until the cooldown lapses.
+#[test]
+fn a_full_method_cools_then_the_node_waits_open() {
+    let method = "gather:mining/mithril_ore";
+    assert_eq!(resolve_wait_step(&[], method), ResolveWait::CoolAndRetry);
+    assert_eq!(resolve_wait_step(&[format!("{method}@3243,3166,0")], method), ResolveWait::CoolAndRetry, "a site key is no method cooldown");
+    assert_eq!(resolve_wait_step(&[method.to_string()], method), ResolveWait::Wait);
+    let wait = |node: &str, outcome: &str| HistoryEntry { node: node.to_string(), started: 1, ended: 1, outcome: outcome.to_string() };
+    let history = vec![
+        wait("n1", &format!("{WAIT_TAG}{method}")),
+        entry(&cool_entry(method, COOL_TICKS, "full"), 1),
+        wait("n2", &format!("{WAIT_TAG}{method}")),
+        wait("n2", "launched"),
+        wait("n3", &format!("{WAIT_TAG}smith:bronze_bar")),
+    ];
+    let cooled = vec![method.to_string()];
+    assert_eq!(waiting_nodes(&history, &cooled), vec!["n1".to_string()], "n2 moved on, n3's method lapsed");
+    assert!(waiting_nodes(&history, &[]).is_empty(), "a lapsed cooldown releases the node");
+}
+
+/// The cooled locked method hands the node to its next alternative on
+/// the following resolve (D6), the node never abandoned.
+#[test]
+fn a_cooled_lock_resolves_to_the_next_method() {
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.combat = 99;
+    ctx.position = Some((3244, 3165, 0));
+    ctx.levels = vec![("mining".to_string(), 99)];
+    ctx.tools = vec!["rune_pickaxe".to_string()];
+    let full = "gather:mining/mithril_ore";
+    let next = "gather:mining/coal";
+    ctx.cooled = vec![full.to_string()];
+    let mut node = Node::new("n7", NodeKind::ReachLevel { skill: "mining".to_string(), level: 70 }, Vec::new(), 70);
+    node.status = NodeStatus::Ready;
+    node.alternatives = vec![
+        Alternative { method: full.to_string(), est_ticks: 6000, est_coins: 0 },
+        Alternative { method: next.to_string(), est_ticks: 6000, est_coins: 0 },
+    ];
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some(next), "status {:?}", node.status);
+    ctx.cooled = vec![full.to_string(), next.to_string()];
+    let mut node = Node::new("n8", NodeKind::ReachLevel { skill: "mining".to_string(), level: 70 }, Vec::new(), 70);
+    node.status = NodeStatus::Ready;
+    node.alternatives = vec![
+        Alternative { method: full.to_string(), est_ticks: 6000, est_coins: 0 },
+        Alternative { method: next.to_string(), est_ticks: 6000, est_coins: 0 },
+    ];
+    resolve_ready(&mut node, &ctx);
+    let NodeStatus::Blocked { reason } = &node.status else { panic!("every method cooled blocks, got {:?}", node.status) };
+    assert_eq!(resolve_wait(reason), Some(full), "a wait, never an abandonment: {reason}");
 }

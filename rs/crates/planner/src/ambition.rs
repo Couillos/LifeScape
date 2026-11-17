@@ -601,6 +601,27 @@ pub fn next_milestone<'a>(ambition: &'a Ambition, avoid: &[String]) -> Option<&'
         .find(|stone| stone.target.skills().iter().all(|skill| !avoid.contains(skill)))
 }
 
+/// `next_milestone` that also skips a milestone unworkable now (tour 3
+/// point 5, plan P2 for milestones, like the side goals' `goal_feasible`):
+/// a product every production leg of which is `sick` (quarantined fleet
+/// wide, cooled for this bot) or trains a banned skill. The next open
+/// milestone is drawn instead; the skipped one stays open.
+pub fn next_feasible_milestone<'a>(ambition: &'a Ambition, avoid: &[String], sick: &dyn Fn(&str) -> bool) -> Option<&'a Milestone> {
+    ambition
+        .milestones
+        .iter()
+        .filter(|stone| stone.status != MilestoneStatus::Done)
+        .filter(|stone| stone.target.skills().iter().all(|skill| !avoid.contains(skill)))
+        .find(|stone| milestone_workable(&stone.target, avoid, sick))
+}
+
+/// A milestone some way still serves (`next_feasible_milestone`).
+fn milestone_workable(target: &Target, avoid: &[String], sick: &dyn Fn(&str) -> bool) -> bool {
+    let Target::Produce { item, .. } = target else { return true };
+    let legs = crate::obtain_legs::production_legs(item);
+    legs.is_empty() || legs.iter().any(|leg| !sick(&leg.method) && leg.skill.as_ref().is_none_or(|(skill, _)| !avoid.contains(skill)))
+}
+
 /// Goal of one milestone. Coin targets run the producer money methods.
 pub fn goal_for_milestone(stone: &Milestone) -> GoalKind {
     match &stone.target {

@@ -302,6 +302,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         dirty = true;
     }
     waiting.extend(quest_waits);
+    // Nodes waiting out a cooled method (every candidate full or cooled)
+    // wait like a parked buy: a filler works meanwhile.
+    waiting.extend(crate::brain_cool::waiting(&life));
     // A reached goal over older goals' abandoned nodes is Finished, never
     // a stuck spell (`brain_stuck::effective_state`).
     match crate::cpu_profile::timed("stuck.effective_state", || crate::brain_stuck::effective_state(&life, &live)) {
@@ -567,6 +570,12 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         // (`missing:hammer,bronze_bar`).
         let missing: Vec<String> = reason.strip_prefix("missing:").map(|needs| needs.split(',').map(|need| lift_coin_need(need, committed)).collect()).unwrap_or_default();
         let id = life.nodes[position].id.clone();
+        // Every site of every candidate full or cooled (tour 3 point 1):
+        // the method cools, the node stays open (next method, D6).
+        if crate::brain_cool::on_resolve_wait(&mut life, position, &reason) {
+            save_or_log(&life);
+            return;
+        }
         if missing.is_empty() {
             lifescape_planner::record_contract_error(&mut life, position, &format!("resolve blocked: {reason}"));
             push_history(&mut life, &id, "abandoned");

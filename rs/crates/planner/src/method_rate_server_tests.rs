@@ -108,7 +108,9 @@ fn spawns_share_the_cluster_not_the_world() {
     let logs = method_prior(&query("ground:logs", 1)).expect("ground logs");
     let respawn = lifescape_gamedata::objs_by_name("logs")[0].respawn_ticks as f64;
     let spawns = crate::method_way::method_way("ground:logs").map(|(_, way)| way.sites.len()).unwrap_or(1) as f64;
-    assert!(spawns > 10.0, "logs spawn all over the world: {spawns}");
+    // Tour 3 point 2: only spawns a bank ROUTE serves count (the fenced
+    // lumber yard and the castle roof are out): still many, not one.
+    assert!(spawns > 5.0, "logs spawn all over the world: {spawns}");
     assert!(logs.ticks_per_action > respawn / spawns, "{logs:?}");
     let wool = method_prior(&at("gather:sheep/wool", 1, "shears", None)).expect("wool");
     assert!(wool.ticks_per_action / wool.success > 3.0, "{wool:?}");

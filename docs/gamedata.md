@@ -158,3 +158,22 @@ talismans dans `Way.tools` (portés, jamais consommés), les voies de sort
 portent leurs runes, les teintures d'Aggie leurs intrants (`aggie.rs2`).
 `quest_requirements` porte `reward_points` (`^<clé>_questpoints`) et
 `blocker` (quête impossible en solo aujourd'hui).
+
+## Banque d'un site par coût de route (`site_banks.rs`, tour 3, point 2)
+
+`gamedata/data/site_banks.json` : pour chaque site du catalogue
+(`site_banks::catalogue()` : sites de `danger::sites` de toutes les
+méthodes, entrées de combat, stations, spawns F2P de PNJ et d'objets,
+portes de guilde, rez-de-chaussée des sites d'étage ; Karamja lu au quai de
+Port Sarim), la banque F2P (7, `bank_stands::bank_entries`) dont la ROUTE
+est la moins chère, avec son coût (coûts du planificateur : portes,
+escaliers, rides, F2P, aucune arête payante ; `lifescape_nav::site_banks`,
+une recherche plafonnée à 300 par banque, case d'appui ouverte du site, puis
+ses autres cases, puis en sortie pour une porte de guilde), ou aucune.
+Recalculée par `rs/crates/nav/tests/site_banks.rs`
+(`LIFESCAPE_WRITE_SITE_BANKS=1` l'écrit, ~25 s). `site_banks::serving` :
+ligne exacte, sinon le site servi le plus proche de la même zone
+(`AREA_RADIUS` 15). `danger::site_bank` = cette banque si son coût ≤
+`BANK_TREK_LIMIT` (250, coût de route ; 150 Manhattan avant) et si le niveau
+a un guichet F2P (un étage se lit au rez-de-chaussée, `surface_of`).
+Mine du marais (3244,3165) : Draynor (170), jamais Al Kharid.
