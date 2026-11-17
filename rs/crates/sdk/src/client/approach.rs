@@ -320,7 +320,7 @@ mod tests {
         for tile in [(1, 0), (2, 0), (3, 0), (0, 1), (1, 1), (2, 1), (0, -1), (1, -1), (2, -1)] {
             bot.collision.set(tile.0, tile.1, 0, collision::WALK_BLOCKED);
         }
-        bot.world.npcs.insert(7, NpcInfo { npc_type: 3, x: 2, z: 0, level: 0, name: None, anim: None, face_entity: None, hit_tick: None });
+        bot.world.npcs.insert(7, NpcInfo { npc_type: 3, x: 2, z: 0, level: 0, name: None, anim: None, face_entity: None, hit_tick: None, spotanim: None });
         // Every ring walk settles back where we stand: motionless Ok must
         // not count, or this never reaches the pump below, offline or live.
         assert!(bot.approach_npc(7, 60).is_err(), "blocked ring terminates loud");
@@ -341,7 +341,7 @@ mod tests {
         }
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".").with_tables(Tables { npc_size: size_two, ..NOTABLES });
         bot.world.level = 0;
-        bot.world.npcs.insert(472, NpcInfo { npc_type: 81, x: 3198, z: 3331, level: 0, name: None, anim: None, face_entity: None, hit_tick: None });
+        bot.world.npcs.insert(472, NpcInfo { npc_type: 81, x: 3198, z: 3331, level: 0, name: None, anim: None, face_entity: None, hit_tick: None, spotanim: None });
         for tile in [(3198, 3333), (3199, 3333), (3200, 3331), (3197, 3332), (3199, 3330)] {
             bot.world.x = tile.0;
             bot.world.z = tile.1;
@@ -398,7 +398,7 @@ mod tests {
         }
         let (bot, _service) = served_bot(3245, 3395, "sdk-ring-none");
         let mut bot = bot.with_tables(Tables { npc_name: man, ..NOTABLES });
-        bot.world.npcs.insert(9, NpcInfo { npc_type: 1, x: 3246, z: 3398, level: 0, name: None, anim: None, face_entity: None, hit_tick: None });
+        bot.world.npcs.insert(9, NpcInfo { npc_type: 1, x: 3246, z: 3398, level: 0, name: None, anim: None, face_entity: None, hit_tick: None, spotanim: None });
         let err = bot.approach_npc(9, 60).expect_err("no reachable side");
         let text = format!("{err}");
         assert!(matches!(err, crate::error::Error::Unreachable(_)), "typed Unreachable, got {err:?}");

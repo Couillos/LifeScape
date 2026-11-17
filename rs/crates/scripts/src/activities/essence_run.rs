@@ -291,7 +291,7 @@ mod tests {
         let aubury = (0u16..4000).find(|id| (bot.tables.npc_name)(*id).unwrap_or_default() == "aubury").expect("aubury npc id");
         bot.world.x = 3250;
         bot.world.z = 3400;
-        bot.world.npcs.insert(7u16, lifescape_sdk::world::NpcInfo { npc_type: aubury, x: 3253, z: 3402, level: 0, name: None, anim: None, face_entity: None, hit_tick: None });
+        bot.world.npcs.insert(7u16, lifescape_sdk::world::NpcInfo { npc_type: aubury, x: 3253, z: 3402, level: 0, name: None, anim: None, face_entity: None, hit_tick: None, spotanim: None });
         assert_eq!(crate::kit::shop::spawn_walk(&bot, "aubury", (AUBURY.0, AUBURY.1)), None, "streamed: no walk");
     }
 

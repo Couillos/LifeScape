@@ -1,4 +1,4 @@
-use super::{choose_step, curse_refusal, debuff_level, run_curse, CurseFoes, CurseRefusal, CurseStep, LOWERED_BAN_TICKS, MAGIC_STAT};
+use super::{all_taken, choose_step, curse_refusal, debuff_level, run_curse, taken_foe, CurseFoes, CurseRefusal, CurseStep, LOWERED_BAN_TICKS, MAGIC_STAT};
 
 /// The server's lines (`player_magic.rs2`, `player_combat.rs2`) by what
 /// the loop does about them.
@@ -74,4 +74,38 @@ fn orders_fail_typed_offline() {
         }
         other => panic!("no runes anywhere blocks on them, got {other:?}"),
     }
+}
+
+/// Tour 3 point 4 (P7c, live 9 "no foe took" failures/h): a foe showing
+/// the confuse impact (another caster's curse landed) or fighting
+/// another player is never aimed; a camp left with only such foes is
+/// contention, foes only our own casts lowered are not.
+#[test]
+fn foes_cursed_or_fought_by_others_are_skipped() {
+    let mut bot = crate::kit::spell_load::tests::stocked_bot(&[], &[]);
+    bot.world.ticks = 500;
+    bot.world.self_slot = Some(7);
+    let chicken = |spotanim: Option<(u16, u64)>, face_entity: Option<u16>| lifescape_sdk::world::NpcInfo {
+        npc_type: 41,
+        x: 3230,
+        z: 3298,
+        level: 0,
+        name: None,
+        anim: None,
+        face_entity,
+        hit_tick: None,
+        spotanim,
+    };
+    bot.world.npcs.insert(1, chicken(Some((104, 480)), None));
+    bot.world.npcs.insert(2, chicken(None, Some(32768 + 12)));
+    bot.world.npcs.insert(3, chicken(None, None));
+    bot.world.npcs.insert(4, chicken(Some((104, 300)), None));
+    assert!(taken_foe(&bot, 1, "confuse"), "confused 20 ticks ago by someone");
+    assert!(!taken_foe(&bot, 1, "weaken"), "a weaken still lands on it");
+    assert!(taken_foe(&bot, 2, "confuse"), "fights player 12");
+    assert!(!taken_foe(&bot, 3, "confuse"), "a free foe");
+    assert!(!taken_foe(&bot, 4, "confuse"), "regenerated past {LOWERED_BAN_TICKS} ticks");
+    assert!(all_taken(2, 0), "only foes other casters hold: contended");
+    assert!(!all_taken(0, 0), "only our own lowered foes: wait for them");
+    assert!(!all_taken(2, 1), "a free foe left");
 }

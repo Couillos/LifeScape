@@ -136,6 +136,23 @@ pub fn choose_step(aggressor: Option<u16>, candidates: &[(u16, i32, i32)], here:
         .map_or(CurseStep::Search, |(slot, _, _)| CurseStep::Cast(*slot))
 }
 
+/// Camp foes another caster already holds (tour 3 point 4, plan P7c):
+/// one fighting another player (`npc_engaged_by_other`) or showing the
+/// impact graphic of `spell` within a regeneration period (a curse
+/// landed on it, whoever cast it: "has already been lowered"). Read from
+/// the live NPC state, before any click.
+pub fn taken_foe(bot: &Bot, slot: u16, spell: &str) -> bool {
+    knowledge::spells::impact_graphic(spell).is_some_and(|graphic| bot.world.npc_showed_graphic(slot, &[graphic], LOWERED_BAN_TICKS)) || bot.npc_engaged_by_other(slot)
+}
+
+/// Pure: no camp foe is left to curse (`workable` 0) and other casters
+/// hold some (`by_others`): the camp is contended, never a broken method
+/// (typed `contended:<site>` when other players are there). Foes only
+/// our own casts lowered wait for their regeneration instead.
+pub fn all_taken(by_others: usize, workable: usize) -> bool {
+    by_others > 0 && workable == 0
+}
+
 fn magic_xp(bot: &Bot) -> i32 {
     bot.world.stats.get(&MAGIC_STAT).map(|(_, xp)| *xp).unwrap_or(0)
 }
@@ -194,8 +211,17 @@ fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: 
         check_events(bot)?;
         let now = bot.world.ticks;
         let mut candidates = bot.npcs_named(&names);
-        candidates.retain(|(slot, _, _)| !bot.npc_engaged_by_other(*slot));
-        let step = choose_step(aggressor(bot, &names), &candidates, (bot.world.x, bot.world.z), foes, now);
+        // Taken by another caster: the ones our own casts lowered aside.
+        let by_others = candidates.iter().filter(|(slot, _, _)| !foes.is_banned(*slot, now) && taken_foe(bot, *slot, spell)).count();
+        candidates.retain(|(slot, _, _)| !taken_foe(bot, *slot, spell));
+        let workable = candidates.iter().filter(|(slot, _, _)| !foes.is_banned(*slot, now)).count();
+        let attacker = aggressor(bot, &names);
+        // Every foe in sight cursed or fought by another player: the
+        // camp is contended (typed), the next resolve picks another site.
+        if let Some(contended) = (attacker.is_none() && all_taken(by_others, workable)).then(|| crate::kit::site::contended_error(bot)).flatten() {
+            return Err(contended);
+        }
+        let step = choose_step(attacker, &candidates, (bot.world.x, bot.world.z), foes, now);
         let slot = match step {
             CurseStep::Search => {
                 reach_camp(bot, spot)?;
