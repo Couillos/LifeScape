@@ -89,7 +89,30 @@ fn failed_filler_sits_out_its_skill() {
     assert_eq!(failed_filler_skills(&life, &fresh), vec!["attack".to_string()], "melee sits out");
     let stale = |_: i64| FILLER_RETRY_TICKS;
     assert!(failed_filler_skills(&life, &stale).is_empty(), "the cooldown ends");
+    assert!(crate::brain_cool::active(&life).contains(&"fight:melee/men".to_string()), "the failed filler is cooled like a node");
     let mut working = life_of(Vec::new(), vec![entry("fill-n238", "filler:fight:melee/men", 100)]);
     fold_filler_report(&mut working, "fill-n238", &report("budget_exhausted", 1500, None));
     assert!(failed_filler_skills(&working, &fresh).is_empty(), "a real window never sits out");
+}
+
+/// Tour 2 P2-6 red test: a filler blocked on a missing tool cools its
+/// method at its site (the launch tag carries it), so the next filler
+/// and the next node resolve never pick it hot again.
+#[test]
+fn a_failed_filler_cools_its_method_at_its_site() {
+    use super::fold_filler_report;
+    let mut life = life_of(Vec::new(), vec![entry("fill-n297", "filler:gather:woodcut/yew_logs@3087,3481,0", 100)]);
+    let blocked = lifescape_json::object(vec![
+        ("node_id", lifescape_json::str_value("fill-n297")),
+        ("stop", lifescape_json::str_value("blocked")),
+        ("ticks", lifescape_json::Value::Int(3)),
+        (
+            "error",
+            lifescape_json::object(vec![("type", lifescape_json::str_value("Blocked")), ("message", lifescape_json::str_value("blocked, missing: bronze_axe"))]),
+        ),
+    ]);
+    let line = fold_filler_report(&mut life, "fill-n297", &blocked);
+    assert!(line.contains("gather:woodcut/yew_logs") && line.contains("cooled"), "{line}");
+    let cooled = crate::brain_cool::active(&life);
+    assert!(cooled.contains(&"gather:woodcut/yew_logs@3087,3481,0".to_string()), "cooled at its site: {cooled:?}");
 }
