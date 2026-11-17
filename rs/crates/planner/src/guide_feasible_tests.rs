@@ -211,3 +211,32 @@ fn feasible_rows_come_first_for_a_profile() {
     assert!(crate::guide_model::GuideFilter { level: Some(30), ..filter.clone() }.has_profile());
     assert!(crate::guide_model::GuideFilter { coins: Some(10.0), ..filter }.has_profile());
 }
+
+/// Live 2026-11-17 (R7 at a8b6237): « attack 72->80: no attack line within
+/// reach (17 lines read) », « woodcutting 88->90 », « magic 9->10 »… A
+/// band view is built at the band's LAST level and each row named that
+/// level as the condition of its own skill (attack 75 at 72): every bot
+/// inside a band but at its end lost every line (picks only at 5, 10,
+/// …, 90). A row's level condition is the activity's gate, whatever the
+/// band it is read in: a bot of the band works it (it reads the band's
+/// rates, docs `guides_store`).
+#[test]
+fn a_band_row_asks_the_activity_gate_not_the_band_end() {
+    for (method, style, band_end, bot_level, gate) in [
+        ("fight:melee/cows", "melee:attack", 75u8, 72u8, 1u8),
+        ("gather:woodcut/yew_logs", "", 90, 88, 60),
+        ("gather:mining/coal", "", 65, 62, 30),
+        ("fight:magic/wind_strike/chickens", "magic", 10, 9, 1),
+    ] {
+        let prereqs = crate::guide_prereq::prereqs_of(method, style, band_end, "");
+        let skill = crate::activity::band_skill(method, style).expect("band skill");
+        let asked = prereqs.levels.iter().find(|(name, _)| *name == skill).map(|(_, level)| *level);
+        assert_eq!(asked, Some(gate), "{method}: the gate of {skill}, got {:?}", prereqs.levels);
+        let found = Bot::new(bot_level).judge(&prereqs);
+        let level_pending = match &found {
+            Feasibility::AfterPrereqs(pending) | Feasibility::Infeasible(_, pending) => pending.iter().any(|need| matches!(need, Pending::Level { .. })),
+            Feasibility::Feasible => false,
+        };
+        assert!(!level_pending, "{method} at {bot_level} in the {band_end} band: {found:?}");
+    }
+}
