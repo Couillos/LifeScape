@@ -510,6 +510,7 @@ impl MarketService {
                 _ => (true, true, (None, None)),
             };
             self.refund_and_relist(deal_id as u64, &buyer, &seller, item, qty, price, relist_buyer, relist_seller, reliability);
+            self.note_deal_end(account, (&buyer, &seller), Some(why));
             // User rule: a party that cannot deliver loses the deal AND
             // the orders behind it. Its other rows on the same object are
             // backed by the same missing stock (live 2026-11-12:
@@ -531,6 +532,8 @@ impl MarketService {
             let store = self.lock_store();
             let _ = store.record_deal_outcome(&buyer, true);
             let _ = store.record_deal_outcome(&seller, true);
+            drop(store);
+            self.note_deal_end(account, (&buyer, &seller), None);
         }
         object(vec![("ok", Value::Bool(true)), ("deal", Value::Int(deal_id)), ("status", str_value(next.as_str()))])
     }

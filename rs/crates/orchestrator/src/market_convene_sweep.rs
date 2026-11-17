@@ -9,6 +9,12 @@ use lifescape_market::{DealStatus, FailReason};
 
 use crate::market_service::MarketService;
 
+/// Deals an account may let expire in a row before its orders are
+/// retired (decision D8).
+pub(crate) const TIMEOUT_STREAK_LIMIT: u32 = 3;
+/// Cancel reason of the orders retired by the timeout streak.
+pub(crate) const TIMEOUT_STREAK_REASON: &str = "timeout_streak";
+
 impl MarketService {
     /// Frees convene state (tiles, deadline, account holds) at a terminal
     /// deal, whatever the outcome. An account stays convened while any
@@ -119,6 +125,46 @@ impl MarketService {
     /// rests is cancelled (it would match and fail again forever). Same
     /// shape as the `short` path. Returns the failed deal ids.
     pub(crate) fn fail_absent_party(&self, account: &str) -> Vec<i64> {
+        let (failed, cancelled) = self.retire_account(account, "");
+        crate::logln!("market: {account} absent, deals {failed:?} failed no_show, {cancelled} order(s) cancelled");
+        failed
+    }
+
+    /// Counts a `timeout` the account reported on its own deal; a settled
+    /// deal resets both parties. The third timeout in a row retires every
+    /// order of the account (decision D8, tour 2 N1: a stranded bot kept
+    /// 38 orders matching and timing out, 1 052 dead deals in an hour).
+    pub(crate) fn note_deal_end(&self, reporter: &str, parties: (&str, &str), outcome: Option<FailReason>) {
+        let streak = {
+            let mut engine = self.lock_engine();
+            match outcome {
+                None => {
+                    engine.timeout_streak.remove(parties.0);
+                    engine.timeout_streak.remove(parties.1);
+                    return;
+                }
+                Some(FailReason::Timeout) => {
+                    let count = engine.timeout_streak.entry(reporter.to_string()).or_insert(0);
+                    *count += 1;
+                    *count
+                }
+                Some(_) => return,
+            }
+        };
+        if streak < TIMEOUT_STREAK_LIMIT {
+            return;
+        }
+        self.lock_engine().timeout_streak.remove(reporter);
+        let (failed, cancelled) = self.retire_account(reporter, TIMEOUT_STREAK_REASON);
+        crate::logln!(
+            "market: {reporter} let {streak} deals expire in a row, deals {failed:?} failed no_show, {cancelled} order(s) retired ({TIMEOUT_STREAK_REASON})"
+        );
+    }
+
+    /// Fails the account's matched deals (`no_show`, the partner relists
+    /// with its priority) and cancels every order it still rests with
+    /// `reason`. Returns (failed deal ids, cancelled orders).
+    pub(crate) fn retire_account(&self, account: &str, reason: &str) -> (Vec<i64>, usize) {
         let mut waiting: Vec<u64> = self
             .lock_engine()
             .deals
@@ -168,13 +214,13 @@ impl MarketService {
                 ("op", str_value("cancel")),
                 ("account", str_value(account)),
                 ("order", Value::Int(row.order_id)),
+                ("reason", str_value(reason)),
             ]));
             if reply.get("ok").as_bool() == Some(true) {
                 cancelled += 1;
             }
         }
-        crate::logln!("market: {account} absent, deals {failed:?} failed no_show, {cancelled} order(s) cancelled");
-        failed
+        (failed, cancelled)
     }
 }
 

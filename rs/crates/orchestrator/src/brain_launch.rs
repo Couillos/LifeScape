@@ -89,6 +89,19 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         Err(_) => return,
     };
     let Some(live) = live else { return };
+    // A bot no route leaves (P2-1a): no launch while it stands there,
+    // its orders retired once; the operator decides (rule 7, D5).
+    let position = crate::errors_model::position_of(live.get("position"));
+    if let Some((tile, first)) = crate::brain_stranded::gate(&job.account, position) {
+        if first {
+            crate::logln!("{}", crate::brain_stranded::verdict_line(&job.account, tile));
+            if let Some(service) = crate::market_service::shared() {
+                let (failed, cancelled) = service.retire_account(&job.account, crate::brain_stranded::STRANDED_REASON);
+                crate::logln!("market: {} stranded, deals {failed:?} failed no_show, {cancelled} order(s) retired", job.account);
+            }
+        }
+        return;
+    }
     let mut dirty = false;
     // A market maker at its capital target leaves every other activity
     // for good and quotes its slice (plan marché Q6).

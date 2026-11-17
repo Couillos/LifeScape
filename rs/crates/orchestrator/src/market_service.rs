@@ -169,6 +169,9 @@ pub(crate) struct Engine {
     /// Sellers withdrawn at their horizon with no buyer (Q4), per
     /// (account, base item): daemon wall of the withdrawal.
     pub(crate) horizon_withdrawn: HashMap<(String, i64), f64>,
+    /// Deals each account let expire in a row (`timeout` it reported
+    /// itself); a settled deal resets it (decision D8).
+    pub(crate) timeout_streak: HashMap<String, u32>,
 }
 
 impl Engine {
@@ -198,6 +201,7 @@ impl Engine {
             last_fills: HashMap::new(),
             fills_settled: 0,
             quest_reserved: HashMap::new(),
+            timeout_streak: HashMap::new(),
             patience: HashMap::new(),
             horizon_withdrawn: HashMap::new(),
         }

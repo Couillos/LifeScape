@@ -303,3 +303,16 @@ dans `run/logs/method_retest.log`). Un rapport poussé mais pas encore plié
 (`brain_inflight`) n'est jamais un « no report: worker went idle » ; le
 graphe est plié avant l'ingestion des taux. `rates: no profit row` est noté
 une fois par (méthode, bande) et par heure.
+
+## Bots échoués, deals expirés (tour 2, 2026-11-17)
+
+`brain_stranded` : deux dossiers NoRoute `Disconnected` depuis la même case
+vers deux destinations, dont la recherche n'a pas dépassé 16 cases de
+l'origine, rendent le bot `Stranded` sur cette case : plus aucun lancement
+tant qu'il s'y trouve, ligne unique `brain <c>: stranded at (x,z,l): …`
+(error_events `stranded`, décision opérateur), ordres retirés (raison
+`stranded`). Quitter la case (ou redémarrer le daemon) lève l'état.
+D8 : trois deals d'affilée expirés (`timeout` rapporté par le bot lui-même)
+retirent tous ses ordres (raison `timeout_streak`, deals appariés en
+`no_show`, contreparties remises au carnet) ; un deal réglé remet le
+compteur à zéro. Ligne `market: <c> let 3 deals expire in a row …`.

@@ -125,7 +125,8 @@ pub fn observe_log_line(line: &str) {
         || line.contains(": goal stuck")
         || line.contains(" banned ")
         || line.contains(": revive cap reached")
-        || line.contains(" no progress: ");
+        || line.contains(" no progress: ")
+        || line.contains(crate::brain_stranded::STRANDED_MARKER);
     if wanted {
         send(Intake::Brain { line: line.to_string(), clock: now_clock() });
     }
@@ -400,6 +401,12 @@ pub(crate) fn scan_dossiers(
             let Some(mut row) = errors_model::from_dossier(name, *mtime, &dossier, &errors_model::map_zone) else {
                 continue;
             };
+            // A walled-in origin strands the bot (P2-1a, `brain_stranded`).
+            if row.kind == "NoRoute" {
+                let dest = dossier.get("dest");
+                let dest = dest.get("x").as_i64().zip(dest.get("z").as_i64()).map(|(x, z)| (x, z, dest.get("level").as_i64().unwrap_or(0)));
+                crate::brain_stranded::observe_no_route(&row.account, row.position, dest, &row.message);
+            }
             if now - mtime <= FRESH_DOSSIER_SECS {
                 let (_, script, args) = live_context(orch, &row.account);
                 row.node_id = errors_model::node_of_args(&args.split(' ').map(str::to_string).collect::<Vec<_>>());
