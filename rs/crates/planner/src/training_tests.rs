@@ -17,7 +17,7 @@ fn with_prices<R>(book: &Book, coin_rate: f64, coins: i64, run: impl FnOnce(&Tra
     let sale = |item: &str| book.sale.get(item).copied().unwrap_or(0.0);
     let acquire = |item: &str, _units: i64| book.buy.get(item).map(|(coins_each, made_by)| Acquired { coins_each: *coins_each, made_by: made_by.map(str::to_string) });
     let value = |item: &str, _units: i64| book.value.get(item).copied().unwrap_or(0.0);
-    let prices = TrainPrices { coin_rate, coins, held: &held, sale_value: &sale, acquire: &acquire, product_value: &value };
+    let prices = TrainPrices { coin_rate, coins, held: &held, sale_value: &sale, acquire: &acquire, product_value: &value, rate: &crate::work_rate::prior_rate };
     run(&prices)
 }
 
@@ -215,3 +215,19 @@ fn a_paying_method_beats_any_loss() {
 }
 
 
+
+/// What a guide-picked climb obtains first (R6, brain side): the
+/// consumables of its yield the bot holds less than an action of; an air
+/// staff pays the teleport's air runes.
+#[test]
+fn a_climb_obtains_what_it_lacks_for_one_action() {
+    let none = |_: &str| 0;
+    assert_eq!(super::missing_inputs("fire:yew_logs", 60, 65, &none), vec!["yew_logs".to_string()]);
+    let logs = |item: &str| if item == "yew_logs" { 5 } else { 0 };
+    assert!(super::missing_inputs("fire:yew_logs", 60, 65, &logs).is_empty(), "a load in hand");
+    let staff = |item: &str| if item == "staff_of_air" { 1 } else { 0 };
+    let mut runes = super::missing_inputs("teleport:varrock_teleport", 25, 30, &staff);
+    runes.sort();
+    assert_eq!(runes, vec!["firerune".to_string(), "lawrune".to_string()], "the staff pays the air");
+    assert!(super::missing_inputs("fight:melee/cows", 10, 15, &none).is_empty(), "melee burns nothing");
+}

@@ -13,7 +13,7 @@ fn with_book<R>(buy: &[(&str, f64)], values: &[(&str, f64)], held: &[(&str, i64)
     let sale = |_: &str| 0.0;
     let acquire = |item: &str, _: i64| buy.get(item).map(|price| Acquired { coins_each: *price, made_by: None });
     let value = |item: &str, _: i64| values.get(item).copied().unwrap_or(0.0);
-    let prices = TrainPrices { coin_rate: 0.5, coins: 100_000, held: &held, sale_value: &sale, acquire: &acquire, product_value: &value };
+    let prices = TrainPrices { coin_rate: 0.5, coins: 100_000, held: &held, sale_value: &sale, acquire: &acquire, product_value: &value, rate: &crate::work_rate::prior_rate };
     run(&prices)
 }
 
@@ -45,9 +45,11 @@ fn a_teleport_is_priced_with_its_runes() {
     let mut missing = best.missing.clone();
     missing.sort();
     assert_eq!(missing, vec!["airrune", "firerune", "lawrune"]);
-    assert!((best.xp_per_tick - 35.0 / super::TELEPORT_TICKS).abs() < 1e-9);
+    // The cast's ticks come from its yield (R3.3), never a constant.
+    let ticks = 35.0 * crate::work_rate::prior_rate("teleport:varrock_teleport", 25).and_then(|rate| rate.ticks_per_xp("magic")).expect("teleport rate");
+    assert!((best.xp_per_tick - 35.0 / ticks).abs() < 1e-9);
     // Cost per XP: the runes of one cast (100 + 3x5 + 5) and the bot's time.
-    assert!((best.cost_per_xp - (120.0 + super::TELEPORT_TICKS * 0.5) / 35.0).abs() < 1e-9, "{best:?}");
+    assert!((best.cost_per_xp - (120.0 + ticks * 0.5) / 35.0).abs() < 1e-9, "{best:?}");
     assert!(!ranked.iter().any(|pick| pick.method == "teleport:lumbridge_teleport"), "Lumbridge opens at 31");
 }
 
@@ -69,7 +71,8 @@ fn curses_are_priced_on_the_climbs_camp() {
     assert!(!low.iter().any(|pick| pick.method.starts_with("curse:weaken")), "weaken opens at 11");
     let mid = with_book(&runes, &[], &[], |prices| spell_options(11, 15, prices));
     let weaken = mid.iter().find(|pick| pick.method == "curse:weaken/cows").expect("weaken priced");
-    assert!((weaken.xp_per_tick - 21.0 / super::CURSE_TICKS).abs() < 1e-9);
+    let ticks_per_xp = crate::work_rate::prior_rate("curse:weaken/cows", 11).and_then(|rate| rate.ticks_per_xp("magic")).expect("curse rate");
+    assert!((weaken.xp_per_tick - 1.0 / ticks_per_xp).abs() < 1e-9);
     assert!(weaken.missing.contains(&"bodyrune".to_string()));
 }
 

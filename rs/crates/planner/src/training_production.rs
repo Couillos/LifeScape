@@ -4,10 +4,11 @@
 //! prayer pick their method at resolve like smithing does — every recipe
 //! open at the level, its inputs priced at what the bot holds (sale
 //! value), buys or makes (`TrainPrices::acquire`, its time included),
-//! its product at what the market absorbs. Same score and ranking as
+//! its product at what the market absorbs, its time per XP from its
+//! yield (R3.3, `training::rated_option`). Same score and ranking as
 //! `training` (most profitable first, then the cheapest XP).
 
-use crate::training::{actions_for_xp, cost_input_of, pick_of, TrainPick, TrainPrices, BANK_TRIP_TICKS, LOAD_SLOTS};
+use crate::training::{rated_option, TrainPick, TrainPrices};
 
 /// Skills this file prices.
 pub const PRODUCTION_SKILLS: [&str; 4] = ["cooking", "crafting", "firemaking", "prayer"];
@@ -25,23 +26,6 @@ pub struct Candidate {
     pub coins: i64,
     pub xp: f64,
     pub success: f64,
-}
-
-/// Server ticks of one action by method family (click included).
-fn action_ticks(method: &str) -> f64 {
-    let family = method.split([':', '/']).next().unwrap_or("");
-    match family {
-        // `cooking.rs2`: 4-tick range loop.
-        "cook" | "bake" => 4.0,
-        // A fire takes ~4 ticks lit plus the step west.
-        "fire" => 5.0,
-        // `bury.rs2`: the bury anim locks 2 ticks.
-        "bury" => 2.0,
-        "cut" => 2.0,
-        // Furnace jewellery, like a smelt.
-        "jewelry" => 5.0,
-        _ => 3.0,
-    }
 }
 
 /// Every F2P recipe of `skill` the dumps know (computed once per skill).
@@ -104,36 +88,7 @@ pub fn rank_production(skill: &str, level: u8, target: u8, prices: &TrainPrices)
     let xp_needed = crate::sizing::xp_between(level, target.max(level.saturating_add(1)));
     let mut out = Vec::new();
     for row in candidates(skill).into_iter().filter(|row| row.level <= level) {
-        let xp_each = row.xp * row.success;
-        let actions = actions_for_xp(xp_needed, xp_each);
-        let mut inputs_each = 0.0;
-        let mut bonus_xp = 0.0;
-        let mut slots = 0.0;
-        let mut missing = Vec::new();
-        let mut feasible = true;
-        for (input, per) in &row.inputs {
-            let per = (*per).max(1);
-            let Some(costed) = cost_input_of(input, actions * per, per, skill, prices) else {
-                feasible = false;
-                break;
-            };
-            inputs_each += per as f64 * costed.each;
-            bonus_xp += per as f64 * costed.bonus_xp;
-            let stackable = lifescape_gamedata::objs_by_name(input).into_iter().next().is_some_and(|obj| obj.stackable);
-            if !stackable {
-                slots += per as f64;
-            }
-            if costed.short {
-                missing.push(input.clone());
-            }
-        }
-        if !feasible {
-            continue;
-        }
-        let ticks_each = action_ticks(&row.method) + BANK_TRIP_TICKS * slots / LOAD_SLOTS;
-        let value = row.product.as_deref().map(|product| (prices.product_value)(product, actions).max(0.0) * row.success).unwrap_or(0.0);
-        let cost_each = ticks_each * prices.coin_rate + inputs_each + row.coins as f64 - value;
-        out.extend(pick_of(row.method.clone(), 0, missing, cost_each, xp_each + bonus_xp, ticks_each, prices.coin_rate));
+        out.extend(rated_option(&row.method, skill, level, xp_needed, prices));
     }
     crate::training::sort_picks(&mut out);
     out
@@ -169,7 +124,7 @@ mod tests {
             "shrimp" => 5.0,
             _ => 0.0,
         };
-        let prices = TrainPrices { coin_rate: 0.5, coins: 10_000, held: &held, sale_value: &sale, acquire: &acquire, product_value: &value };
+        let prices = TrainPrices { coin_rate: 0.5, coins: 10_000, held: &held, sale_value: &sale, acquire: &acquire, product_value: &value, rate: &crate::work_rate::prior_rate };
         let ranked = rank_production("cooking", 20, 25, &prices);
         let first = ranked.first().expect("trout and shrimp are priced");
         assert!(first.method.contains("trout") && first.profit_per_tick > 0.0, "{ranked:?}");

@@ -1,8 +1,10 @@
 //! Companion of `dump-npc-ranges`: the same server `.npc` configs
 //! (`lostcity/content/scripts/**/*.npc`, read-only, `_unpack` included)
 //! give every attackable NPC's combat block (hitpoints, attack,
-//! strength, defence, `attackbonus`/`strengthbonus`, the three melee
-//! defence bonuses, `attackrate`, `damagetype`). Written to
+//! strength, defence, magic, `attackbonus`/`strengthbonus`, the three
+//! melee defence bonuses, `rangedefence`/`magicdefence` (the ranged and
+//! magic defence rolls of `npc_defence_roll_specific`), `attackrate`,
+//! `damagetype`). Written to
 //! `gamedata/data/npc_combat.json` next to `npc_ranges.json`: the game
 //! dump carries none of them, and the melee ladder needs them to rate a
 //! spot (xp per tick, damage taken). Later files override earlier ones,
@@ -18,16 +20,19 @@ use std::path::Path;
 use lifescape_json::{object, Value};
 
 /// Keys copied as integers (`key=value` lines and `param=key,value`).
-const INT_KEYS: [&str; 10] = [
+const INT_KEYS: [&str; 13] = [
     "hitpoints",
     "attack",
     "strength",
     "defence",
+    "magic",
     "attackbonus",
     "strengthbonus",
     "stabdefence",
     "slashdefence",
     "crushdefence",
+    "rangedefence",
+    "magicdefence",
     "attackrate",
 ];
 
@@ -137,6 +142,18 @@ mod tests {
         assert_eq!(guard.damagetype.as_deref(), Some("stab"));
         assert!(!guard.ints.contains_key("vislevel"), "only combat keys");
         assert!(blocks.get("hans").is_none_or(|block| !block.ints.contains_key("hitpoints")), "no hitpoints, no row");
+    }
+
+    /// The ranged and magic defence rolls (`npc_defence_roll_specific`):
+    /// the magic level and both defence bonuses ride with the melee block.
+    #[test]
+    fn reads_the_ranged_and_magic_defences() {
+        let mut blocks = std::collections::BTreeMap::new();
+        parse_combat("[cow]\nhitpoints=8\nmagic=0\nparam=magicdefence,-21\nparam=rangedefence,-21\n", &mut blocks);
+        let cow = blocks.get("cow").expect("cow block");
+        assert_eq!(cow.ints.get("magic"), Some(&0));
+        assert_eq!(cow.ints.get("magicdefence"), Some(&-21));
+        assert_eq!(cow.ints.get("rangedefence"), Some(&-21));
     }
 
     /// `param=undead,^true` (skeletons, zombies, ghosts) rides as a flag;

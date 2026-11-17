@@ -8,16 +8,17 @@
 //! fixture fact against the real dumps at the end.
 
 use crate::catalog::Epoch;
+use crate::work_rate::WorkRate;
 
-/// One production step: a catalogue activity (or service) with its
-/// priors. XP is real XP (server raw / 10, as the recipes dump shows).
+/// One production step: a catalogue activity (or service). Its time and
+/// XP per action are never written here (R3.3): `eval_chain` reads them
+/// from the step's yield at its level (`work_rate`: ticks per action =
+/// 6000 / actions per 6000, XP per action derived from the units).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChainStep {
     pub method: &'static str,
     pub skill: &'static str,
     pub level: u8,
-    pub ticks_each: f64,
-    pub xp_each: f64,
     pub coin_each: f64,
     pub epoch: Epoch,
     pub wilderness: bool,
@@ -41,81 +42,82 @@ pub struct Chain {
 // D58 families, priors from the catalogue and the recipes dump (smelt,
 // cook, leather and gem XP are server raw / 10, asserted in tests).
 const IRON_STEPS: &[ChainStep] = &[
-    ChainStep { method: "gather:mining/iron_ore", skill: "mining", level: 15, ticks_each: 8.0, xp_each: 3.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "iron_ore", makes_qty: 1.0 },
+    ChainStep { method: "gather:mining/iron_ore", skill: "mining", level: 15, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "iron_ore", makes_qty: 1.0 },
     // Half the iron smelts fail (ore lost, no bar, no XP: `smelting.rs2`):
     // per action 0.5 bar and 12.5 / 2 XP on average.
-    ChainStep { method: "smelt:iron_bar", skill: "smithing", level: 15, ticks_each: 4.0, xp_each: 6.25, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "iron_ore", takes_qty: 1.0, makes: "iron_bar", makes_qty: 0.5 },
-    ChainStep { method: "smith:iron_sword", skill: "smithing", level: 29, ticks_each: 4.0, xp_each: 25.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "iron_bar", takes_qty: 1.0, makes: "iron_sword", makes_qty: 1.0 },
+    ChainStep { method: "smelt:iron_bar", skill: "smithing", level: 15, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "iron_ore", takes_qty: 1.0, makes: "iron_bar", makes_qty: 0.5 },
+    ChainStep { method: "smith:iron_sword", skill: "smithing", level: 29, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "iron_bar", takes_qty: 1.0, makes: "iron_sword", makes_qty: 1.0 },
 ];
 const STEEL_STEPS: &[ChainStep] = &[
-    ChainStep { method: "gather:mining/iron_ore", skill: "mining", level: 15, ticks_each: 8.0, xp_each: 3.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "iron_ore", makes_qty: 1.0 },
-    ChainStep { method: "gather:mining/coal", skill: "mining", level: 30, ticks_each: 10.0, xp_each: 5.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "coal", makes_qty: 1.0 },
-    ChainStep { method: "smelt:steel_bar", skill: "smithing", level: 30, ticks_each: 4.0, xp_each: 17.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "iron_ore+coal", takes_qty: 1.0, makes: "steel_bar", makes_qty: 1.0 },
-    ChainStep { method: "smith:steel_platebody", skill: "smithing", level: 48, ticks_each: 4.0, xp_each: 62.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "steel_bar", takes_qty: 5.0, makes: "steel_platebody", makes_qty: 1.0 },
+    ChainStep { method: "gather:mining/iron_ore", skill: "mining", level: 15, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "iron_ore", makes_qty: 1.0 },
+    ChainStep { method: "gather:mining/coal", skill: "mining", level: 30, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "coal", makes_qty: 1.0 },
+    ChainStep { method: "smelt:steel_bar", skill: "smithing", level: 30, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "iron_ore+coal", takes_qty: 1.0, makes: "steel_bar", makes_qty: 1.0 },
+    ChainStep { method: "smith:steel_platebody", skill: "smithing", level: 48, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "steel_bar", takes_qty: 5.0, makes: "steel_platebody", makes_qty: 1.0 },
 ];
 const FISH_COOK_STEPS: &[ChainStep] = &[
-    ChainStep { method: "gather:fishing/raw_trout", skill: "fishing", level: 20, ticks_each: 12.0, xp_each: 7.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "raw_trout", makes_qty: 1.0 },
-    ChainStep { method: "cook:trout", skill: "cooking", level: 15, ticks_each: 3.0, xp_each: 70.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "raw_trout", takes_qty: 1.0, makes: "trout", makes_qty: 1.0 },
+    ChainStep { method: "gather:fishing/raw_trout", skill: "fishing", level: 20, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "raw_trout", makes_qty: 1.0 },
+    ChainStep { method: "cook:trout", skill: "cooking", level: 15, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "raw_trout", takes_qty: 1.0, makes: "trout", makes_qty: 1.0 },
 ];
 const LOGS_FIRE_STEPS: &[ChainStep] = &[
-    ChainStep { method: "gather:woodcut/willow_logs", skill: "woodcutting", level: 30, ticks_each: 8.0, xp_each: 6.75, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "willow_logs", makes_qty: 1.0 },
-    ChainStep { method: "fire:willow_logs", skill: "firemaking", level: 30, ticks_each: 3.0, xp_each: 30.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "willow_logs", takes_qty: 1.0, makes: "ashes", makes_qty: 1.0 },
+    ChainStep { method: "gather:woodcut/willow_logs", skill: "woodcutting", level: 30, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "willow_logs", makes_qty: 1.0 },
+    ChainStep { method: "fire:willow_logs", skill: "firemaking", level: 30, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "willow_logs", takes_qty: 1.0, makes: "ashes", makes_qty: 1.0 },
 ];
 const HIDE_LEATHER_STEPS: &[ChainStep] = &[
-    ChainStep { method: "fight:melee/cows", skill: "attack", level: 1, ticks_each: 20.0, xp_each: 12.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "cow_hide", makes_qty: 1.0 },
-    ChainStep { method: "tan:cow_hide", skill: "crafting", level: 1, ticks_each: 2.0, xp_each: 0.0, coin_each: 1.0, epoch: Epoch::P1, wilderness: false, takes: "cow_hide", takes_qty: 1.0, makes: "leather", makes_qty: 1.0 },
-    ChainStep { method: "craft:leather_gloves", skill: "crafting", level: 1, ticks_each: 3.0, xp_each: 13.8, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "leather", takes_qty: 1.0, makes: "leather_gloves", makes_qty: 1.0 },
+    ChainStep { method: "fight:melee/cows", skill: "attack", level: 1, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "cow_hide", makes_qty: 1.0 },
+    ChainStep { method: "tan:cow_hide", skill: "crafting", level: 1, coin_each: 1.0, epoch: Epoch::P1, wilderness: false, takes: "cow_hide", takes_qty: 1.0, makes: "leather", makes_qty: 1.0 },
+    ChainStep { method: "craft:leather_gloves", skill: "crafting", level: 1, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "leather", takes_qty: 1.0, makes: "leather_gloves", makes_qty: 1.0 },
 ];
 const GOLD_STEPS: &[ChainStep] = &[
-    ChainStep { method: "gather:mining/gold_ore", skill: "mining", level: 40, ticks_each: 12.0, xp_each: 6.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "gold_ore", makes_qty: 1.0 },
-    ChainStep { method: "smelt:gold_bar", skill: "smithing", level: 40, ticks_each: 4.0, xp_each: 22.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "gold_ore", takes_qty: 1.0, makes: "gold_bar", makes_qty: 1.0 },
-    ChainStep { method: "jewelry:gold_ring", skill: "crafting", level: 5, ticks_each: 4.0, xp_each: 15.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "gold_bar", takes_qty: 1.0, makes: "gold_ring", makes_qty: 1.0 },
-    ChainStep { method: "alch:gold_ring", skill: "magic", level: 55, ticks_each: 3.0, xp_each: 65.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "gold_ring", takes_qty: 1.0, makes: "coins", makes_qty: 1.0 },
+    ChainStep { method: "gather:mining/gold_ore", skill: "mining", level: 40, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "gold_ore", makes_qty: 1.0 },
+    ChainStep { method: "smelt:gold_bar", skill: "smithing", level: 40, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "gold_ore", takes_qty: 1.0, makes: "gold_bar", makes_qty: 1.0 },
+    ChainStep { method: "jewelry:gold_ring", skill: "crafting", level: 5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "gold_bar", takes_qty: 1.0, makes: "gold_ring", makes_qty: 1.0 },
+    ChainStep { method: "alch:gold_ring", skill: "magic", level: 55, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "gold_ring", takes_qty: 1.0, makes: "coins", makes_qty: 1.0 },
 ];
 const ESSENCE_STEPS: &[ChainStep] = &[
-    ChainStep { method: "gather:mining/blankrune", skill: "mining", level: 1, ticks_each: 6.0, xp_each: 2.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "blankrune", makes_qty: 1.0 },
-    ChainStep { method: "runecraft:airrune", skill: "runecraft", level: 1, ticks_each: 8.0, xp_each: 5.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "blankrune", takes_qty: 1.0, makes: "airrune", makes_qty: 1.0 },
+    ChainStep { method: "gather:mining/blankrune", skill: "mining", level: 1, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "blankrune", makes_qty: 1.0 },
+    ChainStep { method: "runecraft:airrune", skill: "runecraft", level: 1, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "blankrune", takes_qty: 1.0, makes: "airrune", makes_qty: 1.0 },
 ];
 const WOOL_STEPS: &[ChainStep] = &[
     // shear_sheep.rs2 grants no XP at all (PRD3 lot 7: was 2.5).
-    ChainStep { method: "gather:sheep/wool", skill: "crafting", level: 1, ticks_each: 4.0, xp_each: 0.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "wool", makes_qty: 1.0 },
-    ChainStep { method: "spin:ball_of_wool", skill: "crafting", level: 1, ticks_each: 3.0, xp_each: 2.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "wool", takes_qty: 1.0, makes: "ball_of_wool", makes_qty: 1.0 },
-    ChainStep { method: "string:unstrung_gold_amulet", skill: "crafting", level: 1, ticks_each: 2.0, xp_each: 4.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "ball_of_wool", takes_qty: 1.0, makes: "strung_gold_amulet", makes_qty: 1.0 },
+    ChainStep { method: "gather:sheep/wool", skill: "crafting", level: 1, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "wool", makes_qty: 1.0 },
+    ChainStep { method: "spin:ball_of_wool", skill: "crafting", level: 1, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "wool", takes_qty: 1.0, makes: "ball_of_wool", makes_qty: 1.0 },
+    ChainStep { method: "string:unstrung_gold_amulet", skill: "crafting", level: 1, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "ball_of_wool", takes_qty: 1.0, makes: "strung_gold_amulet", makes_qty: 1.0 },
 ];
 const CLAY_STEPS: &[ChainStep] = &[
-    ChainStep { method: "gather:mining/clay", skill: "mining", level: 1, ticks_each: 8.0, xp_each: 2.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "", takes_qty: 0.0, makes: "clay", makes_qty: 1.0 },
-    ChainStep { method: "pottery:pot", skill: "crafting", level: 1, ticks_each: 4.0, xp_each: 6.3, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "clay", takes_qty: 1.0, makes: "pot", makes_qty: 1.0 },
+    ChainStep { method: "gather:mining/clay", skill: "mining", level: 1, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "", takes_qty: 0.0, makes: "clay", makes_qty: 1.0 },
+    ChainStep { method: "pottery:pot", skill: "crafting", level: 1, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "clay", takes_qty: 1.0, makes: "pot", makes_qty: 1.0 },
 ];
 const BREAD_STEPS: &[ChainStep] = &[
-    ChainStep { method: "gather:wheat/grain", skill: "cooking", level: 1, ticks_each: 4.0, xp_each: 1.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "", takes_qty: 0.0, makes: "grain", makes_qty: 1.0 },
-    ChainStep { method: "mill:pot_flour", skill: "cooking", level: 1, ticks_each: 6.0, xp_each: 1.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "grain", takes_qty: 1.0, makes: "pot_flour", makes_qty: 1.0 },
-    ChainStep { method: "bake:bread", skill: "cooking", level: 1, ticks_each: 3.0, xp_each: 40.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "bread_dough", takes_qty: 1.0, makes: "bread", makes_qty: 1.0 },
+    ChainStep { method: "gather:wheat/grain", skill: "cooking", level: 1, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "", takes_qty: 0.0, makes: "grain", makes_qty: 1.0 },
+    ChainStep { method: "mill:pot_flour", skill: "cooking", level: 1, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "grain", takes_qty: 1.0, makes: "pot_flour", makes_qty: 1.0 },
+    ChainStep { method: "bake:bread", skill: "cooking", level: 1, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "bread_dough", takes_qty: 1.0, makes: "bread", makes_qty: 1.0 },
 ];
 const SUPERHEAT_STEPS: &[ChainStep] = &[
-    ChainStep { method: "gather:mining/iron_ore", skill: "mining", level: 15, ticks_each: 8.0, xp_each: 3.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "iron_ore", makes_qty: 1.0 },
-    ChainStep { method: "superheat:iron_bar", skill: "magic", level: 43, ticks_each: 3.0, xp_each: 53.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "iron_ore", takes_qty: 1.0, makes: "iron_bar", makes_qty: 1.0 },
+    ChainStep { method: "gather:mining/iron_ore", skill: "mining", level: 15, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "iron_ore", makes_qty: 1.0 },
+    ChainStep { method: "superheat:iron_bar", skill: "magic", level: 43, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "iron_ore", takes_qty: 1.0, makes: "iron_bar", makes_qty: 1.0 },
 ];
 const RUNITE_WILD_STEPS: &[ChainStep] = &[
-    ChainStep { method: "gather:mining/runite_ore", skill: "mining", level: 85, ticks_each: 30.0, xp_each: 12.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: true, takes: "", takes_qty: 0.0, makes: "runite_ore", makes_qty: 1.0 },
+    ChainStep { method: "gather:mining/runite_ore", skill: "mining", level: 85, coin_each: 0.0, epoch: Epoch::P1, wilderness: true, takes: "", takes_qty: 0.0, makes: "runite_ore", makes_qty: 1.0 },
 ];
 const ENCHANT_STEPS: &[ChainStep] = &[
     // Wiring amulets to enchant spells (P2.1 review): the strung input
     // resolves spell, level, runes and product in the script; the XP is
     // the spell dump (enchant_lvl1 175 raw / 10, asserted below).
-    ChainStep { method: "enchant:strung_sapphire_amulet", skill: "magic", level: 7, ticks_each: 3.0, xp_each: 17.5, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "strung_sapphire_amulet", takes_qty: 1.0, makes: "amulet_of_magic", makes_qty: 1.0 },
+    ChainStep { method: "enchant:strung_sapphire_amulet", skill: "magic", level: 7, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "strung_sapphire_amulet", takes_qty: 1.0, makes: "amulet_of_magic", makes_qty: 1.0 },
 ];
 const BURY_STEPS: &[ChainStep] = &[
-    // §7 combat → burial: the bones bury in the combat loop (no
-    // standalone bury script: `bury_loot::bury_now` is an in-loop
-    // helper), so the chain step is the fight itself, scored in prayer.
-    ChainStep { method: "fight:melee/cows", skill: "prayer", level: 1, ticks_each: 20.0, xp_each: 4.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "bones", makes_qty: 1.0 },
+    // §7 combat → burial: the fight drops the bones (one a kill), the
+    // burial pays the prayer (R3.3: each step's XP from its own yield,
+    // a fight's prior pays no prayer).
+    ChainStep { method: "fight:melee/cows", skill: "attack", level: 1, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "bones", makes_qty: 1.0 },
+    ChainStep { method: "bury:bones", skill: "prayer", level: 1, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "bones", takes_qty: 1.0, makes: "bones", makes_qty: 1.0 },
 ];
 const LESSER_STEPS: &[ChainStep] = &[
     // §7 lesser demons → rune → high alchemy. The helm is a drop, not a
     // guarantee: makes_qty 1.0 is an upper-bound prior (measured
     // yields replace priors from n ≥ 3, D22 rates, never the dump rate).
-    ChainStep { method: "fight:melee/lesser_demons", skill: "attack", level: 82, ticks_each: 20.0, xp_each: 12.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "rune_med_helm", makes_qty: 1.0 },
-    ChainStep { method: "alch:rune_med_helm", skill: "magic", level: 55, ticks_each: 3.0, xp_each: 65.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "rune_med_helm", takes_qty: 1.0, makes: "coins", makes_qty: 1.0 },
+    ChainStep { method: "fight:melee/lesser_demons", skill: "attack", level: 82, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "rune_med_helm", makes_qty: 1.0 },
+    ChainStep { method: "alch:rune_med_helm", skill: "magic", level: 55, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "rune_med_helm", takes_qty: 1.0, makes: "coins", makes_qty: 1.0 },
 ];
 
 /// Every D58 family on the partial catalogue (§7, minus member-gated rows).
@@ -161,28 +163,50 @@ pub struct ChainEval {
     pub profit_per_6000: f64,
     pub epoch: Epoch,
     pub wilderness: bool,
+    /// Steps without a yield at their level (no measure, no prior): the
+    /// chain is not priced (profit 0, never a guessed duration).
+    pub unrated: Vec<String>,
 }
 
 /// Extra ticks priced on Wilderness legs (risk of death and loss).
 pub const WILDERNESS_TAX_TICKS: u64 = 1200;
 
-/// Evaluate one chain end to end: every step's ticks, every skill's
-/// XP, service fees, and the final market-or-shop value.
+/// Ticks and XP of one action of `step` from its yield at the step's
+/// level: 6000 / actions per 6000, XP per action of the step's skill
+/// (0 for a step that pays none, a tanner).
+pub fn step_rate(step: &ChainStep, rate: &dyn Fn(&str, u8) -> Option<WorkRate>) -> Option<(f64, f64)> {
+    let read = rate(step.method, step.level)?;
+    (read.actions_6000 > 0.0).then(|| (crate::work_rate::WINDOW_TICKS / read.actions_6000, read.xp_per_action(step.skill).unwrap_or(0.0)))
+}
+
+/// `eval_chain_with` on the game prior (`work_rate::prior_rate`).
 pub fn eval_chain(chain: &Chain, qty: f64, prices: &ChainPrices) -> ChainEval {
+    eval_chain_with(chain, qty, prices, &crate::work_rate::prior_rate)
+}
+
+/// Evaluate one chain end to end: every step's ticks and XP from its
+/// yield (`rate`), service fees, and the final market-or-shop value.
+pub fn eval_chain_with(chain: &Chain, qty: f64, prices: &ChainPrices, rate: &dyn Fn(&str, u8) -> Option<WorkRate>) -> ChainEval {
     let mut ticks = prices.trip_ticks.saturating_mul(2) as f64;
     let mut xp: Vec<(String, f64)> = Vec::new();
     let mut coins = 0.0;
+    let mut unrated: Vec<String> = Vec::new();
     // Walk backwards: each step must make enough for the next one's takes.
     let mut need = qty;
     for step in chain.steps.iter().rev() {
         let actions = if step.makes_qty > 0.0 { need / step.makes_qty } else { need };
-        ticks += actions.ceil() * step.ticks_each;
+        let Some((ticks_each, xp_each)) = step_rate(step, rate) else {
+            unrated.push(step.method.to_string());
+            need = actions.ceil() * step.takes_qty;
+            continue;
+        };
+        ticks += actions.ceil() * ticks_each;
         coins += actions.ceil() * step.coin_each;
         let slot = xp.iter_mut().find(|(skill, _)| *skill == step.skill);
         if let Some(slot) = slot {
-            slot.1 += actions.ceil() * step.xp_each;
+            slot.1 += actions.ceil() * xp_each;
         } else {
-            xp.push((step.skill.to_string(), actions.ceil() * step.xp_each));
+            xp.push((step.skill.to_string(), actions.ceil() * xp_each));
         }
         need = actions.ceil() * step.takes_qty;
         if step.wilderness {
@@ -192,7 +216,7 @@ pub fn eval_chain(chain: &Chain, qty: f64, prices: &ChainPrices) -> ChainEval {
     let unit = (prices.market)(chain.product).max((prices.shop)(chain.product));
     let final_value = unit * qty;
     let profit = final_value - coins;
-    let profit_per_6000 = if ticks > 0.0 { profit / ticks * 6000.0 } else { 0.0 };
+    let profit_per_6000 = if ticks > 0.0 && unrated.is_empty() { profit / ticks * 6000.0 } else { 0.0 };
     let epoch = if chain.steps.iter().any(|step| step.epoch == Epoch::P2) { Epoch::P2 } else { Epoch::P1 };
     ChainEval {
         id: chain.id.to_string(),
@@ -203,6 +227,7 @@ pub fn eval_chain(chain: &Chain, qty: f64, prices: &ChainPrices) -> ChainEval {
         profit_per_6000,
         epoch,
         wilderness: chain.steps.iter().any(|step| step.wilderness),
+        unrated,
     }
 }
 
@@ -502,6 +527,31 @@ mod tests {
         assert_eq!(hide.coins_spent, 10, "tanner fee rides in the chain (10 hides)");
     }
 
+    /// R3.3: every step's time and XP come from its yield (the game
+    /// prior here), none is written in the fixtures; a step without one
+    /// leaves the chain unpriced, never a guessed duration.
+    #[test]
+    fn every_chain_step_reads_its_yield() {
+        for eval in evals(10.0) {
+            // Only a step the game prior cannot time (the mill, a method
+            // with no way) leaves its chain unpriced until measured.
+            for method in &eval.unrated {
+                let level = CHAINS.iter().flat_map(|chain| chain.steps.iter()).find(|step| step.method == method).map(|step| step.level).unwrap_or(1);
+                let query = crate::method_rate::PriorQuery { method: method.clone(), level, ..Default::default() };
+                assert!(crate::method_rate::method_prior(&query).is_err(), "{} lists {method} unrated with a prior", eval.id);
+            }
+            if ["iron", "steel", "fish_cook", "logs_fire", "gold", "essence", "superheat", "runite_wild", "enchant", "bury"].contains(&eval.id.as_str()) {
+                assert!(eval.unrated.is_empty(), "{} has unrated steps {:?}", eval.id, eval.unrated);
+            }
+        }
+        let (market, shop) = prices();
+        let ctx = ChainPrices { market: &market, shop: &shop, trip_ticks: 800 };
+        let iron = chain_by_id("iron").expect("iron chain");
+        let blind = super::eval_chain_with(iron, 10.0, &ctx, &|_: &str, _: u8| None);
+        assert_eq!(blind.unrated.len(), iron.steps.len());
+        assert_eq!(blind.profit_per_6000, 0.0, "an unpriced chain never ranks as paying");
+    }
+
     #[test]
     fn existing_methods_stay_covered_by_chain_choices() {
         // Tranches (D21) still fix one resource per palier.
@@ -586,15 +636,17 @@ mod tests {
     #[test]
     fn p1_wins_xp_ties() {
         // D64 tiebreak, order-independent: same xp/tick, P1 beats P2.
-        static TIE_P1: &[ChainStep] = &[ChainStep { method: "cook:trout", skill: "cooking", level: 15, ticks_each: 3.0, xp_each: 70.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "raw_trout", takes_qty: 1.0, makes: "trout", makes_qty: 1.0 }];
-        static TIE_P2: &[ChainStep] = &[ChainStep { method: "bake:bread", skill: "cooking", level: 1, ticks_each: 3.0, xp_each: 70.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "bread_dough", takes_qty: 1.0, makes: "bread", makes_qty: 1.0 }];
+        static TIE_P1: &[ChainStep] = &[ChainStep { method: "cook:trout", skill: "cooking", level: 15, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "raw_trout", takes_qty: 1.0, makes: "trout", makes_qty: 1.0 }];
+        static TIE_P2: &[ChainStep] = &[ChainStep { method: "bake:bread", skill: "cooking", level: 1, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "bread_dough", takes_qty: 1.0, makes: "bread", makes_qty: 1.0 }];
         let p1 = Chain { id: "tie_p1", steps: TIE_P1, product: "trout", unlocks: "" };
         let p2 = Chain { id: "tie_p2", steps: TIE_P2, product: "bread", unlocks: "" };
         let (market, shop) = prices();
         let ctx = ChainPrices { market: &market, shop: &shop, trip_ticks: 800 };
         let levels = |_: &str| 99u8;
+        // The same yield for both (3 ticks and 70 XP an action).
+        let tied = |_: &str, _: u8| Some(crate::work_rate::WorkRate { actions_6000: 2000.0, xp_6000: vec![("cooking".to_string(), 140_000.0)], flows_6000: Vec::new() });
         for order in [vec![&p1, &p2], vec![&p2, &p1]] {
-            let evals: Vec<super::ChainEval> = order.iter().map(|chain| eval_chain(chain, 1.0, &ctx)).collect();
+            let evals: Vec<super::ChainEval> = order.iter().map(|chain| super::eval_chain_with(chain, 1.0, &ctx, &tied)).collect();
             assert!((evals[0].ticks as f64 - evals[1].ticks as f64).abs() < 1e-9, "tied rates, got {evals:?}");
             let picked = best_for_xp(&order, &evals, "cooking", &levels).expect("a chain wins");
             assert_eq!(picked.id, "tie_p1", "P1 wins ties whichever order, got {}", picked.id);
@@ -608,7 +660,8 @@ mod tests {
         let wild = chain_by_id("runite_wild").expect("wilderness chain");
         let eval = eval_chain(wild, 1.0, &ctx);
         assert!(eval.wilderness, "flagged");
-        assert_eq!(eval.ticks, 800 * 2 + 30 + super::WILDERNESS_TAX_TICKS, "trips + one runite rock + risk, got {}", eval.ticks);
+        let (rock, _) = super::step_rate(&wild.steps[0], &crate::work_rate::prior_rate).expect("runite prior");
+        assert_eq!(eval.ticks, (800.0 * 2.0 + rock.ceil() + super::WILDERNESS_TAX_TICKS as f64).ceil() as u64, "trips + one runite rock + risk, got {}", eval.ticks);
     }
 
     #[test]
@@ -716,6 +769,10 @@ mod tests {
         for chain in CHAINS {
             let small = eval_chain(chain, 10.0, &ctx);
             let bulk = eval_chain(chain, 1000.0, &ctx);
+            // An unpriced chain (a step without a yield) publishes nothing.
+            if !small.unrated.is_empty() {
+                continue;
+            }
             assert!(bulk.ticks > small.ticks, "chain {} grows with quantity", chain.id);
             assert!(bulk.final_value > small.final_value, "chain {} value grows", chain.id);
             assert!(bulk.xp.iter().any(|(_, amount)| *amount > 0.0), "chain {} teaches at volume", chain.id);
@@ -783,7 +840,8 @@ mod tests {
             let row = lifescape_gamedata::recipes::making(step.makes, Some("smelt")).into_iter().find(|recipe| recipe.members == Some(false)).expect("F2P smelt row");
             let odds = lifescape_gamedata::recipes::success_odds(&row.source);
             assert!((step.makes_qty - odds).abs() < 1e-9, "{} makes {} per action, server {odds}", step.method, step.makes_qty);
-            assert!((step.xp_each - row.xp as f64 / 10.0 * odds).abs() < 1e-9, "{} xp per action {}", step.method, step.xp_each);
+            let (_, xp_each) = super::step_rate(step, &crate::work_rate::prior_rate).expect("smelt prior");
+            assert!((xp_each - row.xp as f64 / 10.0 * odds).abs() < 1e-9, "{} xp per action {xp_each}", step.method);
         }
         let enchant_xp = lifescape_gamedata::spells::by_name("enchant_lvl1")
             .into_iter()

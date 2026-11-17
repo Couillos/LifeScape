@@ -3,13 +3,21 @@
 //! - melee: `gamedata::melee_math::estimate` (hit odds against the NPC's
 //!   defence roll, max hit, kill overhead), every melee stat at the key's
 //!   level, hitpoints at least 10, the key's worn weapon;
-//! - ranged and magic: the planner's damage model (`sizing::HIT_ODDS`
-//!   of the max hit, halved), a shot every 4 ticks (shortbow, the
-//!   server's default `attackrate`), a cast every 5 (`player_magic.rs2`);
-//!   an arrow per shot (the scripts never pick them back up), the
-//!   spell's runes per cast.
+//! - ranged and magic: the server's rolls (`player_combat_stat.rs2`,
+//!   `npc_defence_roll_specific` in `npc_combat.rs2`): a hit lands when
+//!   `randominc(attack) > randominc(defence)` (`melee_math::hit_chance`),
+//!   attack = effective level × (gear bonus + 64) (ranged: level + 8 + 3
+//!   on the accurate style; magic: level + 8 + 1, its fixed style
+//!   bonus), defence = (NPC defence + 9) × (`rangedefence` + 64), or
+//!   (NPC magic + 9) × (`magicdefence` + 64) (dump `npc_combat.json`);
+//!   a landed hit deals `randominc(maxhit)`, half the max hit on average
+//!   (ranged: `combat_maxhit(effective × (arrow strength + 64))`, bronze
+//!   arrows unless the key's gear names others). A shot every 4 ticks
+//!   (shortbow, the server's default `attackrate`), a cast every 5
+//!   (`player_magic.rs2`); an arrow per shot (the scripts never pick
+//!   them back up), the spell's runes per cast.
 
-use lifescape_gamedata::melee_math::{estimate, Fighter, KILL_OVERHEAD_TICKS, PLAYER_ATTACK_TICKS};
+use lifescape_gamedata::melee_math::{estimate, hit_chance, max_hit, Fighter, KILL_OVERHEAD_TICKS, PLAYER_ATTACK_TICKS};
 use lifescape_gamedata::npc_combat::NpcCombat;
 
 use crate::method_rate::{Action, PriorError, PriorQuery};
@@ -18,6 +26,14 @@ use crate::method_rate::{Action, PriorError, PriorQuery};
 pub const RANGED_ATTACK_TICKS: f64 = 4.0;
 /// Ticks between two combat casts.
 pub const MAGIC_ATTACK_TICKS: f64 = 5.0;
+/// Ranged style bonus of the accurate style (`combat_get_damagestyle_
+/// bonuses`: `^style_ranged_accurate` = +3 ranged).
+pub const RANGED_ACCURATE_BONUS: i64 = 3;
+/// Magic's fixed style bonus (`player_combat_stat.rs2`: always +1).
+pub const MAGIC_STYLE_BONUS: i64 = 1;
+/// Ranged strength of a bronze arrow (`rangebonus`), the ammo the prior
+/// burns when the key's gear names none.
+pub const BRONZE_ARROW_STRENGTH: i64 = 7;
 
 fn spot_target(method: &str) -> Result<(String, NpcCombat), PriorError> {
     let key = crate::method_way::fight_spot(method).ok_or_else(|| PriorError::NoWay(method.to_string()))?;
@@ -34,11 +50,40 @@ fn melee_fighter(level: u8, tool: &str) -> Fighter {
     Fighter::naked(level, level, level, level.max(10), level).wearing(&gear)
 }
 
-/// Kill ticks of a ranged or magic attacker hitting `max_hit` every
-/// `interval` ticks at `sizing::HIT_ODDS`.
-fn kill_ticks(npc: &NpcCombat, max_hit: f64, interval: f64) -> Option<f64> {
-    let per_tick = crate::sizing::HIT_ODDS * max_hit / 2.0 / interval;
+/// Kill ticks of a ranged or magic attacker landing `odds` of its
+/// attacks for half of `most` on average, one every `interval` ticks.
+fn kill_ticks(npc: &NpcCombat, odds: f64, most: f64, interval: f64) -> Option<f64> {
+    let per_tick = odds * most / 2.0 / interval;
     (per_tick > 0.0).then(|| npc.hitpoints.max(1) as f64 / per_tick)
+}
+
+/// Gear a key's tool names (`shortbow+bronze_arrow`).
+fn worn(tool: &str) -> Vec<lifescape_gamedata::equipment::Wearable> {
+    tool.split('+').filter_map(lifescape_gamedata::equipment::by_name).collect()
+}
+
+fn attack_bonus(gear: &[lifescape_gamedata::equipment::Wearable], kind: &str) -> i64 {
+    gear.iter().flat_map(|item| item.attack.iter()).filter(|(name, _)| name == kind).map(|(_, bonus)| *bonus).sum()
+}
+
+/// Odds a ranged shot lands on `npc` and its max hit, at `level` with
+/// the gear `tool` names (module doc).
+pub fn ranged_roll(npc: &NpcCombat, level: u8, tool: &str) -> (f64, i64) {
+    let gear = worn(tool);
+    let effective = i64::from(level.max(1)) + 8 + RANGED_ACCURATE_BONUS;
+    let attack = effective * (attack_bonus(&gear, "range") + 64);
+    let defence = (npc.defence + 9) * (npc.ranged_defence + 64);
+    let arrows = gear.iter().filter(|item| item.rangebonus >= 0).map(|item| item.rangebonus).max().unwrap_or(BRONZE_ARROW_STRENGTH);
+    (hit_chance(attack, defence), max_hit(effective, arrows))
+}
+
+/// Odds a combat cast lands on `npc` at `level` with the gear `tool`
+/// names (the max hit is the spell's).
+pub fn magic_odds(npc: &NpcCombat, level: u8, tool: &str) -> f64 {
+    let effective = i64::from(level.max(1)) + 8 + MAGIC_STYLE_BONUS;
+    let attack = effective * (attack_bonus(&worn(tool), "magic") + 64);
+    let defence = (npc.magic + 9) * (npc.magic_defence + 64);
+    hit_chance(attack, defence)
 }
 
 fn kill_units(npc_name: &str, hitpoints: i64) -> Vec<(&'static str, String, f64)> {
@@ -80,13 +125,13 @@ pub fn fight_action(query: &PriorQuery) -> Result<Action, PriorError> {
     let mut units = kill_units(&npc_name, npc.hitpoints);
     let mut flows: Vec<(String, &'static str, f64)> = Vec::new();
     let ticks = if method.starts_with("fight:ranged/") {
-        let max_hit = (0.5 + (f64::from(query.level.max(1)) + 8.0) * (7.0 + 64.0) / 640.0).floor().max(1.0);
-        let killing = kill_ticks(&npc, max_hit, RANGED_ATTACK_TICKS).ok_or_else(|| PriorError::NoTarget(npc_name.clone()))?;
+        let (odds, most) = ranged_roll(&npc, query.level, &query.tool);
+        let killing = kill_ticks(&npc, odds, most.max(1) as f64, RANGED_ATTACK_TICKS).ok_or_else(|| PriorError::NoTarget(npc_name.clone()))?;
         flows.push(("bronze_arrow".to_string(), "ammo", -(killing / RANGED_ATTACK_TICKS)));
         killing + KILL_OVERHEAD_TICKS
     } else if let Some(spell) = crate::method_way::magic_spell(method) {
         let row = lifescape_gamedata::spells::all_spells().into_iter().find(|row| row.spell == spell).ok_or_else(|| PriorError::NoOdds(spell.clone()))?;
-        let killing = kill_ticks(&npc, row.maxhit.unwrap_or(0) as f64, MAGIC_ATTACK_TICKS).ok_or_else(|| PriorError::NoOdds(format!("{spell} max hit")))?;
+        let killing = kill_ticks(&npc, magic_odds(&npc, query.level, &query.tool), row.maxhit.unwrap_or(0) as f64, MAGIC_ATTACK_TICKS).ok_or_else(|| PriorError::NoOdds(format!("{spell} max hit")))?;
         let casts = killing / MAGIC_ATTACK_TICKS;
         flows.extend(row.runes.iter().map(|(rune, count)| (rune.to_string(), "rune", -(*count as f64) * casts)));
         units.push(("cast", spell, casts));

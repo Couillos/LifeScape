@@ -1,166 +1,122 @@
 #![forbid(unsafe_code)]
-//! Priced training, brain side (2026-11-14: "smelt bars then smith what
-//! pays, alch for magic like a player"). The pure ranking lives in the
-//! planner (`training`); this file reads the bot's own state (live
-//! levels, free holdings, wallet, staff, stock) and the PUBLIC market
-//! (book views, current prices, other accounts' asks), then hands the
-//! resolver its pick (`ReadyCtx::training`).
+//! Training method of a priced climb, brain side (plan rendements R6,
+//! D13, D17): smithing, magic from confuse and the consuming skills
+//! (`training::priced_at_resolve`) pick their method from the TRAINING
+//! GUIDE the guides store precomputed (`guides_store::current()`: the
+//! shared `Arc` of the last cycle, never a build on demand):
+//! - the bot's lines: the guide read at its live level, its quests done
+//!   (`GuideSet::training`, filters applied by reading), its skill, only
+//!   the lines a level climb launches (`mapping::map_method`; quest
+//!   shortcuts are quest nodes, never a tranche method);
+//! - each line scored for THIS bot (`train_score`): its ticks per XP plus
+//!   its coins per XP converted at the bot's D17 price (best accessible
+//!   money line of the same bot, read in the money view), the coins
+//!   weighed by the thrift trait (rapide ↔ économe), a market line by
+//!   market_affinity like `choose_market_or_farm`;
+//! - the best score kept (`train_score::choose`: R7's weighted draw takes
+//!   that place), its consumables the bot lacks for one action obtained
+//!   first (`training::missing_inputs`), handed to the resolver
+//!   (`ReadyCtx::training`).
 //!
-//! Called once per launch of a smithing or magic (from 21) climb, right
-//! before `resolve_ready` (never on a brain tick without a launch: the
-//! book is read once, every acquisition cost memoized for the pass).
-//! No market service: no pick, the static tranche method runs.
-//!
-//! Prices handed to the planner:
-//! - held units sell for the best bid or the current price (Iron: 0);
-//! - a unit to acquire costs `bid_response::unit_cost` (cheapest asks
-//!   that hold the units, or making it, time at the bot's coin rate),
-//!   else the current price (a standing bid fills there), else an NPC
-//!   shop when D-A allows it (a staff of fire), else nothing;
-//! - a product is worth its current price times the share of the batch
-//!   the book absorbs (`market_fit::saturation_factor`), or the alchemy
-//!   net when the bot casts and that pays more;
-//! - alchemy supply: the bot's own free stock (plan inputs and kept gear
-//!   out) and other accounts' asks at or under the alchemy value.
-
-use std::cell::RefCell;
-use std::collections::HashMap;
+//! No guide published yet (the first cycle after a start) or no runnable
+//! line: no pick, logged; the static tranche method runs (as without a
+//! market before). Called once per launch of such a climb, right before
+//! `resolve_ready`.
 
 use lifescape_json::Value;
-use lifescape_planner::alchemy::Caster;
 use lifescape_planner::expand::ReadyCtx;
-use lifescape_planner::market_fit::{coin_rate, saturation_factor};
-use lifescape_planner::training::{best_pick, priced_at_resolve, Acquired, AlchSupply, TrainPick, TrainPrices};
+use lifescape_planner::guide_model::{GuideFilter, Supply};
+use lifescape_planner::train_score::{choose, rank_rows, ticks_per_coin, LineScore};
+use lifescape_planner::training::{missing_inputs, priced_at_resolve, TrainPick};
 use lifescape_planner::{Life, Node, NodeKind};
 
-use crate::brain_bids::{BotState, MarketReader};
+use crate::guides_store::GuideSet;
 
-/// Objects of other accounts' asks a magic pick weighs at most.
-pub const MAX_ASK_OBJECTS: usize = 20;
-
-/// What the pick reads beyond the bot's state: the book, current prices
-/// of traded objects, the bot as a caster, the alchemy supply, its free
-/// wallet.
-pub(crate) struct TrainMarket<'a> {
-    pub reader: &'a MarketReader,
-    /// Current price of an object that traded (`None`: never traded).
-    pub traded: &'a dyn Fn(&str) -> Option<f64>,
-    pub mage: Option<Caster>,
-    pub supply: Vec<AlchSupply>,
-    pub coins: i64,
+/// The line a bot trains with and why.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GuidePick {
+    pub pick: TrainPick,
+    pub supply: Supply,
+    pub score: LineScore,
+    /// Runnable lines scored.
+    pub scored: usize,
+    /// The bot's D17 price (best accessible money line per 6000).
+    pub best_profit: Option<f64>,
 }
 
-/// Pure choice for one climb (`skill` at the live `level` toward
-/// `target`): the planner's best priced method for this bot.
-pub(crate) fn choose_pick(skill: &str, level: u8, target: u8, life: &Life, state: &BotState, rows: &[(String, i64, f64)], market: &TrainMarket) -> Option<TrainPick> {
-    let rate = coin_rate(rows, state.level_of);
-    let ironman = life.profile.ironman;
-    let view = |item: &str| market.reader.view(item);
-    let best_bid = |item: &str| view(item).and_then(|book| book.best_bid()).map(|price| price as f64);
-    let sale_value = |item: &str| {
-        if ironman {
-            return 0.0;
-        }
-        best_bid(item).unwrap_or(0.0).max((market.traded)(item).unwrap_or(0.0))
-    };
-    let memo: RefCell<HashMap<(String, i64), Option<Acquired>>> = RefCell::new(HashMap::new());
-    let acquire = |item: &str, units: i64| {
-        let key = (item.to_string(), units);
-        if let Some(known) = memo.borrow().get(&key) {
-            return known.clone();
-        }
-        let found = state
-            .with_producer(life, rate, |producer| lifescape_planner::bid_response::unit_cost(item, units, &view, producer))
-            .map(|unit| Acquired { coins_each: unit.total(rate), made_by: unit.plan.first().and_then(|step| step.strip_prefix("make ")).map(str::to_string) })
-            .or_else(|| (!ironman).then(|| (market.traded)(item)).flatten().map(|price| Acquired { coins_each: price, made_by: None }))
-            .or_else(|| {
-                lifescape_gamedata::obtain::merchant_buy_allowed(item)
-                    .then(|| lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| Acquired { coins_each: obj.price.max(1) as f64, made_by: None }))
-                    .flatten()
-            });
-        memo.borrow_mut().insert(key, found.clone());
-        found
-    };
-    let product_value = |item: &str, units: i64| {
-        let alch = market.mage.as_ref().and_then(|mage| mage.net(item)).unwrap_or(0.0);
-        if ironman {
-            return alch.max(0.0);
-        }
-        let book = view(item);
-        let sale = (market.traded)(item).or_else(|| best_bid(item)).unwrap_or(0.0) * saturation_factor(book.as_ref(), units as f64);
-        sale.max(alch).max(0.0)
-    };
-    let prices = TrainPrices { coin_rate: rate, coins: market.coins, held: state.held, sale_value: &sale_value, acquire: &acquire, product_value: &product_value };
-    best_pick(skill, level, target, &prices, &market.supply)
-}
-
-/// Current price of an object that traded (median of its last fills).
-fn traded_price(item: &str) -> Option<f64> {
-    let service = crate::market_service::shared()?;
-    let id = crate::brain_alch::obj_id(item)?;
-    let reference = service.reference(id);
-    reference.traded.then_some(reference.price.max(1) as f64)
-}
-
-/// Alchemy supply of a caster: its own free stock, then others' asks at
-/// or under the alchemy value (never for Iron).
-fn alch_supply(life: &Life, live: &Value, mage: Option<&Caster>) -> Vec<AlchSupply> {
-    let Some(mage) = mage else { return Vec::new() };
-    let keep = crate::brain_alch::kept(life, live);
-    let mut out: Vec<AlchSupply> = crate::brain_alch::alch_stock(live, &life.account, &keep)
-        .into_iter()
-        .map(|(item, units, price)| AlchSupply { item, units, unit_cost: if life.profile.ironman { 0.0 } else { price }, own: true })
-        .collect();
-    if !life.profile.ironman {
-        // The widest margins under the alchemy value first, a bounded few
-        // (one pricing per object at each launch).
-        let mut asks: Vec<AlchSupply> = crate::brain_alch::cheap_asks(mage, &life.account)
-            .into_iter()
-            .filter(|(item, units, _)| *units > 0 && !out.iter().any(|known| known.item == *item))
-            .map(|(item, units, coins)| AlchSupply { item, units, unit_cost: coins / units as f64, own: false })
-            .collect();
-        let margin = |offer: &AlchSupply| lifescape_planner::alchemy::alch_value(&offer.item, mage.spell.high).unwrap_or(0) as f64 - offer.unit_cost;
-        asks.sort_by(|left, right| margin(right).total_cmp(&margin(left)).then_with(|| left.item.cmp(&right.item)));
-        asks.truncate(MAX_ASK_OBJECTS);
-        out.extend(asks);
+/// True for a guide line a `skill` level climb can launch.
+fn launchable(method: &str, skill: &str) -> bool {
+    if method.starts_with("quest:") {
+        return false;
     }
-    out
+    let probe = Node::new("probe", NodeKind::ReachLevel { skill: skill.to_string(), level: 99 }, Vec::new(), 0);
+    lifescape_planner::map_method(method, &probe, None).is_some()
 }
 
-/// Fills `ctx.training` for a smithing or magic climb about to resolve
-/// (module doc), logging the pick with its numbers.
+/// The pick of a `skill` climb from `level` to `target` for `life`, read
+/// in `set` (module doc). `held`: free units the bot holds.
+pub(crate) fn pick_from_guide(set: &GuideSet, skill: &str, level: u8, target: u8, life: &Life, quests_done: &[String], held: &dyn Fn(&str) -> i64) -> Result<GuidePick, String> {
+    let filter = GuideFilter { skill: Some(skill.to_string()), level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
+    let (rows, _) = set.training(&filter);
+    let lines: Vec<_> = rows.into_iter().filter(|row| row.skill == skill && launchable(&row.method, skill)).collect();
+    let bot = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
+    let best_profit = lifescape_planner::guide_read::best_profit_in(set.money_view(Some(level)), &bot);
+    let ranked = rank_rows(&lines, &life.profile, ticks_per_coin(best_profit));
+    let Some(row) = choose(&ranked) else {
+        return Err(format!("no runnable {skill} line at {level} in the training guide ({} lines read)", lines.len()));
+    };
+    let score = ranked.iter().find(|(_, line)| std::ptr::eq(*line, row)).map(|(score, _)| score.clone()).ok_or("chosen line lost its score")?;
+    let pick = TrainPick {
+        method: row.method.clone(),
+        batch: 0,
+        missing: missing_inputs(&row.method, level, target, held),
+        cost_per_xp: row.coins_per_xp,
+        xp_per_tick: row.effective_xp_6000 / lifescape_planner::guide_model::WINDOW_TICKS,
+        profit_per_tick: row.coins_6000 / lifescape_planner::guide_model::WINDOW_TICKS,
+    };
+    Ok(GuidePick { pick, supply: row.supply, score, scored: ranked.len(), best_profit })
+}
+
+/// Fills `ctx.training` for a priced climb about to resolve (module doc),
+/// logging the pick with its numbers.
 pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value) {
     let NodeKind::ReachLevel { skill, level: target } = &node.kind else { return };
-    if node.method.is_some() || crate::market_service::shared().is_none() {
+    if node.method.is_some() {
         return;
     }
     let level = crate::brain_succession::live_level(live, skill);
     if !priced_at_resolve(skill, level) || level >= *target {
         return;
     }
-    let reader = MarketReader::live(&life.account);
-    let mage = if skill == "magic" { crate::brain_alch::caster_for(live) } else { None };
-    let supply = alch_supply(life, live, mage.as_ref());
-    // Products are valued as alchemy only by a caster (any skill).
-    let mage = mage.or_else(|| crate::brain_alch::caster_for(live));
-    let market = TrainMarket { reader: &reader, traded: &traded_price, mage, supply, coins: ctx.coins };
-    let rows = crate::brain_bids::rate_rows();
-    let pick = crate::brain_bids::with_bot_state(life, live, |state| choose_pick(skill, level, *target, life, state, &rows, &market));
-    match &pick {
-        Some(found) => crate::logln!(
-            "brain {}: {} {skill} {level}->{target} trains by {} ({:+.2} coins/tick, {:.2} coins/XP, {:.1} XP/tick{}{})",
-            life.account,
-            node.id,
-            found.method,
-            found.profit_per_tick,
-            found.cost_per_xp,
-            found.xp_per_tick,
-            if found.batch > 0 { format!(", batch {}", found.batch) } else { String::new() },
-            if found.missing.is_empty() { String::new() } else { format!(", obtains {}", found.missing.join(",")) }
-        ),
-        None => crate::logln!("brain {}: {} {skill} {level}->{target} has no priced method, static tranche", life.account, node.id),
+    let Some(set) = crate::guides_store::current() else {
+        crate::logln!("brain {}: {} {skill} {level}->{target}: no training guide published yet, static tranche", life.account, node.id);
+        return;
+    };
+    let locks = crate::brain_locks::locked_items(&life.account);
+    let held = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item));
+    match pick_from_guide(&set, skill, level, *target, life, &ctx.quests_done, &held) {
+        Ok(found) => {
+            crate::logln!(
+                "brain {}: {} {skill} {level}->{target} trains by {} ({}, score {:.3} = {:.3} ticks/XP + {:.3} coin ticks/XP, thrift {:.2}, affinity {:.2}, {:.1} XP/tick, {:+.2} coins/tick, {} lines, guide {} s old{})",
+                life.account,
+                node.id,
+                found.pick.method,
+                found.supply.as_str(),
+                found.score.score,
+                found.score.own_ticks_per_xp,
+                found.score.coin_ticks_per_xp,
+                life.profile.thrift,
+                life.profile.market_affinity,
+                found.pick.xp_per_tick,
+                found.pick.profit_per_tick,
+                found.scored,
+                set.age().as_secs(),
+                if found.pick.missing.is_empty() { String::new() } else { format!(", obtains {}", found.pick.missing.join(",")) }
+            );
+            ctx.training = Some(found.pick);
+        }
+        Err(error) => crate::logln!("brain {}: {} {skill} {level}->{target}: {error}, static tranche", life.account, node.id),
     }
-    ctx.training = pick;
 }
 
 #[cfg(test)]

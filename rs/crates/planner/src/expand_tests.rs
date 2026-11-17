@@ -573,3 +573,20 @@ fn an_incredible_bid_blocks_on_coins_instead() {
     resolve_ready(&mut feathers[0], &cheap);
     assert!(!matches!(&feathers[0].status, NodeStatus::Blocked { reason } if reason.starts_with("missing:coins")), "{:?} {:?}", feathers[0].status, feathers[0].alternatives);
 }
+
+/// R3.3: a reach tranche carries its duration from its method's yield,
+/// level by level (`sizing::tranche_ticks`), never a fixed window: the
+/// shrimp tranche 1->5 and the sardine one 5->10 each their own.
+#[test]
+fn reach_tranches_carry_their_yield_duration() {
+    let nodes = expand_goal(&GoalKind::MaxSkills { skills: vec!["fishing".to_string()], level: 10 }, &profile());
+    let mut start = 1;
+    for node in nodes.iter().filter(|node| matches!(node.kind, NodeKind::ReachLevel { .. })) {
+        let NodeKind::ReachLevel { level, .. } = node.kind else { continue };
+        let alt = node.alternatives.first().expect("a tranche method");
+        let expected = crate::sizing::tranche_ticks(&alt.method, start, level).expect("fishing rate").ceil() as u64;
+        assert_eq!(alt.est_ticks, expected, "{} {start}->{level}", alt.method);
+        assert!(alt.est_ticks > 0);
+        start = level;
+    }
+}

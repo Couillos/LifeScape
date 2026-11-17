@@ -1,38 +1,27 @@
-//! Offline sims of priced training (2026-11-14) on the real planner and
-//! the brain's price wiring: a smith picks what to hammer from the book,
-//! simulated mages at magic 25 and 60 (the fleet is at ≤ 10) alch their
-//! stock or cheap asks instead of bolting cows, and the launch line
-//! carries the batch.
+//! The brain's training pick read from a precomputed guide set (R6): a
+//! set built in memory (no store, no engine, no rate read: a pick is a
+//! READ of the published views), fabricated lines, profiles of every
+//! trait; the resolver then locks the pick and blocks on what it lacks.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
-use lifescape_json::{object, Value};
-use lifescape_planner::alchemy::caster;
 use lifescape_planner::expand::ReadyCtx;
-use lifescape_planner::market_fit::BookView;
-use lifescape_planner::training::AlchSupply;
-use lifescape_planner::{map_method, resolve_ready, Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
+use lifescape_planner::guide_model::{Confidence, Family, MoneyRow, Prereqs, Supply, TrainingRow};
+use lifescape_planner::guide_read::{MoneyView, TrainingView};
+use lifescape_planner::{resolve_ready, Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
 
-use super::{choose_pick, TrainMarket};
-use crate::brain_bids::{BotState, MarketReader};
+use super::pick_from_guide;
+use crate::guides_store::GuideSet;
 
-fn live(levels: &[(&str, i64)], inv: &[(&str, i64)]) -> Value {
-    let skills = levels
-        .iter()
-        .map(|(skill, level)| object(vec![("id", Value::Int(i64::from(lifescape_sdk::provenance::skill_id(skill).expect("skill")))), ("level", Value::Int(*level))]))
-        .collect();
-    let stacks = inv.iter().map(|(name, count)| object(vec![("name", lifescape_json::str_value(name)), ("count", Value::Int(*count))])).collect();
-    object(vec![("skills", Value::Arr(skills)), ("inv", Value::Arr(stacks))])
-}
-
-fn life_for(skill: &str, level: u8) -> Life {
+fn life_with(market_affinity: f64, thrift: f64) -> Life {
     Life {
         schema: 1,
-        account: "mage01".to_string(),
+        account: "maker01".to_string(),
         created_at: 0,
         seed: 7,
-        profile: Profile::new(false, 0.5, 0.5, 7, Archetype::Producer),
-        goal: GoalKind::MaxSkills { skills: vec![skill.to_string()], level },
+        profile: Profile::new(false, market_affinity, 0.5, 7, Archetype::Producer).with_thrift(thrift),
+        goal: GoalKind::MaxSkills { skills: vec!["firemaking".to_string()], level: 65 },
         nodes: Vec::new(),
         engagement: None,
         active: None,
@@ -43,146 +32,142 @@ fn life_for(skill: &str, level: u8) -> Life {
     }
 }
 
-fn units(method: &str, _item: &str) -> f64 {
-    if method.starts_with("farm:") || method.starts_with("gather:") {
-        200.0
-    } else {
-        600.0
+fn line(skill: &str, method: &str, supply: Supply, xp_6000: f64, coins_6000: f64) -> TrainingRow {
+    TrainingRow {
+        skill: skill.to_string(),
+        band: 56,
+        method: method.to_string(),
+        style: String::new(),
+        site: None,
+        tool: String::new(),
+        supply,
+        prereqs: Prereqs::default(),
+        xp_6000,
+        coins_6000,
+        coins_per_xp: -coins_6000 / xp_6000,
+        converted_ticks_6000: 0.0,
+        effective_xp_6000: xp_6000,
+        ticks_to_band_end: None,
+        other_xp_6000: Vec::new(),
+        quest_xp: 0.0,
+        quest_ticks: None,
+        flows: Vec::new(),
+        routes: Vec::new(),
+        confidence: Confidence::default(),
+        price_confidence: "traded",
+        blocked: Vec::new(),
+        accessible: true,
     }
 }
 
-/// A book of asks (other accounts) and bids per object, with current
-/// prices for what traded.
-fn book(asks: &[(&str, i64, i64)], bids: &[(&str, i64, i64)]) -> MarketReader {
-    let mut views: HashMap<String, BookView> = HashMap::new();
-    for (item, price, qty) in asks {
-        views.entry(item.to_string()).or_default().asks.push((*price, *qty));
+/// The bot's best money line (D17): 30 000 coins per 6000 ticks.
+fn money_line() -> MoneyRow {
+    MoneyRow {
+        family: Family::Farm,
+        method: "gather:woodcut/logs".to_string(),
+        style: String::new(),
+        site: None,
+        tool: String::new(),
+        band: 56,
+        prereqs: Prereqs::default(),
+        flows: Vec::new(),
+        other_drops: Default::default(),
+        revenue_6000: 30_000.0,
+        cost_6000: 0.0,
+        profit_6000: 30_000.0,
+        xp_6000: Vec::new(),
+        extra_ticks_per_6000: 0.0,
+        stages: Vec::new(),
+        routes: Vec::new(),
+        confidence: Confidence::default(),
+        price_confidence: "traded",
+        blocked: Vec::new(),
+        accessible: true,
     }
-    for (item, price, qty) in bids {
-        views.entry(item.to_string()).or_default().bids.push((*price, *qty));
-    }
-    MarketReader::fixed(views)
 }
 
-const RUNE_ASKS: [(&str, i64, i64); 7] =
-    [("airrune", 5, 50_000), ("waterrune", 5, 50_000), ("mindrune", 4, 50_000), ("chaosrune", 90, 20_000), ("deathrune", 160, 20_000), ("firerune", 5, 50_000), ("naturerune", 60, 20_000)];
-
-fn traded(item: &str) -> Option<f64> {
-    RUNE_ASKS.iter().find(|(name, _, _)| *name == item).map(|(_, price, _)| *price as f64)
+/// A published set whose band 56-60 holds `rows` (built at 60).
+fn set_with(rows: Vec<TrainingRow>) -> GuideSet {
+    let money = MoneyView { level: Some(60), rows: vec![money_line()], ..MoneyView::default() };
+    GuideSet {
+        built_unix_ms: 0,
+        built: Instant::now(),
+        cycle_ms: 0,
+        cycle_cpu_ms: None,
+        market_wait_ticks: None,
+        money_catalog: MoneyView::default(),
+        training_catalog: TrainingView::default(),
+        money_bands: vec![(60, money)],
+        training_bands: vec![(60, TrainingView { level: Some(60), rows, gaps: Vec::new() })],
+        quotes: HashMap::new(),
+        stats: lifescape_json::Value::Null,
+    }
 }
 
-/// Simulated mage at magic 25 with 300 iron platelegs from its smithing:
-/// low alchemy (31 XP a cast, 112 coins against a 60-coin nature rune)
-/// pays, so it beats every loss — water bolts (chaos runes at 90) and the
-/// curses, the cheapest XP that loses (D18: iron daggers, 14 coins an
-/// alch, now lose to `curse:curse/cows`); the pick casts the stock, buys
-/// the nature runes and a staff of fire (Zaff sells it, D-A: nothing F2P
-/// makes one; cheaper than 3 fire runes a cast over the climb) first, and
-/// the resolved launch is `alchemy iron_platelegs 300 --level magic 35`.
+/// Firemaking yew from the guide (R6 example): the market bot buys its
+/// logs (the faster line once its coins are converted), the autarkic
+/// one cuts them; a quest shortcut and another skill's line never
+/// launch a firemaking climb.
 #[test]
-fn magic_25_alchs_its_platelegs_and_launches_the_batch() {
-    let snapshot = live(&[("magic", 25), ("smithing", 30)], &[("iron_platelegs", 300)]);
-    let life = life_for("magic", 35);
-    let level_of = |skill: &str| crate::brain_succession::live_level(&snapshot, skill);
-    let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
-    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None };
-    let reader = book(&RUNE_ASKS, &[]);
-    let price = |item: &str| traded(item).unwrap_or(1.0);
-    let supply = vec![AlchSupply { item: "iron_platelegs".to_string(), units: 300, unit_cost: 0.0, own: true }];
-    let market = TrainMarket { reader: &reader, traded: &traded, mage: caster(25, false, &price), supply, coins: 40_000 };
-    let pick = choose_pick("magic", 25, 35, &life, &state, &[], &market).expect("a priced pick");
-    assert_eq!(pick.method, "alch:iron_platelegs", "{pick:?}");
-    assert_eq!(pick.batch, 300);
-    assert_eq!(pick.missing, vec!["naturerune".to_string(), "staff_of_fire".to_string()]);
-    // The resolver blocks on both runes at once; once held, it launches
-    // the batch with the climb's level.
-    let mut node = Node::new("n5", NodeKind::ReachLevel { skill: "magic".to_string(), level: 35 }, Vec::new(), 35);
-    node.status = NodeStatus::Ready;
-    let mut ctx = ReadyCtx::blind(0.5);
-    ctx.training = Some(pick.clone());
-    resolve_ready(&mut node, &ctx);
-    assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:naturerune,staff_of_fire".to_string() });
-    assert_eq!(lifescape_planner::replan::need_count_from(&node, "naturerune", Some(25)), 300, "one nature a cast, the batch");
-    let mut ready = pick;
-    ready.missing.clear();
-    ctx.training = Some(ready);
-    node.status = NodeStatus::Ready;
-    node.method = None;
-    resolve_ready(&mut node, &ctx);
-    let (script, args) = map_method(node.method.as_deref().expect("locked"), &node, None).expect("maps");
-    assert_eq!(script, "alchemy");
-    assert_eq!(&args[..5], ["iron_platelegs", "300", "--level", "magic", "35"], "{args:?}");
+fn the_brain_picks_its_line_from_the_published_guide() {
+    let mut quest = line("firemaking", "quest:druidic_ritual", Supply::Quest, 1_000_000.0, 0.0);
+    quest.quest_xp = 250.0;
+    let set = set_with(vec![
+        quest,
+        line("woodcutting", "gather:woodcut/yew_logs", Supply::Autonomous, 90_000.0, 30_000.0),
+        line("firemaking", "fire:yew_logs", Supply::Autonomous, 30_000.0, 0.0),
+        line("firemaking", "fire:yew_logs", Supply::Market, 60_000.0, -30_000.0),
+    ]);
+    let none = |_: &str| 0;
+    let market = pick_from_guide(&set, "firemaking", 60, 65, &life_with(1.0, 0.5), &[], &none).expect("a line");
+    assert_eq!((market.pick.method.as_str(), market.supply), ("fire:yew_logs", Supply::Market));
+    assert_eq!(market.best_profit, Some(30_000.0), "D17 read in the money view");
+    assert_eq!(market.scored, 2, "the quest and the woodcutting line are out");
+    assert_eq!(market.pick.missing, vec!["yew_logs".to_string()], "the logs to obtain first");
+    let autarkic = pick_from_guide(&set, "firemaking", 60, 65, &life_with(0.0, 0.5), &[], &none).expect("a line");
+    assert_eq!((autarkic.pick.method.as_str(), autarkic.supply), ("fire:yew_logs", Supply::Autonomous));
+    assert!((autarkic.pick.xp_per_tick - 5.0).abs() < 1e-9, "the line's effective rate");
 }
 
-/// Simulated mage at magic 60 holding a staff of fire and nature runes,
-/// nothing to alch of its own: steel platebodies resting under their high
-/// alchemy value are bought to alch (fire from the staff), not fire
-/// blasts at 160 a death rune.
+/// Rapide ↔ économe on two magic lines: the fast bot teleports (dear,
+/// quick), the thrifty one curses (cheap, slow). Inaccessible or
+/// blocked lines never win, and with none left the pick is a typed
+/// error (the static tranche then runs).
 #[test]
-fn magic_60_buys_cheap_asks_to_high_alch() {
-    let snapshot = live(&[("magic", 60)], &[("staff_of_fire", 1), ("naturerune", 400)]);
-    let life = life_for("magic", 65);
-    let level_of = |skill: &str| crate::brain_succession::live_level(&snapshot, skill);
-    let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
-    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None };
-    let high = lifescape_planner::alchemy::alch_value("steel_platebody", true).expect("alchs");
-    let mut asks = RUNE_ASKS.to_vec();
-    asks.push(("steel_platebody", high - 60, 150));
-    let reader = book(&asks, &[]);
-    let price = |item: &str| traded(item).unwrap_or(1.0);
-    let supply = vec![AlchSupply { item: "steel_platebody".to_string(), units: 150, unit_cost: (high - 60) as f64, own: false }];
-    let market = TrainMarket { reader: &reader, traded: &traded, mage: caster(60, true, &price), supply, coins: 500_000 };
-    let pick = choose_pick("magic", 60, 65, &life, &state, &[], &market).expect("a priced pick");
-    assert_eq!(pick.method, "alch:steel_platebody", "{pick:?}");
-    assert_eq!(pick.batch, 150, "the whole resting supply");
-    assert_eq!(pick.missing, vec!["steel_platebody".to_string()], "runes held, fire from the staff");
-    // No supply at all: every option loses, the smallest loss per XP
-    // wins (user 2026-11-15) — the curse (D18: a body rune and five
-    // elementals for 29 XP), never fire blasts at 160 a death rune.
-    let bare = TrainMarket { reader: &reader, traded: &traded, mage: caster(60, true, &price), supply: Vec::new(), coins: 500_000 };
-    let cheapest = choose_pick("magic", 60, 65, &life, &state, &[], &bare).expect("a pick");
-    assert_eq!(cheapest.method, "curse:curse/cows", "{cheapest:?}");
+fn the_thrift_trait_splits_a_fast_line_from_a_cheap_one() {
+    let mut blocked = line("magic", "fight:magic/fire_strike/cows", Supply::Autonomous, 900_000.0, 0.0);
+    blocked.blocked = vec!["firerune".to_string()];
+    let set = set_with(vec![
+        blocked,
+        line("magic", "teleport:varrock_teleport", Supply::Market, 120_000.0, -120_000.0),
+        line("magic", "curse:confuse/chickens", Supply::Market, 30_000.0, -3000.0),
+    ]);
+    let none = |_: &str| 0;
+    let fast = pick_from_guide(&set, "magic", 58, 60, &life_with(0.5, 0.0), &[], &none).expect("a line");
+    assert_eq!(fast.pick.method, "teleport:varrock_teleport");
+    let thrifty = pick_from_guide(&set, "magic", 58, 60, &life_with(0.5, 1.0), &[], &none).expect("a line");
+    assert_eq!(thrifty.pick.method, "curse:confuse/chickens");
+    let empty = set_with(Vec::new());
+    assert!(pick_from_guide(&empty, "magic", 58, 60, &life_with(0.5, 0.5), &[], &none).is_err());
 }
 
-/// A smith at 18 (mining 1) with the live scimitar bids (2961 down to 700)
-/// and bronze bars resting at 5: scimitars pay, not the platebody; without
-/// bids the platebody's 5 bars a press win; the hammer and bars are
-/// obtained first. A miner (mining 20) with a cheap hour mines and smelts
-/// its own iron instead (25 XP a bar plus 12.5 at the furnace).
+/// The pick locks like any priced tranche: the resolver blocks on the
+/// logs it lacks, then locks the method once they are held.
 #[test]
-fn smith_18_hammers_what_the_book_pays() {
-    let miner = live(&[("smithing", 18), ("mining", 20)], &[("bronze_pickaxe", 1)]);
-    let life = life_for("smithing", 20);
-    {
-        let level_of = |skill: &str| crate::brain_succession::live_level(&miner, skill);
-        let held = |item: &str| crate::brain_ambition::live_count(&miner, item);
-        let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None };
-        let none = |_: &str| None;
-        let quiet = book(&[("bronze_bar", 5, 400)], &[]);
-        let plain = TrainMarket { reader: &quiet, traded: &none, mage: None, supply: Vec::new(), coins: 5_000 };
-        let pick = choose_pick("smithing", 18, 20, &life, &state, &[], &plain).expect("a priced pick");
-        assert!(pick.method.starts_with("smith:iron_"), "{pick:?}");
-        assert_eq!(pick.missing, vec!["iron_bar".to_string()]);
-    }
-    let snapshot = live(&[("smithing", 18), ("mining", 1)], &[]);
-    let level_of = |skill: &str| crate::brain_succession::live_level(&snapshot, skill);
-    let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
-    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None };
-    let none = |_: &str| None;
-    let scimitars: Vec<(&str, i64, i64)> = [2961, 2896, 2876, 2484, 2434, 2133, 1967, 1930, 1774, 1500].iter().map(|price| ("bronze_scimitar", *price, 1)).collect();
-    let reader = book(&[("bronze_bar", 5, 400)], &scimitars);
-    let market = TrainMarket { reader: &reader, traded: &none, mage: None, supply: Vec::new(), coins: 5_000 };
-    let pick = choose_pick("smithing", 18, 20, &life, &state, &[], &market).expect("a priced pick");
-    assert_eq!(pick.method, "smith:bronze_scimitar", "{pick:?}");
-    assert_eq!(pick.missing, vec!["bronze_bar".to_string()]);
-    let quiet = book(&[("bronze_bar", 5, 400)], &[]);
-    let plain = TrainMarket { reader: &quiet, traded: &none, mage: None, supply: Vec::new(), coins: 5_000 };
-    let pick = choose_pick("smithing", 18, 20, &life, &state, &[], &plain).expect("a priced pick");
-    assert_eq!(pick.method, "smith:bronze_platebody", "{pick:?}");
-    let mut node = Node::new("n2", NodeKind::ReachLevel { skill: "smithing".to_string(), level: 20 }, Vec::new(), 20);
+fn the_resolver_locks_the_guide_pick() {
+    let set = set_with(vec![line("firemaking", "fire:yew_logs", Supply::Market, 60_000.0, -30_000.0)]);
+    let none = |_: &str| 0;
+    let found = pick_from_guide(&set, "firemaking", 60, 65, &life_with(1.0, 0.5), &[], &none).expect("a line");
+    let mut node = Node::new("n4", NodeKind::ReachLevel { skill: "firemaking".to_string(), level: 65 }, Vec::new(), 65);
     node.status = NodeStatus::Ready;
-    let mut ctx = ReadyCtx::blind(0.5);
-    ctx.training = Some(pick);
+    let mut ctx = ReadyCtx::blind(1.0);
+    ctx.bank_known = true;
+    ctx.tools = vec!["tinderbox".to_string()];
+    ctx.training = Some(found.pick.clone());
     resolve_ready(&mut node, &ctx);
-    assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:hammer,bronze_bar".to_string() });
+    assert_eq!(node.method.as_deref(), Some("fire:yew_logs"));
+    assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:yew_logs".to_string() });
+    let logs = |item: &str| if item == "yew_logs" { 27 } else { 0 };
+    let held = pick_from_guide(&set, "firemaking", 60, 65, &life_with(1.0, 0.5), &[], &logs).expect("a line");
+    assert!(held.pick.missing.is_empty(), "a load in hand");
 }

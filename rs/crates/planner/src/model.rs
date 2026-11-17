@@ -47,9 +47,31 @@ pub struct Profile {
     pub margin: f64,
     pub seed: u64,
     pub archetype: Archetype,
+    /// Rapide (0) ↔ économe (1) (plan rendements D13, R6): how much the
+    /// coins a training line spends weigh against its time
+    /// (`train_score::coin_weight`). Drawn from the seed (`draw_thrift`),
+    /// at creation and for a life file written before the trait.
+    pub thrift: f64,
+}
+
+/// Salt of the thrift draw (the brain's draws use 101 and 102).
+pub const THRIFT_SALT: u64 = 103;
+
+/// The thrift trait of a seed, in [0, 1], deterministic (a splitmix64
+/// step of the seed and `THRIFT_SALT`, three decimals like the other
+/// traits): the same bot always draws the same value.
+pub fn draw_thrift(seed: u64) -> f64 {
+    let mut word = seed ^ THRIFT_SALT.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    word = word.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    word = (word ^ (word >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    word = (word ^ (word >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    word ^= word >> 31;
+    (word % 1000) as f64 / 999.0
 }
 
 impl Profile {
+    /// A profile; its thrift is the seed's draw (`draw_thrift`), a life
+    /// file's stored value replaces it on load (`with_thrift`).
     pub fn new(ironman: bool, market_affinity: f64, price_patience: f64, seed: u64, archetype: Archetype) -> Self {
         Profile {
             ironman,
@@ -58,7 +80,14 @@ impl Profile {
             margin: 0.05 + price_patience * 0.15,
             seed,
             archetype,
+            thrift: draw_thrift(seed),
         }
+    }
+
+    /// The same profile with a given thrift (clamped to [0, 1]).
+    pub fn with_thrift(mut self, thrift: f64) -> Self {
+        self.thrift = thrift.clamp(0.0, 1.0);
+        self
     }
 }
 
@@ -518,6 +547,7 @@ pub fn life_to_value(life: &Life) -> Value {
                 ("ironman", Value::Bool(life.profile.ironman)),
                 ("market_affinity", Value::Float(life.profile.market_affinity)),
                 ("price_patience", Value::Float(life.profile.price_patience)),
+                ("thrift", Value::Float(life.profile.thrift)),
                 (
                     "archetype",
                     str_value(match life.profile.archetype {
@@ -579,6 +609,11 @@ pub fn life_from_value(value: &Value) -> Option<Life> {
             value.get("seed").as_i64().unwrap_or(0) as u64,
             // `merchant` (removed in wave 3) and unknown names: producer.
             crate::market_maker::archetype_from_value(&profile),
+        )
+        .with_thrift(
+            // A life written before the trait (R6): the seed's draw, the
+            // value creation would have drawn; saved with the next write.
+            profile.get("thrift").as_f64().unwrap_or_else(|| draw_thrift(value.get("seed").as_i64().unwrap_or(0) as u64)),
         ),
         goal: goal_from_value(&value.get("goal"))?,
         nodes,
@@ -653,6 +688,38 @@ mod tests {
         let back = life_from_value(&value).expect("life parses back");
         assert_eq!(back, life(), "aller-retour exact");
         assert_eq!(value.get("schema").as_i64(), Some(1), "schema v1");
+    }
+
+    /// R6 trait rapide ↔ économe: drawn from the seed at creation, in
+    /// [0, 1], varied across seeds, written to the life file; a file
+    /// written before the trait migrates to the SAME draw (stable across
+    /// loads), a stored value is kept as is. Lives built in memory, never
+    /// read from run/.
+    #[test]
+    fn thrift_is_drawn_from_the_seed_and_migrated() {
+        let made = Profile::new(false, 0.5, 0.5, 918273645, Archetype::Producer);
+        assert_eq!(made.thrift, super::draw_thrift(918273645), "creation draws from the seed");
+        assert_eq!(super::draw_thrift(918273645), super::draw_thrift(918273645), "deterministic");
+        let draws: Vec<f64> = (1..=200u64).map(super::draw_thrift).collect();
+        assert!(draws.iter().all(|thrift| (0.0..=1.0).contains(thrift)), "in [0, 1]");
+        assert!(draws.iter().any(|thrift| *thrift < 0.25) && draws.iter().any(|thrift| *thrift > 0.75), "spread over the range");
+        let created: Vec<f64> = (1..=200u64).map(|seed| Profile::new(false, 0.5, 0.5, seed, Archetype::Producer).thrift).collect();
+        assert_eq!(created, draws, "creation and migration draw alike");
+        let mut old = life_to_value(&life());
+        if let lifescape_json::Value::Obj(map) = &mut old {
+            if let Some(lifescape_json::Value::Obj(profile)) = map.get_mut("profile") {
+                assert!(profile.remove("thrift").is_some(), "the trait is written");
+            }
+        }
+        let first = life_from_value(&old).expect("an old life loads");
+        let second = life_from_value(&old).expect("loads again");
+        assert_eq!(first.profile.thrift, super::draw_thrift(918273645), "migrated to the seed's draw");
+        assert_eq!(first.profile.thrift, second.profile.thrift, "stable across loads");
+        let saved = life_to_value(&first);
+        assert_eq!(saved.get("profile").get("thrift").as_f64(), Some(first.profile.thrift), "saved with the next write");
+        let mut stored = life();
+        stored.profile = stored.profile.with_thrift(0.125);
+        assert_eq!(life_from_value(&life_to_value(&stored)).expect("parses").profile.thrift, 0.125, "a stored value wins");
     }
 
     #[test]

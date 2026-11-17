@@ -206,11 +206,12 @@ pub(crate) fn reach_chain(skill: &str, from: u8, to: u8, counter: &mut usize, af
             if after.is_empty() { Vec::new() } else { vec![after.clone()] },
             i64::from(level),
         );
-        node.alternatives.push(Alternative {
-            method: reach_method(skill, start),
-            est_ticks: 0,
-            est_coins: 0,
-        });
+        // Its duration from the method's yield level by level (R3.3,
+        // `sizing::tranche_ticks`); none without a rate (melee: the
+        // skill rides in the node), the resolver's window then.
+        let method = reach_method(skill, start);
+        let est_ticks = crate::sizing::tranche_ticks(&method, start, level).map(|ticks| ticks.ceil() as u64).unwrap_or(0);
+        node.alternatives.push(Alternative { method, est_ticks, est_coins: 0 });
         *after = id.clone();
         out.push(node);
         start = level;

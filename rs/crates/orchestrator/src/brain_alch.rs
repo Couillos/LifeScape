@@ -256,42 +256,6 @@ fn rank_by_profit(asks: &mut [(String, i64, i64, i64, i64)]) {
     asks.sort_by(|left, right| (right.4 - right.2).cmp(&(left.4 - left.2)).then_with(|| left.0.cmp(&right.0)));
 }
 
-/// Other accounts' resting asks at or under the alchemy value of their
-/// object for this caster's spell, per object: `(object, units, coins
-/// they cost)` (magic training, `brain_train`: what a player buys to
-/// alch). Banknote books count as their object.
-pub(crate) fn cheap_asks(mage: &Caster, account: &str) -> Vec<(String, i64, f64)> {
-    let Some(service) = crate::market_service::shared() else { return Vec::new() };
-    let rows: Vec<(i64, i64, i64)> = {
-        let engine = service.lock_engine();
-        engine
-            .books
-            .iter()
-            .flat_map(|(item_id, book)| {
-                book.orders()
-                    .into_iter()
-                    .filter(|order| order.side == lifescape_market::Side::Sell && order.remaining > 0 && !order.account.eq_ignore_ascii_case(account))
-                    .map(|order| (*item_id, order.price, order.remaining))
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    };
-    let mut totals: HashMap<String, (i64, f64)> = HashMap::new();
-    for (item_id, ask, qty) in rows {
-        let Some(item) = usize::try_from(item_id).ok().and_then(lifescape_gamedata::obj_by_id).and_then(|obj| obj.name).map(|name| name.strip_prefix("cert_").unwrap_or(name).to_string()) else { continue };
-        let Some(value) = lifescape_planner::alchemy::alch_value(&item, mage.spell.high) else { continue };
-        if ask > value {
-            continue;
-        }
-        let entry = totals.entry(item).or_insert((0, 0.0));
-        entry.0 += qty;
-        entry.1 += (qty * ask.max(1)) as f64;
-    }
-    let mut out: Vec<(String, i64, f64)> = totals.into_iter().map(|(item, (units, coins))| (item, units, coins)).collect();
-    out.sort_by(|left, right| left.0.cmp(&right.0));
-    out
-}
-
 fn claims() -> &'static Mutex<HashMap<String, std::collections::BTreeSet<i64>>> {
     static TABLE: OnceLock<Mutex<HashMap<String, std::collections::BTreeSet<i64>>>> = OnceLock::new();
     TABLE.get_or_init(|| Mutex::new(HashMap::new()))
