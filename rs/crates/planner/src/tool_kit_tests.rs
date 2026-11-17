@@ -135,6 +135,11 @@ fn jim_targets_the_best_axe_on_offer_and_funds_it() {
     let saved = |from: &str, to: &str| ticks_saved(&axe_work, from, to);
     let climbed = kit_purchases_in(&JIM_LEVELS, &jim_kit(), 24, &KitMarket { offer: &with_adamant, saved: &saved, coin_rate: 0.1 });
     assert_eq!(climbed[0].item, "adamant_axe");
+    // Live 09:58: the last mithril ask sold to lara_lane: steel (asks at
+    // 120, Bob 200) is the best tier on offer, funded the same way.
+    let no_mithril = |item: &str| if item == "mithril_axe" { None } else { jim_book(item) };
+    let steel = kit_purchases_in(&JIM_LEVELS, &jim_kit(), 24, &KitMarket { offer: &no_mithril, saved: &saved, coin_rate: 0.1 });
+    assert_eq!((steel[0].item.as_str(), steel[0].price, steel[0].financed), ("steel_axe", 120, true));
 }
 
 /// Gain under the cost: no funding. 50 yews left save less than the

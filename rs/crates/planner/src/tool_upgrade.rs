@@ -106,7 +106,18 @@ pub fn planned_work(life: &Life, canonical: &str, level_of: &dyn Fn(&str) -> u8)
         }
         match &node.kind {
             NodeKind::ObtainItems { count, .. } => {
-                let Some(method) = node.method.as_deref().filter(|method| uses_family(method, canonical)) else { continue };
+                // Locked method, else (a window just ended, `EngagementEnd`
+                // cleared it before the next resolve) its cheapest
+                // production alternative: a purchase leg is no work.
+                let produced = |method: &str| !["market:", "shop:", "dialogue:"].iter().any(|prefix| method.starts_with(prefix));
+                let fallback = || {
+                    node.alternatives
+                        .iter()
+                        .filter(|alt| produced(&alt.method) && uses_family(&alt.method, canonical))
+                        .min_by_key(|alt| alt.est_ticks)
+                        .map(|alt| alt.method.as_str())
+                };
+                let Some(method) = node.method.as_deref().or_else(fallback).filter(|method| uses_family(method, canonical)) else { continue };
                 let units = (*count - node.progress_current).max(0) as f64;
                 let level = method_skill(method).map(|skill| level_of(&skill)).unwrap_or(1);
                 if units > 0.0 {

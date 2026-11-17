@@ -82,6 +82,25 @@ fn planned_work_counts_the_open_nodes_of_the_tool() {
     assert!(work[0].units > 1000.0, "86 -> 90 is thousands of yews: {work:?}");
 }
 
+/// Live 2026-11-17 09:55 (jim_ellis, no kit step): a window ends
+/// (`EngagementEnd`: Ready, method cleared) and the kit pass runs BEFORE
+/// the resolve locks `farm:yew_logs` again. The obtain's production
+/// alternative using the tool still counts; a purchase leg never does.
+#[test]
+fn an_obtain_between_windows_still_counts_its_work() {
+    let mut life = jim_life();
+    life.nodes[0].status = NodeStatus::Ready;
+    life.nodes[0].method = None;
+    life.nodes[0].alternatives = vec![
+        crate::model::Alternative { method: "market:buy".to_string(), est_ticks: 1714, est_coins: 411936 },
+        crate::model::Alternative { method: "farm:yew_logs".to_string(), est_ticks: 2434338, est_coins: 0 },
+    ];
+    let axe = planned_work(&life, "bronze_axe", &jim_levels);
+    assert_eq!(axe, vec![PlannedWork { method: "farm:yew_logs".to_string(), level: 86, units: 4291.0 }]);
+    life.nodes[0].alternatives.retain(|alt| alt.method == "market:buy");
+    assert!(planned_work(&life, "bronze_axe", &jim_levels).is_empty(), "bought, not chopped: no axe work");
+}
+
 /// Server odds (`tree_chance`): each tier chops yews faster; the ticks
 /// saved grow with the tier and the volume, and a better tool pays only
 /// when they beat its price in the bot's ticks.
