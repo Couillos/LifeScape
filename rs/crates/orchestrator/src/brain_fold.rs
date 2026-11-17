@@ -105,6 +105,29 @@ pub(crate) fn xp_toward(report: &Value, kind: &NodeKind) -> i64 {
         .unwrap_or(0)
 }
 
+/// Units of the node's own target the run gained, read in the report
+/// itself (tour 2 P2-8): the `items` deltas, or the coins a money node
+/// counts. The fold judges a run by what IT brought, not only by the live
+/// holdings, which may lag the report (will_field 12:36: stringing
+/// `--want strung_emerald_amulet 1` made its amulet, the brain read
+/// "short") or measure a target no single run meets (ella_quill 12:29: an
+/// alchemy run on a `have_coins` node, +1 216 coins, "short").
+pub(crate) fn gained_toward(report: &Value, kind: &NodeKind) -> i64 {
+    let wanted = match kind {
+        NodeKind::ObtainItems { item, .. } => item.as_str(),
+        NodeKind::HaveCoins { .. } | NodeKind::MakeMoney => "coins",
+        _ => return 0,
+    };
+    // Report rows carry the display name ("Coins", "Yew logs").
+    let display = lifescape_gamedata::objs_by_name(wanted).first().and_then(|obj| obj.display);
+    let named = |name: &str| name == wanted || Some(name) == display;
+    report
+        .get("items")
+        .as_arr()
+        .map(|rows| rows.iter().filter(|row| row.get("name").as_str().is_some_and(named)).filter_map(|row| row.get("qty").as_i64()).filter(|qty| *qty > 0).sum())
+        .unwrap_or(0)
+}
+
 /// History outcome of a node folded done: a janitor pass that exits on
 /// its budget (`market cleanup` exits so only while the bank is still at
 /// or past the limit) is short, and holds the next insert back
@@ -291,7 +314,7 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         },
         _ => (true, false),
     };
-    let progressed = xp > 0 || (matches!(kind, NodeKind::ObtainItems { .. }) && life.nodes[index].progress_current > held_before);
+    let progressed = xp > 0 || (matches!(kind, NodeKind::ObtainItems { .. }) && life.nodes[index].progress_current > held_before) || gained_toward(report, &kind) > 0;
     // Silent loops: the report-level detector (no output, bank churn),
     // then windows without progress toward a measurable node.
     let silent = crate::report_progress::assess(report).map(|finding| finding.message);
@@ -515,6 +538,25 @@ mod tests {
 
     /// XP the report credits to the node's skill (or any combat skill for
     /// a combat level), read from the report's `xp` rows.
+    /// Tour 2 P2-8 red test: a `goal_reached` run that brought units of
+    /// the node's own target (the amulet strung, the coins an alchemy run
+    /// paid) is progress, never "goal check is short"; the next pass
+    /// closes the node on its holdings.
+    #[test]
+    fn a_run_that_brought_its_target_is_progress() {
+        let row = |name: &str, qty: i64| lifescape_json::object(vec![("name", lifescape_json::str_value(name)), ("qty", lifescape_json::Value::Int(qty))]);
+        let report = |rows: Vec<lifescape_json::Value>| lifescape_json::object(vec![("items", lifescape_json::Value::Arr(rows))]);
+        let strung = report(vec![row("strung_emerald_amulet", 1), row("ball_of_wool", -1)]);
+        let obtain = lifescape_planner::NodeKind::ObtainItems { item: "strung_emerald_amulet".to_string(), count: 8 };
+        assert_eq!(super::gained_toward(&strung, &obtain), 1);
+        let alch = report(vec![row("Coins", 1216), row("Bronze platebody", -19)]);
+        assert_eq!(super::gained_toward(&alch, &lifescape_planner::NodeKind::HaveCoins { amount: 40_000 }), 1216);
+        assert_eq!(super::gained_toward(&alch, &obtain), 0, "another object is no progress");
+        let progressed = super::gained_toward(&strung, &obtain) > 0;
+        assert_eq!(verdict("goal_reached", None, &[], false, false, progressed), Verdict::EngagementEnd);
+        assert!(matches!(verdict("goal_reached", None, &[], false, false, false), Verdict::Failure(_)), "nothing brought stays short");
+    }
+
     #[test]
     fn xp_toward_reads_the_report_rows() {
         let report = lifescape_json::parse(
