@@ -35,7 +35,7 @@ pub struct Served {
 pub(crate) fn open_stand(world: &StaticWorld, tables: &Tables, shared: &crate::plan::SharedEdges, site: Tile) -> Option<Tile> {
     let open = |tile: Tile| match crate::pocket::verdict(world, tables, shared, tile) {
         crate::pocket::PocketVerdict::Open => true,
-        crate::pocket::PocketVerdict::Closed { edge_in, .. } => edge_in,
+        crate::pocket::PocketVerdict::Closed { .. } => false,
     };
     let mut first: Option<Tile> = None;
     for tile in stand_candidates(world, site) {

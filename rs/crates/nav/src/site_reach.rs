@@ -85,7 +85,7 @@ pub(crate) fn site_verdict(world: &StaticWorld, tables: &Tables, shared: &Shared
             stands_reaching += 1;
             let open = match verdict(world, tables, shared, Tile { x, z, level }) {
                 PocketVerdict::Open => true,
-                PocketVerdict::Closed { edge_in, .. } => edge_in,
+                PocketVerdict::Closed { .. } => false,
             };
             if open {
                 return SiteVerdict::Reachable;
