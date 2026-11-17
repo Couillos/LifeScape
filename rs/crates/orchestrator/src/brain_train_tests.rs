@@ -305,6 +305,43 @@ fn a_biting_spot_waits_for_its_food() {
     assert!(found.pick.missing.contains(&"herring".to_string()), "the food obtained first: {:?}", found.pick.missing);
 }
 
+/// User lever 2026-11-17 (« entraînement marché plus fréquent »), the
+/// user's test: smithing 56->60 from the published guide, bars bought
+/// (market) or ore mined and smelted (autonomous). A market profile (0.8)
+/// takes the market line, the node buys its inputs: the block files the
+/// bars as a `market:buy` obtain at the tranche's volume (a need bid);
+/// an autarkic profile (0.1) works them up, every production leg kept.
+#[test]
+fn a_market_profile_climbs_smithing_on_bought_bars() {
+    let set = set_with(vec![
+        line("smithing", "smith:steel_med_helm", Supply::Autonomous, 1700.0, 510.0),
+        line("smithing", "smith:steel_med_helm", Supply::Market, 4400.0, -2640.0),
+    ]);
+    let none = |_: &str| 0;
+    let climb = |life: &Life| {
+        let found = pick(&set, "smithing", 56, 60, life, &[], &none).expect("a line");
+        let mut node = Node::new("n4", NodeKind::ReachLevel { skill: "smithing".to_string(), level: 60 }, Vec::new(), 60);
+        node.status = NodeStatus::Ready;
+        let mut ctx = ReadyCtx::blind(life.profile.market_affinity);
+        ctx.tools = vec!["hammer".to_string()];
+        ctx.training = Some(found.pick.clone());
+        resolve_ready(&mut node, &ctx);
+        assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:steel_bar".to_string() });
+        let fresh = lifescape_planner::replan::replan_node_from(&mut node, &lifescape_planner::replan::ReplanCause::Blocked, &["steel_bar".to_string()], &mut 4, Some(56));
+        (found, fresh)
+    };
+    let (market, fresh) = climb(&life_with(0.8, 0.5));
+    assert_eq!(market.supply, Supply::Market);
+    assert!(market.pick.buys_inputs);
+    let tranche = lifescape_planner::sizing::tranche_need("smith:steel_med_helm", 56, 60, "steel_bar").expect("bars");
+    assert!(matches!(&fresh[0].kind, NodeKind::ObtainItems { item, count } if item == "steel_bar" && *count == tranche), "{:?}", fresh[0].kind);
+    assert_eq!(fresh[0].alternatives.iter().map(|alt| alt.method.as_str()).collect::<Vec<_>>(), vec!["market:buy"], "bars bought, never smelted");
+    let (autarkic, fresh) = climb(&life_with(0.1, 0.5));
+    assert_eq!(autarkic.supply, Supply::Autonomous);
+    assert!(!autarkic.pick.buys_inputs);
+    assert!(fresh[0].alternatives.iter().any(|alt| alt.method.starts_with("smelt:")), "{:?}", fresh[0].alternatives);
+}
+
 /// R7 suite: a `reach_combat` node climbs its style's skill on the guide
 /// (ranged, magic), melee its lowest of attack, strength and defence.
 #[test]

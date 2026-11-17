@@ -476,6 +476,7 @@ fn expand_quest_inner(quest: &str, profile: &Profile, counter: &mut usize, level
 /// and quest leaves keep their single method; only the estimate fills.
 pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
     node.batch = 0;
+    node.buys_inputs = false;
     // A method a dependency cycle went through never resolves again
     // (`lifecycle_cycle`).
     let excluded = node.excluded.clone();
@@ -703,6 +704,8 @@ fn lock_training_pick(node: &mut Node, ctx: &ReadyCtx) -> bool {
     }
     node.method = Some(pick.method.clone());
     node.batch = pick.batch;
+    // A market pick buys its inputs (`replan`: market legs only).
+    node.buys_inputs = pick.buys_inputs;
     if !missing.is_empty() {
         node.status = NodeStatus::Blocked { reason: format!("missing:{}", missing.join(",")) };
     }

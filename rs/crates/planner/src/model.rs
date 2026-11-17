@@ -201,6 +201,12 @@ pub struct Node {
     /// (an alchemy batch: casts the stock and runes cover, 2026-11-14);
     /// 0 = until the node's own target. Reset at every resolve.
     pub batch: i64,
+    /// The climb's training pick is a MARKET line (user lever 2026-11-17):
+    /// the inputs its blocks file come by the market only (`replan`:
+    /// `market:buy`, a need bid at the tranche's volume), never farmed;
+    /// its tools by the usual legs. Set with the pick, reset at every
+    /// resolve.
+    pub buys_inputs: bool,
     /// Method whose run raised the node's last block (`record_block_from`):
     /// the method a dependency cycle through this node goes by.
     pub blocked_by: Option<String>,
@@ -230,6 +236,7 @@ impl Node {
             toll: false,
             boat: false,
             batch: 0,
+            buys_inputs: false,
             blocked_by: None,
             excluded: Vec::new(),
         }
@@ -466,6 +473,7 @@ fn node_to_value(node: &Node) -> Value {
         ("toll", Value::Bool(node.toll)),
         ("boat", Value::Bool(node.boat)),
         ("batch", Value::Int(node.batch)),
+        ("buys_inputs", Value::Bool(node.buys_inputs)),
         ("blocked_by", node.blocked_by.as_deref().map_or(Value::Null, str_value)),
         ("excluded", Value::Arr(node.excluded.iter().map(|method| str_value(method)).collect())),
     ])
@@ -515,6 +523,8 @@ fn node_from_value(value: &Value) -> Option<Node> {
         toll: value.get("toll").as_bool() == Some(true),
         boat: value.get("boat").as_bool() == Some(true),
         batch: value.get("batch").as_i64().unwrap_or(0).max(0),
+        // Absent in files written before the market climbs: farmed legs.
+        buys_inputs: value.get("buys_inputs").as_bool() == Some(true),
         // Absent in files written before the cycle breaker: none.
         blocked_by: value.get("blocked_by").as_str().map(str::to_string),
         excluded: value

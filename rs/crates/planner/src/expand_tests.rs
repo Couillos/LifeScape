@@ -524,7 +524,7 @@ fn goals_climb_from_the_live_level() {
 fn a_training_pick_locks_or_blocks_on_all_it_lacks() {
     use crate::model::{Alternative, NodeStatus};
     let mut ctx = ReadyCtx::blind(0.5);
-    let pick = crate::training::TrainPick { method: "smith:bronze_platebody".to_string(), batch: 0, missing: vec!["bronze_bar".to_string()], cost_per_xp: 1.0, xp_per_tick: 3.9, profit_per_tick: -1.0 };
+    let pick = crate::training::TrainPick { method: "smith:bronze_platebody".to_string(), batch: 0, missing: vec!["bronze_bar".to_string()], buys_inputs: false, cost_per_xp: 1.0, xp_per_tick: 3.9, profit_per_tick: -1.0 };
     ctx.training = Some(pick.clone());
     let mut node = Node::new("n3", NodeKind::ReachLevel { skill: "smithing".to_string(), level: 20 }, Vec::new(), 20);
     node.alternatives.push(Alternative { method: reach_method("smithing", 18), est_ticks: 0, est_coins: 0 });
@@ -536,7 +536,7 @@ fn a_training_pick_locks_or_blocks_on_all_it_lacks() {
     let mut alch = Node::new("n4", NodeKind::ReachLevel { skill: "magic".to_string(), level: 35 }, Vec::new(), 35);
     alch.status = NodeStatus::Ready;
     ctx.tools = vec!["hammer".to_string(), "naturerune".to_string(), "firerune".to_string()];
-    ctx.training = Some(crate::training::TrainPick { method: "alch:iron_dagger".to_string(), batch: 120, missing: vec!["naturerune".to_string()], cost_per_xp: 2.0, xp_per_tick: 6.0, profit_per_tick: -2.0 });
+    ctx.training = Some(crate::training::TrainPick { method: "alch:iron_dagger".to_string(), batch: 120, missing: vec!["naturerune".to_string()], buys_inputs: false, cost_per_xp: 2.0, xp_per_tick: 6.0, profit_per_tick: -2.0 });
     resolve_ready(&mut alch, &ctx);
     assert_eq!(alch.batch, 120);
     assert_eq!(alch.status, NodeStatus::Blocked { reason: "missing:naturerune".to_string() });
@@ -602,7 +602,7 @@ fn a_combat_level_climb_locks_the_guides_pick() {
     use crate::model::{Alternative, NodeStatus};
     let mut ctx = ReadyCtx::blind(0.5);
     ctx.combat = 40;
-    ctx.training = Some(crate::training::TrainPick { method: "fight:melee/cows".to_string(), batch: 0, missing: Vec::new(), cost_per_xp: 0.0, xp_per_tick: 1.0, profit_per_tick: 0.1 });
+    ctx.training = Some(crate::training::TrainPick { method: "fight:melee/cows".to_string(), batch: 0, missing: Vec::new(), buys_inputs: false, cost_per_xp: 0.0, xp_per_tick: 1.0, profit_per_tick: 0.1 });
     let mut node = Node::new("n7", NodeKind::ReachCombat { level: 45 }, Vec::new(), 45);
     node.alternatives.push(Alternative { method: "fight:melee/chickens".to_string(), est_ticks: 0, est_coins: 0 });
     node.status = NodeStatus::Ready;

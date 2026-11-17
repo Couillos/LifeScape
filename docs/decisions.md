@@ -1647,3 +1647,88 @@ par les candidats du nœud qui le juge.
 Limites : `--use` est relu entre deux charges (une charge commencée finit,
 comme un sac plein) ; une unité gardée par un autre nœud peut être
 entamée par la dernière charge.
+
+## 2026-11-17 — Entraînement marché plus fréquent : poids continu, achat de la tranche, ambitions selon le trait
+
+Constat live (après R7) : 293 ordres d'achat (~16 000 unités) contre
+2 141 ventes (~993 000) ; 44 bots sur 76 coupent ou minent. Décision
+utilisateur : levier « entraînement marché plus fréquent » (les profils
+marché achètent leurs intrants pour monter), SANS toucher aux autres
+leviers (vente au volume absorbé, M6, puits).
+
+Hypothèse écrite avant le code : les montées de transformation
+n'atteignent presque jamais le tirage, et quand elles l'atteignent leurs
+intrants sont produits ; le poids du mode marché et les ambitions ne
+dépendent presque pas du trait. Preuves (lecture seule : `run/lives`,
+`run/orchestrator.log` de l'heure R7 15:10-16:13, base copiée, guide
+publié en GET, rebuild hors ligne `rates-rebuild --guides-store` sur une
+copie) :
+- C1 exécution (principale) : les obtentions d'intrants d'une montée
+  passent par `resolve_obtain` production d'abord (ask couvert + bot
+  producteur → produire avec un bid à l'ask ; pas d'ask → produire avec
+  un bid « beside production » borné par le portefeuille, ex. owen_wood
+  `standing bid 17/7143 mithril_bar`, puis minage de 7 143 minerais).
+  Vies : 64 montées de transformation (60 en attente, 4 actives) ; leurs
+  obtentions résolues : 12 par production (7 `farm:`, 5 `ground:`), 1 au
+  marché ; 12 bots occupés à produire l'intrant d'une montée (5
+  allumeurs coupant 8 619 à 103 398 bûches, 3 prêtres ramassant des os,
+  3 mages des runes, 1 forgeron du minerai) contre 4 montées actives.
+  Heure R7 : 85 bids « beside production » contre 66 achats purs ;
+  choix `trains by` : forge 0, artisanat 0, feu 0, cuisine 2 (stock),
+  prière 2 sur 107.
+- C2 guide : la ligne marché d'entraînement payait l'attente mesurée
+  (1 224 ticks) + l'aller-retour Varrock PAR SAC de 28, plafond ~110
+  intrants/6000 ticks : feu de saule marché 11 280 XP/6000 contre coupe
+  + feu 42 594 (eva_dale 75) ; fonte de fer marché 510 XP/6000. Part de
+  tirages marché simulée (63 bots × 7 compétences, guide hors ligne du
+  même instant) : feu 0,23 (0,00 sous 0,4 d'affinité), prière 0,00 ;
+  cuisine, forge, artisanat, runes, magie déjà 1,00 (la ligne autonome
+  attend un outil : classe 2).
+- C3 poids : 1,5 − affinité (×3 d'un bout à l'autre) : part marché
+  0,70 / 0,71 / 0,78 selon l'affinité < 0,4 / 0,4-0,6 / ≥ 0,6.
+- C4 ambitions : indépendantes du trait : 27 types de transformation sur
+  60 producteurs, 44 % sous 0,3, 53 % entre 0,3 et 0,6, 44 % à partir de
+  0,6.
+- D17 : non prohibitif : médiane 0,39 tick par pièce (p10 0,20, p90 0,65).
+  Traits : 26 bots ≥ 0,6, 21 < 0,4 sur 63.
+
+Correctifs (universels, aucune liste de compétences) :
+(a) `train_score::buy_weight` = 2^(2 − 4 × affinité), continu,
+    décroissant (×1 à 0,5, ×0,76 à 0,6, ×0,44 à 0,8, ×3 à 0,1) sur le coût
+    d'une ligne MARCHÉ d'entraînement ; un D17 élevé rend la ligne
+    autonome. Le guide money (`merit_money`) et
+    `cost::choose_market_or_farm` gardent 1,5 − affinité.
+(b) `ambition_catalog::transform_share` (part des activités du catalogue
+    des guides de la compétence primaire nourries par des intrants
+    achetables, des données du jeu) et `ambition_fleet::affinity_tilt` =
+    2^(1,5 × (2a − 1) × (2s − 1)) sur le tirage et le score de couverture,
+    dans le catalogue existant.
+(c) `TrainPick::buys_inputs` → `Node::buys_inputs` (vie, remis à zéro à
+    chaque résolution) : les obtentions d'intrants d'une montée marché
+    n'ont que `market:buy`, au volume de la tranche (bid `need` borné par
+    le portefeuille) ; outils : jambes habituelles. Le guide compte un
+    trajet et une attente par tranche achetée (`band_slots`, au moins un
+    sac ; la ligne 100 % market du guide money garde un sac).
+Tests : `train_score::tests::{the_buy_weight_follows_the_trait_
+continuously, a_market_profile_buys_its_bars_while_its_coins_allow_it}`,
+`guide_money::tests::market_lot::*`, `replan::market_climb_tests::*`,
+`ambition_fleet::market_tests::*` (flotte fabriquée de 76 profils :
+transformation 20 % / 53 % / 74 %), `brain_train::tests::a_market_
+profile_climbs_smithing_on_bought_bars`.
+Attendu (simulation hors ligne, vies réelles et guide reconstruit du
+même instant, 63 bots × 7 compétences de transformation) : part des
+tirages en mode marché 0,73 → 0,78 (affinité ≥ 0,6 : 0,78 → 0,84) ; feu
+0,23 → 0,54 (≥ 0,6 : 0,54 → 0,94) ; forge, cuisine, artisanat, runes,
+magie 1,00 inchangé ; prière 0,00 inchangé (aucun os aux asks : D21,
+disponibilité d'un sac aux asks, non modifiée). Ambitions de
+transformation des profils ≥ 0,6 : 44 % → ~74 % aux prochains tirages ;
+et chaque tirage marché ACHÈTE désormais (avant : 1 obtention sur 13 au
+marché). Vérification live attendue : `trains by smith:…|fire:…|cook:…
+(market` puis `bid N/M <intrant> … placed` avec M = intrants de la
+tranche (centaines à milliers), ordres `need` au carnet sur barres,
+bûches, poisson cru, runes ; plus de `farm:`/`smelt:` sous une montée
+marché.
+Hors périmètre, signalés : obtentions de squelette des graphes d'avant
+R7 (eva_dale, isaac_hart : bûches farmées) ; ordre des classes (une
+ligne de forge derrière l'achat du marteau, classe 2, perd contre une
+fonte faisable, classe 0).

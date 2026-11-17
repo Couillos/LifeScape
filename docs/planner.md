@@ -135,8 +135,14 @@ construction à la demande) :
   converties en ticks au D17 du bot (6000 / profit de sa meilleure ligne
   money making accessible, lue dans la vue money de sa tranche) ;
   `coin_weight = 0,5 + thrift` (rapide 0,5 ↔ économe 1,5 ; 1 = total D17
-  neutre) ; une ligne MARCHÉ pèse ×(1,5 − market_affinity) comme
-  `cost::choose_market_or_farm` (un score négatif, ligne qui rapporte
+  neutre) ; une ligne MARCHÉ pèse ×`buy_weight(market_affinity)` =
+  2^(2 − 4 × affinité) (levier utilisateur 2026-11-17 « entraînement
+  marché plus fréquent » : courbe continue, ×1 à 0,5, ×0,76 à 0,6, ×0,44
+  à 0,8, ×3 à 0,1 ; remplace 1,5 − affinité, que gardent les lignes
+  market du guide money et `cost::choose_market_or_farm`) : un profil
+  marché achète ses intrants tant que leurs pièces au D17 ne rendent pas
+  l'achat bien plus lent, un D17 élevé (meilleure ligne d'argent
+  pauvre) rend la ligne autonome (un score négatif, ligne qui rapporte
   plus que son temps, est divisé par ce poids : même ordre) ; une ligne
   bloquée, inaccessible, sans XP, ou marché pour un Iron, n'a pas de
   score ;
@@ -144,7 +150,14 @@ construction à la demande) :
   mêmes lignes classées (`best` = tête de l'ordre du score seul) ;
   consommables dont le bot tient moins d'une action
   (`training::missing_inputs`, tirés du rendement) à obtenir d'abord ;
-  verrouillé par `lock_training_pick` comme avant ;
+  verrouillé par `lock_training_pick` comme avant ; une ligne MARCHÉ
+  marque le nœud (`TrainPick::buys_inputs` → `Node::buys_inputs`, levier
+  utilisateur 2026-11-17) : les obtentions que ses blocages déposent pour
+  ses intrants (pas ses outils) n'ont que `market:buy`, au volume de la
+  tranche (`replan::buys_by_market`, bid `need` borné par le
+  portefeuille ; economy.md § Montées en mode marché) ; la ligne marché
+  du guide compte un trajet et une attente par tranche achetée
+  (`guide_training::band_slots`), plus par sac ;
 - aucun guide publié (premier cycle) ou aucune ligne jouable : aucun
   choix, loggé, méthode statique de la tranche.
 Log : `brain <compte>: nX firemaking 60->65 trains by fire:yew_logs
@@ -937,10 +950,22 @@ paire (bot, trou) de meilleur score part d'abord (score = adéquation
 bot ; PV exclus de l'adéquation : ils partent de 10). La flotte = les comptes ayant un job dans le daemon
 (hors `admin`/`bite`), relue à chaque lancement ; les vies de `run/lives`
 sans job ne comptent pas. Au-delà de la couverture : tirage aléatoire
-(graine, splitmix64) pondéré par demande × √adéquation, jamais un type
-opérateur ; les niveaux penchent le tirage sans le figer (décision utilisateur
-« au-delà aléatoire » ; l'ancienne règle `levels:<groupe>` faisait 9
-guerriers sur 12). Log par compte : `brain <acct>: ambition <kind>
+(graine, splitmix64) pondéré par demande × √adéquation × inclinaison du
+trait, jamais un type opérateur ; les niveaux penchent le tirage sans le
+figer (décision utilisateur « au-delà aléatoire » ; l'ancienne règle
+`levels:<groupe>` faisait 9 guerriers sur 12). Inclinaison du trait
+(levier utilisateur 2026-11-17 « entraînement marché plus fréquent »,
+`ambition_fleet::affinity_tilt`) : ×2^(1,5 × (2a − 1) × (2s − 1)), a =
+market_affinity, s = part de transformation du type
+(`ambition_catalog::transform_share` : part des activités du catalogue
+des guides qui entraînent la compétence primaire et que nourrissent des
+intrants achetables, transformation de stock ou sort à runes, calculée
+des données du jeu : forgeron, cuisinier, allumeur, artisan, prêtre,
+mage, runier 1 ; guerrier, archer, bûcheron, pêcheur, mineur 0) ;
+appliquée aussi au score de couverture (adéquation × inclinaison). Flotte
+fabriquée de 76 profils neufs (test `ambition_fleet::market_tests`) :
+buts de transformation 20 % sous 0,4, 53 % entre 0,4 et 0,6, 74 % à
+partir de 0,6, les 12 groupes couverts. Log par compte : `brain <acct>: ambition <kind>
 (<why>) — milestones …`.
 
 Contrat du fichier (rendu par la page `life`, lu par les ventes) :

@@ -18,7 +18,10 @@
 //!   runes of an altar out of reach...) stay purchases; the line names
 //!   the way of each (`routes`);
 //! - market: stock inputs bought (current price, or a shop's, Q7), a
-//!   square round trip and the measured wait per lot (as D15); what the
+//!   square round trip and the measured wait per PURCHASE, one purchase
+//!   carrying the band's inputs (`band_slots`, at least a pack; user lever
+//!   2026-11-17: the climb buys its tranche at once through need bids at
+//!   its volume, never a pack per market visit); what the
 //!   asks and the shops hold is a condition (D22, the money guide's
 //!   purchase rule). A method that spends only consumables (teleports,
 //!   curses, a fight's ammo, bait: no stock input) gets one too (user
@@ -133,10 +136,30 @@ fn autonomous(engine: &Engine, place: &Place) -> Balance {
     Balance { coins_6000, xp_6000: xp.into_iter().map(|(skill, gained)| (skill, gained * scale)).collect(), flows: priced.lines, prereqs, priced: is_priced, routes }
 }
 
-/// Market balance: the stock inputs bought, trips and waits per lot.
-fn bought(engine: &Engine, place: &Place, band: i64) -> Balance {
-    let row = crate::guide_money::market_row(engine, place, band);
+/// Market balance: the stock inputs bought, one trip and one wait per
+/// purchase of the band's inputs (`band_slots`, user lever 2026-11-17:
+/// the climb buys its tranche at once, need bids at its volume).
+fn bought(engine: &Engine, place: &Place, band: i64, skill: &str) -> Balance {
+    let row = crate::guide_money::market_row_with(engine, place, band, band_slots(place, skill));
     Balance { coins_6000: row.profit_6000, xp_6000: row.xp_6000, flows: row.flows, prereqs: row.prereqs, priced: row.priced, routes: Vec::new() }
+}
+
+/// Slots of non-stackable inputs the work burns over the whole band of
+/// the place's level in `skill` (the yield's inputs per XP of the skill
+/// times `band_xp`): what one purchase of a market climb carries (a
+/// tranche of five levels). `None` without XP of the skill or a slot
+/// input.
+pub fn band_slots(place: &Place, skill: &str) -> Option<f64> {
+    let answer = &place.answer;
+    let xp = crate::unit_xp::derived_xp(&place.ask.method, &place.ask.style, &answer.units, place.ask.level).into_iter().find(|(name, _)| name == skill).map(|(_, xp)| xp)?;
+    let slots = crate::guide_engine::lots_per_6000(answer) * crate::guide_model::LOT_SLOTS;
+    (xp > 0.0 && slots > 0.0).then(|| slots * band_xp(place.ask.level) / xp)
+}
+
+/// XP of the whole band of `level` (its first level to its last + 1).
+pub fn band_xp(level: u8) -> f64 {
+    let start = band_of(level).clamp(1, 99) as u8;
+    xp_to_band_end(start)
 }
 
 /// XP from `level` to the band's end (its last level + 1), in XP.
@@ -324,7 +347,7 @@ pub fn training_view(engine: &Engine, level: Option<u8>, quests_done: &[String])
                     rows.extend(row_of(skill, place, band, Supply::Autonomous, balance, profit, place.answer.confidence.clone(), &filter));
                 }
                 if market {
-                    rows.extend(row_of(skill, place, band, Supply::Market, engine.timed("bought", || bought(engine, place, band)), profit, place.answer.confidence.clone(), &filter));
+                    rows.extend(row_of(skill, place, band, Supply::Market, engine.timed("bought", || bought(engine, place, band, skill)), profit, place.answer.confidence.clone(), &filter));
                 }
             }
         }

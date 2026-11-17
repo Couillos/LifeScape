@@ -173,11 +173,25 @@ fn own_row(engine: &Engine, place: &Place, family: Family, band: i64, held: &[(S
 /// measured wait per lot (a pack of non-stackable inputs). What the asks
 /// and the shops hold of each input is a condition (D22), never a block.
 pub fn market_row(engine: &Engine, place: &Place, band: i64) -> MoneyRow {
+    market_row_with(engine, place, band, None)
+}
+
+/// `market_row` whose purchases carry `per_purchase` slots of inputs each
+/// (the training market line, user lever 2026-11-17: a climb buys its
+/// tranche's inputs at once, need bids at the tranche's volume, one
+/// square round trip and one market wait per purchase, the bank trips
+/// between packs already in the yield); `None` or under one pack: one
+/// purchase per pack (D15's lot). The capital stays one pack's.
+pub fn market_row_with(engine: &Engine, place: &Place, band: i64, per_purchase: Option<f64>) -> MoneyRow {
     let answer = &place.answer;
     let lots = lots_per_6000(answer);
+    let purchases = match per_purchase {
+        Some(slots) if slots > crate::guide_model::LOT_SLOTS => lots * crate::guide_model::LOT_SLOTS / slots,
+        _ => lots,
+    };
     let trip = workshop(place).and_then(|site| round_trip_ticks(VARROCK_SQUARE, site)).unwrap_or(0.0);
     let wait = engine.world.market_wait_ticks.unwrap_or(0.0);
-    let extra = answer.pause_per_6000.max(0.0) + lots * (trip + wait);
+    let extra = answer.pause_per_6000.max(0.0) + purchases * (trip + wait);
     let scale = work_share(extra);
     let own = crate::guide_methods::own_product(&place.ask.method);
     let priced = price_flows(engine, answer, own.as_deref(), InputPricing::Bought, scale, &|_, _| false);

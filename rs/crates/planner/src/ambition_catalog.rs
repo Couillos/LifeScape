@@ -219,6 +219,46 @@ pub fn method_skill(method: &str) -> Option<&'static str> {
     })
 }
 
+/// Share (0..1) of the guide catalogue's activities training `skill`
+/// (the skill of their game-data way: `method_way`, else `spell_way`)
+/// that BUY-ABLE inputs feed: a transformation of stock
+/// (`guide_methods::transforms`: recipe, alchemy, burning, burying,
+/// runecraft) or a spell burning its runes. 0 for a skill no such way
+/// trains (fights, harvests). Computed from the game data, memoised
+/// (user lever 2026-11-17: the ambitions of a market profile lean on the
+/// skills a player trains by buying).
+pub fn transform_share_of_skill(skill: &str) -> f64 {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, f64>>> = std::sync::OnceLock::new();
+    crate::guide_methods::memo(&MEMO, skill.to_string(), || {
+        let mut trained = 0usize;
+        let mut fed = 0usize;
+        for entry in crate::guide_methods::catalogue() {
+            let way = crate::method_way::method_way(&entry.method).or_else(|| crate::spell_methods::spell_way(&entry.method));
+            let Some((_, way)) = way else { continue };
+            if way.skill.as_ref().is_none_or(|(name, _)| name != skill) {
+                continue;
+            }
+            trained += 1;
+            let spell = way.kind == lifescape_gamedata::obtain::WayKind::Spell && !way.inputs.is_empty();
+            if crate::guide_methods::transforms(&entry.method) || spell {
+                fed += 1;
+            }
+        }
+        if trained == 0 {
+            0.0
+        } else {
+            fed as f64 / trained as f64
+        }
+    })
+}
+
+/// A kind's transformation share: the highest of its primary group's
+/// skills (`transform_share_of_skill`; melee, ranged, harvests 0; smith,
+/// cook, firemaker, crafter, priest, mage, runecrafter high).
+pub fn transform_share(kind: &str) -> f64 {
+    primary_group(kind).map(|group| group_skills(group).into_iter().map(transform_share_of_skill).fold(0.0, f64::max)).unwrap_or(0.0)
+}
+
 /// Highest level a kind's ladder climbs `skill` to (0: never). A bot
 /// whose ambition climbs a skill values that XP: training it for a lot is
 /// no cost of the lot (`market_value::training_share`).

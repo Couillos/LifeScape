@@ -204,6 +204,7 @@ fn a_paying_method_beats_any_loss() {
         method: method.to_string(),
         batch: 0,
         missing: Vec::new(),
+        buys_inputs: false,
         cost_per_xp: -profit_per_tick / xp_per_tick,
         xp_per_tick,
         profit_per_tick,
