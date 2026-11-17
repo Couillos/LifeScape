@@ -506,7 +506,16 @@ ouvert à toutes les méthodes (sol, stations, vendeurs, dialogue :
 `access::fare_only`), l'aller-retour budgété. Live 2026-11-16 : admin,
 sac vide, `ground_pickup jug_empty --site 2905,3146,0` sans `boat` :
 NoRoute `coins:60` → 60 pièces prises à Draynor → bateau → cruche →
-douanier → dépôt. Goldens `bateau_universel`, `bateau_universel_retour`. Le plan porte tout ce que l'exécuteur doit savoir
+douanier → dépôt. Goldens `bateau_universel`, `bateau_universel_retour`.
+Destination bloquée derrière une exigence (2026-11-17, admin
+`farm:raw_lobster`, sac vide à Draynor, spot sur le ponton de Musa Point
+(2925,3181)) : la recherche stricte de `detour::strict_detour` rendait sa
+tuile la plus proche (la côte de Rimmington, (2940,3196)) comme un
+« détour » ; le SDK la lisait Disconnected sans `coins:60` et le marcheur
+n'allait jamais chercher les pièces. Une arrivée stricte n'est un détour
+que si elle est aussi proche de la cible que l'arrivée levée
+(`detour::as_close`, niveau puis Chebyshev), sinon NeedsRequirement
+(golden `bateau_sans_piece_ponton`). Le plan porte tout ce que l'exécuteur doit savoir
 (`custom_edge::CustomEdgeRef` : genre, loc, tuile, PNJ, réponses,
 tarif ; sérialisé dans le segment `custom`). Exécuteur SDK
 `client/travel_custom.rs` : `npc_fare` vérifie le tarif en sac, parle au

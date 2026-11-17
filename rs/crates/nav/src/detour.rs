@@ -24,6 +24,15 @@
 //! anywhere is no verdict (`Cut`): the caller answers BudgetExhausted,
 //! never cached. Custom edges (boat fares) keep the capped answer: no
 //! walk replaces a crossing.
+//!
+//! Blocked destination (a fishing spot on a pier): the strict search
+//! "finds" its closest reachable tile, wherever that is. Such a stand is
+//! a detour only when it is as close to the target as the lifted path's
+//! (`as_close`); farther, the strict region is exhausted short of the
+//! target: Sealed (live 2026-11-17, admin farm:raw_lobster, empty pack
+//! at Draynor: the Musa Point pier (2925,3181) planned to the Rimmington
+//! shore (2940,3196), read Disconnected without `coins:60`, and the
+//! walker never fetched the fare; golden `bateau_sans_piece_ponton`).
 
 #![forbid(unsafe_code)]
 
@@ -59,13 +68,16 @@ pub(crate) fn strict_detour(
     options: &NavOptions,
     shared: &SharedEdges,
     lifted: u32,
+    lifted_arrival: Tile,
     blocked: &[(EdgeId, Vec<String>)],
     yield_: &mut dyn FnMut() -> bool,
 ) -> Detour {
     let deadline = std::time::Instant::now() + DIAGNOSIS_BUDGET;
     match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, shared, detour_cap(lifted), yield_, deadline) {
         Outcome::Aborted => return Detour::Aborted,
-        Outcome::Found(chain, cost, _) => return Detour::Found(chain, cost),
+        Outcome::Found(chain, cost, arrival) => {
+            return if as_close(arrival, lifted_arrival, dest) { Detour::Found(chain, cost) } else { Detour::Sealed };
+        }
         Outcome::Closest(_) => return Detour::Sealed,
         Outcome::OverBudget(_) => {}
     }
@@ -95,8 +107,35 @@ pub(crate) fn strict_detour(
     }
     match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, shared, u32::MAX, yield_, deadline) {
         Outcome::Aborted => Detour::Aborted,
-        Outcome::Found(chain, cost, _) => Detour::Found(chain, cost),
-        Outcome::Closest(_) => Detour::Sealed,
+        Outcome::Found(chain, cost, arrival) if as_close(arrival, lifted_arrival, dest) => Detour::Found(chain, cost),
+        Outcome::Found(..) | Outcome::Closest(_) => Detour::Sealed,
         Outcome::OverBudget(_) => Detour::Cut,
+    }
+}
+
+/// A strict arrival replaces the lifted one only when it stands as close
+/// to the target (level, then Chebyshev): an exact destination always
+/// does; a blocked one's substitute farther than the lifted stand is the
+/// edge of a region the requirement seals, not a detour.
+pub(crate) fn as_close(strict: Tile, lifted: Tile, dest: Tile) -> bool {
+    let rank = |tile: Tile| ((tile.level - dest.level).abs(), tile.chebyshev(dest));
+    rank(strict) <= rank(lifted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::as_close;
+    use crate::plan::Tile;
+
+    /// The Musa Point pier from an empty pack: the Rimmington shore is no
+    /// detour for the stand beside the spot; another stand beside it is.
+    #[test]
+    fn a_far_substitute_is_no_detour() {
+        let pier = Tile { x: 2925, z: 3181, level: 0 };
+        let lifted = Tile { x: 2924, z: 3180, level: 0 };
+        assert!(!as_close(Tile { x: 2940, z: 3196, level: 0 }, lifted, pier), "the shore across the water");
+        assert!(as_close(Tile { x: 2926, z: 3180, level: 0 }, lifted, pier), "the other side of the spot");
+        assert!(as_close(pier, lifted, pier), "an exact arrival");
+        assert!(!as_close(Tile { x: 2925, z: 3181, level: 1 }, lifted, pier), "level first");
     }
 }

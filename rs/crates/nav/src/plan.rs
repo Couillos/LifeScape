@@ -427,7 +427,7 @@ fn plan_budgeted_memo(
             // trapdoor and the main dungeon). The strict search finds it;
             // a true pocket (guild door, boat fare) is proven, not assumed
             // from a cost cap (`detour.rs`).
-            let reason = match crate::detour::strict_detour(world, tables, from, dest, options, shared, cost, &blocked, yield_) {
+            let reason = match crate::detour::strict_detour(world, tables, from, dest, options, shared, cost, best, &blocked, yield_) {
                 crate::detour::Detour::Aborted => return Err(aborted(from)),
                 crate::detour::Detour::Found(chain, cost) => {
                     let mut plan = assemble(tables, from, dest, chain, cost);

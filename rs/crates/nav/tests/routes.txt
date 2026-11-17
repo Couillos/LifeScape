@@ -160,6 +160,12 @@ bateau_aller | 3029,3217,0 | 2915,3150,0 | paid,f2p,has=coins:30,has=coins:60 | 
 bateau_retour | 2915,3150,0 | 3029,3217,0 | paid,f2p,has=coins:30 | reachable ; uses_custom=boat_karamja_to_port_sarim ; uses_custom=gangplank_port_sarim_dock ; levels=0>1>0 ; stand=2954,3147 ; fare=30
 bateau_draynor_homard | 3092,3245,0 | 2924,3178,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_port_sarim_to_karamja ; fare=30
 bateau_ile_libre | 2956,3146,0 | 2924,3178,0 | f2p | reachable ; doors<=0
+# Live 2026-11-17 (admin, farm:raw_lobster / farm:raw_swordfish) : sac
+# vide a la banque de Draynor, destination = tuile du spot sur le ponton
+# de Musa Point (2925,3181), non marchable (rambarde) : le plan rendait
+# une destination ajustee sur la cote de Rimmington, lue Disconnected sans
+# `coins:60`, et le marcheur n'allait jamais chercher les pieces.
+bateau_sans_piece_ponton | 3092,3242,0 | 2925,3181,0 | f2p | unreachable=NeedsRequirement ; blocked_custom=boat_port_sarim_to_karamja
 # 41-46. poches scellees (2026-11-13) : tuile marchable sans aucune entree
 # (murs, mobilier, cloture ; aucune porte, montee ou arete custom n'y
 # mene). Visees par approach_npc (anneau autour d'un PNJ) : la recherche
