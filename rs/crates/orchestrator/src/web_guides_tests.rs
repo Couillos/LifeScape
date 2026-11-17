@@ -249,3 +249,28 @@ fn the_precomputed_set_serves_what_a_direct_build_gives() -> Result<(), lifescap
     assert_eq!(lower.get("approximate").as_arr().map(Vec::len), Some(1), "{:?}", lower.get("approximate"));
     Ok(())
 }
+
+/// D22: without a profile (no level, levels, quests, stock nor coins)
+/// the API judges no line for a made-up bot: `feasibility` null on every
+/// row, `judged` false; a profile given, every row carries its judgement.
+#[test]
+fn no_profile_judges_no_line() -> Result<(), lifescape_store::Error> {
+    let store = Store::open_in_memory()?;
+    let mut snapshot = Snapshot::new();
+    for qty in [50, 60, 70] {
+        snapshot.record(&parsed(), Some(&fight(qty)), 9);
+    }
+    let set = crate::guides_store::build_set(&store, &snapshot, &StoreWaits::default());
+    for kind in [GuideKind::Money, GuideKind::Training] {
+        let catalogue = read_guide(&set, kind, &GuideFilter::default());
+        let rows = catalogue.get("rows").as_arr().cloned().unwrap_or_default();
+        assert!(!rows.is_empty(), "{kind:?}");
+        assert_eq!(catalogue.get("judged").as_bool(), Some(false), "{kind:?}");
+        assert!(rows.iter().all(|row| matches!(row.get("feasibility"), Value::Null)), "{kind:?}: no line judged without a profile");
+        let profiled = read_guide(&set, kind, &GuideFilter { level: Some(30), ..GuideFilter::default() });
+        assert_eq!(profiled.get("judged").as_bool(), Some(true), "{kind:?}");
+        let rows = profiled.get("rows").as_arr().cloned().unwrap_or_default();
+        assert!(rows.iter().all(|row| row.get("feasibility").get("state").as_str().is_some()), "{kind:?}: every line judged for the profile");
+    }
+    Ok(())
+}

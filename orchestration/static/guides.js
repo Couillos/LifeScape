@@ -11,7 +11,8 @@
 // site, quests, tools, stock, capital, market availability of what it
 // buys) and the API judges it for the profile typed in (level, per-skill
 // levels, quests, stock held, coins): the "feasibility" filter keeps the
-// lines feasible now, or feasible after prerequisites.
+// lines feasible now, or feasible after prerequisites. No profile typed
+// in: no line judged (feasibility null), none greyed.
 var GuidesView = (function () {
   var SKILLS = ['attack', 'strength', 'defence', 'hitpoints', 'ranged', 'prayer', 'magic', 'cooking', 'woodcutting',
     'fishing', 'firemaking', 'crafting', 'smithing', 'mining', 'runecraft'];
@@ -85,8 +86,9 @@ var GuidesView = (function () {
   // "after_prereqs: smithing 20 -> 30, buy hammer" or "infeasible:
   // coal: holds 0, asks 1, shops 0 of 19 per lot": the API's judgement
   // for the profile of the query.
+  // No profile typed in: the API judges no line (feasibility null).
   function feasibilityText(feasibility) {
-    if (!feasibility) return '-';
+    if (!feasibility) return 'not judged (no profile)';
     var parts = (feasibility.pending || []).concat(feasibility.reasons || []);
     return feasibility.state + (parts.length ? ': ' + parts.join('; ') : '');
   }
@@ -157,6 +159,14 @@ var GuidesView = (function () {
         .map(function (entry) { return entry.row; });
     }
     return options.limit > 0 ? out.slice(0, options.limit) : out;
+  }
+
+  // Row class (D22): a line is greyed (`locked`) only when it is
+  // infeasible for the profile typed in; without a profile no line is
+  // judged, none greyed (the conditions impossible for every bot stay
+  // red in the conditions column).
+  function rowClass(row, profiled) {
+    return profiled && row.feasibility && row.feasibility.state === 'infeasible' ? 'line locked' : 'line';
   }
 
   // Unpriced line (an input nothing prices): no figure, said so.
@@ -262,12 +272,13 @@ var GuidesView = (function () {
       if (!state.payload) return;
       var profile = {};
       QUERY_KEYS.forEach(function (key) { profile[key] = value(key); });
-      var options = { search: value('search'), feasibility: value('feasibility'), limit: parseInt(value('limit'), 10) || 0, feasibleFirst: hasProfile(profile) };
+      var profiled = hasProfile(profile);
+      var options = { search: value('search'), feasibility: value('feasibility'), limit: parseInt(value('limit'), 10) || 0, feasibleFirst: profiled };
       var rows = visibleRows(state.rows, options);
       document.getElementById('summary').textContent = state.rows.length + ' line(s), ' + rows.length + ' shown · ' + freshnessText(state.payload) +
         (state.payload.market_wait_ticks ? ' · market wait ' + Math.round(state.payload.market_wait_ticks) + ' ticks/lot' : ' · market wait unmeasured');
       var keyOf = function (row) { return [row.family, row.skill, row.method, row.style, row.site, row.tool, row.band, row.supply].join('|'); };
-      var rowAttrs = function (row) { return { 'data-key': keyOf(row), class: row.feasibility && row.feasibility.state === 'infeasible' ? 'line locked' : 'line' }; };
+      var rowAttrs = function (row) { return { 'data-key': keyOf(row), class: rowClass(row, profiled) }; };
       // onSort: a header click re-runs this render, so sorted lines keep
       // their click handlers and open details.
       if (sorter) sorter.render('guide', columns, rows, sortOptions(rowAttrs, render));
@@ -328,7 +339,7 @@ var GuidesView = (function () {
     return [MONEY_COLS, TRAINING_COLS].map(function (cols) { return cols.some(function (col) { return col.key === key && typeof col.fmt === 'function'; }); });
   }
 
-  return { start: start, hasProfile: hasProfile, sortOptions: sortOptions, confidenceText: confidenceText, confidenceHtml: confidenceHtml, columnFormats: columnFormats, queryOf: queryOf, visibleRows: visibleRows, conditionsText: conditionsText, conditionsHtml: conditionsHtml, feasibilityText: feasibilityText, xpText: xpText, number: number, routeText: routeText, freshnessText: freshnessText, retryDelay: retryDelay };
+  return { start: start, hasProfile: hasProfile, rowClass: rowClass, sortOptions: sortOptions, confidenceText: confidenceText, confidenceHtml: confidenceHtml, columnFormats: columnFormats, queryOf: queryOf, visibleRows: visibleRows, conditionsText: conditionsText, conditionsHtml: conditionsHtml, feasibilityText: feasibilityText, xpText: xpText, number: number, routeText: routeText, freshnessText: freshnessText, retryDelay: retryDelay };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -709,7 +709,12 @@ asks 0, recent 40, shops 0", "impossible": false, "item": "naturerune",
   profil de la requête (`level`, `levels=skill:n,...`, `quests`,
   `held`, `coins` : clé `feasibility` de chaque ligne ; front : colonnes
   conditions et faisabilité, filtre « faisable maintenant / après
-  prérequis ») ;
+  prérequis ») ; SANS profil (aucune de ces clés, 2026-11-17) : aucune
+  ligne jugée, jamais pour un bot fictif (D22 : chaque bot juge) —
+  `feasibility` null sur chaque ligne, `judged` false à la racine ; le
+  front n'en grise aucune (« not judged (no profile) »), seules les
+  conditions impossibles pour tous restent en rouge ; avec un profil,
+  les lignes `infeasible` pour lui sont grisées ;
 - MAGASIN PRÉCALCULÉ (2026-11-17, `orchestrator::guides_store`) : aucune
   requête ne construit un guide. Le thread `guides` du daemon construit
   toutes les `REFRESH_PERIOD` (300 s) un jeu complet dans UN moteur

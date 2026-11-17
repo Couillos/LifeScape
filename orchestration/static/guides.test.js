@@ -56,6 +56,13 @@ check('route bought', GuidesView.routeText({ item: 'fishing_bait', cause: 'bait'
 check('xp text best first', GuidesView.xpText({ mining: 5000, smithing: 200, magic: 0 }), 'mining 5000, smithing 200');
 check('freshness of the set', GuidesView.freshnessText({ age_ms: 42400, cycle_ms: 3720, refresh_s: 300, approximate: [] }), 'set built 42 s ago in 3.7 s, rebuilt every 300 s');
 check('approximate read said', GuidesView.freshnessText({ age_ms: 0, cycle_ms: 0, refresh_s: 300, approximate: ['rates of level 30'] }), 'set built 0 s ago in 0 s, rebuilt every 300 s · ≈ rates of level 30');
+// D22: no profile typed in, no line is greyed for its feasibility (the
+// API judges none: feasibility null); a profile given, the lines
+// infeasible for it are greyed (`locked`).
+var judged = [{ feasibility: { state: 'feasible' } }, { feasibility: { state: 'infeasible' } }, { feasibility: { state: 'after_prereqs' } }, { feasibility: null }];
+check('no profile: no line locked', judged.map(function (row) { return GuidesView.rowClass(row, false); }), ['line', 'line', 'line', 'line']);
+check('profile: infeasible lines locked', judged.map(function (row) { return GuidesView.rowClass(row, true); }), ['line', 'line locked', 'line', 'line']);
+check('unjudged feasibility said', GuidesView.feasibilityText(null), 'not judged (no profile)');
 check('pending set asks again', GuidesView.retryDelay({ ok: false, pending: true }), 5000);
 check('an error is not retried', GuidesView.retryDelay({ ok: false, error: 'x' }), null);
 
