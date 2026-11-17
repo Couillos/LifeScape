@@ -81,3 +81,13 @@ est tout-ou-rien (octets remis en tête du tampon sur timeout) et `recv`
 garde la trame dont l'opcode est lu (ISAAC consommé) jusqu'à son corps
 complet : un timeout au milieu d'une trame ne décale plus le flux.
 « unknown server opcode » nomme les 8 dernières trames décodées.
+
+Désynchronisation (tour 2, P2-9) : comme le client 274 (`tcpIn` →
+`logout()` sur un type de paquet inconnu ou une erreur de décodage), un
+opcode inconnu ou une erreur `Protocol` de décodage d'une trame ferme la
+connexion aussitôt (`Connection::drop_desynced`) et rend `Io("protocol
+desync, connection dropped: …")` : la session se reconnecte et reprend son
+script depuis la position où le serveur a posé le bot (le trajet est
+replanifié, arêtes custom comprises). Aucune lecture après l'erreur.
+Cause racine (désynchronisation sur téléportation scriptée) non établie :
+capture pktlog live nécessaire.

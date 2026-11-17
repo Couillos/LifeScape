@@ -536,6 +536,18 @@ impl Connection {
         self.incoming = None;
     }
 
+    /// A desynced ISAAC stream never comes back in step (tour 2 P2-9):
+    /// like the 274 client (`tcpIn` → `logout()` on an unknown packet or
+    /// a decode error), the connection is dropped at once and the error
+    /// is `Io`, the reconnect class, so the session relogs and resumes
+    /// its script from wherever the server put the bot.
+    pub fn drop_desynced(&mut self, detail: &str) -> Error {
+        self.close();
+        self.buffer.clear();
+        self.pending = None;
+        Error::Io(format!("protocol desync, connection dropped: {detail}"))
+    }
+
     fn xorshift(state: &mut u64) -> u32 {
         // std-only randomness for the login seeds (not gameplay).
         let mut x = *state;
@@ -653,7 +665,9 @@ impl Connection {
                 let shift = self.incoming.as_mut().ok_or_else(|| Error::Login("not logged in".to_string()))?.next_int();
                 let opcode = raw.wrapping_sub(shift as u8);
                 self.packet_index += 1;
-                let (name, size) = server_op(opcode).ok_or_else(|| Error::Protocol(format!("unknown server opcode {opcode} after [{}]", self.frames_ring())))?;
+                let Some((name, size)) = server_op(opcode) else {
+                    return Err(self.drop_desynced(&format!("unknown server opcode {opcode} after [{}]", self.frames_ring())));
+                };
                 self.pending = Some((opcode, name, size, None));
                 (opcode, name, size, None)
             }
