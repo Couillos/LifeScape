@@ -229,6 +229,11 @@ fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: 
             Some(CurseRefusal::UnderAttack) => {}
         }
     }
+    // Every foe already weakened or under attack while other players work
+    // the camp: contention (D4, tour 2 P2-3c), never a broken method.
+    if let Some(contended) = crate::kit::site::contended_error(bot) {
+        return Err(contended);
+    }
     let last = bot.world.messages.last().cloned().unwrap_or_default();
     Err(ScriptError::Failed(format!("no {} foe took {spell} in {PICKS_PER_CAST} picks at {:?} (last line {last:?})", spot.key, bot.position())))
 }

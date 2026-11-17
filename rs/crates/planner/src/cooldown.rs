@@ -85,6 +85,14 @@ pub fn cooled_sites(cooled: &[String], method: &str) -> Vec<(i64, i64, i64)> {
         .collect()
 }
 
+/// True when two sites are one working area: same level, within
+/// `combat::CROWD_RADIUS` (the radius the crowd and the capacity count
+/// in). Tour 2 P2-3a: the cooldown keyed the ROCK, so cooling (3242,3160)
+/// sent the bot to (3243,3166), the same swamp field.
+pub fn same_area(left: (i64, i64, i64), right: (i64, i64, i64)) -> bool {
+    left.2 == right.2 && (left.0 - right.0).abs().max((left.1 - right.1).abs()) <= crate::combat::CROWD_RADIUS
+}
+
 /// Keys an abandonment of `method` at `site` cools: the method at its
 /// site; the method itself when it has no site, or when another site of
 /// the same method is already cooled (the failure follows the method,
@@ -95,7 +103,7 @@ pub fn keys_for_abandon(cooled: &[String], method: &str, site: Option<(i64, i64,
     }
     let Some(site) = site else { return vec![method.to_string()] };
     let mut keys = vec![cool_key(method, Some(site))];
-    if cooled_sites(cooled, method).iter().any(|other| *other != site) {
+    if cooled_sites(cooled, method).iter().any(|other| !same_area(*other, site)) {
         keys.push(method.to_string());
     }
     keys

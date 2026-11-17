@@ -142,7 +142,7 @@ pub fn steer_off_bans(node: &mut Node, ctx: &ReadyCtx, avoid: &[String]) -> Resu
                 node.boat = true;
                 return Ok(true);
             }
-            SitePick::Fare(_) | SitePick::Needs(_) | SitePick::Access(..) | SitePick::Cooled => continue,
+            SitePick::Fare(_) | SitePick::Needs(_) | SitePick::Access(..) | SitePick::Cooled | SitePick::Full => continue,
         }
     }
     Err(format!("every workable money method trains a banned skill ({})", avoid.join(",")))

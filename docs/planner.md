@@ -1206,3 +1206,17 @@ le carnet et le portefeuille et pose les bids `stock` (voir
 d'une récolte planifiée (plumes, appât de pêche :
 `tools::required_tool(...).consumables`).
 
+
+## Contention : site = zone, méthode pleine (tour 2, P2-3, D6)
+
+- Un refroidissement `méthode@site` couvre toute la zone de travail
+  (`cooldown::same_area` : même niveau, `CROWD_RADIUS` = 15 cases, le rayon
+  de la capacité et de la foule) : refroidir un roc du marais écarte tout le
+  marais, et un second roc de la même zone ne refroidit pas la méthode.
+- `pick_site_avoiding` rend `SitePick::Full` quand TOUS les sites ouverts
+  sont pleins (`site_full`) : jamais un site plein forcé ; un site gratuit
+  plein ne bat plus un site payant libre. `place_on_site` passe alors à la
+  méthode suivante du nœud (ordre des alternatives, rendement mesuré, D6) ;
+  aucune libre : `Blocked full:<méthode>`.
+- Scripts : pêche (« fish failed ») et sort de malédiction (« no foe took
+  … ») rendent `contended:<site>` quand d'autres joueurs travaillent le site.

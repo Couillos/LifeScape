@@ -197,6 +197,10 @@ pub enum SitePick {
     /// Every site this bot works safely is cooled for it (`cooldown`,
     /// P1/D4): the method waits out the cooldown, another one serves.
     Cooled,
+    /// Every open site is full (the fleet works every node, tour 2 P2-3b,
+    /// D6): the method steps aside like a cooled one, the node's next
+    /// method serves; never a forced full site.
+    Full,
 }
 
 /// Station families whose server way places them (furnace, anvil, range,
@@ -418,7 +422,8 @@ pub fn pick_site_avoiding(
         return SitePick::Anywhere;
     };
     let ever: Vec<&SiteRow> = table.iter().filter(|row| row.open_ever).collect();
-    let rows: Vec<&SiteRow> = ever.iter().copied().filter(|row| !avoid.contains(&row.site)).collect();
+    // A cooled site covers its whole working area (P2-3a).
+    let rows: Vec<&SiteRow> = ever.iter().copied().filter(|row| !avoid.iter().any(|cool| crate::cooldown::same_area(*cool, row.site))).collect();
     if !avoid.is_empty() && ever.iter().any(|row| row.required <= combat) && !rows.iter().any(|row| row.required <= combat) {
         return SitePick::Cooled;
     }
@@ -442,9 +447,14 @@ pub fn pick_site_avoiding(
     let passes = |gate: &lifescape_gamedata::access::Gate| pass.opens(gate) || matches!(gate, lifescape_gamedata::access::Gate::Boat { area: "karamja", .. });
     let open: Vec<(i64, i64, i64)> = safe.iter().filter(|row| row.gates.iter().all(passes)).map(|row| row.site).collect();
     let boat = |site: &(i64, i64, i64)| lifescape_gamedata::access::behind_boat(site.0, site.1, site.2);
-    // A site with a free node first, then the nearest (D2: no guild
-    // priority, the crowd lowers a guild like any rock field).
-    if let Some(site) = open.iter().filter(|site| !across(site) && !boat(site)).min_by_key(|site| (full(site), distance(site))) {
+    // Every open site full (P2-3b, D6): the method steps aside.
+    if !open.is_empty() && open.iter().all(full) {
+        return SitePick::Full;
+    }
+    // A site with a free node, the nearest first (D2: no guild priority,
+    // the crowd lowers a guild like any rock field); a full free site
+    // never beats a free paid one.
+    if let Some(site) = open.iter().filter(|site| !across(site) && !boat(site) && !full(site)).min_by_key(|site| distance(site)) {
         return SitePick::At(*site);
     }
     // Paid sites: the cheapest fares first, then the nearest.

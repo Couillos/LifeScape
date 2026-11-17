@@ -173,3 +173,39 @@ fn a_crowded_coal_site_sends_the_next_miner_elsewhere() {
     let lone = [(nearest, 1u32)];
     assert_eq!(super::pick_site_crowded(method, 40, Some(EDGEVILLE), broke(), &miner(30), &lone), SitePick::At(nearest), "one miner is no crowd");
 }
+
+/// Tour 2 P2-3a red test: cooling one rock cools its site. lily_brook
+/// cooled (3242,3160) on the Lumbridge swamp and was sent to (3243,3166),
+/// (3243,3167), (3243,3158)... seven "sites" in ten tiles. A cooled site
+/// covers every row within `CROWD_RADIUS` on its level.
+#[test]
+fn a_cooled_rock_cools_its_whole_site() {
+    let method = "gather:mining/mithril_ore";
+    let table = super::method_site_table(method).expect("mithril sites");
+    let swamp: Vec<(i64, i64, i64)> =
+        table.iter().map(|row| row.site).filter(|site| site.2 == 0 && (site.0 - 3243).abs() <= 6 && (site.1 - 3162).abs() <= 8).collect();
+    assert!(swamp.len() >= 2, "several swamp mithril rows: {swamp:?}");
+    let avoid = [swamp[0]];
+    let pick = super::pick_site_avoiding(method, 40, Some((3244, 3165, 0)), broke(), &miner(63), &[], &avoid);
+    let site = match pick {
+        SitePick::At(site) | SitePick::Tolled(site) | SitePick::Boat { site, .. } => site,
+        other => panic!("another mithril site serves: {other:?}"),
+    };
+    assert!(
+        site.2 != avoid[0].2 || (site.0 - avoid[0].0).abs().max((site.1 - avoid[0].1).abs()) > super::CROWD_RADIUS,
+        "cooled {:?}, picked {site:?} in the same site",
+        avoid[0]
+    );
+}
+
+/// Tour 2 P2-3b red test (D6): every site of a method full (the fleet
+/// works every node) is `Full`, never a forced full site; the node's next
+/// method serves.
+#[test]
+fn a_method_full_everywhere_is_full() {
+    let method = "gather:mining/mithril_ore";
+    let table = super::method_site_table(method).expect("mithril sites");
+    let crowd: Vec<((i64, i64, i64), u32)> = table.iter().map(|row| (row.site, 50u32)).collect();
+    let rich = Fare { wallet: 10_000, free_pass: true };
+    assert_eq!(super::pick_site_crowded(method, 99, Some((3244, 3165, 0)), rich, &miner(99), &crowd), SitePick::Full);
+}
