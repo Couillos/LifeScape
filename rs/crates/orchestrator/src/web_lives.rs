@@ -154,11 +154,14 @@ pub const TOP_ACTIVITIES: usize = 10;
 /// figures, never the old rates profit table): its priced lines with no
 /// condition impossible for every bot (D22), best profit/6000 first,
 /// `TOP_ACTIVITIES` at most, with family, method, band and confidence.
+/// A general top: priced lines with nothing impossible for every bot and
+/// no stock to hold first (a recipe on stock is judged on a bot's own
+/// stock, D22; its D5 value of a never-traded input would top the list).
 pub fn guide_activities(set: &crate::guides_store::GuideSet) -> Vec<Value> {
     let Ok((rows, _)) = set.money(&lifescape_planner::guide_model::GuideFilter::default()) else { return Vec::new() };
     let mut kept: Vec<&lifescape_planner::guide_model::MoneyRow> = rows
         .iter()
-        .filter(|row| row.priced && row.profit_6000.is_finite() && !lifescape_planner::guide_feasible::conditions(&row.prereqs).iter().any(|condition| condition.impossible()))
+        .filter(|row| row.priced && row.profit_6000.is_finite() && row.prereqs.stock.is_empty() && !lifescape_planner::guide_feasible::conditions(&row.prereqs).iter().any(|condition| condition.impossible()))
         .collect();
     kept.sort_by(|left, right| right.profit_6000.total_cmp(&left.profit_6000));
     kept.truncate(TOP_ACTIVITIES);

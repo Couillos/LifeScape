@@ -288,7 +288,9 @@ fn economy_top_activities_read_the_money_guide() -> Result<(), lifescape_store::
     }
     let set = crate::guides_store::build_set(&store, &snapshot, &StoreWaits::default());
     let guide = read_guide(&set, GuideKind::Money, &GuideFilter::default());
-    let possible = |row: &Value| row.get("priced").as_bool() == Some(true) && row.get("conditions").as_arr().cloned().unwrap_or_default().iter().all(|condition| condition.get("impossible").as_bool() != Some(true));
+    // A general top: priced, nothing impossible, and no stock to hold
+    // first (a recipe on stock is judged on a bot's own stock, D22).
+    let possible = |row: &Value| row.get("priced").as_bool() == Some(true) && row.get("conditions").as_arr().cloned().unwrap_or_default().iter().all(|condition| condition.get("impossible").as_bool() != Some(true) && condition.get("kind").as_str() != Some("stock"));
     let mut want: Vec<(String, String, f64)> = guide
         .get("rows")
         .as_arr()
