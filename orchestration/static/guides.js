@@ -216,7 +216,9 @@ var GuidesView = (function () {
         (state.payload.market_wait_ticks ? ' · market wait ' + Math.round(state.payload.market_wait_ticks) + ' ticks/lot' : ' · market wait unmeasured');
       var keyOf = function (row) { return [row.family, row.skill, row.method, row.style, row.site, row.tool, row.band, row.supply].join('|'); };
       var rowAttrs = function (row) { return { 'data-key': keyOf(row), class: row.accessible ? 'line' : 'line locked' }; };
-      if (sorter) sorter.render('guide', columns, rows, { rowAttrs: rowAttrs });
+      // onSort: a header click re-runs this render, so sorted lines keep
+      // their click handlers and open details.
+      if (sorter) sorter.render('guide', columns, rows, sortOptions(rowAttrs, render));
       var table = document.getElementById('guide');
       var byKey = {};
       rows.forEach(function (row) { byKey[keyOf(row)] = row; });
@@ -262,12 +264,18 @@ var GuidesView = (function () {
     setInterval(load, 60000);
   }
 
+  // Options of the guide table: a header click (sort) must re-run the
+  // guide render, or sorted lines lose their click-to-unfold handlers.
+  function sortOptions(rowAttrs, rerender) {
+    return { rowAttrs: rowAttrs, onSort: rerender };
+  }
+
   // Whether each guide (money, training) renders `key` through a formatter.
   function columnFormats(key) {
     return [MONEY_COLS, TRAINING_COLS].map(function (cols) { return cols.some(function (col) { return col.key === key && typeof col.fmt === 'function'; }); });
   }
 
-  return { start: start, confidenceText: confidenceText, confidenceHtml: confidenceHtml, columnFormats: columnFormats, queryOf: queryOf, visibleRows: visibleRows, prereqText: prereqText, xpText: xpText, number: number, routeText: routeText, freshnessText: freshnessText, retryDelay: retryDelay };
+  return { start: start, sortOptions: sortOptions, confidenceText: confidenceText, confidenceHtml: confidenceHtml, columnFormats: columnFormats, queryOf: queryOf, visibleRows: visibleRows, prereqText: prereqText, xpText: xpText, number: number, routeText: routeText, freshnessText: freshnessText, retryDelay: retryDelay };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {

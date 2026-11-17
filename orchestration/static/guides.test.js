@@ -44,6 +44,10 @@ check('confidence column renders through its formatter', GuidesView.columnFormat
 // shown as a combat level.
 check('never-safe site is named, not combat 255', GuidesView.prereqText({ levels: { mining: 85 }, combat: 255, quests: [], tools: [], capital: 0, ironman: true }), 'mining 85, no site within bank reach');
 
+// A sort re-runs the guide render (click-to-unfold survives a sort).
+var rerendered = function () {};
+check('sort re-runs the guide render', GuidesView.sortOptions(null, rerendered).onSort === rerendered, true);
+
 if (failures) {
   console.log(failures + ' failure(s)');
   process.exit(1);
