@@ -186,5 +186,5 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // a 0-tick goal_reached the brain relaunches at once.
     // Without an objective the end of the loop is a window, never a goal
     // (P15: `goal_reached` read short by the brain, attack banned).
-    if worked { Ok(crate::kit::cycle::ended_code(&spec)) } else { Err(crate::kit::hunt::nothing_hunted_error(bot, "melee", &keys)) }
+    if worked { Ok(crate::kit::cycle::ended_code(bot, &state, &spec)) } else { Err(crate::kit::hunt::nothing_hunted_error(bot, "melee", &keys)) }
 }

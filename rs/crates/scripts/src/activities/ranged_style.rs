@@ -196,7 +196,7 @@ pub fn run_ranged(bot: &mut Bot, args: &[String]) -> ScriptResult {
         return Err(crate::kit::hunt::nothing_hunted_error(bot, "ranged", &keys));
     }
     // No objective: the loop's end is a window, never a goal (P15).
-    Ok(crate::kit::cycle::ended_code(&spec))
+    Ok(crate::kit::cycle::ended_code(bot, &state, &spec))
 }
 
 #[cfg(test)]

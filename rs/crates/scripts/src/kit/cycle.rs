@@ -57,9 +57,20 @@ impl TaskTargets {
 /// `goal_reached` on their own criterion, the brain's goal check read
 /// short, 162 failures banned attack). With an objective the loop's end
 /// is the goal (0); without one it is the end of a window
-/// (`BUDGET_EXIT`, `budget_exhausted`): never `goal_reached`.
-pub fn ended_code(spec: &TaskSpec) -> i32 {
-    if spec.targets.any() {
+/// (`BUDGET_EXIT`, `budget_exhausted`): never `goal_reached`. Tour 3
+/// point 6 (P15c, live ryan_mason x3: melee `--want naturerune 434`
+/// ended `goal_reached` at its ~6 000-tick budget, short of the want):
+/// with an objective, only a MET one is the goal; the loop ending short
+/// of it is the end of the window too.
+pub fn ended_code(bot: &Bot, state: &CycleState, spec: &TaskSpec) -> i32 {
+    ended_code_for(spec, goal_met(bot, state, spec))
+}
+
+/// Pure `ended_code`: `met` = an objective of the run is met (a quest
+/// objective, which the brain checks itself, reads as met).
+pub fn ended_code_for(spec: &TaskSpec, met: bool) -> i32 {
+    let quest_only = spec.targets.quest.is_some() && !(spec.targets.xp_amount.is_some() || spec.targets.level.is_some() || spec.targets.count.is_some() || spec.targets.want_count.is_some());
+    if met || quest_only {
         0
     } else {
         BUDGET_EXIT
@@ -488,30 +499,37 @@ impl CycleState {
     }
 }
 
+/// True once one of the run's objectives (`--want`, count, XP, level)
+/// is met.
+pub fn goal_met(bot: &Bot, state: &CycleState, spec: &TaskSpec) -> bool {
+    if let (Some(item), Some(want), Some(base)) = (spec.targets.want_item.as_deref(), spec.targets.want_count, state.want_base) {
+        if held_total(bot, item).saturating_sub(base) >= want {
+            return true;
+        }
+    }
+    if spec.targets.count.is_some_and(|want| state.units >= want) {
+        return true;
+    }
+    if let (Some(skill), Some(amount)) = (spec.targets.xp_skill.as_deref(), spec.targets.xp_amount) {
+        if state.xp_gain(bot, skill) >= amount {
+            return true;
+        }
+    }
+    if let (Some(skill), Some(level)) = (spec.targets.level_skill.as_deref(), spec.targets.level) {
+        if state.level_now(bot, skill) >= level {
+            return true;
+        }
+    }
+    false
+}
+
 /// One stop check: goal first (targets), then budget (deferred to the
 /// next safe point, forced past the defer cap). `min` wins over `max`
 /// when inconsistent; `max == 0` means unbounded.
 pub fn poll_stop(bot: &Bot, state: &CycleState, spec: &TaskSpec) -> Option<StopReason> {
     let elapsed = state.work_ticks(bot);
-    if let (Some(item), Some(want), Some(base)) = (spec.targets.want_item.as_deref(), spec.targets.want_count, state.want_base) {
-        if held_total(bot, item).saturating_sub(base) >= want {
-            return Some(StopReason::GoalReached);
-        }
-    }
-    if let Some(want) = spec.targets.count {
-        if state.units >= want {
-            return Some(StopReason::GoalReached);
-        }
-    }
-    if let (Some(skill), Some(amount)) = (spec.targets.xp_skill.as_deref(), spec.targets.xp_amount) {
-        if state.xp_gain(bot, skill) >= amount {
-            return Some(StopReason::GoalReached);
-        }
-    }
-    if let (Some(skill), Some(level)) = (spec.targets.level_skill.as_deref(), spec.targets.level) {
-        if state.level_now(bot, skill) >= level {
-            return Some(StopReason::GoalReached);
-        }
+    if goal_met(bot, state, spec) {
+        return Some(StopReason::GoalReached);
     }
     let budget = spec.budget_max_ticks.max(spec.budget_min_ticks);
     if budget > 0 && elapsed >= budget {
@@ -710,10 +728,17 @@ mod tests {
         // P15: a run without objective never ends `goal_reached`.
         let bare = parse_cli("melee", &["men".to_string()]).expect("bare melee");
         assert!(!bare.targets.any());
-        assert_eq!(super::ended_code(&bare), BUDGET_EXIT);
+        assert_eq!(super::ended_code_for(&bare, false), BUDGET_EXIT);
         let leveled = parse_cli("melee", &["men".to_string(), "--level".to_string(), "attack".to_string(), "20".to_string()]).expect("melee to 20");
         assert!(leveled.targets.any());
-        assert_eq!(super::ended_code(&leveled), 0);
+        assert_eq!(super::ended_code_for(&leveled, true), 0);
+        // Tour 3 point 6 (P15c, ryan_mason): `--want naturerune 434` at
+        // the end of its budget, short of the want: a window, never the
+        // goal.
+        let wanted = parse_cli("melee", &["men".to_string(), "--want".to_string(), "naturerune".to_string(), "434".to_string()]).expect("melee for runes");
+        assert!(wanted.targets.any());
+        assert_eq!(super::ended_code_for(&wanted, false), BUDGET_EXIT);
+        assert_eq!(super::ended_code_for(&wanted, true), 0);
         assert_eq!(exit_code(StopReason::BudgetExhausted).unwrap(), BUDGET_EXIT);
         assert!(matches!(
             exit_code(StopReason::Blocked { missing: vec!["bronze_axe".to_string()] }),

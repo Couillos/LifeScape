@@ -621,7 +621,8 @@ sans gâcher, se soigner à la banque, emporter la nourriture adaptée.
   `HUNT_MIN_FREE` (`combat_bank::kept_food_surplus`).
 - Intrants vérifiés au départ quand la banque est connue
   (`withdraw::preflight_blocked`, smelt).
-- Un script de combat sans objectif finit `budget_exhausted`
+- Un script de combat sans objectif (ou dont l'objectif n'est pas atteint,
+  tour 3 point 6 : `cycle::goal_met`) finit `budget_exhausted`
   (`cycle::ended_code`), jamais `goal_reached`.
 
 ## Banque par coût de route (tour 2, N3, 2026-11-17)
