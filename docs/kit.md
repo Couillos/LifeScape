@@ -644,3 +644,15 @@ la même banque, au coût de route réel ; la garde de trajet d'un spot de
 pêche compare ce coût à `danger::BANK_TREK_LIMIT` (250, coût de route).
 Seule la banque du BOT (`bank::nearest_bank`, position live quelconque)
 reste chiffrée en direct par `bank_route`.
+
+## Besoin verrouillé par ses propres annonces (tour 3, point 3, P5)
+
+`kit::locked::tag_locked`, appliqué par `lifescape_scripts::run` à tout
+`Blocked` : un besoin dont le bot ne porte aucun exemplaire libre (sac, ou
+banque connue hors verrou de marché) mais dont la banque garde des unités
+verrouillées par ses ordres devient `locked:<objet>` (famille d'outils :
+le meilleur membre verrouillé ; intrant : l'objet). Le cerveau
+(`brain_fold`, `brain_tools::locked_needs`) retire les annonces de la
+famille (raison `need_held`) et relance le nœud sans bloc compté
+(`locked_released`) ; aucune annonce retirée (verrou d'un échange en
+cours) : le besoin nu suit la voie usuelle.

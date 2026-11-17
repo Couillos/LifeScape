@@ -50,6 +50,7 @@ pub mod janitor;
 pub mod ladder;
 pub mod harvest;
 pub mod load;
+pub mod locked;
 pub mod loot;
 pub mod magic;
 pub mod meals;

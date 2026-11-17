@@ -392,12 +392,25 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             push_history(&mut life, &id, "contended");
         }
         Verdict::Blocked(needs) => {
-            // A missing level climbs from the reported live level.
-            let level_of = |skill: &str| reach_level(report, skill).unwrap_or(1);
-            let fold = record_block_from(&mut life, index, needs, &level_of);
-            push_history(&mut life, &id, crate::brain_launch::block_outcome(&fold));
-            if let FailureFold::CycleBroken(line) = &fold {
-                crate::logln!("brain {account}: {line}");
+            // A need its own listings lock (P5, `locked:<object>`): the
+            // listings go, the node relaunches, no block counted, no buy.
+            let locked = crate::brain_tools::locked_needs(needs);
+            let withdrawn: usize = locked.iter().map(|item| crate::brain_tools::withdraw_family_listings(&account, item)).sum();
+            if withdrawn > 0 {
+                crate::logln!("brain {account}: {id} blocked on its own listings ({}): {withdrawn} listing(s) withdrawn, relaunch", locked.join(", "));
+                retry_uncounted(&mut life, index);
+                push_history(&mut life, &id, "locked_released");
+            } else {
+                // A missing level climbs from the reported live level. A
+                // lock no withdrawal freed (a deal in flight) is the plain
+                // need.
+                let needs = crate::brain_tools::plain_needs(needs);
+                let level_of = |skill: &str| reach_level(report, skill).unwrap_or(1);
+                let fold = record_block_from(&mut life, index, &needs, &level_of);
+                push_history(&mut life, &id, crate::brain_launch::block_outcome(&fold));
+                if let FailureFold::CycleBroken(line) = &fold {
+                    crate::logln!("brain {account}: {line}");
+                }
             }
         }
         Verdict::Contract(text) => {
