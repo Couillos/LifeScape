@@ -10,7 +10,7 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::spots::{nearest_bank_at, SITE_RADIUS};
+use crate::kit::spots::SITE_RADIUS;
 use crate::ScriptError;
 
 /// Walk budget to reach a far site (a cross-map trek).
@@ -20,11 +20,25 @@ pub const SITE_WALK_TICKS: u64 = 6000;
 /// Kharid toll gate and the brain did not pass `toll`.
 pub const TOLL_AREA: &str = "al_kharid_toll";
 
-/// Bank serving the run: nearest F2P bank to the assigned site when the
-/// brain fixed one, else `None` (the caller keeps its own pick).
-pub fn site_bank(bot: &Bot) -> Option<knowledge::banks::Bank> {
+/// Bank serving the run when the brain fixed a site: the free bank with
+/// the cheapest ROUTE from the site (tour 2 N3: the swamp mine is 27
+/// tiles from Al Kharid as the crow flies, 467 walked; Draynor 170),
+/// else `None` (the caller keeps its own pick). A Karamja site prices
+/// from the Port Sarim dock its boat lands on.
+pub fn site_bank(bot: &mut Bot) -> Option<knowledge::banks::Bank> {
     let (x, z, level) = bot.assigned_site?;
-    nearest_bank_at(x, z, level)
+    let (anchor_x, anchor_z, anchor_level) = knowledge::access::mainland_anchor(i64::from(x), i64::from(z), i64::from(level));
+    let mut banks = crate::kit::bank_route::free_banks_for_level(anchor_level);
+    // Same danger rule as `nearest_bank`: a booth a hunter that can kill
+    // this bot covers is never priced while a safe one exists.
+    let threats = crate::kit::danger::threats(bot);
+    let safe: Vec<knowledge::banks::Bank> =
+        banks.iter().filter(|bank| crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_none()).cloned().collect();
+    if !safe.is_empty() {
+        banks = safe;
+    }
+    let from = lifescape_sdk::plan::Tile { x: anchor_x as i32, z: anchor_z as i32, level: anchor_level as i32 };
+    crate::kit::bank_route::cheapest_route_bank(bot, from, (anchor_x, anchor_z), &banks)
 }
 
 /// True when the bot stands inside the assigned site's working area (or
@@ -105,10 +119,10 @@ mod tests {
         bot.world.level = 0;
         bot.world.x = 3232;
         bot.world.z = 3203;
-        assert!(site_bank(&bot).is_none(), "no site, caller's own pick");
+        assert!(site_bank(&mut bot).is_none(), "no site, caller's own pick");
         assert!(at_site(&bot), "no site reads as there");
         bot.assigned_site = Some((3294, 3287, 0));
-        let bank = site_bank(&bot).expect("a bank near the mine");
+        let bank = site_bank(&mut bot).expect("a bank near the mine");
         assert!((bank.x - 3269).abs() <= 3 && (bank.z - 3167).abs() <= 6, "Al Kharid bank, got ({},{})", bank.x, bank.z);
         assert!(!at_site(&bot), "Lumbridge is not the mine");
         bot.world.x = 3296;
@@ -161,7 +175,7 @@ mod tests {
     fn upper_floor_site_banks_on_the_surface() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         bot.assigned_site = Some((3166, 3307, 2));
-        let bank = site_bank(&bot).expect("a surface bank for the mill");
+        let bank = site_bank(&mut bot).expect("a surface bank for the mill");
         assert!(!bank.members && bank.level == 0, "got {bank:?}");
     }
 }

@@ -641,6 +641,13 @@ impl Bot {
     /// transport) is `None` for every dest, so callers keep the Manhattan
     /// order. Never plans locally.
     pub fn walk_costs(&mut self, dests: &[Tile]) -> Vec<Option<u32>> {
+        let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
+        self.walk_costs_from(from, dests)
+    }
+
+    /// `walk_costs` from any source tile (a work site ranks its banks by
+    /// route, tour 2 N3), same batching, memo and miss contract.
+    pub fn walk_costs_from(&mut self, from: Tile, dests: &[Tile]) -> Vec<Option<u32>> {
         if dests.is_empty() {
             return Vec::new();
         }
@@ -656,7 +663,6 @@ impl Bot {
         if !self.plan_yield() {
             return vec![None; dests.len()];
         }
-        let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
         // E14: one remote entry per unique tile in the batch.
         let mut unique: Vec<Tile> = Vec::with_capacity(dests.len());
         let mut slot_of: Vec<usize> = Vec::with_capacity(dests.len());

@@ -27,8 +27,8 @@ const TRANSIT_HEAL_TICKS: u64 = 200;
 /// went unseen and t48 walked from the tower basement to Al Kharid.
 const BANK_FENCE_RADIUS: i32 = 200;
 
-/// Nearest free (non-members) bank booth by Manhattan distance, on this
-/// level, else on the ground floor (no bank upstairs: windmill top), a
+/// Free (non-members) bank booth with the cheapest route (`bank_route`,
+/// Manhattan pre-selection), on this level, else on the ground floor (no bank upstairs: windmill top), a
 /// dungeon tile ranked from the surface above it. Toll-fence aware: banks on
 /// the far side of a toll gate are last resort, never the default.
 /// Needs the toll gate's fence line, served by the nav service.
@@ -56,8 +56,6 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
             None
         }
     };
-    let mut best: Option<(i64, knowledge::banks::Bank)> = None;
-    let mut fallback: Option<(i64, knowledge::banks::Bank)> = None;
     // A bank inside an aggro square of a hunter that can kill this bot
     // (Draynor's, beside the young dark wizards, for combat 14 and
     // under) is never picked while a safe one exists on this level.
@@ -65,6 +63,8 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
     let safe_exists = knowledge::banks::all_banks().iter().any(|bank| {
         !bank.members && bank.level == level && crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_none()
     });
+    let mut near_side = Vec::new();
+    let mut far_side = Vec::new();
     for bank in knowledge::banks::all_banks() {
         if bank.members || bank.level != level {
             continue;
@@ -72,19 +72,22 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
         if safe_exists && crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_some() {
             continue;
         }
-        let dist = (bank.x - i64::from(here_x)).abs() + (bank.z - i64::from(here_z)).abs();
         let across = crate::kit::bans::across_toll((here_x, here_z), (bank.x as i32, bank.z as i32), gate_x);
-        let slot = if across { &mut fallback } else { &mut best };
-        let weaker = match slot {
-            Some((known, _)) => dist < *known,
-            None => true,
-        };
-        if weaker {
-            *slot = Some((dist, bank));
+        if across {
+            far_side.push(bank);
+        } else {
+            near_side.push(bank);
         }
     }
-    best.or(fallback)
-        .map(|(_, bank)| bank)
+    // Ranked by route cost from where the bot stands (tour 2 N3), the
+    // Manhattan anchor only pre-selects the candidates.
+    let from = lifescape_sdk::plan::Tile { x: bot.world.x, z: bot.world.z, level: bot.world.level };
+    let anchor = (i64::from(here_x), i64::from(here_z));
+    let picked = match crate::kit::bank_route::cheapest_route_bank(bot, from, anchor, &near_side) {
+        Some(bank) => Some(bank),
+        None => crate::kit::bank_route::cheapest_route_bank(bot, from, anchor, &far_side),
+    };
+    picked
         .ok_or_else(|| ScriptError::Failed(format!("no reachable bank from {:?}", bot.position())))
 }
 

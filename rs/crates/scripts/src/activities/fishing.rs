@@ -125,7 +125,12 @@ mod tests {
         bot.world.z = 3243;
         bot.allow_paid = true;
         bot.assigned_site = Some((2925, 3181, 0));
-        let bank = crate::kit::site::site_bank(&bot).expect("Draynor serves Karamja");
+        // Combat 40: the Draynor wizards are no threat, the site's bank is
+        // chosen by route (`site_bank` skips booths a hunter covers).
+        for skill in 0..7u8 {
+            bot.world.stats.insert(skill, (40, 37_224));
+        }
+        let bank = crate::kit::site::site_bank(&mut bot).expect("Draynor serves Karamja");
         let tier = crate::kit::fish_gear::ordered_tier("raw_lobster", 40).expect("lobster at 40");
         let error = super::depart(&mut bot, &tier, &bank).expect_err("offline: nothing leaves");
         match error {

@@ -623,3 +623,16 @@ sans gâcher, se soigner à la banque, emporter la nourriture adaptée.
   (`withdraw::preflight_blocked`, smelt).
 - Un script de combat sans objectif finit `budget_exhausted`
   (`cycle::ended_code`), jamais `goal_reached`.
+
+## Banque par coût de route (tour 2, N3, 2026-11-17)
+
+`kit::bank_route` : la banque servante d'un site (`site::site_bank`) et
+celle du bot (`bank::nearest_bank`) sont choisies par COÛT DE ROUTE : les
+4 banques les plus proches à vol d'oiseau (un guichet par banque) sont
+chiffrées en un seul `walk_costs` (`Bot::walk_costs_from`, depuis le site
+ou le bot), la moins chère gagne, une banque sans route jamais ; sans
+service (aucun coût) l'ordre Manhattan reste. Mine du marais de Lumbridge
+(3244,3165) : Draynor (route 170), plus Al Kharid (467 à pied). Les deux
+choix écartent un guichet couvert par un chasseur qui tuerait le bot tant
+qu'un sûr existe. Reste Manhattan : `gamedata::danger::site_bank` (exigence
+de combat d'un site) et `spots::nearest_bank_at` (pickers de spots).
