@@ -1647,3 +1647,47 @@ par les candidats du nœud qui le juge.
 Limites : `--use` est relu entre deux charges (une charge commencée finit,
 comme un sac plein) ; une unité gardée par un autre nœud peut être
 entamée par la dernière charge.
+
+## 2026-11-17 — Financement des teneurs par dons en jeu (`fund-makers`)
+
+Demande utilisateur : « force les users les plus riches à donner de
+l'argent aux market makers pour qu'ils atteignent leur target et
+commencent leur travail ». Décision : commande opérateur ponctuelle et
+idempotente `orchestrator fund-makers [--dry-run]` (procédure dans
+`orchestrator.md`), exécutée par de VRAIS échanges en jeu.
+1. Plan pur (`funding_plan`) : manque d'un teneur en jeu = cible commune
+   − capital live (sac + banque, la lecture de la bascule) − dons en vol ;
+   donateurs = flotte hors staff admin/admin2, bite, liste d'exclusion,
+   teneurs et Iron ; chacun garde une réserve nommée (pièces engagées
+   dans ses bids et deals acheteurs, prochain achat d'équipement et
+   d'outil, marge 10 % ≥ 5 000, dons déjà dus) ; glouton : plus grand
+   manque d'abord, servi par le plus riche restant. Pas de don < 1 000.
+2. Exécution : un don est un deal de son propre genre (coins, prix 0,
+   vendeur = donateur, acheteur = teneur, id ≥ 10^12) injecté dans la
+   machine d'état des deals du daemon : convocation place de Varrock,
+   départs échelonnés par ETA, partie absente ouverte, `market deliver`
+   (donateur : les pièces dans la fenêtre ; teneur : rien ; double écran ;
+   « Accepted trade. »), balayage. Pas de ligne `deals` en base : ni
+   exécution, ni bougie, ni print, ni registre, ni fiabilité, ni relist au
+   redémarrage (un don en vol perdu au redémarrage est marqué `lost`,
+   `fund-makers` replanifie). Vérification : le teneur rapporte les pièces
+   gagnées par son sac (`received`), journalisées `received ok` ou
+   `MISMATCH`. Échec typé retenté une fois puis `abandoned`.
+3. Journal `run/funding.jsonl` (une ligne par événement) + log daemon
+   `funding: gift …` + section « funding » d'`orchestrator economy`.
+Pourquoi pas un ordre au marché : un ordre achète un bien, le don n'en
+a pas ; détourner le carnet fausserait prix, volumes et critères §6.
+Pourquoi pas une ligne `deals` en base : prix 0 refusé par le store, et
+chaque lecture des deals (positions des teneurs, demande, resync des
+exécutions, relist au démarrage) aurait dû l'exclure.
+Bascule vérifiée : `maybe_switch` lit `holdings_count(job, "coins")` =
+sac + banque + porté de l'instantané live (la banque fermée reste dans
+l'instantané) ; banque non streamée : capital sous la cible, jamais de
+fausse bascule. Test `funding_cmd::tests::switch_reads_pack_plus_bank`.
+Le rapport `economy` (section market makers) qui affichait 0 avant la
+bascule est corrigé à part (autre lot), pas la bascule.
+Tests : `funding_plan_tests` (répartition, réserves, exclusions,
+idempotence), `funding_gifts_tests` (convocation des deux parties,
+`my_deals`, règlement vérifié sans trace marché, `no_show` retenté puis
+`mismatch` abandonné, journal), `market_lots::tests::a_gift_is_paid_
+from_the_purse`.
