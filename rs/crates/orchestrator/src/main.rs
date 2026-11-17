@@ -182,6 +182,9 @@ fn daemon_main() -> i32 {
                 let started = std::time::Instant::now();
                 restoring.restore_jobs();
                 println!("restore_jobs done in {:.1}s", started.elapsed().as_secs_f64());
+                // D1 (user 2026-11-17): each deploy re-tests the
+                // quarantined methods on admin, a working check lifts them.
+                lifescape_orchestrator::quarantine_retest::start();
             })
             .expect("restore thread spawns");
     }

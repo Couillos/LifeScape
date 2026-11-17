@@ -173,6 +173,7 @@ pub mod flow_causes;
 pub mod report_meta;
 pub mod report_contract;
 pub mod purge_cmd;
+pub mod quarantine_retest;
 pub mod rates_rebuild_cmd;
 pub mod guides_store;
 pub mod web_guides;
