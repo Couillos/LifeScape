@@ -32,7 +32,7 @@ const FARE_TALKS: u32 = 2;
 
 /// Al-Kharid toll (`border_gate.rs2`: `inv_total(inv, coins) < 10`
 /// refuses with a chatplayer line, no message, the gate stays shut).
-pub(crate) const TOLL_FARE: u32 = 10;
+pub(crate) const TOLL_FARE: u32 = lifescape_nav::fare::TOLL_FARE;
 
 /// Paid paths only with the toll in the pack: a script's `allow_paid`
 /// on an empty wallet routed through the gate, the guard said "Oh dear,

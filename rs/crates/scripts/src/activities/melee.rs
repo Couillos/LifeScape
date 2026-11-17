@@ -69,7 +69,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("melee", args)?;
     let spots = spec.resource.clone();
     let no_bank = spec.no_bank;
-    crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat)?;
+    crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat, spec.site)?;
     bot.allow_shop = spec.allow_shop;
     // The brain's site anchors the hunt (`kit::foes::ranked_clusters`);
     // never one a previous run left on the session's Bot.

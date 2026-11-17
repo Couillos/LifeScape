@@ -411,6 +411,12 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
         // runs inside its run and keeps it.
         if !is_rescue {
             bot.assigned_site = None;
+            // Paid paths and the fare reserve are the run's own too: a
+            // toll or boat run left them armed, and every later run of
+            // the session kept and refilled travel coins it never spent
+            // (logs 2026-11-17: 3 618 withdrawals of 10/60/70 coins in
+            // unarmed runs after an armed one).
+            lifescape_scripts::kit::toll::disarm(&mut bot);
         }
         match lifescape_scripts::run(script, &mut bot, args) {
             Ok(code) => {

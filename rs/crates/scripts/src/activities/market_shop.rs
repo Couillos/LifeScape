@@ -86,7 +86,7 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if boat {
         // A Karamja keeper: the boat's round trip in the pack, paid
         // crossings open (the toll too when the brain budgeted it).
-        crate::kit::toll::arm_fares(bot, toll, true)?;
+        crate::kit::toll::arm_fares(bot, toll, true, site)?;
     } else if toll {
         bot.allow_paid = true;
     }

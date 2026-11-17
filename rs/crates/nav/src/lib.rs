@@ -10,6 +10,7 @@ pub mod custom_edge;
 pub mod danger;
 mod detour;
 pub mod f2p;
+pub mod fare;
 pub mod fast_hop;
 #[cfg(test)]
 mod fast_hop_tests;

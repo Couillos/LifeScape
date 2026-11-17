@@ -52,7 +52,7 @@ pub fn run_dialogue_buy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if !spec.allow_shop {
         return Err(ScriptError::Failed(format!("dialogue_buy {item}: purchases are off for this task")));
     }
-    crate::kit::toll::arm_fares(bot, spec.allow_paid, false)?;
+    crate::kit::toll::arm_fares(bot, spec.allow_paid, false, spec.site)?;
     bot.assigned_site = spec.site;
     wait_pack_streamed(bot)?;
     check_events(bot)?;

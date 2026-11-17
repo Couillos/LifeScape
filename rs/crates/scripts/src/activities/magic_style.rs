@@ -155,7 +155,7 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("magic", args)?;
     let spots = spec.resource.clone();
     let no_bank = spec.no_bank;
-    crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat)?;
+    crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat, spec.site)?;
     bot.allow_shop = spec.allow_shop;
     // The brain's site anchors the hunt (`kit::foes::ranked_clusters`).
     crate::kit::fight::arm_fight(bot, &spec);

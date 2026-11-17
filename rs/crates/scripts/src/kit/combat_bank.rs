@@ -225,7 +225,8 @@ pub fn prepare_at_bank_for(bot: &mut Bot, food_target: u32, keep_items: &[(Strin
     // A paid run (`toll`) leaves the bank with the fare in the pack.
     let coins = obj_id(bot, "coins").ok();
     if let Some(coins) = coins {
-        let short = crate::kit::toll::restock_reserve(bot, pack_total(bot, coins));
+        let carried = pack_total(bot, coins);
+        let short = crate::kit::toll::restock_reserve(bot, (bank_x, bank_z, bank.level as i32), carried)?;
         if short > 0 && bot.bank_items().contains_key(&coins) {
             let _ = bot.bank_withdraw(coins, short, 25);
         }

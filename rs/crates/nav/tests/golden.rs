@@ -294,6 +294,12 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
             let pair: Vec<i32> = stand.split(',').map(|part| part.trim().parse().expect("stand pair")).collect();
             assert!(pair.len() == 2, "route {name}: stand needs x,z");
             assert!(has_stand(plan, pair[0], pair[1]), "route {name}: no segment stands on ({},{})", pair[0], pair[1]);
+        } else if let Some(coins) = assertion.strip_prefix("fare=") {
+            // Coins the route takes from the pack (toll doors, fare
+            // edges): what a bot carries for this trip, nothing more.
+            let coins: u32 = coins.parse().expect("fare coins");
+            let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan for fare"));
+            assert_eq!(lifescape_nav::fare::route_fare(plan), coins, "route {name}: wrong fare");
         } else if assertion.starts_with("budget_ms=") {
             // Read above, before the latency check.
         } else if let Some(avoid) = assertion.strip_prefix("avoids=") {

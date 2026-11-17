@@ -57,7 +57,7 @@ pub fn alch_value(name: &str) -> Option<(i64, i64)> {
 pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("alchemy", &rest)?;
-    crate::kit::toll::arm(bot, spec.allow_paid)?;
+    crate::kit::toll::arm(bot, spec.allow_paid, spec.site)?;
     bot.allow_shop = spec.allow_shop;
     let keep = crate::kit::cycle::resolve_keep(bot, &spec)?;
     wait_pack_streamed(bot)?;

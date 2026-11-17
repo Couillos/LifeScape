@@ -53,7 +53,7 @@ pub fn jewel_row(product: &str) -> Option<(&'static str, u8, &'static str, &'sta
 pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("smelt_jewelry", &rest)?;
-    crate::kit::toll::arm(bot, spec.allow_paid)?;
+    crate::kit::toll::arm(bot, spec.allow_paid, spec.site)?;
     bot.allow_shop = spec.allow_shop;
     let task_keep = resolve_keep(bot, &spec)?;
     wait_pack_streamed(bot)?;

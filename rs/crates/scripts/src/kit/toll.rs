@@ -1,85 +1,63 @@
-//! Fares the brain budgeted (user decision 2026-11-13): the run may pay a
-//! crossing, and every fare is taken from the INVENTORY, never the bank.
-//! - `toll`: the Al Kharid border gate, 10 coins (`border_gate.rs2`:
-//!   `inv_total(inv, coins) < 10` ⇒ "Oh dear, I don't actually seem to
-//!   have enough money");
-//! - `boat`: the Port Sarim sailors and the Karamja customs officer, 30
-//!   coins each way (`sailors.rs2`, `customs_officer.rs2`): the run keeps
-//!   a round trip (60) so a bot on Karamja always sails back.
-//! A bot whose coins sit in the bank fetches the reserve before the first
-//! crossing; bank trips of a paid run keep it and refill to it
-//! (`kit::bank::bank_trip`).
+//! Travel coins (user rule 2026-11-17): a bot takes money for its trip
+//! ONLY when the planned route really costs money, and only that amount.
+//! Every fare is paid from the INVENTORY (`border_gate.rs2`: the Al
+//! Kharid gate wants 10 coins in the pack; `sailors.rs2`,
+//! `customs_officer.rs2`: the Karamja boat 30 each way), so a paid run
+//! carries the fares its routes cross, decided by the nav plan
+//! (`Bot::route_fare`: toll doors and fare edges, 0 for a free route):
+//! - `arm_fares`: out (here → site) plus the way back (site → the site's
+//!   bank), fetched before the first crossing;
+//! - `bank_trip` / the combat restock: bank → site → bank, priced again
+//!   for each new bank (`refresh_reserve`).
+//! A run with neither `toll` nor `boat` keeps no travel coins: its bank
+//! trips treat coins like any other item, and a route that asks for a
+//! fare (the boat's `coins:60`) fetches exactly that from the nearest
+//! bank (`fetch_fare_coins`, `skill_walk`).
 
 #![forbid(unsafe_code)]
 
-use lifescape_gamedata::services::BOAT_FARE_GP;
-use lifescape_gamedata::toll::FARE;
+use lifescape_sdk::plan::Tile;
 use lifescape_sdk::Bot;
 
 use crate::kit::pack::{obj_id, pack_slots, pack_total};
 use crate::ScriptError;
 
-/// Coins a toll run keeps in the pack.
-pub fn fare() -> u32 {
-    FARE as u32
+/// Coins one trip takes, priced on its planned routes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TripFare {
+    /// Fares of the way to the site.
+    pub out: u32,
+    /// Fares of the way back to the bank the site banks at.
+    pub back: u32,
 }
 
-/// Coins a boat run keeps in the pack: out and back.
-pub fn boat_round_trip() -> u32 {
-    2 * BOAT_FARE_GP as u32
+impl TripFare {
+    /// Coins the pack carries when the trip starts: out and back, never
+    /// a flat margin.
+    pub fn carried(&self) -> u32 {
+        self.out.saturating_add(self.back)
+    }
 }
 
-/// Pack reserve of a run allowed these crossings.
-pub fn reserve(toll: bool, boat: bool) -> u32 {
-    (if toll { fare() } else { 0 }) + if boat { boat_round_trip() } else { 0 }
+fn tile((x, z, level): (i32, i32, i32)) -> Tile {
+    Tile { x, z, level }
 }
 
-/// Coins to withdraw so the pack carries the toll fare (0 when it does).
-pub fn fare_short(carried: u32) -> u32 {
-    fare().saturating_sub(carried)
-}
-
-/// Coins every bot keeps in its pack: at least the boat's round trip, so
-/// any run may sail to Karamja and back (user 2026-11-16: "aller à
-/// Karamja de manière universelle, comme la carte"); a run armed for more
-/// (`arm_fares`: toll + boat) keeps its armed reserve.
-pub fn pack_reserve(bot: &Bot) -> u32 {
-    let armed = if bot.fare_reserve > 0 {
-        bot.fare_reserve
-    } else if bot.allow_paid {
-        fare()
-    } else {
-        0
+/// Fares of `from` → `site` → `bank` on the planned routes (fares
+/// payable, `Bot::route_fare`).
+pub fn trip_fare(bot: &mut Bot, from: (i32, i32, i32), site: (i32, i32, i32), bank: Option<(i32, i32, i32)>) -> Result<TripFare, ScriptError> {
+    let out = bot.route_fare(tile(from), tile(site))?;
+    let back = match bank {
+        Some(bank) => bot.route_fare(tile(site), tile(bank))?,
+        None => 0,
     };
-    armed.max(boat_round_trip())
+    Ok(TripFare { out, back })
 }
 
-/// Coins a bank trip withdraws for the pack reserve, `keep` extended with
-/// the coins when they stay: a paid run (`toll`) keeps its coins and
-/// refills its reserve; every other run keeps the boat's round trip — a
-/// pack within the reserve stays, a fuller one banks and takes the
-/// reserve back out, refilled from coins the bank was last seen holding
-/// (an empty or unseen bank never loops the trip). A caller that already
-/// keeps its coins decides alone.
-pub fn reserve_at_bank(bot: &Bot, keep: &mut Vec<u16>, withdraw_coins: u32) -> u32 {
-    let Ok(coins) = obj_id(bot, "coins") else { return withdraw_coins };
-    let carried = pack_total(bot, coins);
-    if bot.allow_paid {
-        if !keep.contains(&coins) {
-            keep.push(coins);
-        }
-        return withdraw_coins.max(reserve_short(bot, carried));
-    }
-    if keep.contains(&coins) {
-        return withdraw_coins;
-    }
-    let reserve = pack_reserve(bot);
-    if carried > reserve {
-        return withdraw_coins.max(reserve);
-    }
-    keep.push(coins);
-    let banked = bot.bank_items().get(&coins).copied().unwrap_or(0);
-    withdraw_coins.max(reserve.saturating_sub(carried).min(banked))
+/// Coins the pack keeps for travel: the armed run's route-priced
+/// reserve, none for any other run.
+pub fn pack_reserve(bot: &Bot) -> u32 {
+    if bot.allow_paid { bot.fare_reserve } else { 0 }
 }
 
 /// Coins to withdraw so the pack carries its reserve (`pack_reserve`).
@@ -87,35 +65,86 @@ pub fn reserve_short(bot: &Bot, carried: u32) -> u32 {
     pack_reserve(bot).saturating_sub(carried)
 }
 
-/// Coins a deposit-everything restock must take back out so a paid run
-/// still carries the fare at the gate (frank_lane 2026-11-13: the combat
-/// restock banked the fare `arm` had just fetched, then "Yes, ok." at the
-/// gate with an empty pack, looped). Unpaid runs never withdraw.
-pub fn restock_fare(allow_paid: bool, carried_after_deposit: u32) -> u32 {
-    if allow_paid { fare_short(carried_after_deposit) } else { 0 }
+/// Close the run's paid paths and drop its reserve: a session's Bot
+/// outlives one run, and the next run decides its own fares.
+pub fn disarm(bot: &mut Bot) {
+    bot.allow_paid = false;
+    bot.fare_reserve = 0;
+    bot.fare_bank = None;
 }
 
-/// `restock_fare` for a live run: every run refills its pack reserve
-/// (`pack_reserve`: the boat's round trip at least).
-pub fn restock_reserve(bot: &Bot, carried_after_deposit: u32) -> u32 {
-    reserve_short(bot, carried_after_deposit)
+/// Price the reserve of a paid run banking at `bank`: the fares of
+/// bank → site → bank on the planned routes (the cycle every bank trip
+/// starts). Once per bank: the same bank keeps its price. A run without
+/// paid paths or without a site keeps what `arm_fares` set.
+pub fn refresh_reserve(bot: &mut Bot, bank: (i32, i32, i32)) -> Result<(), ScriptError> {
+    let Some(site) = bot.assigned_site.filter(|_| bot.allow_paid) else { return Ok(()) };
+    if bot.fare_bank == Some(bank) {
+        return Ok(());
+    }
+    let cycle = trip_fare(bot, bank, site, Some(bank))?;
+    bot.fare_reserve = cycle.carried();
+    bot.fare_bank = Some(bank);
+    bot.log(&format!(
+        "fares: bank ({},{}) -> site ({},{}) -> bank: {} + {} coins kept in the pack",
+        bank.0, bank.1, site.0, site.1, cycle.out, cycle.back
+    ));
+    Ok(())
 }
 
-/// Opt the run into paid crossings (`toll`) and carry the fare. Unpaid
-/// runs are untouched.
-pub fn arm(bot: &mut Bot, allow_paid: bool) -> Result<(), ScriptError> {
-    arm_fares(bot, allow_paid, false)
+/// Coins a bank trip withdraws for the pack reserve, `keep` extended with
+/// the coins of a paid run (they ride every trip, refilled to the
+/// route-priced reserve). Any other run keeps no travel coins: the
+/// caller's own request stands, coins bank like any item.
+pub fn reserve_at_bank(bot: &mut Bot, bank: (i32, i32, i32), keep: &mut Vec<u16>, withdraw_coins: u32) -> Result<u32, ScriptError> {
+    if !bot.allow_paid {
+        return Ok(withdraw_coins);
+    }
+    let Ok(coins) = obj_id(bot, "coins") else { return Ok(withdraw_coins) };
+    refresh_reserve(bot, bank)?;
+    if !keep.contains(&coins) {
+        keep.push(coins);
+    }
+    Ok(withdraw_coins.max(reserve_short(bot, pack_total(bot, coins))))
+}
+
+/// Coins a deposit-everything restock at `bank` takes back out so a paid
+/// run still carries its route fares (frank_lane 2026-11-13: the combat
+/// restock banked the fare, then "Yes, ok." at the gate with an empty
+/// pack). Unpaid runs never withdraw.
+pub fn restock_reserve(bot: &mut Bot, bank: (i32, i32, i32), carried_after_deposit: u32) -> Result<u32, ScriptError> {
+    refresh_reserve(bot, bank)?;
+    Ok(reserve_short(bot, carried_after_deposit))
+}
+
+/// `arm_fares` for a run that may only pay the toll.
+pub fn arm(bot: &mut Bot, allow_paid: bool, site: Option<(i32, i32, i32)>) -> Result<(), ScriptError> {
+    arm_fares(bot, allow_paid, false, site)
 }
 
 /// Opt the run into the crossings the brain budgeted (`toll`, `boat`)
-/// and carry their reserve in the pack. Runs with neither are untouched.
-pub fn arm_fares(bot: &mut Bot, toll: bool, boat: bool) -> Result<(), ScriptError> {
+/// and carry what its routes cost: here → `site` and site → the site's
+/// bank, priced on the plan (0 when neither crosses a paid transition).
+/// Without a site nothing is priced, so nothing is carried: a route that
+/// asks for a fare fetches it on the way (`fetch_fare_coins`). Runs
+/// with neither flag are untouched.
+pub fn arm_fares(bot: &mut Bot, toll: bool, boat: bool, site: Option<(i32, i32, i32)>) -> Result<(), ScriptError> {
     if !toll && !boat {
         return Ok(());
     }
-    // The reserve first, from a bank on this side (the pick is fenced
-    // while paid paths are still off), then the crossings open to the run.
-    bot.fare_reserve = reserve(toll, boat);
+    crate::kit::survival::wait_pack_streamed(bot)?;
+    let fare = match site {
+        Some(site) => {
+            let here = (bot.world.x, bot.world.z, bot.world.level);
+            let bank = crate::kit::spots::nearest_bank_at(site.0, site.1, site.2).map(|bank| (bank.x as i32, bank.z as i32, bank.level as i32));
+            trip_fare(bot, here, site, bank)?
+        }
+        None => TripFare::default(),
+    };
+    // The fares first, from a bank on this side (the pick is fenced while
+    // paid paths are still off), then the crossings open to the run.
+    bot.fare_reserve = fare.carried();
+    bot.fare_bank = None;
     carry_fare(bot)?;
     bot.allow_paid = true;
     let what = match (toll, boat) {
@@ -123,7 +152,12 @@ pub fn arm_fares(bot: &mut Bot, toll: bool, boat: bool) -> Result<(), ScriptErro
         (false, true) => "the Karamja boat",
         _ => "toll gates",
     };
-    bot.log(&format!("{what} allowed for this run ({} coins carried, reserve {})", carried_coins(bot), bot.fare_reserve));
+    bot.log(&format!(
+        "{what} allowed for this run ({} coins carried; route fares: out {}, back {})",
+        carried_coins(bot),
+        fare.out,
+        fare.back
+    ));
     Ok(())
 }
 
@@ -131,12 +165,18 @@ fn carried_coins(bot: &Bot) -> u32 {
     obj_id(bot, "coins").map(|coins| pack_total(bot, coins)).unwrap_or(0)
 }
 
-/// Reserve in the pack: a bank trip withdraws the shortfall, the whole
-/// pack kept. Still short after it (bank empty): typed `Blocked` on the
-/// coins the brain files as a `have_coins` dependency.
-pub fn carry_fare(bot: &mut Bot) -> Result<(), ScriptError> {
-    crate::kit::survival::wait_pack_streamed(bot)?;
-    let short = reserve_short(bot, carried_coins(bot));
+/// Coins to fetch so the pack carries `reserve` (0 when it does).
+pub fn fare_shortfall(reserve: u32, carried: u32) -> u32 {
+    reserve.saturating_sub(carried)
+}
+
+/// The arming reserve in the pack (`fare_reserve`, paid paths still
+/// off): a bank trip withdraws the shortfall, the whole pack kept. Still
+/// short after it (bank empty): typed `Blocked` on the coins the brain
+/// files as a `have_coins` dependency.
+fn carry_fare(bot: &mut Bot) -> Result<(), ScriptError> {
+    let reserve = bot.fare_reserve;
+    let short = fare_shortfall(reserve, carried_coins(bot));
     if short == 0 {
         return Ok(());
     }
@@ -144,8 +184,8 @@ pub fn carry_fare(bot: &mut Bot) -> Result<(), ScriptError> {
     let bank = crate::kit::bank::nearest_bank(bot)?;
     bot.log(&format!("fares: fetching {short} coins from the bank at ({},{})", bank.x, bank.z));
     crate::kit::bank::bank_trip(bot, &bank, &keep, short)?;
-    if reserve_short(bot, carried_coins(bot)) > 0 {
-        return Err(ScriptError::Blocked { missing: vec![format!("coins:{}", pack_reserve(bot))] });
+    if fare_shortfall(reserve, carried_coins(bot)) > 0 {
+        return Err(ScriptError::Blocked { missing: vec![format!("coins:{reserve}")] });
     }
     Ok(())
 }
@@ -169,51 +209,86 @@ pub fn fetch_fare_coins(bot: &mut Bot, need: u32) -> Result<bool, ScriptError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{boat_round_trip, fare, fare_short, reserve, reserve_short, restock_fare};
+    use super::{disarm, fare_shortfall, pack_reserve, reserve_at_bank, reserve_short, restock_reserve, TripFare};
 
-    #[test]
-    fn a_paid_restock_takes_the_fare_back_out() {
-        assert_eq!(restock_fare(true, 0), 10, "deposit-all banked the fare");
-        assert_eq!(restock_fare(true, 25), 0);
-        assert_eq!(restock_fare(false, 0), 0, "unpaid runs carry nothing");
-    }
-
-    #[test]
-    fn the_fare_is_ten_coins_carried() {
-        assert_eq!(fare(), 10);
-        assert_eq!(fare_short(0), 10);
-        assert_eq!(fare_short(4), 6);
-        assert_eq!(fare_short(1070), 0);
-    }
-
-    /// The boat keeps a round trip (30 out, 30 back); a run allowed both
-    /// crossings carries both; every other run keeps the boat's round
-    /// trip (Karamja universal, user 2026-11-16).
-    #[test]
-    fn the_boat_keeps_a_round_trip() {
-        assert_eq!(boat_round_trip(), 60);
-        assert_eq!((reserve(true, false), reserve(false, true), reserve(true, true), reserve(false, false)), (10, 60, 70, 0));
+    fn live_bot() -> lifescape_sdk::Bot {
         let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
-        assert_eq!(reserve_short(&bot, 3), 57, "every bot keeps the boat round trip");
-        assert_eq!(super::restock_reserve(&bot, 0), 60, "unpaid runs refill it too");
-        bot.fare_reserve = reserve(true, true);
-        assert_eq!(reserve_short(&bot, 0), 70, "an armed toll + boat run keeps both");
-        bot.fare_reserve = reserve(false, true);
-        assert_eq!(reserve_short(&bot, 30), 30, "back from Karamja: refill the way out");
-        bot.fare_reserve = 0;
         crate::tables_live::attach_live_tables(&mut bot);
-        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins");
+        bot
+    }
+
+    fn carry(bot: &mut lifescape_sdk::Bot, coins: u32) -> u16 {
+        let coins_id = crate::kit::pack::obj_id(bot, "coins").expect("coins");
         let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
-        // Within the reserve, bank unseen: the coins stay, no trip forced.
-        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
+        bot.world.inv.insert(pack_com, [(0u8, (coins_id, coins))].into_iter().collect());
+        coins_id
+    }
+
+    /// A trip carries its route fares, nothing more: a free route 0, the
+    /// Al Kharid gate out and back 2 x 10, the Karamja boat 30 + 30, the
+    /// gate and the boat together 40 + 40.
+    #[test]
+    fn a_trip_carries_its_route_fares() {
+        assert_eq!(TripFare { out: 0, back: 0 }.carried(), 0, "no toll, no boat: no coin");
+        assert_eq!(TripFare { out: 10, back: 10 }.carried(), 20, "Al Kharid out and back");
+        assert_eq!(TripFare { out: 10, back: 0 }.carried(), 10, "Al Kharid, banking on the far side");
+        assert_eq!(TripFare { out: 30, back: 30 }.carried(), 60, "the Karamja boat");
+        assert_eq!(TripFare { out: 40, back: 40 }.carried(), 80, "gate and boat both ways");
+        assert_eq!(fare_shortfall(60, 25), 35);
+        assert_eq!(fare_shortfall(0, 25), 0);
+    }
+
+    /// No paid run, no travel coins (user 2026-11-17): the 60-coin
+    /// floor every bank trip withdrew is gone, coins bank like any item.
+    #[test]
+    fn an_unpaid_run_keeps_no_travel_coins() {
+        let mut bot = live_bot();
+        assert_eq!(pack_reserve(&bot), 0);
+        assert_eq!(reserve_short(&bot, 0), 0);
+        bot.fare_reserve = 60;
+        assert_eq!(pack_reserve(&bot), 0, "a reserve without paid paths is never kept");
+        let coins = carry(&mut bot, 500);
         let mut keep = Vec::new();
-        assert_eq!(super::reserve_at_bank(&bot, &mut keep, 0), 0, "an unseen bank never loops the trip");
-        assert_eq!(keep, vec![coins]);
-        // A full wallet banks and takes the round trip back out.
-        bot.world.inv.insert(pack_com, [(0u8, (coins, 500u32))].into_iter().collect());
+        assert_eq!(reserve_at_bank(&mut bot, (3092, 3245, 0), &mut keep, 0).expect("no plan"), 0, "a full wallet: nothing withdrawn");
+        assert!(!keep.contains(&coins), "coins bank like any item");
+        carry(&mut bot, 5);
         let mut keep = Vec::new();
-        assert_eq!(super::reserve_at_bank(&bot, &mut keep, 0), 60);
-        assert!(keep.is_empty(), "the excess is banked");
-        assert_eq!(reserve_short(&bot, 75), 0);
+        assert_eq!(reserve_at_bank(&mut bot, (3092, 3245, 0), &mut keep, 0).expect("no plan"), 0, "a few coins: nothing withdrawn");
+        assert_eq!(reserve_at_bank(&mut bot, (3092, 3245, 0), &mut keep, 7).expect("no plan"), 7, "the caller's own request stands");
+        assert_eq!(restock_reserve(&mut bot, (3092, 3245, 0), 0).expect("no plan"), 0, "unpaid restock withdraws nothing");
+    }
+
+    /// A paid run keeps its route-priced reserve: refilled, never more.
+    /// Without a site nothing is priced (no plan asked).
+    #[test]
+    fn a_paid_run_keeps_its_priced_reserve() {
+        let mut bot = live_bot();
+        bot.allow_paid = true;
+        bot.fare_reserve = 60;
+        let coins = carry(&mut bot, 30);
+        let mut keep = Vec::new();
+        assert_eq!(reserve_at_bank(&mut bot, (3092, 3245, 0), &mut keep, 0).expect("no site, no plan"), 30, "back from Karamja: refill the way out");
+        assert_eq!(keep, vec![coins], "the fares ride every trip");
+        bot.fare_reserve = 0;
+        assert_eq!(restock_reserve(&mut bot, (3092, 3245, 0), 0).expect("no plan"), 0, "a free cycle carries nothing");
+        bot.fare_reserve = 10;
+        assert_eq!(restock_reserve(&mut bot, (3092, 3245, 0), 4).expect("no plan"), 6);
+        disarm(&mut bot);
+        assert!(!bot.allow_paid && bot.fare_reserve == 0 && bot.fare_bank.is_none(), "the next run decides its own fares");
+    }
+
+    /// Same bank, same price: the reserve is priced once per bank (no
+    /// plan asked again), a site-less run never plans.
+    #[test]
+    fn a_priced_bank_is_not_priced_again() {
+        let mut bot = live_bot();
+        bot.allow_paid = true;
+        bot.assigned_site = Some((3300, 3310, 0));
+        bot.fare_bank = Some((3269, 3167, 0));
+        bot.fare_reserve = 0;
+        super::refresh_reserve(&mut bot, (3269, 3167, 0)).expect("cached: no service needed");
+        assert_eq!(bot.fare_reserve, 0);
+        let error = super::refresh_reserve(&mut bot, (3092, 3245, 0)).expect_err("a new bank plans: no service here");
+        assert!(error.to_string().contains("nav-down"), "{error}");
     }
 }

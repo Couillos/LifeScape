@@ -242,7 +242,7 @@ pub fn run_curse(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spot = knowledge::combat_spots::by_key(key).ok_or_else(|| ScriptError::Usage(format!("unknown combat spot {key:?}")))?;
     let spell = spec.spell.clone().ok_or_else(|| ScriptError::Usage(format!("curse {key}: no --spell named")))?;
     let need = debuff_level(&spell).ok_or_else(|| ScriptError::Usage(format!("{spell:?} is no F2P curse (confuse, weaken, curse, bind)")))?;
-    crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat)?;
+    crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat, spec.site)?;
     bot.allow_shop = spec.allow_shop;
     bot.assigned_site = spec.site;
     wait_pack_streamed(bot)?;

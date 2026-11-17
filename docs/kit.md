@@ -32,8 +32,12 @@ la suite. Reste rangé sans changement de comportement : `pack_*`,
 Tarifs (`kit::toll::arm_fares`, 2026-11-13) : `toll` (porte d'Al Kharid,
 10 po) et `boat` (bateau de Karamja, 30 po chaque sens) se paient depuis
 le SAC ; le run arme `bot.allow_paid` et une réserve
-`bot.fare_reserve` (10, 60 aller-retour, 70 les deux) que `bank_trip`
-garde et recomplète. Pêche, minage, bûcheronnage, mêlée, distance et
+`bot.fare_reserve` que `bank_trip` garde et recomplète, décidée par les
+routes planifiées (2026-11-17, `Bot::route_fare`) : aller + retour au
+lancement (ici → `--site` → banque du site), banque → site → banque à
+chaque nouvelle banque ; 0 sans transition payante. Sans `toll`/`boat`
+aucune pièce de voyage n'est gardée ni retirée (le marcheur va chercher
+le `coins:N` qu'une route exige), et l'armement meurt avec le run. Pêche, minage, bûcheronnage, mêlée, distance et
 magie l'arment ; la banque d'un site de Karamja se choisit depuis le
 quai de Port Sarim (`access::mainland_anchor`). `dialogue_buy <objet>
 --want <objet> N --site …` achète par dialogue (`gamedata::dialogue_shops`).

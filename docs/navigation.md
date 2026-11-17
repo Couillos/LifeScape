@@ -487,9 +487,18 @@ la garde (ajoutée au chargement ; l'aller `coins:60`), jamais
 porté typé par `TravelError.missing` (`Error::missing_coins`) ; le
 marcheur des scripts (`skill_walk::walk_checked_at`) va alors chercher
 le manque à la banque la plus proche (`kit::toll::fetch_fare_coins`) et
-replanifie une fois. Chaque passage en banque garde l'aller-retour en
-sac (`kit::toll::reserve_at_bank`, 60 pièces ; un sac plus riche dépose
-l'excédent). Les exigences se lisent sur le SAC seul
+replanifie une fois. Pièces de voyage (utilisateur 2026-11-17 : de
+l'argent pour un trajet SEULEMENT s'il coûte, le montant exact) :
+`nav::fare::route_fare` somme les portes à péage (10) et les arêtes à
+tarif (bateau 30) d'un plan, `Bot::route_fare(from, dest)` le demande
+au service chemins payants ouverts et `coins:*` tenus ; 0 sans
+transition payante (goldens `tarif_*`, assertion `fare=`). Seul un run
+armé (`toll`/`boat`) garde des pièces : aller + retour au lancement
+(`kit::toll::arm_fares`), banque → site → banque à chaque banque
+(`kit::toll::refresh_reserve`) ; tout autre run banque ses pièces comme
+un objet (la réserve universelle de 60 du 2026-11-16 retirait 60 pièces
+à ~22 000 passages en banque sans trajet payant) et l'armement est
+remis à zéro à chaque run (`kit::toll::disarm`, `session.rs`). Les exigences se lisent sur le SAC seul
 (`Bot::pack_items`) : la somme de tous les inventaires comptait la
 banque vue en dernier (admin avait planifié le bateau avec 401 764
 pièces en banque et un sac vide). Planner : tout site de Karamja est

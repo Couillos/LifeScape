@@ -912,8 +912,8 @@ Drapeaux communs :
 | `--want <objet> <N>` | nœud `obtain` (sauf `market`, `walkto`, `equip`, quêtes) | s'arrêter quand N unités de plus sont détenues (N = quantité − détenu au lancement) |
 | `--site x,z,niveau` | le planner a choisi un site (`pick_site_gated`) ; tout script sauf `walkto`, `equip`, `quest_*` et `market buy|sell|make|cleanup` (seul `shopbuy` marche vers un marchand ; `make` reçoit son poste en `--post`) | travailler CE site (poste, rocher, eau, spot, magasin, apparition au sol), jamais un autre |
 | `--wear <objet>` | le site est dans une guilde à uniforme (artisanat : `brown_apron`, cuisiniers : `chefs_hat`) | porter l'objet avant la porte (le planner l'a fait obtenir) |
-| `toll` | site au-delà du péage d'Al Kharid, péage budgété ou gratuit (Prince Ali) | le script peut payer 10 po à la porte (`kit::toll::arm_fares`) |
-| `boat` | site à Karamja (`node.boat`), aller-retour budgété (60 po) ; seulement pêche, minage, bûcheronnage, combats | le script garde 60 po dans le sac et peut prendre le bateau (`kit::toll::arm_fares`, `bot.fare_reserve`) |
+| `toll` | site au-delà du péage d'Al Kharid, péage budgété ou gratuit (Prince Ali) | le script peut payer la porte et porte les tarifs de ses routes planifiées, rien si elles ne coûtent rien (`kit::toll::arm_fares`, `Bot::route_fare`) |
+| `boat` | site à Karamja (`node.boat`), aller-retour budgété (60 po) ; seulement pêche, minage, bûcheronnage, combats | le script porte les tarifs de ses routes (aller + retour : 60 depuis Draynor) et peut prendre le bateau (`kit::toll::arm_fares`, `bot.fare_reserve`) |
 | `--spell <sort>` | magie | lancer CE sort (le planner a dimensionné ses runes) |
 | `--shop <clé>` | `market shopbuy` | acheter dans CE magasin (clé `gamedata::shops`) |
 

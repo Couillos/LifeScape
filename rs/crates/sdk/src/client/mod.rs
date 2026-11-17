@@ -25,6 +25,7 @@ pub mod static_cache;
 pub mod travel;
 pub mod travel_custom;
 pub mod travel_dossier;
+pub mod travel_fare;
 pub mod travel_here;
 pub mod travel_hook;
 pub mod travel_pause;
@@ -126,9 +127,13 @@ pub struct Bot {
     /// choice stay on the free side of every fence.
     pub allow_paid: bool,
     /// Coins a paid run keeps in the pack (the fares are taken from the
-    /// inventory): 10 for the Al Kharid toll, 60 for a Karamja round trip
-    /// (30 each way). 0 outside paid runs; bank trips refill to it.
+    /// inventory), decided by the planned routes (`route_fare`): the
+    /// toll doors and fare edges of the trip, 0 for a free one (user
+    /// 2026-11-17). 0 outside paid runs; bank trips refill to it.
     pub fare_reserve: u32,
+    /// Bank tile `fare_reserve` was last priced from (bank → site →
+    /// bank): a bank trip from another bank prices it again.
+    pub fare_bank: Option<(i32, i32, i32)>,
     /// Opt-in to NPC shop purchases. Default true; a constrained task
     /// (`TaskSpec.allow_shop`) clears it and the buy paths refuse loud
     /// instead of spending, so the run reports blocked, never broke.
@@ -243,6 +248,7 @@ impl Bot {
             approach_depth: 0,
             allow_paid: false,
             fare_reserve: 0,
+            fare_bank: None,
             allow_shop: true,
             combat_style: "melee".to_string(),
             combat_spell: None,

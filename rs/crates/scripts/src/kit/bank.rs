@@ -386,12 +386,12 @@ pub fn bank_trip(
             keep.push(lamp);
         }
     }
-    // Fares come from the pack, never the bank: the coin reserve every
-    // bot carries (`kit::toll::reserve_at_bank`, Karamja universal).
-    let withdraw_coins = crate::kit::toll::reserve_at_bank(bot, &mut keep, withdraw_coins);
     let bank_x = bank.x as i32;
     let bank_z = bank.z as i32;
     let bank_level = bank.level as i32;
+    // Fares come from the pack, never the bank: a paid run keeps what
+    // its routes from this bank cost (`kit::toll::reserve_at_bank`).
+    let withdraw_coins = crate::kit::toll::reserve_at_bank(bot, (bank_x, bank_z, bank_level), &mut keep, withdraw_coins)?;
     // True no-op: nothing to deposit and nothing to withdraw. Walking
     // anyway would send every clean pack on a pointless (and sometimes
     // deadly) trek before the caller even starts its real business.

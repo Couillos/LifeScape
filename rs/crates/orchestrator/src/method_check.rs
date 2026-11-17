@@ -24,7 +24,8 @@ use crate::await_cmd::{wait_for_end, Baseline, DaemonSource, StateSource, Verdic
 
 /// Wall seconds one check may take.
 const CHECK_TIMEOUT_S: f64 = 900.0;
-/// Coins carried for fares and fees.
+/// Wallet the site pick budgets fares against (`Fare::wallet`); the
+/// stage gives only the fares the picked site needs (`MethodPlan::fare`).
 const TRAVEL_COINS: i64 = 2_000;
 /// Bait or feathers staged per wanted fish (`stage`).
 const FISHING_BAIT_FACTOR: i64 = 10;
@@ -48,6 +49,8 @@ pub struct MethodPlan {
     pub inputs: Vec<(String, i64)>,
     pub tools: Vec<String>,
     pub coins: i64,
+    /// Travel coins the picked site needs (toll, boat), 0 for a free one.
+    pub fare: i64,
 }
 
 /// The planner's view of `method` for `count` units (pure). A spell
@@ -138,7 +141,10 @@ pub fn plan(method: &str, count: i64) -> Result<MethodPlan, String> {
     }
     // The fine method rides to the task report like a brain launch.
     args.extend([crate::report_meta::METHOD_FLAG.to_string(), leg.to_string()]);
-    Ok(MethodPlan { method: method.to_string(), drop_farm, quest, script, args, product, skill, inputs, tools, coins })
+    // Travel coins only for a trip that costs money (user 2026-11-17):
+    // the gate one way, the boat out and back, nothing for a free site.
+    let fare = if node.toll { lifescape_gamedata::toll::FARE } else { 0 } + if node.boat { 2 * lifescape_gamedata::services::BOAT_FARE_GP } else { 0 };
+    Ok(MethodPlan { method: method.to_string(), drop_farm, quest, script, args, product, skill, inputs, tools, coins, fare })
 }
 
 /// Units of `item` the state holds: pack, bank and worn.
@@ -375,7 +381,7 @@ fn stage(account: &str, plan: &MethodPlan, count: i64) -> Result<(), String> {
             cheat(account, &format!("give {input} {}", want - have))?;
         }
     }
-    let coins = (plan.coins * count).max(0) + TRAVEL_COINS;
+    let coins = (plan.coins * count).max(0) + plan.fare;
     if held(&state, "coins") < coins {
         cheat(account, &format!("give coins {coins}"))?;
     }

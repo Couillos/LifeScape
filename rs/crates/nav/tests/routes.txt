@@ -36,8 +36,8 @@ repaire_sortie | 3243,9783,0 | 3244,3382,0 | - | reachable ; rides>=1 ; levels=0
 # est couverte par le test synthetique tests/paid_only.rs (carre isole
 # dont la porte est le seul passage), pas par ces deux lignes qui figent
 # le comportement reel.
-peage_detour | 3265,3227,0 | 3270,3227,0 | - | reachable ; doors<=0 ; walk_tiles>=200
-peage_payant | 3265,3227,0 | 3270,3227,0 | paid | reachable ; uses_loc=2882 ; walk_tiles<=10
+peage_detour | 3265,3227,0 | 3270,3227,0 | - | reachable ; doors<=0 ; walk_tiles>=200 ; fare=0
+peage_payant | 3265,3227,0 | 3270,3227,0 | paid | reachable ; uses_loc=2882 ; walk_tiles<=10 ; fare=10
 # 9-10. porte a exigence de quete (guilde des Champions, qp>=32).
 guilde_sans_qp | 3191,3366,0 | 3191,3361,0 | - | unreachable=NeedsRequirement
 guilde_avec_qp | 3191,3366,0 | 3191,3361,0 | has=qp:32 | reachable ; uses_loc=1805
@@ -156,9 +156,9 @@ bateau_universel | 3029,3217,0 | 2915,3150,0 | f2p,has=coins:30,has=coins:60 | r
 bateau_universel_retour | 2915,3150,0 | 3029,3217,0 | f2p,has=coins:30 | reachable ; uses_custom=boat_karamja_to_port_sarim
 bateau_sans_piece | 3029,3217,0 | 2915,3150,0 | paid,f2p | unreachable=NeedsRequirement ; blocked_custom=boat_port_sarim_to_karamja
 bateau_aller_sans_retour | 3029,3217,0 | 2915,3150,0 | paid,f2p,has=coins:30 | unreachable=NeedsRequirement ; blocked_custom=boat_port_sarim_to_karamja
-bateau_aller | 3029,3217,0 | 2915,3150,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_port_sarim_to_karamja ; uses_custom=gangplank_karamja_dock ; levels=0>1>0 ; stand=3027,3218
-bateau_retour | 2915,3150,0 | 3029,3217,0 | paid,f2p,has=coins:30 | reachable ; uses_custom=boat_karamja_to_port_sarim ; uses_custom=gangplank_port_sarim_dock ; levels=0>1>0 ; stand=2954,3147
-bateau_draynor_homard | 3092,3245,0 | 2924,3178,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_port_sarim_to_karamja
+bateau_aller | 3029,3217,0 | 2915,3150,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_port_sarim_to_karamja ; uses_custom=gangplank_karamja_dock ; levels=0>1>0 ; stand=3027,3218 ; fare=30
+bateau_retour | 2915,3150,0 | 3029,3217,0 | paid,f2p,has=coins:30 | reachable ; uses_custom=boat_karamja_to_port_sarim ; uses_custom=gangplank_port_sarim_dock ; levels=0>1>0 ; stand=2954,3147 ; fare=30
+bateau_draynor_homard | 3092,3245,0 | 2924,3178,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_port_sarim_to_karamja ; fare=30
 bateau_ile_libre | 2956,3146,0 | 2924,3178,0 | f2p | reachable ; doors<=0
 # 41-46. poches scellees (2026-11-13) : tuile marchable sans aucune entree
 # (murs, mobilier, cloture ; aucune porte, montee ou arete custom n'y
@@ -295,3 +295,18 @@ guilde_valaine_avec_qp | 3191,3366,0 | 3193,3361,1 | f2p,has=qp:32 | reachable ;
 # ne le fait pas apparaitre (GameMap.loadNpcs) et refuse le telejump.
 lundail_hors_f2p | 3083,3890,0 | 2534,4719,0 | f2p | unreachable=OutsideF2p
 arene_mages_hors_f2p | 3083,3890,0 | 3083,3960,0 | f2p | unreachable=OutsideF2p
+# Pieces de voyage decidees par la route (utilisateur 2026-11-17 : un bot
+# ne prend de l'argent pour son trajet que si ce trajet coute, et le
+# montant exact). `fare=` somme les portes a peage (10) et les aretes a
+# tarif (bateau 30) du plan ; aller + retour = deux plans.
+# Route sans transition payante, chemins payants ouverts : 0 piece.
+tarif_sans_peage | 3222,3218,0 | 3092,3245,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; fare=0
+# Lumbridge <-> banque d'Al Kharid : la porte dans chaque sens (2 x 10).
+tarif_alkharid_aller | 3222,3218,0 | 3270,3167,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_loc=2882 ; fare=10
+tarif_alkharid_retour | 3270,3167,0 | 3222,3218,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; fare=10
+# Sans piece en sac le meme trajet contourne la cloture : 0 piece.
+tarif_alkharid_detour | 3222,3218,0 | 3270,3167,0 | f2p | reachable ; fare=0 ; budget_ms=1500
+# Plusieurs transitions payantes : banque d'Al Kharid -> homards de
+# Karamja (porte 10 + bateau 30), et retour (bateau 30 + porte 10).
+tarif_alkharid_karamja | 3270,3167,0 | 2924,3178,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_port_sarim_to_karamja ; fare=40 ; budget_ms=1500
+tarif_karamja_alkharid | 2924,3178,0 | 3270,3167,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_karamja_to_port_sarim ; fare=40 ; budget_ms=1500
