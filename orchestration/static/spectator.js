@@ -2,9 +2,11 @@
 var SpectatorPanels = (function () {
   const SKILLS = ["attack","defence","strength","hitpoints","ranged","prayer","magic","cooking","woodcutting","fletching","fishing","firemaking","crafting","smithing","mining","herblore","agility","thieving","slayer","farming","runecraft"];
   // Skills table rows: one per skill, in stat order. `level` = current
-  // level (boosted/drained), `base` = level from xp (heartbeat).
+  // level (boosted/drained), `base` = level from xp (heartbeat). The
+  // Level column shows the base level (hitpoints: the level, never the
+  // hp left); the current level only when no base is sent.
   function skillRows(skills) {
-    return (skills || []).map(s => ({ skill: SKILLS[s.id] || ('stat' + s.id), level: s.level, base: s.base, xp: s.xp }));
+    return (skills || []).map(s => ({ skill: SKILLS[s.id] || ('stat' + s.id), level: s.base != null ? s.base : s.level, base: s.base, xp: s.xp }));
   }
   // Total line under the skills table: sum of BASE levels (not the
   // current ones) and of xp; null (shown '-') when a row lacks the value.

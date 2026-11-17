@@ -13,7 +13,9 @@ function check(name, actual, expected) {
 }
 
 check('skill rows', SpectatorPanels.skillRows([{ id: 0, level: 40, base: 40, xp: 37224 }, { id: 3, level: 4, base: 10, xp: 1154 }]),
-  [{ skill: 'attack', level: 40, base: 40, xp: 37224 }, { skill: 'hitpoints', level: 4, base: 10, xp: 1154 }]);
+  [{ skill: 'attack', level: 40, base: 40, xp: 37224 }, { skill: 'hitpoints', level: 10, base: 10, xp: 1154 }]);
+check('level column is the base level (hitpoints = level, never hp left)', SpectatorPanels.skillRows([{ id: 3, level: 4, base: 10, xp: 1154 }])[0].level, 10);
+check('level falls back to current without base', SpectatorPanels.skillRows([{ id: 0, level: 40, xp: 37224 }])[0].level, 40);
 check('unknown stat id', SpectatorPanels.skillRows([{ id: 30, level: 1, base: 1, xp: 0 }]), [{ skill: 'stat30', level: 1, base: 1, xp: 0 }]);
 check('totals sum base levels, not current', SpectatorPanels.skillTotals(SpectatorPanels.skillRows([{ id: 0, level: 45, base: 40, xp: 37224 }, { id: 3, level: 4, base: 10, xp: 1154 }])),
   { skill: 'Total', level: 50, xp: 38378 });
