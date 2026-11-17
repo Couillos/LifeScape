@@ -103,6 +103,10 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         return;
     }
     let mut dirty = false;
+    // An operator ambition switch filed by the CLI (`brain_operator`).
+    if crate::brain_operator::apply_pending(&mut life, &live) {
+        dirty = true;
+    }
     // A market maker at its capital target leaves every other activity
     // for good and quotes its slice (plan marché Q6).
     if crate::market_maker::maybe_switch(job, &mut life) {

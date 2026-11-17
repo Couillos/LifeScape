@@ -63,6 +63,7 @@ const META: &[Meta] = {
         ("market_maker", "teneur de marché : capital d'abord (argent), puis cotation à la fontaine", &[], Coins),
         ("generalist", "généraliste : compétence la plus basse", &[], Empty),
         ("overall", "premier au classement overall : total level puis XP", &[], Empty),
+        ("alcher", "alchimiste : natures et objets achetés au marché, alchés du plus rentable au moins rentable", &[], Empty),
     ]
 };
 

@@ -159,7 +159,10 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     // Producers respond to bids (point 7): a public bid this bot can make
     // at a profit worth twice its time preempts the milestone, the
     // ambition untouched (`brain_bids`, `planner::bid_response`).
-    let answered = (!quoting).then(|| crate::brain_bids::bid_goal_for(life, live)).flatten()
+    // The alchemist (operator, 2026-11-18) answers no bid: its alchemy
+    // first, else the planner's money that funds its buys.
+    let alcher = lifescape_planner::is_alcher(life);
+    let answered = (!quoting && !alcher).then(|| crate::brain_bids::bid_goal_for(life, live)).flatten()
         // Alchemy (2026-11-14): a stock that alchs for more than it sells,
         // runes in hand, worth the bot's time like a bid.
         .or_else(|| crate::brain_alch::alch_goal_for(life, live))

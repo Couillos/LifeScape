@@ -16,6 +16,15 @@ servi sur `run/pathfinding.sock`. Les workers ne portent que le handle
 CLI (`src/cli.rs`, `src/main.rs`, le daemon démarre seul) :
 `open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|redeploy|shutdown|daemon|direct|map|route|replay-nav|dump-transitions|reload-nav|nav-stats`.
 
+`ambition <compte> alcher` (2026-11-18, `src/brain_operator.rs`) : donne au
+compte l'ambition opérateur alchimiste (`planner/src/alcher.rs`, tenue pour
+de bon, jamais tirée par la flotte). Appliquée au prochain passage du
+cerveau sur ce compte au repos : nœuds ouverts abandonnés (`role:alcher`).
+L'alchimiste ne répond à aucune enchère : son but d'alchimie d'abord (temps
+non décompté, `brain_alch::time_rate`), achats de natures et de lots sous le
+net d'alch par profit décroissant (`market_pass`), sinon de l'argent qui
+finance ces achats.
+
 `verify` (W2) : runner de scénarios déclaratifs (`scenarios/*.json`, lus avec
 `lifescape-json`). Setup série via `admin` (cheats + `bank_all`, effets
 vérifiés), runs parallèles sur comptes distincts (N clampé à 20 D38),

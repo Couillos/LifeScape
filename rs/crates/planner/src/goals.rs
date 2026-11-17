@@ -111,6 +111,11 @@ pub fn draw_goal_origin_with(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_s
     if ambition.kind == crate::ambition::OVERALL {
         return lowest_skill_goal(OVERALL_SKILLS, level_of, &avoid, life.seed, life.history.len() as u64).map(|goal| (goal, None)).ok_or(NoGoal::NothingTrainable);
     }
+    // The alchemist (operator, 2026-11-18): the brain draws its alchemy
+    // goal first (`brain_alch`); with nothing to alch, money funds the buys.
+    if ambition.kind == crate::ambition::ALCHER {
+        return Ok((GoalKind::MakeMoney, None));
+    }
     if ambition.kind != crate::ambition::GENERALIST {
         let cooled = crate::cooldown::cooled_keys(&life.history, ticks_since);
         let sick = |method: &str| quarantined(method) || crate::cooldown::method_cooled(&cooled, method);

@@ -697,6 +697,13 @@ impl Orchestrator {
                 return self.call_job(account, method, &args);
             }
             "methods" => return self.methods_job(account),
+            "ambition" => {
+                let kind = request.get("kind").as_str().unwrap_or("");
+                return match crate::brain_operator::request(account, kind) {
+                    Ok(()) => object(vec![("ok", Value::Bool(true)), ("pending", str_value(kind))]),
+                    Err(error) => object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]),
+                };
+            }
             "rares" => {
                 let accounts: Vec<String> = self.jobs.lock().unwrap().keys().cloned().collect();
                 return match crate::rares_cmd::rares_lines(&accounts) {

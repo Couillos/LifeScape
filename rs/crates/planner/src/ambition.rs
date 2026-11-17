@@ -41,6 +41,9 @@ pub const GENERALIST: &str = "generalist";
 /// fleet, never redrawn, changed nor repaired; it draws the lowest F2P
 /// skill (`goals::OVERALL_SKILLS`), the cheapest level of the account.
 pub const OVERALL: &str = "overall";
+/// Operator-only alchemist (user 2026-11-18, `alcher`): no ladder, held
+/// for good.
+pub const ALCHER: &str = "alcher";
 /// `why` prefix of an operator-pinned ambition (`pinned_ambition`).
 pub const PIN_WHY: &str = "operator:pin:";
 
@@ -276,14 +279,14 @@ pub fn pinned_ambition(skill: &str, level: u8, now: &BotNow, seed: u64, demand: 
 /// a skill pin, or an operator-only kind held for good (`overall`, the
 /// market maker's playing phase).
 pub fn pinned(ambition: &Ambition) -> bool {
-    ambition.pin.is_some() || ambition.kind == OVERALL || ambition.kind == crate::market_maker::MARKET_MAKER_KIND
+    ambition.pin.is_some() || ambition.kind == OVERALL || ambition.kind == ALCHER || ambition.kind == crate::market_maker::MARKET_MAKER_KIND
 }
 
 /// Kinds with no ladder that draw their goals directly (`goals`): the
 /// generalist and the overall highscore. Never "achieved", never refused
 /// for want of a milestone.
 pub fn ladderless(kind: &str) -> bool {
-    kind == GENERALIST || kind == OVERALL
+    kind == GENERALIST || kind == OVERALL || kind == ALCHER
 }
 
 /// Lift the pin once its skill reaches the level; returns the lifted pin

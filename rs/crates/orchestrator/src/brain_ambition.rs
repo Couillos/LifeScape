@@ -203,7 +203,7 @@ fn build(account: &str, bot: &FleetBot, now: &BotNow, first: (String, String), i
 }
 
 /// What the ambition reads of the bot, borrowed from the live snapshot.
-fn with_now<T>(live: &Value, body: impl FnOnce(&BotNow) -> T) -> T {
+pub(crate) fn with_now<T>(live: &Value, body: impl FnOnce(&BotNow) -> T) -> T {
     let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
     let held = |item: &str| live_count(live, item);
     body(&BotNow { level_of: &level_of, coins: live_coins(live), held: &held })

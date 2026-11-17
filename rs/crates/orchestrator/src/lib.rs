@@ -46,6 +46,7 @@ pub mod brain_grace;
 pub mod brain_filler;
 pub mod brain_launch;
 pub mod brain_locks;
+pub mod brain_operator;
 pub mod brain_loot;
 pub mod brain_market;
 pub mod brain_npc_sale;

@@ -179,10 +179,22 @@ fn own_coin_rate(life: &Life, live: &Value) -> f64 {
     crate::brain_d17::coin_rate(&crate::brain_d17::BotKey { level_of: &level_of, combat: crate::brain_plan::live_combat(live), quests_done: &quests, ironman: life.profile.ironman })
 }
 
+/// Coins one tick of this caster's time costs an alchemy: its D17, zero
+/// for the alchemist (alchemy is its mission, user 2026-11-18: every
+/// cast that nets coins is worth it, the best margins first).
+fn time_rate(life: &Life, live: &Value) -> f64 {
+    if lifescape_planner::is_alcher(life) {
+        0.0
+    } else {
+        own_coin_rate(life, live)
+    }
+}
+
 /// The alchemy goal of a draw: the best stock to alch, worth the bot's
-/// time like a bid (`bid_response::preempts` numbers), its nature runes
-/// held for at least `MIN_ALCH_CASTS`. Origin `alch:<object>`: no
-/// milestone, the ambition untouched.
+/// time like a bid (`bid_response::preempts` numbers; the alchemist
+/// counts no time, `time_rate`), its nature runes held for at least
+/// `MIN_ALCH_CASTS`. Origin `alch:<object>`: no milestone, the ambition
+/// untouched.
 pub(crate) fn alch_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, String)> {
     let _phase = crate::cpu_profile::phase("alch.goal_for");
     let (_, pick) = best_for(life, live)?;
@@ -190,10 +202,11 @@ pub(crate) fn alch_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, Stri
     if casts < lifescape_planner::alchemy::MIN_ALCH_CASTS {
         return None;
     }
-    let own_rate = own_coin_rate(life, live);
+    let own_rate = time_rate(life, live);
     let rate = pick.profit_each / lifescape_planner::alchemy::CAST_TICKS;
     let profit = casts as f64 * (pick.profit_each - lifescape_planner::alchemy::CAST_TICKS * own_rate);
-    if rate < own_rate.max(lifescape_planner::market_fit::MIN_COIN_RATE) || profit < lifescape_planner::bid_response::BID_MIN_PROFIT {
+    let too_slow = !lifescape_planner::is_alcher(life) && rate < own_rate.max(lifescape_planner::market_fit::MIN_COIN_RATE);
+    if too_slow || profit < lifescape_planner::bid_response::BID_MIN_PROFIT {
         return None;
     }
     crate::logln!(
@@ -322,7 +335,7 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
     if let Some(id) = obj_id(NATURE_RUNE) {
         claim(&job.account, id);
     }
-    let own_rate = own_coin_rate(life, live);
+    let own_rate = time_rate(life, live);
     let coins = crate::brain_gear::free_coins(job, None);
     let natures = natures_held(live);
     let mut placed = 0;

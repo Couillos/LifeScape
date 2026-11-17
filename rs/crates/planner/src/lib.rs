@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod activity;
+pub mod alcher;
 pub mod ambition;
 pub mod ambition_catalog;
 pub mod ambition_fleet;
@@ -109,7 +110,7 @@ pub use ambition::{
     achieved, ambition_from_value, describe as describe_ambition, ambition_to_value, drop_stale_products, extend as extend_ambition, goal_for_milestone, mark_drawn, may_change, new_ambition,
     new_ambition_extended, next_milestone, open_count, pinned, pinned_ambition, release_pin, AmbitionError, BotNow, Pin,
     on_goal_closed, refresh, revise, Ambition, CloseOutcome, Milestone, MilestoneStatus, Revision, Stamp, Target,
-    AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS, OVERALL,
+    AMBITION_CHANGE_TICKS, ALCHER, GENERALIST, MILESTONE_MAX_BLOCKS, OVERALL,
 };
 pub use ambition_catalog::{kind_weights, DemandItem, KindDemand, GROUPS};
 pub use market_maker::{become_quoting, maker_post, maker_role, quoting, switch_due, MakerPhase, MakerRole, MAKER_POSTS, MAKE_METHOD, MARKET_MAKER_KIND, MAKER_ROLE_CAUSE};
@@ -124,3 +125,4 @@ pub use space::{
     Fallback, ItemEcon, cleanup_cooling, cleanup_needed, cleanup_stalled, janitor_stalled, d17_order, fallback_for, iron_may_use, launch_allowed,
     market_leg, needs_cleanup, reserve_floor, triage_bank, BANK_TYPE_LIMIT, CLEANUP_RETRY_SECS, CLEANUP_SHORT_TAG, FOOD_KEEP_MIN,
 };
+pub use alcher::{become_alcher, is_alcher, ALCHER_ROLE_CAUSE};

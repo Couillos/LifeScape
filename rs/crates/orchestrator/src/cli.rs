@@ -700,7 +700,7 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|await|verify|check-method|economy|bid-why|fund-makers|purge-measures-v1|rates-rebuild|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|close|redeploy|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ... (run ... --wait [--timeout-s N] [--json]; await <compte> [--timeout-s N] [--json]; verify [ids|--all] [--parallel N])");
+        println!("usage: orchestrator open|run|await|verify|check-method|economy|bid-why|fund-makers|purge-measures-v1|rates-rebuild|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|ambition|close|redeploy|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ... (run ... --wait [--timeout-s N] [--json]; await <compte> [--timeout-s N] [--json]; verify [ids|--all] [--parallel N]; ambition <compte> alcher)");
         return 2;
     }
     if argv[1].as_str() == "dump-npc-ranges" {
@@ -779,6 +779,12 @@ pub fn cli(argv: &[String]) -> i32 {
                 ("script", str_value(&script)),
                 ("args", args),
             ]));
+            println!("{}", json::stringify_pretty(&reply));
+            if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
+        }
+        "ambition" => {
+            let kind = argv.get(3).cloned().unwrap_or_default();
+            let reply = send(object(vec![("cmd", str_value("ambition")), ("account", str_value(&account)), ("kind", str_value(&kind))]));
             println!("{}", json::stringify_pretty(&reply));
             if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
         }
