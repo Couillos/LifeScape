@@ -37,6 +37,7 @@ pub mod bank_full;
 pub mod bans;
 pub mod chain_spec;
 pub mod combat_bank;
+pub mod curse_camp;
 pub mod cycle;
 pub mod danger;
 pub mod essence_mine;

@@ -22,11 +22,13 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
-
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
+pub use crate::kit::curse_camp::{
+    all_taken, choose_step, curse_refusal, CastBudget, CastSpent, CurseFoes, CurseRefusal, CurseStep, CAST_WAIT_TICKS, CURSE_LAND_TICKS,
+    FINISH_TICKS, FOE_RADIUS, LOWERED_BAN_TICKS, PICKS_PER_CAST, TAKEN_BAN_TICKS,
+};
 use crate::kit::magic::{spell_com, wield_staff_for};
 use crate::kit::spell_load::{run_casts, SpellLoad};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
@@ -34,107 +36,14 @@ use crate::{ScriptError, ScriptResult};
 
 /// Magic stat id (server order: attack 0 .. magic 6).
 pub const MAGIC_STAT: u8 = 6;
-/// Ticks a cast gets to show its XP (walk into range, 5-tick delay).
-pub const CURSE_LAND_TICKS: u64 = 20;
-/// Ticks a lowered foe stays out of the picks (one NPC regen period).
-pub const LOWERED_BAN_TICKS: u64 = 100;
-/// Ticks a foe taken by someone else, or unreachable, stays out.
-pub const TAKEN_BAN_TICKS: u64 = 30;
-/// Ticks a retaliating foe gets to die before the loop moves on.
-pub const FINISH_TICKS: u64 = 150;
 /// Re-click period while finishing an aggressor (melee keeps swinging).
 const FINISH_RECLICK_TICKS: u64 = 25;
-/// Picks one cast may try before it fails loud.
-const PICKS_PER_CAST: u32 = 12;
-/// Tiles from the bot within which a camp NPC is a candidate.
-const FOE_RADIUS: i32 = 15;
-
-/// Server answer to a curse click, by what the loop does about it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CurseRefusal {
-    /// The foe's stat is already lowered, or it is held or immune: out
-    /// until it regenerates.
-    Lowered,
-    /// Another foe attacks us (single-way camp): deal with it first.
-    UnderAttack,
-    /// Another player fights it, or it is out of reach: skip it.
-    Taken,
-}
-
-/// Classify one server line after a curse click (`None`: not a refusal).
-pub fn curse_refusal(line: &str) -> Option<CurseRefusal> {
-    let lowered = line.to_lowercase();
-    if lowered.contains("has already been lowered") || lowered.contains("has already been weakened") || lowered.contains("already held by a magical force") || lowered.contains("currently immune") {
-        Some(CurseRefusal::Lowered)
-    } else if lowered.contains("already under attack") {
-        Some(CurseRefusal::UnderAttack)
-    } else if lowered.contains("someone else is fighting") || lowered.contains("can't reach that") || lowered.contains("not after you") {
-        Some(CurseRefusal::Taken)
-    } else {
-        None
-    }
-}
-
 /// The F2P NPC debuff `spell` and its level (`None`: no such debuff in
 /// the dump: a strike, a members curse, a typo).
 pub fn debuff_level(spell: &str) -> Option<i64> {
     knowledge::spells::by_name(spell).into_iter().find(|row| !row.members && row.npc_debuff()).map(|row| row.level)
 }
 
-/// Per-run memory of the camp's foes (never persisted): slots out of the
-/// picks until a tick, and the slots our casts touched.
-#[derive(Debug, Default, Clone)]
-pub struct CurseFoes {
-    banned: HashMap<u16, u64>,
-    lowered: HashMap<u16, u64>,
-}
-
-impl CurseFoes {
-    /// Keep `slot` out of the picks until `until`.
-    pub fn ban(&mut self, slot: u16, until: u64) {
-        let known = self.banned.entry(slot).or_insert(until);
-        *known = (*known).max(until);
-    }
-
-    /// The foe's stat is down (a refusal said so): finish it if it
-    /// attacks, never cast on it until it regenerates.
-    pub fn mark_lowered(&mut self, slot: u16, now: u64) {
-        self.lowered.insert(slot, now + LOWERED_BAN_TICKS);
-        self.ban(slot, now + LOWERED_BAN_TICKS);
-    }
-
-    pub fn is_lowered(&self, slot: u16, now: u64) -> bool {
-        self.lowered.get(&slot).is_some_and(|until| *until > now)
-    }
-
-    pub fn is_banned(&self, slot: u16, now: u64) -> bool {
-        self.banned.get(&slot).is_some_and(|until| *until > now)
-    }
-}
-
-/// What the loop does next.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CurseStep {
-    /// A lowered foe attacks us: melee it down first.
-    Finish(u16),
-    /// Cast on this foe.
-    Cast(u16),
-    /// No candidate in sight: walk to the camp or wait.
-    Search,
-}
-
-/// Pure choice: an aggressor first (the only legal target while it hits
-/// us), finished when lowered; else the nearest camp foe not banned.
-pub fn choose_step(aggressor: Option<u16>, candidates: &[(u16, i32, i32)], here: (i32, i32), foes: &CurseFoes, now: u64) -> CurseStep {
-    if let Some(slot) = aggressor {
-        return if foes.is_lowered(slot, now) { CurseStep::Finish(slot) } else { CurseStep::Cast(slot) };
-    }
-    candidates
-        .iter()
-        .filter(|(slot, x, z)| !foes.is_banned(*slot, now) && (x - here.0).abs().max((z - here.1).abs()) <= FOE_RADIUS)
-        .min_by_key(|(slot, x, z)| ((x - here.0).abs() + (z - here.1).abs(), *slot))
-        .map_or(CurseStep::Search, |(slot, _, _)| CurseStep::Cast(*slot))
-}
 
 /// Camp foes another caster already holds (tour 3 point 4, plan P7c):
 /// one fighting another player (`npc_engaged_by_other`) or showing the
@@ -145,13 +54,6 @@ pub fn taken_foe(bot: &Bot, slot: u16, spell: &str) -> bool {
     knowledge::spells::impact_graphic(spell).is_some_and(|graphic| bot.world.npc_showed_graphic(slot, &[graphic], LOWERED_BAN_TICKS)) || bot.npc_engaged_by_other(slot)
 }
 
-/// Pure: no camp foe is left to curse (`workable` 0) and other casters
-/// hold some (`by_others`): the camp is contended, never a broken method
-/// (typed `contended:<site>` when other players are there). Foes only
-/// our own casts lowered wait for their regeneration instead.
-pub fn all_taken(by_others: usize, workable: usize) -> bool {
-    by_others > 0 && workable == 0
-}
 
 fn magic_xp(bot: &Bot) -> i32 {
     bot.world.stats.get(&MAGIC_STAT).map(|(_, xp)| *xp).unwrap_or(0)
@@ -207,7 +109,8 @@ fn reach_camp(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot) -> Resu
 fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: &str, foes: &mut CurseFoes) -> Result<(), ScriptError> {
     let com = spell_com(bot, spell)?;
     let names: Vec<&str> = spot.npc_names.to_vec();
-    for _ in 0..PICKS_PER_CAST {
+    let mut budget = CastBudget::new(bot.world.ticks);
+    let spent = loop {
         check_events(bot)?;
         let now = bot.world.ticks;
         let mut candidates = bot.npcs_named(&names);
@@ -222,9 +125,18 @@ fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: 
             return Err(contended);
         }
         let step = choose_step(attacker, &candidates, (bot.world.x, bot.world.z), foes, now);
+        if let Err(spent) = budget.step(step, now) {
+            break spent;
+        }
         let slot = match step {
             CurseStep::Search => {
+                let before = bot.world.ticks;
                 reach_camp(bot, spot)?;
+                // The tick bound only ends a loop whose ticks move: an
+                // instant walk refusal still waits one tick.
+                if bot.world.ticks == before {
+                    bot.pump(1)?;
+                }
                 continue;
             }
             CurseStep::Finish(slot) => {
@@ -248,20 +160,25 @@ fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: 
             }
             refusal = bot.world.messages.get(seen..).unwrap_or(&[]).iter().find_map(|line| curse_refusal(line));
         }
+        budget.refused();
         let now = bot.world.ticks;
         match refusal {
             Some(CurseRefusal::Lowered) => foes.mark_lowered(slot, now),
             Some(CurseRefusal::Taken) | None => foes.ban(slot, now + TAKEN_BAN_TICKS),
             Some(CurseRefusal::UnderAttack) => {}
         }
-    }
+    };
     // Every foe already weakened or under attack while other players work
     // the camp: contention (D4, tour 2 P2-3c), never a broken method.
     if let Some(contended) = crate::kit::site::contended_error(bot) {
         return Err(contended);
     }
     let last = bot.world.messages.last().cloned().unwrap_or_default();
-    Err(ScriptError::Failed(format!("no {} foe took {spell} in {PICKS_PER_CAST} picks at {:?} (last line {last:?})", spot.key, bot.position())))
+    let bound = match spent {
+        CastSpent::Picks => format!("{PICKS_PER_CAST} refused casts"),
+        CastSpent::Ticks => format!("{CAST_WAIT_TICKS} ticks"),
+    };
+    Err(ScriptError::Failed(format!("no {} foe took {spell} in {bound} at {:?} (last line {last:?})", spot.key, bot.position())))
 }
 
 /// `curse <spot> --spell <confuse|weaken|curse|bind> [count] [--level

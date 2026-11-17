@@ -1,4 +1,4 @@
-use super::{all_taken, choose_step, curse_refusal, debuff_level, run_curse, taken_foe, CurseFoes, CurseRefusal, CurseStep, LOWERED_BAN_TICKS, MAGIC_STAT};
+use super::{all_taken, choose_step, CastBudget, CAST_WAIT_TICKS, PICKS_PER_CAST, curse_refusal, debuff_level, run_curse, taken_foe, CurseFoes, CurseRefusal, CurseStep, LOWERED_BAN_TICKS, MAGIC_STAT};
 
 /// The server's lines (`player_magic.rs2`, `player_combat.rs2`) by what
 /// the loop does about them.
@@ -108,4 +108,28 @@ fn foes_cursed_or_fought_by_others_are_skipped() {
     assert!(all_taken(2, 0), "only foes other casters hold: contended");
     assert!(!all_taken(0, 0), "only our own lowered foes: wait for them");
     assert!(!all_taken(2, 1), "a free foe left");
+}
+
+/// alice_knight 2026-11-17 (Champions' Guild, 3 cows): every cow lowered
+/// by our own casts, the loop's finish and search steps ate the 12 picks
+/// and the run failed in ~130 ticks ("no cows foe took curse in 12
+/// picks", last line "already been weakened") while the cows regenerate
+/// within 100. Only a refused cast spends a pick; waiting for the regen
+/// is bounded in ticks.
+#[test]
+fn waiting_for_the_regen_spends_no_pick() {
+    let mut budget = CastBudget::new(1000);
+    for tick in 0..40 {
+        assert!(budget.step(CurseStep::Search, 1000 + tick * 5).is_ok(), "search waits, never a pick");
+        assert!(budget.step(CurseStep::Finish(7), 1000 + tick * 5).is_ok(), "finishing an aggressor is no pick");
+    }
+    let mut refused = CastBudget::new(1000);
+    for _ in 0..PICKS_PER_CAST {
+        assert!(refused.step(CurseStep::Cast(7), 1010).is_ok());
+        refused.refused();
+    }
+    assert!(refused.step(CurseStep::Cast(7), 1010).is_err(), "twelve refused casts fail loud");
+    let mut late = CastBudget::new(1000);
+    assert!(late.step(CurseStep::Search, 1000 + CAST_WAIT_TICKS).is_err(), "no XP past the regen bound fails loud");
+    assert!(CAST_WAIT_TICKS > LOWERED_BAN_TICKS, "the bound outlasts one regeneration");
 }
