@@ -328,3 +328,12 @@ p. ex. `check_dispose`) n'est pas un verdict : re-file (2 fois au plus),
 jamais « still quarantined ». Au chargement de `method_health.json`, une
 quarantaine que la règle des 3 comptes ne poserait pas (fiches d'avant P4,
 `accounts {}`) est levée en probation (compteurs gardés).
+
+Avoirs live lus par id (tour 3, point 7) : `live_items::live_units` /
+`entry_is` comptent une pile `inv`/`bank`/`worn` par son id d'objet (son
+billet compris), le nom seulement pour une entrée sans id ; plusieurs
+objets partagent un affichage (« Emerald amulet » enfilée et non enfilée).
+Lecteurs : `brain_plan::raw_holdings_count`, `live_owned`,
+`brain_ambition::live_count`. Une ligne de rapport (nom affiché) ne compte
+pour la cible d'un nœud que si la méthode du run la nomme ainsi
+(`brain_fold::gained_toward`, `rates_names::debug_in`).

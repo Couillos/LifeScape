@@ -118,9 +118,13 @@ pub(crate) fn gained_toward(report: &Value, kind: &NodeKind) -> i64 {
         NodeKind::HaveCoins { .. } | NodeKind::MakeMoney => "coins",
         _ => return 0,
     };
-    // Report rows carry the display name ("Coins", "Yew logs").
+    // Report rows carry the display name ("Coins", "Yew logs"), shared by
+    // homonyms ("Emerald amulet": strung and unstrung): a display row is
+    // the target only when the run's method names it so (`debug_in`, the
+    // guides' rule, tour 3 point 7).
     let display = lifescape_gamedata::objs_by_name(wanted).first().and_then(|obj| obj.display);
-    let named = |name: &str| name == wanted || Some(name) == display;
+    let method = report.get("planner_method").as_str().unwrap_or("");
+    let named = |name: &str| name == wanted || (Some(name) == display && crate::rates_names::debug_in(method, name, false) == wanted);
     report
         .get("items")
         .as_arr()
@@ -590,6 +594,13 @@ mod tests {
         let alch = report(vec![row("Coins", 1216), row("Bronze platebody", -19)]);
         assert_eq!(super::gained_toward(&alch, &lifescape_planner::NodeKind::HaveCoins { amount: 40_000 }), 1216);
         assert_eq!(super::gained_toward(&alch, &obtain), 0, "another object is no progress");
+        // Tour 3 point 7: the display row "Emerald amulet" is the strung
+        // amulet for the stringing run, the UNSTRUNG one for a jewelry
+        // smelt: homonyms are told apart by the run's method.
+        let shown = |method: &str| lifescape_json::object(vec![("planner_method", lifescape_json::str_value(method)), ("items", lifescape_json::Value::Arr(vec![row("Emerald amulet", 1)]))]);
+        assert_eq!(super::gained_toward(&shown("string:unstrung_emerald_amulet"), &obtain), 1);
+        let unstrung = lifescape_planner::NodeKind::ObtainItems { item: "unstrung_emerald_amulet".to_string(), count: 8 };
+        assert_eq!(super::gained_toward(&shown("string:unstrung_emerald_amulet"), &unstrung), 0, "the stringing run consumed it");
         let progressed = super::gained_toward(&strung, &obtain) > 0;
         assert_eq!(verdict("goal_reached", None, &[], false, false, progressed), Verdict::EngagementEnd);
         assert!(matches!(verdict("goal_reached", None, &[], false, false, false), Verdict::Failure(_)), "nothing brought stays short");
