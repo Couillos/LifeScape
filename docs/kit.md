@@ -634,5 +634,13 @@ ou le bot), la moins chère gagne, une banque sans route jamais ; sans
 service (aucun coût) l'ordre Manhattan reste. Mine du marais de Lumbridge
 (3244,3165) : Draynor (route 170), plus Al Kharid (467 à pied). Les deux
 choix écartent un guichet couvert par un chasseur qui tuerait le bot tant
-qu'un sûr existe. Reste Manhattan : `gamedata::danger::site_bank` (exigence
-de combat d'un site) et `spots::nearest_bank_at` (pickers de spots).
+qu'un sûr existe.
+
+Tour 3 (point 2) : la banque d'un SITE se lit dans la table hors ligne
+`gamedata::site_banks` (voir `gamedata.md`) : `site::site_bank` (site du
+cerveau), `spots::nearest_bank_at` (pickers de spots, roue, péage),
+`foes` (camp de combat) et `danger::site_bank` (exigence de combat) lisent
+la même banque, au coût de route réel ; la garde de trajet d'un spot de
+pêche compare ce coût à `danger::BANK_TREK_LIMIT` (250, coût de route).
+Seule la banque du BOT (`bank::nearest_bank`, position live quelconque)
+reste chiffrée en direct par `bank_route`.

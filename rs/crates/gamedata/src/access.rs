@@ -187,6 +187,12 @@ fn areas() -> Vec<Area> {
     ]
 }
 
+/// Ground tiles outside every gated area's door (`surface_of`): sites of
+/// the bank table (`site_banks::catalogue`).
+pub fn area_doors() -> Vec<(i64, i64, i64)> {
+    areas().into_iter().filter_map(|area| area.door).collect()
+}
+
 /// Gates of the site (x, z, level): the most specific area first, then
 /// the generic underground gate. Empty = open. The Wilderness is no gate
 /// (user 2026-11-16: accessible to every bot, always).
@@ -212,7 +218,9 @@ pub fn surface_of(x: i64, z: i64, level: i64) -> (i64, i64, i64) {
     if let Some(door) = areas().into_iter().find(|area| inside(area, x, z, level)).and_then(|area| area.door) {
         return door;
     }
-    if level > 0 && crate::danger::site_bank(x, z, level).is_none() {
+    // No F2P booth stands on an upper floor (rev 274): an upstairs site
+    // reads at the ground tile below, whatever bank its route reaches.
+    if level > 0 && !crate::banks::all_banks().iter().any(|bank| !bank.members && bank.level == level) {
         return (x, z, 0);
     }
     (x, z, level)

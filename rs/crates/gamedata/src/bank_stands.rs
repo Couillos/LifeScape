@@ -57,6 +57,35 @@ pub fn client_stands(x: i64, z: i64, level: i64) -> Option<&'static [(i64, i64)]
     table().get(&(x, z, level)).map(Vec::as_slice)
 }
 
+/// One F2P bank: its name, its first booth and that booth's first client
+/// stand (where a route to the bank ends).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BankEntry {
+    pub name: String,
+    pub booth: (i64, i64, i64),
+    pub stand: (i64, i64),
+}
+
+/// Every F2P bank of the table, in file order (one entry per bank, not
+/// per booth): the candidates of `site_banks`.
+pub fn bank_entries() -> Vec<BankEntry> {
+    let Ok(doc) = lifescape_json::parse(RAW) else { return Vec::new() };
+    let mut out = Vec::new();
+    for bank in doc.get("banks").as_arr().map(Vec::as_slice).unwrap_or(&[]) {
+        let Some(name) = bank.get("name").as_str() else { continue };
+        let first = bank.get("booths").as_arr().and_then(|booths| {
+            booths.iter().find_map(|booth| {
+                let booth_tile = (booth.get("x").as_i64()?, booth.get("z").as_i64()?, booth.get("level").as_i64()?);
+                pairs(booth.get("client")).first().map(|stand| (booth_tile, *stand))
+            })
+        });
+        if let Some((booth, stand)) = first {
+            out.push(BankEntry { name: name.to_string(), booth, stand });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::client_stands;

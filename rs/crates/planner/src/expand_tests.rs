@@ -478,10 +478,12 @@ fn site_fallback_never_revives_a_refused_purchase() {
 }
 
 /// 2026-11-13: an object the bot cannot make (no workable production)
-/// with a covered ask is a pure buy: the brain places it and waits.
+/// with a covered ask is a pure buy: the brain places it and waits. Tour
+/// 3 point 2: the net now has a ground spawn in route reach (Wilderness,
+/// 213 tiles from Edgeville): the harpoon (F2P shop only) is the case.
 #[test]
 fn unmakeable_covered_ask_is_a_pure_buy() {
-    let mut nodes = expand_goal(&GoalKind::Obtain { item: "net".to_string(), count: 1 }, &profile());
+    let mut nodes = expand_goal(&GoalKind::Obtain { item: "harpoon".to_string(), count: 1 }, &profile());
     let mut ctx = ReadyCtx::blind(0.72);
     ctx.coins = 500;
     ctx.price = 5;

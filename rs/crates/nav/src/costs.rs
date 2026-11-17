@@ -249,6 +249,23 @@ pub(crate) fn plan_costs_with(
     shared: &SharedEdges,
     memo: Option<&crate::pocket::PocketMemo>,
 ) -> Vec<Option<u32>> {
+    plan_costs_capped(world, tables, from, dests, options, shared, memo, u32::MAX)
+}
+
+/// `plan_costs_with` whose horizon never exceeds `cap`: a target priced
+/// past it reads `None` (the offline bank table, `site_banks`, prices
+/// only routes that can still win).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_costs_capped(
+    world: &StaticWorld,
+    tables: &Tables,
+    from: Tile,
+    dests: &[Tile],
+    options: &NavOptions,
+    shared: &SharedEdges,
+    memo: Option<&crate::pocket::PocketMemo>,
+    cap: u32,
+) -> Vec<Option<u32>> {
     let mut search = Search {
         world,
         tables,
@@ -305,7 +322,7 @@ pub(crate) fn plan_costs_with(
     dist.insert(from.key(), 0);
     heap.push((Reverse(0), Reverse(key_of(from)), false));
     let mut visits = 0usize;
-    let horizon = horizon(from, dests);
+    let horizon = horizon(from, dests).min(cap);
     let mut pending = goal_floors(shared, dests, &settle);
     while let Some((Reverse(cost), Reverse(found), opened)) = heap.pop() {
         let known = if opened { &dist_open } else { &dist };

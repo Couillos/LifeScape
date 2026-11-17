@@ -18,9 +18,12 @@ pub const LETHAL_LEVEL: i64 = 5;
 /// Slack past `huntrange + wanderrange` (the hunter strays `wanderrange`
 /// off its spawn, then hunts `huntrange` around itself).
 pub const DANGER_MARGIN: i64 = 1;
-/// Farthest a gather site may sit from its bank (Manhattan), shared by
-/// the planner's requirement and the scripts' pickers.
-pub const BANK_TREK_LIMIT: i64 = 150;
+/// Farthest a gather site may sit from its bank, in ROUTE cost (the
+/// planner's tiles, doors and rides: `site_banks`), shared by the
+/// planner's requirement and the scripts' pickers. Tour 3 point 2: was
+/// 150 Manhattan; 250 keeps every site the old trek reached and a route
+/// serves (the swamp mine: Draynor at 170).
+pub const BANK_TREK_LIMIT: i64 = 250;
 /// Requirement of a place no combat level makes safe (no bank in reach).
 /// The Wilderness is never one (user 2026-11-16: "le wilderness doit être
 /// accessible à tous, toujours") : its hunters count like any other.
@@ -102,21 +105,19 @@ pub fn required_combat_at(x: i64, z: i64, level: i64) -> u8 {
     hunters().iter().filter(|hunter| covers(hunter, x, z, level)).map(passive_from).max().unwrap_or(3)
 }
 
-/// Nearest non-members bank on the same level, if within the trek limit.
-/// A Karamja site (no F2P bank on the island) reads from the Port Sarim
-/// dock its boat lands on (`access::mainland_anchor`).
+/// The bank serving a site: the cheapest ROUTE of the offline table
+/// (`site_banks`, tour 3 point 2: never the nearest booth as the crow
+/// flies), within the trek limit. A Karamja site reads from the Port
+/// Sarim dock its boat lands on (`access::mainland_anchor`).
 pub fn site_bank(x: i64, z: i64, level: i64) -> Option<crate::banks::Bank> {
-    let (x, z, level) = crate::access::mainland_anchor(x, z, level);
-    static BANKS: OnceLock<Vec<crate::banks::Bank>> = OnceLock::new();
-    BANKS
-        .get_or_init(crate::banks::all_banks)
-        .iter()
-        .cloned()
-        .filter(|bank| !bank.members && bank.level == level)
-        .map(|bank| ((bank.x - x).abs() + (bank.z - z).abs(), bank))
-        .filter(|(trek, _)| *trek <= BANK_TREK_LIMIT)
-        .min_by_key(|(trek, _)| *trek)
-        .map(|(_, bank)| bank)
+    // A level with no F2P booth (an upper floor) has no bank of its own:
+    // its callers read it at the ground tile below (`access::surface_of`).
+    let (_, _, anchored) = crate::access::mainland_anchor(x, z, level);
+    static LEVELS: OnceLock<Vec<i64>> = OnceLock::new();
+    if !LEVELS.get_or_init(|| crate::banks::all_banks().into_iter().filter(|bank| !bank.members).map(|bank| bank.level).collect()).contains(&anchored) {
+        return None;
+    }
+    crate::site_banks::serving(x, z, level).filter(|served| served.cost <= BANK_TREK_LIMIT).map(|served| served.bank)
 }
 
 /// Combat a bot needs to work this site and bank its output: the site
@@ -222,9 +223,12 @@ mod tests {
         assert!(shrimp <= 15, "some shrimp water is safe from 15 on, got {shrimp}");
         assert!(in_wilderness(3090, 3540, 0));
         assert!(site_requirement(3090, 3540, 0) < NEVER, "the Wilderness is open to every bot (user 2026-11-16)");
-        // Deep north: the bank trek (`BANK_TREK_LIMIT`), the same rule as
-        // anywhere else, not the zone.
-        assert_eq!(site_requirement(3050, 3704, 0), NEVER);
+        // Deep north: the bank trek (`BANK_TREK_LIMIT`, a ROUTE cost since
+        // tour 3), the same rule as anywhere else, not the zone: 222 tiles
+        // from Edgeville is in reach, 281 is not, no route is never.
+        assert!(site_requirement(3050, 3704, 0) < NEVER);
+        assert_eq!(site_requirement(3079, 3767, 0), NEVER);
+        assert_eq!(site_requirement(3054, 3852, 0), NEVER);
     }
 
     #[test]

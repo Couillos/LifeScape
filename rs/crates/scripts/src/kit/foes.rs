@@ -22,7 +22,8 @@ fn hunt_anchor(bot: &Bot) -> (i32, i32, i32) {
 }
 
 fn nearest_bank_tile(anchor: (i32, i32, i32)) -> Option<(i32, i32, i32)> {
-    knowledge::banks::nearest_free_bank(i64::from(anchor.0), i64::from(anchor.1), i64::from(anchor.2)).map(|bank| (bank.level as i32, bank.x as i32, bank.z as i32))
+    // The bank serving the anchor by route (`site_banks`, tour 3 point 2).
+    knowledge::site_banks::serving(i64::from(anchor.0), i64::from(anchor.1), i64::from(anchor.2)).map(|served| (served.bank.level as i32, served.bank.x as i32, served.bank.z as i32))
 }
 
 /// NPC spawn clusters for a spot, on the anchor's level (the site's when
