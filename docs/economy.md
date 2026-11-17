@@ -919,7 +919,11 @@ profil, engagement en cours, graphe des tâches (statuts colorés,
 méthode choisie et alternatives avec coûts estimés, avancement,
 ticks dépensés), historique des issues. Page `economy`
 (`/api/economy`) : masse monétaire (holdings, hors Iron), deals
-(réglés, ratés, taux d'échec), top activités par profit/6000 ticks,
+(réglés, ratés, taux d'échec), top activités par profit/6000 ticks
+(guide money précalculé, `web_lives::guide_activities` : vue catalogue
+de `guides_store::current()`, mêmes chiffres que la page guides ; les
+10 lignes cotées sans condition impossible pour tous, avec famille,
+méthode, tranche, confiance ; jamais l'ancienne table `rates_profit`),
 tendances publiques 24 h (pénurie, momentum, score), teneurs de marché
 (tranche, phase, capital cible, capital, P&L, écart moyen coté, part du
 carnet, stock). Les bots ne lisent aucune de ces pages.

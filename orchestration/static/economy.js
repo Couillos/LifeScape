@@ -41,11 +41,17 @@ async function load() {
     '<tr><td class="left">' + (deals.total || 0) + '</td><td>' + (deals.settled || 0) +
     '</td><td>' + (deals.failed || 0) + '</td><td>' + failPct + '</td></tr>';
 
+  // Top activities: the money guide's catalogue (precomputed set, the
+  // guides page's figures): priced lines, none impossible for every bot.
   const activities = (payload.activities || []).slice(0, 10);
-  document.getElementById('activities').innerHTML =
-    '<tr><th class="left">method</th><th>band</th><th>profit</th></tr>' +
-    activities.map(row => '<tr><td class="left">' + row.method + '</td><td>' +
-      row.band + '-' + (row.band + 4) + '</td><td>' + number(row.profit) + '</td></tr>').join('');
+  const band = value => value > 0 ? value + '-' + (value + 4) : '-';
+  const confidence = row => !row.confidence ? '-' :
+    (row.confidence.measured ? 'measured' : 'estimated') + ' · n ' + (row.confidence.runs || 0);
+  document.getElementById('activities').innerHTML = payload.activities_pending ? '<tr><td class="muted">guides: first build running</td></tr>' :
+    '<tr><th class="left">family</th><th class="left">method</th><th>band</th><th>profit/6000</th><th class="left">confidence</th></tr>' +
+    activities.map(row => '<tr><td class="left">' + row.family + '</td><td class="left">' + row.method +
+      (row.style ? ' <span class="muted">' + row.style + '</span>' : '') + '</td><td>' + band(row.band) + '</td><td>' +
+      number(row.profit_6000) + '</td><td class="left">' + confidence(row) + '</td></tr>').join('');
 
   const trends = payload.trends || [];
   document.getElementById('trends').innerHTML =

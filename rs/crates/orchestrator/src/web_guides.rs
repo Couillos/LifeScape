@@ -378,7 +378,7 @@ pub fn guides_api(kind: GuideKind, query: &str) -> Value {
     }
 }
 
-fn site_text(site: Option<(i64, i64, i64)>) -> String {
+pub(crate) fn site_text(site: Option<(i64, i64, i64)>) -> String {
     site.map(|(x, z, level)| format!("{x},{z},{level}")).unwrap_or_default()
 }
 
@@ -451,7 +451,7 @@ fn priced_value(priced: bool, value: f64) -> Value {
     }
 }
 
-fn confidence_value(confidence: &Confidence) -> Value {
+pub(crate) fn confidence_value(confidence: &Confidence) -> Value {
     object(vec![
         ("measured", Value::Bool(confidence.measured)),
         ("runs", Value::Int(confidence.runs as i64)),

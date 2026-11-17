@@ -146,10 +146,41 @@ pub fn lives_response_in(run_dir: &std::path::Path) -> Value {
     object(vec![("ok", Value::Bool(true)), ("lives", Value::Arr(rows))])
 }
 
+/// Lines of the economy page's « top activities ».
+pub const TOP_ACTIVITIES: usize = 10;
+
+/// « Top activities » of the economy page: the money guide's catalogue
+/// read from the precomputed set (`guides_store`, the guides page's own
+/// figures, never the old rates profit table): its priced lines with no
+/// condition impossible for every bot (D22), best profit/6000 first,
+/// `TOP_ACTIVITIES` at most, with family, method, band and confidence.
+pub fn guide_activities(set: &crate::guides_store::GuideSet) -> Vec<Value> {
+    let Ok((rows, _)) = set.money(&lifescape_planner::guide_model::GuideFilter::default()) else { return Vec::new() };
+    let mut kept: Vec<&lifescape_planner::guide_model::MoneyRow> = rows
+        .iter()
+        .filter(|row| row.priced && row.profit_6000.is_finite() && !lifescape_planner::guide_feasible::conditions(&row.prereqs).iter().any(|condition| condition.impossible()))
+        .collect();
+    kept.sort_by(|left, right| right.profit_6000.total_cmp(&left.profit_6000));
+    kept.truncate(TOP_ACTIVITIES);
+    kept.iter()
+        .map(|row| {
+            object(vec![
+                ("family", str_value(row.family.as_str())),
+                ("method", str_value(&row.method)),
+                ("style", str_value(&row.style)),
+                ("site", str_value(&crate::web_guides::site_text(row.site))),
+                ("band", Value::Int(row.band)),
+                ("profit_6000", Value::Float(row.profit_6000)),
+                ("confidence", crate::web_guides::confidence_value(&row.confidence)),
+            ])
+        })
+        .collect()
+}
+
 /// Economy payload from existing sources only: holdings via the `items`
 /// command, market stats via the `market` command, deals/trends/market
-/// makers via the store and the life files, top activities via the rates
-/// table. One JSON fetch for
+/// makers via the store and the life files, top activities via the
+/// precomputed money guide (`guide_activities`). One JSON fetch for
 /// the economy page; bots never read it.
 pub fn economy_response(dispatch: &Dispatch) -> Value {
     economy_response_in(dispatch, &crate::paths::run_dir())
@@ -192,15 +223,9 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
     }
     trends.sort_by(|left, right| right.4.abs().total_cmp(&left.4.abs()));
     trends.truncate(15);
-    let rates = crate::rates_service::rates_api(&**dispatch);
-    let mut activities: Vec<(String, i64, f64)> = Vec::new();
-    for row in rates.get("profit").as_arr().cloned().unwrap_or_default() {
-        let method = row.get("method").as_str().unwrap_or("").to_string();
-        let profit = row.get("profit").as_f64().unwrap_or(0.0);
-        activities.push((method, row.get("band").as_i64().unwrap_or(0), profit));
-    }
-    activities.sort_by(|left, right| right.2.total_cmp(&left.2));
-    activities.truncate(10);
+    // Top activities: the money guide's set; none before its first build.
+    let guides = crate::guides_store::current();
+    let activities = guides.as_deref().map(guide_activities).unwrap_or_default();
     // Market makers (plan marché Q6): operator info, never read by a bot.
     let makers: Vec<Value> = crate::market_maker_report::maker_rows(&store, &lives_dir(run_dir)).iter().map(crate::market_maker_report::row_value).collect();
     // 100 % market lots (plan rendements R5): predicted vs realized.
@@ -235,21 +260,8 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
                 ),
             ]),
         ),
-        (
-            "activities",
-            Value::Arr(
-                activities
-                    .iter()
-                    .map(|(method, band, profit)| {
-                        object(vec![
-                            ("method", str_value(method)),
-                            ("band", Value::Int(*band)),
-                            ("profit", Value::Float(*profit)),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ),
+        ("activities", Value::Arr(activities)),
+        ("activities_pending", Value::Bool(guides.is_none())),
         (
             "trends",
             Value::Arr(
@@ -442,6 +454,7 @@ mod tests {
         assert_eq!(economy.get("deals").get("total").as_i64(), Some(0));
         assert_eq!(economy.get("market").get("items").as_i64(), Some(3));
         assert!(economy.get("activities").as_arr().is_some());
+        assert!(economy.get("activities_pending").as_bool().is_some(), "top activities say when the guides set is not built yet");
         assert!(economy.get("trends").as_arr().is_some());
         let makers = economy.get("makers").as_arr().expect("makers array");
         assert_eq!(makers.len(), 1, "the maker life file drives the card");

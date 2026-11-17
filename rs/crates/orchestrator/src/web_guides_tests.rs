@@ -274,3 +274,41 @@ fn no_profile_judges_no_line() -> Result<(), lifescape_store::Error> {
     }
     Ok(())
 }
+
+/// Economy page « top activities »: the money guide's catalogue (the
+/// precomputed set, the same figures as the guides page), never the old
+/// rates profit table: its priced lines with no condition impossible
+/// for every bot, best profit/6000 first, ten at most.
+#[test]
+fn economy_top_activities_read_the_money_guide() -> Result<(), lifescape_store::Error> {
+    let store = Store::open_in_memory()?;
+    let mut snapshot = Snapshot::new();
+    for qty in [50, 60, 70] {
+        snapshot.record(&parsed(), Some(&fight(qty)), 9);
+    }
+    let set = crate::guides_store::build_set(&store, &snapshot, &StoreWaits::default());
+    let guide = read_guide(&set, GuideKind::Money, &GuideFilter::default());
+    let possible = |row: &Value| row.get("priced").as_bool() == Some(true) && row.get("conditions").as_arr().cloned().unwrap_or_default().iter().all(|condition| condition.get("impossible").as_bool() != Some(true));
+    let mut want: Vec<(String, String, f64)> = guide
+        .get("rows")
+        .as_arr()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter(|row| possible(row))
+        .map(|row| (row.get("family").as_str().unwrap_or("").to_string(), row.get("method").as_str().unwrap_or("").to_string(), row.get("profit_6000").as_f64().unwrap_or(f64::NAN)))
+        .collect();
+    want.sort_by(|left, right| right.2.total_cmp(&left.2));
+    want.truncate(10);
+    assert!(!want.is_empty(), "the fixture prices lines");
+    let activities = crate::web_lives::guide_activities(&set);
+    let got: Vec<(String, String, f64)> = activities.iter().map(|row| (row.get("family").as_str().unwrap_or("").to_string(), row.get("method").as_str().unwrap_or("").to_string(), row.get("profit_6000").as_f64().unwrap_or(f64::NAN))).collect();
+    assert_eq!(got, want);
+    for row in &activities {
+        for key in ["band", "style", "site", "confidence"] {
+            assert!(!matches!(row.get(key), Value::Null), "{key}: {row:?}");
+        }
+        assert!(row.get("confidence").get("measured").as_bool().is_some(), "{row:?}");
+    }
+    Ok(())
+}
