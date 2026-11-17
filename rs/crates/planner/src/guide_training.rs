@@ -282,6 +282,7 @@ pub fn training_guide(engine: &Engine, filter: &GuideFilter) -> (Vec<TrainingRow
         rows.extend(quest_rows(engine, skill, filter));
     }
     // Blocked rows (an input nobody makes, offers or sells) rank last.
-    rows.sort_by(|left, right| left.blocked.is_empty().cmp(&right.blocked.is_empty()).reverse().then(right.effective_xp_6000.total_cmp(&left.effective_xp_6000)));
+    // Usable first (not blocked, prerequisites met), then by value.
+    rows.sort_by(|left, right| (left.blocked.is_empty() && left.accessible).cmp(&(right.blocked.is_empty() && right.accessible)).reverse().then(right.effective_xp_6000.total_cmp(&left.effective_xp_6000)));
     (rows, unrated)
 }

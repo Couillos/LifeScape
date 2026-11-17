@@ -317,7 +317,8 @@ fn guide_rows(engine: &Engine, filter: &GuideFilter, with_chains: bool) -> (Vec<
             rows.push(row);
         }
     }
-    rows.sort_by(|left, right| left.blocked.is_empty().cmp(&right.blocked.is_empty()).reverse().then(right.profit_6000.total_cmp(&left.profit_6000)));
+    // Usable first (not blocked, prerequisites met), then by value.
+    rows.sort_by(|left, right| (left.blocked.is_empty() && left.accessible).cmp(&(right.blocked.is_empty() && right.accessible)).reverse().then(right.profit_6000.total_cmp(&left.profit_6000)));
     (rows, unrated)
 }
 
