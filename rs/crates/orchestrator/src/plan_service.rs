@@ -51,6 +51,7 @@ pub fn load_snapshot() -> Result<Arc<Snapshot>, String> {
     world.set_f2p(zones);
     let tables = Tables::load(&data_dir).map_err(|error| error.to_string())?;
     world.set_sky_floors(tables.sky_floors.clone());
+    world.set_npc_blockers(tables.npc_blockers.clone());
     Ok(Snapshot::new(
         world,
         Arc::new(tables),

@@ -233,6 +233,7 @@ mod tests {
         let world = crate::static_world::StaticWorld::open(&zip, defs).expect("static world");
         let tables = crate::tables::Tables::load(&root.join("LifeScape/gamedata/data")).expect("tables");
         world.set_sky_floors(tables.sky_floors.clone());
+        world.set_npc_blockers(tables.npc_blockers.clone());
         (world, tables)
     }
 

@@ -2081,6 +2081,7 @@ mod tests {
         world.set_f2p(zones);
         let tables = Tables::load(&root.join("LifeScape/gamedata/data")).expect("tables");
         world.set_sky_floors(tables.sky_floors.clone());
+        world.set_npc_blockers(tables.npc_blockers.clone());
         (world, Arc::new(tables))
     }
 
