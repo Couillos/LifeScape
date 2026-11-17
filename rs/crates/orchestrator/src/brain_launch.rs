@@ -219,7 +219,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             let args = vec![lifescape_json::str_value("--node"), lifescape_json::str_value(&id)];
             let reply = crate::cpu_profile::timed("launch.run_job", || orch.run_job(&job.account, "tutorial", &args));
             if reply.get("ok").as_bool() != Some(true) {
-                crate::logln!("brain {}: launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
+                let error = reply.get("error").as_str().unwrap_or("?");
+                crate::logln!("brain {}: launch refused: {error}", job.account);
+                if crate::brain_inflight::refusal_never_ran(error) {
+                    refused_launch(&job.account, &id);
+                }
             }
             return;
         }
@@ -712,8 +716,26 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // the supervisor. A refused launch re-queues via crash recovery.
     let reply = crate::cpu_profile::timed("launch.run_job", || orch.run_job(&job.account, &script, &values));
     if reply.get("ok").as_bool() != Some(true) {
-        crate::logln!("brain {}: launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
+        let error = reply.get("error").as_str().unwrap_or("?");
+        crate::logln!("brain {}: launch refused: {error}", job.account);
+        // Never ran (P2-5): back to ready, uncounted, relaunched once the
+        // worker reads idle (no "no report" on a run that never started).
+        if crate::brain_inflight::refusal_never_ran(error) {
+            refused_launch(&job.account, &launched_id);
+        }
     }
+}
+
+/// Folds a refused launch into the life on disk (`fold_refused_launch`)
+/// and drops the launch grace mark.
+fn refused_launch(account: &str, node_id: &str) {
+    let Some(mut life) = load_life(account) else { return };
+    if crate::brain_inflight::fold_refused_launch(&mut life, node_id) {
+        push_history(&mut life, node_id, crate::brain_inflight::LAUNCH_REFUSED);
+        save_or_log(&life);
+        crate::logln!("brain {account}: {node_id} launch refused, back to ready (uncounted)");
+    }
+    launch_marks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(account);
 }
 
 /// Launch grace table (30 s per account, memory only): stops crash

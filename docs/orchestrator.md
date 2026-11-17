@@ -316,3 +316,8 @@ D8 : trois deals d'affilée expirés (`timeout` rapporté par le bot lui-même)
 retirent tous ses ordres (raison `timeout_streak`, deals appariés en
 `no_show`, contreparties remises au carnet) ; un deal réglé remet le
 compteur à zéro. Ligne `market: <c> let 3 deals expire in a row …`.
+Lancement refusé (P2-5) : une réponse `busy: …` / `no session …` du worker
+prouve que le script n'a pas démarré ; le nœud revient prêt sans échec
+(`brain <c>: nX launch refused, back to ready (uncounted)`, historique
+`launch_refused`) et repart quand le worker est libre. Une erreur de
+transport reste jugée par le détecteur d'inactivité.
