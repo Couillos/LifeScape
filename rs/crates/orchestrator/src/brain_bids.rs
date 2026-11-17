@@ -337,6 +337,10 @@ pub struct BotState<'a> {
     pub planned: Vec<(String, u8)>,
     /// The bot as a caster (alchemy floor), when it casts.
     pub caster: Option<lifescape_planner::alchemy::Caster>,
+    /// The planner's MEASURED rate reader (R7, `brain_plan_read::
+    /// measured_rate`, memoised for the pass): the training a lot carries
+    /// is sized on it (`bid_response::Producer::rate`).
+    pub rate: lifescape_planner::work_rate::RateReader<'a>,
 }
 
 impl BotState<'_> {
@@ -360,6 +364,7 @@ impl BotState<'_> {
             free_pass: self.quests_done.iter().any(|quest| quest == lifescape_gamedata::toll::FREE_PASS_QUEST),
             planned_level: &planned,
             alch_net: &alch,
+            rate: self.rate,
         };
         use_it(&producer)
     }
@@ -464,6 +469,18 @@ pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnc
         }
     };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+    // The planner's measured reader (R7), one estimate per (method,
+    // level) for the whole pass: never a heavy read per candidate.
+    let measured: std::cell::RefCell<HashMap<(String, u8), Option<lifescape_planner::work_rate::WorkRate>>> = Default::default();
+    let rate = |method: &str, level: u8| {
+        let key = (method.to_string(), level);
+        if let Some(known) = measured.borrow().get(&key) {
+            return known.clone();
+        }
+        let found = crate::brain_plan_read::measured_rate(snapshot.book(), method, level, now);
+        measured.borrow_mut().insert(key, found.clone());
+        found
+    };
     let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now - stamp);
     let position = live.get("position").as_arr().and_then(|cells| {
         let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
@@ -480,6 +497,7 @@ pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnc
         position,
         planned: planned_levels(life),
         caster: if life.profile.ironman { None } else { crate::brain_alch::caster_for(live) },
+        rate: &rate,
     };
     use_state(&state)
 }

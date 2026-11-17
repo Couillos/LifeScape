@@ -304,3 +304,19 @@ fn a_biting_spot_waits_for_its_food() {
     assert_eq!((found.pick.method.as_str(), found.choice.class), ("fight:melee/men", 1));
     assert!(found.pick.missing.contains(&"herring".to_string()), "the food obtained first: {:?}", found.pick.missing);
 }
+
+/// R7 suite: a `reach_combat` node climbs its style's skill on the guide
+/// (ranged, magic), melee its lowest of attack, strength and defence.
+#[test]
+fn a_combat_level_climbs_its_styles_lowest_skill() {
+    let levels = |skill: &str| match skill {
+        "attack" => 40,
+        "strength" => 32,
+        "defence" => 35,
+        _ => 10,
+    };
+    assert_eq!(super::combat_climb_skill("fight:melee/chickens", &levels), "strength");
+    assert_eq!(super::combat_climb_skill("fight:ranged/chickens", &levels), "ranged");
+    assert_eq!(super::combat_climb_skill("fight:magic/chickens", &levels), "magic");
+    assert_eq!(super::combat_climb_skill("fight:melee/chickens", &|_: &str| 20), "attack", "a tie trains attack");
+}

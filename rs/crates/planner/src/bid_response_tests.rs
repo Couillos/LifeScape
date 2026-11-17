@@ -57,6 +57,7 @@ fn smith<'a>(level_of: &'a dyn Fn(&str) -> u8, held: &'a dyn Fn(&str) -> i64, av
         free_pass: false,
         planned_level: &super::no_plan,
         alch_net: &super::no_alch,
+        rate: &crate::work_rate::prior_rate,
     }
 }
 
@@ -205,4 +206,34 @@ fn bots_spread_over_windows_and_iron_never_answers() {
     let mut iron = smith(&smith_levels, &hammer_only, &avoid, answering_seed("bronze_scimitar"));
     iron.ironman = true;
     assert_eq!(best_opportunity(&[("bronze_scimitar".to_string(), scimitar_bids())], &market, &iron), None);
+}
+
+/// R7 suite (2026-11-17): the training a bid carries reads the MEASURED
+/// yields (`Producer::rate`, the planner's reader: n >= 3 blended with the
+/// prior, the prior below), never the prior alone: a smelt measured to
+/// burn twice the ore per XP doubles the ores the training buys.
+#[test]
+fn a_bids_training_reads_the_measured_yields() {
+    let avoid: Vec<String> = Vec::new();
+    let fresh = |_: &str| 1u8;
+    let with_ores = |item: &str| match item {
+        "copper_ore" | "tin_ore" => Some(BookView { bids: Vec::new(), asks: vec![(3, 5000)], volume_24h: 0, ..BookView::default() }),
+        _ => market(item),
+    };
+    let seed = answering_seed("bronze_scimitar");
+    let prior_bot = smith(&fresh, &hammer_only, &avoid, seed);
+    let train = vec![("smithing".to_string(), 1u8, 5u8)];
+    let (prior_coins, prior_ticks) = super::training_cost(&train, &with_ores, &prior_bot).expect("priced on the prior");
+    let measured = |method: &str, level: u8| {
+        crate::work_rate::prior_rate(method, level).map(|mut rate| {
+            for flow in rate.flows_6000.iter_mut().filter(|flow| flow.1 == "input") {
+                flow.2 *= 2.0;
+            }
+            rate
+        })
+    };
+    let measured_bot = Producer { rate: &measured, ..smith(&fresh, &hammer_only, &avoid, seed) };
+    let (coins, ticks) = super::training_cost(&train, &with_ores, &measured_bot).expect("priced on the measure");
+    assert!(coins > prior_coins * 1.5, "measured {coins} vs prior {prior_coins}");
+    assert!((ticks - prior_ticks).abs() < 1e-6, "the ores are bought: the smelting time is the game's, {ticks} vs {prior_ticks}");
 }

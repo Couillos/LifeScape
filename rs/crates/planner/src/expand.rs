@@ -675,13 +675,14 @@ fn resolve_method(node: &mut Node, ctx: &ReadyCtx) {
     }
 }
 
-/// A priced tranche (`training`): the brain's pick locks with its batch
+/// A priced tranche (`training`), or a combat level's climb read on the
+/// training guide (R7 suite): the brain's pick locks with its batch
 /// (alchemy casts). The tools it lacks (the hammer) and the inputs the
 /// pick found short block typed, all at once, the pick's method kept so
 /// the obtain sub-tasks size on it (`replan::need_count_from`). `false`:
 /// no pick, or its quest is missing (the static method resolves).
 fn lock_training_pick(node: &mut Node, ctx: &ReadyCtx) -> bool {
-    if !matches!(node.kind, NodeKind::ReachLevel { .. }) {
+    if !matches!(node.kind, NodeKind::ReachLevel { .. } | NodeKind::ReachCombat { .. }) {
         return false;
     }
     let Some(pick) = ctx.training.as_ref() else { return false };
