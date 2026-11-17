@@ -704,7 +704,7 @@ impl Orchestrator {
                     Err(error) => object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]),
                 };
             }
-            "fund_makers" => return crate::funding_cmd::fund_makers(self, request.get("dry_run").as_bool().unwrap_or(true)),
+            "fund_makers" => return crate::funding_cmd::fund_makers(self, request.get("dry_run").as_bool().unwrap_or(true), request.get("force").as_bool().unwrap_or(false)),
             "bid_why" => {
                 let item = request.get("item").as_str().unwrap_or("");
                 return match crate::brain_bids::explain_for(account, item) {

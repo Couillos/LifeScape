@@ -139,9 +139,40 @@ pub fn purchase_steps(item: &str, window_ticks: i64) -> Vec<ShopStep> {
     out
 }
 
+/// Most one unit of `item` can cost at `shop` (`None`: every F2P shop
+/// that sells it): its price at stock 1, the dearest unit `buy_item`
+/// ever asks, whatever the live stock other buyers left. What a bot
+/// carries to the counter (live 2026-11-17: jane_95 carried the dump
+/// value of an adamant chainbody, 4 800, and the White Knights' asked
+/// more: "You don't have enough coins", three runs). `None` when no
+/// such shop sells it.
+pub fn unit_price_ceiling(item: &str, shop: Option<&str>) -> Option<i64> {
+    let steps = purchase_steps(item, 0);
+    let at_shop: Vec<&ShopStep> = steps.iter().filter(|step| shop.is_none_or(|key| step.shop == key)).collect();
+    at_shop.iter().map(|step| step.price).max()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ceiling is the dearest base-stock unit (stock 1) of the shop,
+    /// never under the dump value.
+    #[test]
+    fn the_ceiling_is_the_last_base_unit() {
+        let steps = purchase_steps("adamant_chainbody", 0);
+        let shop = steps.first().map(|step| step.shop.clone()).expect("an F2P shop sells adamant chainbodies");
+        let dearest = steps.iter().filter(|step| step.shop == shop).map(|step| step.price).max();
+        assert_eq!(unit_price_ceiling("adamant_chainbody", Some(&shop)), dearest);
+        let value = crate::objs_by_name("adamant_chainbody").first().map(|obj| obj.price).unwrap_or(0);
+        assert!(dearest.unwrap_or(0) >= value, "never under the dump value at stock 1: {dearest:?} vs {value}");
+        // A keeper selling over the value (multiplier above 1000) asks more
+        // than the dump value at its last unit: the ceiling follows it.
+        let dear = crate::shops::all_shops().into_iter().flat_map(|shop| shop.keepers).any(|keeper| keeper.sell_multiplier.is_some_and(|multiplier| multiplier > 1000));
+        assert!(dear, "some F2P keeper sells over the value");
+        assert_eq!(unit_price_ceiling("adamant_chainbody", Some("no_such_shop")), None);
+        assert_eq!(unit_price_ceiling("no_such_item", None), None);
+    }
 
     /// `buy_item` walks the stock down: 5 in stock of base 5, multiplier
     /// 1000, haggle 30, cost 100: 100, 103, 106, 109, 112; the restock (one

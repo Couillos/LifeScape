@@ -104,8 +104,11 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // went to the shop "carrying 0 coins" with 25 banked, three times):
     // the bank is opened to look whenever the pack falls short.
     let coins = obj_id(bot, "coins")?;
-    let price_each = entry.price.max(1) as u32;
-    let need = qty.max(1) as u32 * price_each;
+    // The keeper's dearest unit (stock 1, server formula), never the
+    // dump value: a shop sells over it and the counter refuses the
+    // difference ("You don't have enough coins").
+    let price_each = lifescape_gamedata::shop_buy::unit_price_ceiling(&item, shop.as_deref()).unwrap_or(entry.price).clamp(1, i64::from(u32::MAX)) as u32;
+    let need = (qty.max(1) as u32).saturating_mul(price_each);
     let mut held = bot.inventory().get(&coins).copied().unwrap_or(0);
     if held < need {
         let bank = crate::kit::bank::nearest_bank(bot)?;

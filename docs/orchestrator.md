@@ -332,7 +332,7 @@ vie n'est pas réécrite) ; indice de tranche, phase et base de P&L gardés.
 
 ## Financement des teneurs : `fund-makers` (2026-11-17)
 
-`orchestrator fund-makers [--dry-run]` (`src/funding_cmd.rs`, plan pur
+`orchestrator fund-makers [--dry-run] [--force]` (`src/funding_cmd.rs`, plan pur
 `src/funding_plan.rs`, dons `src/funding_gifts.rs`) : les comptes les
 plus riches de la flotte donnent des pièces aux teneurs encore en phase
 de jeu pour qu'ils atteignent la cible commune et basculent. Commande
@@ -353,6 +353,16 @@ jamais : il faut la flotte connectée).
   (`brain_gear::next_gear_cost`) et d'outil (`brain_tool_shop::
   next_kit_price`), marge 10 % des pièces (au moins 5 000), dons déjà dus.
   Le reste est donnable.
+- `--force` (utilisateur 2026-11-17, « force les plus riches ») : le
+  prochain achat n'est plus réservé et la marge tombe au plancher 5 000 ;
+  seules les pièces engagées (bids, deals acheteurs) restent intouchées
+  (un bid rempli doit être payé). Sans `--force` le 17/11, 8 dons
+  seulement (204 719 pièces), 622 217 non couverts ; avec, 11 dons
+  couvrant les 9 teneurs restants.
+- Chaque teneur est financé jusqu'à cible + 2 000 (`SWITCH_BUFFER`) : il
+  joue jusqu'à sa passe de bascule et un achat entre-temps ne doit pas le
+  refaire passer sous la cible (jim_ford, 17/11 : 102 070 / 103 000 après
+  un don à la cible exacte).
 - Répartition gloutonne : teneurs par manque décroissant, chacun servi par
   le donateur le plus riche restant, puis le suivant.
 - `--dry-run` imprime le plan (`donateur -> teneur : montant`, réserves,
@@ -374,6 +384,7 @@ Procédure live :
 
     ./rs/target/release/orchestrator fund-makers --dry-run   # relire le plan
     ./rs/target/release/orchestrator fund-makers             # créer les dons
+    ./rs/target/release/orchestrator fund-makers --force     # si « uncovered » reste > 0
     ./rs/target/release/orchestrator economy 1               # section funding
     grep -E "funding: gift|market maker slice|market make --post" run/orchestrator.log
 

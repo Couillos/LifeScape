@@ -193,6 +193,43 @@ pub fn off_style_weapon(bot: &Bot) -> Option<String> {
     (!weapon_fits_style(&entry, &bot.combat_style)).then(|| name.to_string())
 }
 
+/// Pure: the pack stack banked to free a slot for the unwielded weapon,
+/// never what the run consumes (coins, food, runes, ammo): the first
+/// other stack, `None` when the pack holds only those.
+pub fn spare_stack(pack: &[(u16, String)]) -> Option<u16> {
+    pack.iter()
+        .find(|(_, name)| {
+            name != "coins"
+                && knowledge::food::heal(name) <= 0
+                && !name.ends_with("rune")
+                && !knowledge::equipment::by_name(name).is_some_and(|entry| entry.wearpos == AMMO_SLOT)
+        })
+        .map(|(obj, _)| *obj)
+}
+
+/// A full pack and an off-style weapon to take off (live 2026-11-17,
+/// wolfe_carl: "ranged run wields adamant_battleaxe and the pack is full",
+/// 25 failures): one spare stack goes to the nearest bank, everything
+/// else stays. Typed failure when no stack is spare.
+fn free_one_slot(bot: &mut Bot, name: &str) -> Result<(), ScriptError> {
+    // Object debug names (`shrimps`, `airrune`), what gamedata keys on.
+    let pack: Vec<(u16, String)> = crate::kit::pack::pack_slots(bot)
+        .into_iter()
+        .map(|(_, (obj, _))| (obj, knowledge::obj_by_id(usize::from(obj)).and_then(|row| row.name).unwrap_or_default().to_string()))
+        .collect();
+    let Some(spare) = spare_stack(&pack) else {
+        return Err(ScriptError::Failed(format!("{} run wields {name} and the pack holds only supplies: cannot unwield it", bot.combat_style)));
+    };
+    let keep: Vec<u16> = pack.iter().map(|(obj, _)| *obj).filter(|obj| *obj != spare).collect();
+    bot.log(&format!("pack full under {name}: banking {} to take it off", crate::kit::pack::obj_label(bot, spare)));
+    let bank = crate::kit::bank::nearest_bank(bot)?;
+    crate::kit::bank::bank_trip(bot, &bank, &keep, 0)?;
+    if free_slots(bot) == 0 {
+        return Err(ScriptError::Failed(format!("{} run wields {name} and the pack is still full after the bank: cannot unwield it", bot.combat_style)));
+    }
+    Ok(())
+}
+
 /// Take the wielded weapon off (worn tab "Remove": equip.rs2
 /// `[inv_button1,wornitems:wear]` -> `~unequip`, refused with "You don't
 /// have enough free space to do that." on a full pack). Typed failure
@@ -200,7 +237,7 @@ pub fn off_style_weapon(bot: &Bot) -> Option<String> {
 fn unwield_weapon(bot: &mut Bot, name: &str) -> Result<(), ScriptError> {
     let Some(obj) = worn_obj(bot, WEAPON_SLOT) else { return Ok(()) };
     if free_slots(bot) == 0 {
-        return Err(ScriptError::Failed(format!("{} run wields {name} and the pack is full: cannot unwield it", bot.combat_style)));
+        free_one_slot(bot, name)?;
     }
     let worn_com = (bot.tables.com_id)(WORN_COM_NAME)
         .ok_or_else(|| ScriptError::Usage(format!("{WORN_COM_NAME} missing from component table")))?;
@@ -396,6 +433,15 @@ pub fn rewear(bot: &mut Bot, why: &str) -> Result<(), ScriptError> {
 
 #[cfg(test)]
 mod tests {
+    /// The stack banked under a full pack is never a supply the run
+    /// consumes: logs go, coins, food, runes and arrows stay.
+    #[test]
+    fn spare_stack_skips_supplies() {
+        let pack = |names: &[&str]| -> Vec<(u16, String)> { names.iter().enumerate().map(|(index, name)| (index as u16 + 1, name.to_string())).collect() };
+        assert_eq!(super::spare_stack(&pack(&["coins", "shrimps", "airrune", "bronze_arrow", "logs"])), Some(5));
+        assert_eq!(super::spare_stack(&pack(&["coins", "shrimps", "mindrune", "iron_arrow"])), None);
+    }
+
     /// The bank leg of a magic run withdraws the ORDERED spell's runes
     /// (fire strike: mind, fire, air), not the wind-strike pair: a
     /// `fight:magic/fire_strike` run left the fire runes banked.

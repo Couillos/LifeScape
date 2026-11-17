@@ -401,16 +401,27 @@ pub fn buy_stock_at(bot: &mut Bot, obj_name: &str, count: u32, shop: Option<&str
     while bot.world.ticks < target {
         bot.pump(5)?;
         if let Some(slots) = bot.world.inv.get(&main_com) {
-            slot_found = slots.iter().find(|(_, (held, _))| *held == wanted).map(|(slot, _)| *slot);
+            slot_found = slots.iter().find(|(_, (held, _))| *held == wanted).map(|(slot, (_, stock))| (*slot, *stock));
             if slot_found.is_some() {
                 break;
             }
         }
     }
-    let Some(shop_slot) = slot_found else {
-        bot.close_modal()?;
-        bot.pump(5)?;
-        return Err(ScriptError::Failed(format!("no {obj_name} in shop stock at {:?}", bot.position())));
+    let shop_slot = match slot_found {
+        Some((slot, stock)) if stock > 0 => slot,
+        _ => {
+            // The keeper stocks it (checked above) and the live stock is
+            // empty: other buyers took it, the restock brings it back.
+            // Contention, never a broken method (`buy_item` checks the
+            // price before the stock: at stock 0 an adamant chainbody
+            // costs 4 848 and the refusal reads "You don't have enough
+            // coins", live 2026-11-17 jane_95, three counted failures).
+            bot.close_modal()?;
+            bot.pump(5)?;
+            bot.log(&format!("{obj_name}: shop stock empty at {:?}, contended", bot.position()));
+            let (x, z, level) = bot.assigned_site.unwrap_or((bot.world.x, bot.world.z, bot.world.level));
+            return Err(ScriptError::Blocked { missing: vec![format!("{}{x},{z},{level}", crate::kit::site::CONTENDED_TAG)] });
+        }
     };
     for (op, _) in sell_batches(count) {
         bot.inv_button(op, wanted, shop_slot, main_com)?;

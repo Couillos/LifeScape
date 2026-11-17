@@ -17,6 +17,13 @@
 //!   and a margin (`margin`: 10 % of its coins, at least `MIN_MARGIN`).
 //!   What it gives is `coins - pending_out - reserve`, the gifts it
 //!   already owes counted out.
+//! - `--force` (user 2026-11-17, « force les plus riches »): the donor's
+//!   next gear and kit purchase is not reserved and its margin is the
+//!   floor `MIN_MARGIN`; only the coins its resting bids and buyer deals
+//!   commit stay untouched (a filled bid must still be paid).
+//! - A maker is funded to its target plus `SWITCH_BUFFER`: it keeps
+//!   playing until its next launch pass reads its purse, and a purchase
+//!   meanwhile must not drop it back under the target.
 //! - Greedy: the makers by decreasing shortfall (name breaks ties), each
 //!   served by the richest donor left, then the next, until covered or
 //!   the donors run dry (`uncovered`).
@@ -32,6 +39,8 @@ pub const MIN_MARGIN: i64 = 5_000;
 pub const MARGIN_PCT: i64 = 10;
 /// Smallest gift worth a square trip (coins).
 pub const MIN_GIFT: i64 = 1_000;
+/// Coins a funded maker gets over its target (spent before its switch).
+pub const SWITCH_BUFFER: i64 = 2_000;
 
 /// One maker as the plan reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,7 +121,7 @@ pub fn margin(coins: i64) -> i64 {
 }
 
 /// The donor's reserve and free coins (`None`: never a donor, with why).
-pub fn reserve_of(purse: &DonorPurse) -> Result<DonorReserve, String> {
+pub fn reserve_of(purse: &DonorPurse, force: bool) -> Result<DonorReserve, String> {
     if purse.excluded {
         return Err("staff or private account, never a donor".to_string());
     }
@@ -123,21 +132,22 @@ pub fn reserve_of(purse: &DonorPurse) -> Result<DonorReserve, String> {
         return Err("Iron account, never trades".to_string());
     }
     let Some(coins) = purse.coins else { return Err("bank not streamed, coins unread".to_string()) };
-    let margin = margin(coins);
-    let held = purse.committed.max(0) + purse.next_purchase.max(0) + margin + purse.pending_out.max(0);
+    let margin = if force { MIN_MARGIN } else { margin(coins) };
+    let next_purchase = if force { 0 } else { purse.next_purchase.max(0) };
+    let held = purse.committed.max(0) + next_purchase + margin + purse.pending_out.max(0);
     Ok(DonorReserve {
         account: purse.account.clone(),
         coins,
         committed: purse.committed.max(0),
-        next_purchase: purse.next_purchase.max(0),
+        next_purchase,
         margin,
         pending_out: purse.pending_out.max(0),
         free: (coins - held).max(0),
     })
 }
 
-/// The plan: who gives what to which maker.
-pub fn plan(makers: &[MakerNeed], donors: &[DonorPurse]) -> FundingPlan {
+/// The plan: who gives what to which maker (`force`: see the module).
+pub fn plan(makers: &[MakerNeed], donors: &[DonorPurse], force: bool) -> FundingPlan {
     let mut out = FundingPlan::default();
     let mut needs: Vec<MakerLine> = Vec::new();
     for maker in makers {
@@ -149,11 +159,11 @@ pub fn plan(makers: &[MakerNeed], donors: &[DonorPurse]) -> FundingPlan {
             out.skipped.push((maker.account.clone(), "offline or bank not streamed, capital unread".to_string()));
             continue;
         };
-        let shortfall = (maker.target - capital - maker.pending_in.max(0)).max(0);
+        let shortfall = (maker.target + SWITCH_BUFFER - capital - maker.pending_in.max(0)).max(0);
         needs.push(MakerLine { account: maker.account.clone(), capital, target: maker.target, pending_in: maker.pending_in.max(0), shortfall, planned: 0 });
     }
     for purse in donors {
-        match reserve_of(purse) {
+        match reserve_of(purse, force) {
             Ok(reserve) => out.reserves.push(reserve),
             Err(why) => out.skipped.push((purse.account.clone(), why)),
         }

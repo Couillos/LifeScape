@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! `orchestrator fund-makers [--dry-run]` (user 2026-11-17): the richest
+//! `orchestrator fund-makers [--dry-run] [--force]` (user 2026-11-17): the richest
 //! fleet accounts give coins to the market makers still earning, so they
 //! reach the common capital target and switch to quoting at their next
 //! launch pass (`market_maker::maybe_switch`).
@@ -89,13 +89,16 @@ fn gather(orch: &Orchestrator, service: &MarketService) -> (Vec<MakerNeed>, Vec<
 
 /// The daemon command: the plan's lines, and the gifts created unless
 /// `dry_run`.
-pub fn fund_makers(orch: &Orchestrator, dry_run: bool) -> Value {
+pub fn fund_makers(orch: &Orchestrator, dry_run: bool, force: bool) -> Value {
     let Some(service) = crate::market_service::shared() else {
         return object(vec![("ok", Value::Bool(false)), ("error", str_value("market service down: no gift can be convened"))]);
     };
     let (makers, donors, notes) = gather(orch, &service);
-    let plan = crate::funding_plan::plan(&makers, &donors);
+    let plan = crate::funding_plan::plan(&makers, &donors, force);
     let mut lines = vec![if dry_run { "fund-makers --dry-run: plan only, nothing created".to_string() } else { "fund-makers: gifts created below".to_string() }];
+    if force {
+        lines.push("--force: donors keep only their bid-backed coins and a 5000 margin (next purchase not reserved)".to_string());
+    }
     lines.extend(crate::funding_plan::plan_lines(&plan));
     lines.extend(notes);
     if !dry_run {
@@ -112,15 +115,16 @@ pub fn fund_makers(orch: &Orchestrator, dry_run: bool) -> Value {
     object(vec![("ok", Value::Bool(true)), ("lines", Value::Arr(lines.iter().map(|line| str_value(line)).collect()))])
 }
 
-/// `orchestrator fund-makers [--dry-run]`: asks the running daemon,
+/// `orchestrator fund-makers [--dry-run] [--force]`: asks the running daemon,
 /// never starts one.
 pub fn fund_makers_cli(args: &[String]) -> i32 {
-    if let Some(unknown) = args.iter().find(|arg| arg.as_str() != "--dry-run") {
-        eprintln!("usage: fund-makers [--dry-run] (unknown argument {unknown:?})");
+    if let Some(unknown) = args.iter().find(|arg| arg.as_str() != "--dry-run" && arg.as_str() != "--force") {
+        eprintln!("usage: fund-makers [--dry-run] [--force] (unknown argument {unknown:?})");
         return 2;
     }
-    let dry_run = !args.is_empty();
-    let request = object(vec![("cmd", str_value("fund_makers")), ("dry_run", Value::Bool(dry_run))]);
+    let dry_run = args.iter().any(|arg| arg == "--dry-run");
+    let force = args.iter().any(|arg| arg == "--force");
+    let request = object(vec![("cmd", str_value("fund_makers")), ("dry_run", Value::Bool(dry_run)), ("force", Value::Bool(force))]);
     match crate::cli::send_command(&request, Duration::from_secs(120)) {
         Ok(reply) if reply.get("ok").as_bool() == Some(true) => {
             for line in reply.get("lines").as_arr().cloned().unwrap_or_default() {
