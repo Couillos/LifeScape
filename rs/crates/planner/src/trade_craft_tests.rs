@@ -242,6 +242,9 @@ fn a_lot_already_held_crafts_without_buying() {
     assert_eq!(node.method.as_deref(), Some(method.as_str()));
     assert_eq!(node.status, NodeStatus::Ready, "nothing to buy");
     assert_eq!(node.batch, 100);
+    let mut lots = Vec::new();
+    let lot = open_lot(&mut lots, &node, &ctx, 0).expect("recorded");
+    assert_eq!((lot.buys.len(), lot.cost, lot.bound.as_str()), (0, 0, "held"), "nothing bought");
 }
 
 #[test]
@@ -258,6 +261,9 @@ fn trade_inputs_size_on_the_recipe_and_its_failures() {
     assert_eq!(input_count(&method_of("smelt:iron_bar"), "iron_ore", 10), Some(20), "an iron smelt fails half the time");
     assert_eq!(input_count(&method_of(BRONZE), "copper_ore", 0), None);
     assert_eq!(input_count(BRONZE, "copper_ore", 22), None, "only a trade lot");
+    assert!(super::buys_input(&method_of(BRONZE), "tin_ore"));
+    assert!(!super::buys_input(&method_of("smith:bronze_dagger"), "hammer"), "a tool comes by the usual legs");
+    assert!(!super::buys_input(BRONZE, "tin_ore"));
 }
 
 #[test]
@@ -277,4 +283,21 @@ fn lots_round_trip_in_the_memory_and_stay_capped() {
     let back = crate::life_memory::memory_from_value(&lifescape_json::parse(&lifescape_json::stringify(&value)).expect("json"));
     assert_eq!(back, memory, "exact round trip");
     assert_eq!(super::lot_products(&back.trades), vec!["bronze_bar".to_string()]);
+}
+
+/// A lot whose inputs were bought is crafted even when its row left the
+/// guide (the bare offer of its recipe), and that offer never ranks as a
+/// money method (no guide profit).
+#[test]
+fn a_bought_lot_whose_row_left_the_guide_is_still_crafted() {
+    let method = method_of(BRONZE);
+    let mut node = ready_money();
+    node.blocked_by = Some(method.clone());
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.trades = vec![super::recipe_offer(&method, &|_| 22).expect("bare offer")];
+    assert!(!crate::resolve_obtain::money_methods(&ctx).contains(&method), "no profit: never ranked");
+    crate::expand::resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some(method.as_str()));
+    assert_eq!(node.batch, 22);
+    assert!(super::recipe_offer(BRONZE, &|_| 22).is_none(), "only a trade method");
 }

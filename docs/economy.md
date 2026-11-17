@@ -627,7 +627,31 @@ toujours après les autres.
   serves_what_a_direct_build_gives`). `rates-rebuild <copie>
   --guides-store <dossier> [money|training:requête …]` construit le jeu
   hors ligne et en donne le coût (docs/resources.md) ;
-- les bots ne lisent pas encore les guides (R7 : `guides_store::current`).
+- les bots ne lisent pas encore les guides pour leurs choix (R7 :
+  `guides_store::current`), sauf l'exécution 100 % market (R5, ci-dessous).
+
+### Exécution 100 % market (R5, 2026-11-17)
+
+Le guide money dit QUOI faire, `trade:craft/<recette>` le fait
+(`docs/planner.md` § « Exécution 100 % market ») : pour une ligne market
+non bloquée et rentable, le bot achète tous les intrants au marché (jambes
+`market:buy` existantes, au prix et au volume des asks du cycle, lot borné
+par sa bourse libre, la profondeur du carnet et le volume d'une fenêtre de
+la ligne), crafte avec le script de la recette, vend le produit par la
+vente par défaut (motif `trade`, horizon d'un surplus, réserve = son coût
+propre). Ironman exclu. Le guide reste la seule source du choix (lecture
+du jeu précalculé, aucun calcul à la demande).
+
+Suivi « profit prévu vs réalisé » (`trade_report.rs`, section de
+`orchestrator economy`, tableau « 100 % market lots » de la page economy,
+`/api/economy` clés `trades` et `trades_closed`) : une ligne par lot des
+vies (`memory.trades`) : prévu = profit du guide × lot ; achats = deals
+d'achat des intrants du compte depuis le verrou, plafonnés aux unités
+planifiées ; craft = produits faits et leur rendement /6000 ticks de
+travail face à celui du guide ; ventes = deals de vente du produit,
+plafonnées aux produits faits ; réalisé = ventes − achats ; statut
+`buying` | `crafting` | `selling` | `closed` (les deals d'un lot s'arrêtent
+à l'ouverture du lot suivant du compte). Staff exclu (règle 11).
 
 Rentabilité d'une (activité, style, tranche), cumul tous sites et outils :
 Σ flux positifs × prix courant (médiane des 5 derniers fills bornée par

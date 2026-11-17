@@ -63,6 +63,8 @@ pub fn planned_methods(life: &Life) -> Vec<String> {
             continue;
         }
         methods.extend(node.method.iter().cloned().chain(node.alternatives.iter().map(|alt| alt.method.clone())));
+        // A 100 % market lot bought for (R5): its inputs wait for the craft.
+        methods.extend(node.blocked_by.iter().filter(|method| lifescape_planner::trade_craft::is_trade(method)).cloned());
         if let NodeKind::ReachLevel { skill, level } = &node.kind {
             if node.method.is_none() && node.alternatives.is_empty() {
                 methods.push(lifescape_planner::tranches::reach_method(skill, level.saturating_sub(1).max(1)));
@@ -79,6 +81,11 @@ pub fn planned_methods(life: &Life) -> Vec<String> {
 /// product a transformation makes (sold unless another method eats it).
 /// Gatherers and melee/ranged fighters consume nothing kept.
 fn method_inputs(method: &str, keep: &mut Vec<String>) -> Option<String> {
+    // A 100 % market lot (R5) keeps its recipe's inputs and sells its
+    // product, like the recipe.
+    if let Some(recipe) = lifescape_planner::trade_craft::recipe_of(method) {
+        return method_inputs(recipe, keep);
+    }
     // Alchemy works ON its object (never a product to sell) with nature
     // and fire runes, a staff of fire standing for the fire.
     if let Some(item) = method.strip_prefix("alch:") {
@@ -458,6 +465,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     let make_costs = crate::brain_bids::production_costs_for(life, &live, &priced);
     adopt_listings(&service, &job.account, &selling, &costs, life, &make_costs, &live);
     let mut placed = 0;
+    let trade_products = lifescape_planner::trade_craft::lot_products(&life.memory.trades);
     // Only what no listing or deal already promises (the market refuses
     // the rest anyway, `market_audit::uncommitted`): `free` above.
     let mut offers = surplus(&free, &keep, &worn, &listed);
@@ -499,12 +507,10 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
                 continue;
             }
         };
-        // Motive (plan marché M1): found stock is loot, the rest surplus.
-        let motive = if reserve.is_some_and(|known| known.source == crate::brain_reserve::CostSource::Found) {
-            crate::market_lineage::LOOT
-        } else {
-            crate::market_lineage::SURPLUS
-        };
+        // Motive (plan marché M1): a 100 % market lot's product is a
+        // trade (R5), found stock is loot, the rest surplus.
+        let found = reserve.is_some_and(|known| known.source == crate::brain_reserve::CostSource::Found);
+        let motive = crate::brain_trade::sale_motive(&name, found, &trade_products);
         // The market's own escrow view caps the lot (plan P5: 3 423
         // "seller holds N, needs M" refusals in 10 h): never more than it
         // sees free, nothing when it sees none.

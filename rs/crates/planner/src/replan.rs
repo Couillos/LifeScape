@@ -267,8 +267,9 @@ pub fn replan_node_from(node: &mut Node, cause: &ReplanCause, missing: &[String]
                 // Same legs as creation (PRD3: market first, every
                 // production way, the shop under D-A); Iron is filtered
                 // at resolve time, which re-prices them. A 100 % market
-                // lot (R5) buys its inputs on the market only.
-                sub.alternatives = if node.method.as_deref().is_some_and(crate::trade_craft::is_trade) {
+                // lot (R5) buys its inputs on the market only (a tool it
+                // lacks comes by the usual legs).
+                sub.alternatives = if node.method.as_deref().is_some_and(|method| crate::trade_craft::buys_input(method, need)) {
                     vec![Alternative { method: "market:buy".to_string(), est_ticks: 0, est_coins: 0 }]
                 } else {
                     crate::obtain_legs::obtain_alternatives(need, false)

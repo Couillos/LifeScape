@@ -412,6 +412,8 @@ pub fn cleanup_keep(life: &Life) -> Vec<String> {
             _ => {}
         }
     }
+    // Inputs bought for a 100 % market lot wait for its craft (R5).
+    keep.extend(lifescape_planner::trade_craft::open_inputs(life));
     keep.sort();
     keep.dedup();
     keep

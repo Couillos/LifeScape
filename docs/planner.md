@@ -1188,3 +1188,49 @@ que la compétence de sa propre méthode (`banned_scope`). Les buts d'appoint
 et les réponses aux offres ne sont tirés que si une jambe de production
 n'est ni en quarantaine ni refroidie (`side_goal_with`, `goal_feasible`, taux
 0 dans `brain_bids`). Capacité de site et guildes : voir décisions D2/D4.
+
+## Exécution 100 % market : `trade:craft/<recette>` (R5, 2026-11-17)
+
+`planner/src/trade_craft.rs` (pur), côté démon `brain_trade.rs`,
+`trade_report.rs` ; décision datée dans `docs/decisions.md`.
+- Méthode d'argent `trade:craft/<recette>` (recette = activité d'une ligne
+  market du guide : `smelt:bronze_bar`, `cook:trout`…). Les données du jeu
+  la lisent par sa recette (`trade_craft::inner` : `method_way`, sites
+  `combat::method_site_table`, `quests::method_quest`, activité mesurée
+  `activity_of_run`) ; `mapping` lance le script de la recette avec
+  `--want <produit> <lot>` avant les drapeaux du cerveau.
+- Offres (`ReadyCtx::trades`, `trade_wallet`) : `brain_trade::publish`
+  lit `guides_store::current()` (vue money de la tranche du bot dans le
+  skill de chaque recette, lignes market seules : `market_rows`), les
+  asks du cycle (`GuideSet::quotes`), les unités détenues et la bourse
+  libre (`brain_gear::free_coins`). Une ligne n'est offerte que non
+  bloquée, rentable, produit ≠ pièces et intrants tous achetés au marché
+  (`offer_from_row`), aux niveaux, quêtes et points de quête du bot
+  (`eligible`). Jamais pour un Ironman (ni offre, ni méthode, ni lancement :
+  `space::iron_may_use`).
+- Choix : `money_methods` ajoute chaque offre, `resolve_money` la classe sur
+  son profit/6000 du guide comme toute méthode d'argent (classe « faisable
+  maintenant » quand un lot tient : `workable`, outils détenus, ni
+  quarantaine ni refroidissement). Point d'extension R7 :
+  `trade_craft::pick_offer`.
+- Lot (`lot_size`) : min(volume d'une fenêtre de la ligne, profondeur des
+  asks + unités détenues, bourse libre au coût du carnet — chaque unité au
+  moins au prix courant) ; borne affichée `capital` | `depth` | `window`.
+- Séquence : `lock` bloque `missing:<intrants>` (lot dans `node.batch`) →
+  `record_block_from` dépose une obtention par intrant à jambe `market:buy`
+  SEULE (`replan`, `trade_craft::buys_input` ; un outil manquant garde les
+  jambes usuelles), comptée par `input_count` (lot × intrants ÷ succès :
+  2 minerais par barre de fer) → intrants détenus : `sticky` reprend le lot
+  acheté avant tout classement (`blocked_by`), lot = ce que le stock fait ;
+  une offre nue de la recette (`recipe_offer`) le garde même si la ligne a
+  quitté le guide → le run s'arrête au `--want`, ou sur ses intrants épuisés
+  avec des produits faits (`lot_finished` : clôture, jamais un rachat) →
+  nœud fait, vente par défaut (motif `trade`). Les intrants d'un lot ouvert
+  ne sont ni vendus (`brain_sales::planned_methods`) ni jetés
+  (`brain::cleanup_keep`, `trade_craft::open_inputs`) ; un pilotage hors
+  bans ne vise jamais un lot (`steer_off_bans`), ni le repli de site.
+- Mémoire : `LifeMemory::trades` (20 derniers `TradeLot` : méthode, lot,
+  achats et coût planifiés, borne, profit prévu du guide, produits/6000 du
+  guide, ouverture, produits faits et ticks du craft), écrite au verrou
+  (`brain_trade::note_lot`, log `trade lot …`) et au rapport du craft
+  (`note_made`).

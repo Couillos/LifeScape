@@ -29,9 +29,13 @@ pub const LOOT: &str = "loot";
 /// A dedicated market maker's quote (plan marché Q6, `market_maker`):
 /// fixed price, requoted by its own pass, never on the concession curve.
 pub const MARKET_MAKE: &str = "market_make";
+/// The product of a 100 % market lot listed for sale (plan rendements
+/// R5, `trade_craft`): inputs bought, crafted, sold; the horizon of a
+/// producer's surplus (its reserve is the lot's own cost).
+pub const TRADE: &str = "trade";
 
 /// Every motive an order may carry (empty = not said, a worker's order).
-pub const MOTIVES: [&str; 7] = [NEED, GEAR, TOOL, STOCK, SURPLUS, LOOT, MARKET_MAKE];
+pub const MOTIVES: [&str; 8] = [NEED, GEAR, TOOL, STOCK, SURPLUS, LOOT, MARKET_MAKE, TRADE];
 
 /// Rejects an unknown motive (typed refusal, never a silent default).
 pub fn check_motive(motive: &str) -> Result<(), String> {
@@ -49,7 +53,7 @@ pub fn check_motive(motive: &str) -> Result<(), String> {
 pub fn horizon_ticks(motive: &str, sell: bool) -> u64 {
     match motive {
         NEED => 6_000,
-        GEAR | TOOL | SURPLUS | MARKET_MAKE => 36_000,
+        GEAR | TOOL | SURPLUS | MARKET_MAKE | TRADE => 36_000,
         STOCK | LOOT => 72_000,
         _ if sell => 36_000,
         _ => 6_000,
@@ -86,6 +90,7 @@ mod tests {
         assert_eq!(horizon_ticks(GEAR, false), 36_000);
         assert_eq!(horizon_ticks(STOCK, false), 72_000);
         assert_eq!(horizon_ticks(LOOT, true), 72_000);
+        assert_eq!(horizon_ticks(TRADE, true), horizon_ticks(SURPLUS, true), "a trade lot sells like a producer's surplus");
         assert_eq!(horizon_ticks("", true), 36_000, "an unsaid sale: surplus");
         assert_eq!(horizon_ticks("", false), 6_000, "an unsaid bid: a need");
     }
@@ -94,6 +99,7 @@ mod tests {
     fn unknown_motives_are_refused() {
         assert!(check_motive("").is_ok());
         assert!(check_motive(GEAR).is_ok());
+        assert!(check_motive(TRADE).is_ok());
         assert!(check_motive("whim").is_err());
     }
 

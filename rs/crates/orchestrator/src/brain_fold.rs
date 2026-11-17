@@ -252,6 +252,15 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
     let kind = life.nodes[index].kind.clone();
     let method = life.nodes[index].method.clone().unwrap_or_default();
     let site = life.nodes[index].site;
+    // A 100 % market lot's craft run that spent its bought inputs with
+    // products made finished its lot (R5): never a block that buys again.
+    let made = crate::brain_trade::made_of(report, &method);
+    let stop = if lifescape_planner::trade_craft::lot_finished(&method, &missing, made) {
+        crate::logln!("brain {account}: {node_id} trade lot spent its inputs ({made} made), lot done");
+        "goal_reached".to_string()
+    } else {
+        stop
+    };
     // XP the run earned toward a climb is progress even short of a level
     // (a food refill is not a dead block; a slow prayer window is no
     // failure).
@@ -304,6 +313,11 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         }
     }
     let id = life.nodes[index].id.clone();
+    // What the lot's craft run made, and in how many work ticks (R5).
+    if lifescape_planner::trade_craft::is_trade(&method) && matches!(decision, Verdict::Done | Verdict::EngagementEnd) {
+        let work = report.get("work_ticks").as_i64().unwrap_or(ticks as i64);
+        lifescape_planner::trade_craft::note_made(&mut life.memory.trades, &id, made, work);
+    }
     // Method health (`method_health`): what the method itself did.
     match &decision {
         Verdict::Done | Verdict::EngagementEnd => crate::method_health::record(&account, &method, crate::method_health::Outcome::Ok, ""),

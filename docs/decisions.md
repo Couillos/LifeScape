@@ -1207,3 +1207,46 @@ Source : `docs/plan-erreurs.txt` (causes R01-R18, plan P1-P18).
    prochain resolve choisit un autre site.
 Rejeté : priorité de guilde soumise à capacité (D2 a) ; levée manuelle seule
 (D1 c) ; contention comptée comme échec avec seuil plus haut (D4).
+
+## 2026-11-17 — Exécution 100 % market : méthode `trade:craft/<recette>` (plan rendements R5)
+
+Contexte : le guide money (R4) publie la famille market (D15 : intrants
+achetés au prix courant, craft, vente) ; aucun bot ne l'exécutait.
+Décision :
+1. Méthode du planificateur `trade:craft/<recette>` (`planner::trade_craft`),
+   la recette étant l'activité d'une ligne market du guide
+   (`smelt:bronze_bar`, `cook:trout`, `jewelry:gold_ring`…). Les données
+   du jeu la lisent par sa recette (voie, sites, quête, activité mesurée :
+   le rendement du craft entre dans le seau de la recette) ; script =
+   celui de la recette, lot en `--want <produit> <lot>`. Aucune logique
+   de craft nouvelle.
+2. Sélection : le cerveau lit le guide PRÉCALCULÉ
+   (`guides_store::current()`, vue money de la tranche du bot dans le
+   skill de la recette, lignes market seules), jamais un calcul à la
+   demande ; une offre par méthode (lignes non bloquées, profit > 0,
+   produit ≠ pièces, tout intrant acheté au MARCHÉ — une ligne qui achète
+   en boutique n'a pas de jambe `market:buy`), classée avec les autres
+   méthodes d'argent sur son profit/6000 du guide. Point d'extension R7 :
+   `trade_craft::pick_offer` (tirage pondéré D10/D14 à venir).
+3. Lot = min(volume d'une fenêtre de la ligne — ce que le guide a coté —,
+   profondeur des asks de chaque intrant + unités détenues, bourse libre
+   = pièces − ordres et deals engagés) ; achats au moins au prix courant
+   (D15, comme le guide).
+4. Séquence : blocage `missing:<intrants>` → obtentions à jambe
+   `market:buy` SEULE (dimensionnées sur le lot, échecs de recette
+   comptés) → intrants détenus : le lot acheté est crafté d'abord, quel
+   que soit le classement du moment (aucun stock échoué) → un run qui finit
+   ses intrants avec des produits faits clôt le lot (brûlés et ratés ne
+   rachètent jamais) → vente par défaut, motif `trade` (horizon d'un
+   surplus).
+5. Ironman exclu partout (aucune offre, aucune méthode, `iron_may_use`).
+6. Rapport : lot en mémoire de vie (`memory.trades`, 20 derniers : prévu
+   du guide, achats planifiés, produits faits, ticks du craft) ; réalisé =
+   ventes − achats tirés des deals du compte depuis le verrou (plafonnés
+   aux unités du lot) : `orchestrator economy` et page economy.
+Rejeté : alchimie d'objets achetés dans cette méthode (pas de produit à
+vendre : question ouverte) ; achats en boutique des intrants (pas de jambe
+market) ; un nouveau script « trade ».
+Vérification live : `check-method admin trade:craft/<recette> N` ne teste
+que le craft (le staff ne commerce jamais, règle 13) ; la séquence achat →
+craft → vente se lit sur la flotte après déploiement (page economy).

@@ -86,6 +86,7 @@ pub fn economy_cli(args: &[String]) -> i32 {
         Err(error) => println!("market criteria: {error}"),
     }
     crate::market_maker_report::print_rows(&crate::market_maker_report::maker_rows(&store, &crate::brain::lives_dir()));
+    crate::trade_report::print_rows(&crate::trade_report::trade_rows(&store, &crate::brain::lives_dir()));
     0
 }
 

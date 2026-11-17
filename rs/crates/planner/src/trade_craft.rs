@@ -158,6 +158,22 @@ pub fn offer_from_row(row: &MoneyRow, quote: &dyn Fn(&str) -> Option<Quote>, hel
     Ok(TradeOffer { method: method_of(&row.method), product, profit_6000: row.profit_6000, product_per_6000, unit_sale, inputs })
 }
 
+/// The bare offer of a trade method from its recipe's way (inputs per
+/// product, the failures counted; no guide profit, no asks): what a lot
+/// whose inputs were bought needs to be crafted when its row left the
+/// guide (`sticky`). `None` for another method or a recipe without way.
+pub fn recipe_offer(method: &str, held: &dyn Fn(&str) -> i64) -> Option<TradeOffer> {
+    let recipe = recipe_of(method)?;
+    let (product, way) = crate::method_way::method_way(recipe)?;
+    let out = if way.expected_out() > 0.0 { way.expected_out() } else { 1.0 };
+    let inputs: Vec<TradeInput> = way
+        .inputs
+        .iter()
+        .map(|(item, per_action)| TradeInput { item: item.clone(), per_unit: (*per_action).max(1) as f64 / out, asks: Vec::new(), floor: 0.0, held: held(item).max(0) })
+        .collect();
+    (!inputs.is_empty()).then(|| TradeOffer { method: method.to_string(), product, profit_6000: 0.0, product_per_6000: 0.0, unit_sale: 0.0, inputs })
+}
+
 /// True when a bot (live `level_of`, `quests_done`, Ironman or not) may
 /// work the row: an Ironman never trades; levels, quests and the quest
 /// points of the shops it deals with (Q7) met.
@@ -361,6 +377,12 @@ pub fn input_count(method: &str, need: &str, batch: i64) -> Option<i64> {
     Some(((batch as f64 * (*per_action).max(1) as f64 / out) - 1e-9).ceil().max(1.0) as i64)
 }
 
+/// True when `need` is an input the trade method `method` buys on the
+/// market (its recipe consumes it); a tool or anything else is not.
+pub fn buys_input(method: &str, need: &str) -> bool {
+    recipe_of(method).and_then(crate::method_way::method_way).is_some_and(|(_, way)| way.inputs.iter().any(|(input, _)| input == need))
+}
+
 /// True when a craft run of a trade lot that stopped `blocked` on
 /// `missing` finished its lot: every missing object is an input of the
 /// recipe (the bought stock is spent: burns and failures ate the rest)
@@ -383,7 +405,8 @@ pub struct TradeLot {
     pub buys: Vec<(String, i64)>,
     /// Coins those purchases cost at the book when planned.
     pub cost: i64,
-    /// What bounded the lot (`capital`, `depth`, `window`).
+    /// What bounded the lot (`capital`, `depth`, `window`; `held` when
+    /// the bot's stock made it).
     pub bound: String,
     /// Guide profit of the lot (profit per product × lot, D15/D6).
     pub predicted: i64,
@@ -417,14 +440,17 @@ pub fn open_lot(lots: &mut Vec<TradeLot>, node: &Node, ctx: &ReadyCtx, now: i64)
     let offer = offer_in(ctx, &method)?;
     let plan = lot_size(offer, ctx.trade_wallet);
     let lot = node.batch.max(1);
+    // The purchases of THIS lot (a lot the held stock makes buys nothing).
+    let buys: Vec<(String, i64)> = offer.inputs.iter().map(|input| (input.item.clone(), to_buy(input, lot))).filter(|(_, units)| *units > 0).collect();
+    let bound = if buys.is_empty() { "held" } else { plan.bound.as_str() };
     let record = TradeLot {
         node: node.id.clone(),
         method,
         product: offer.product.clone(),
         lot,
-        buys: plan.buys.clone(),
-        cost: plan.cost,
-        bound: plan.bound.as_str().to_string(),
+        buys,
+        cost: lot_cost(offer, lot).unwrap_or(0.0).ceil() as i64,
+        bound: bound.to_string(),
         predicted: (offer.unit_profit() * lot as f64).round() as i64,
         guide_per_6000: offer.product_per_6000,
         opened: now,
