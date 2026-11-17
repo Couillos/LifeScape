@@ -163,7 +163,7 @@ pub fn run_smelt(bot: &mut Bot, args: &[String]) -> ScriptResult {
             // `want: 0` would read "all carried": the order is met.
             return Ok(StepControl::GoalReached);
         }
-        let job = ProduceJob { spec: &smelt, input: primary, input_name: primary_name, want: sets, products: vec![bar], near: (post.x as i32, post.z as i32) };
+        let job = ProduceJob { spec: &smelt, input: primary, input_name: primary_name, want: sets, products: vec![bar], near: (post.x as i32, post.z as i32), until: state.want_goal(step_bot, &spec) };
         match produce::run_job(step_bot, &job) {
             Err(error) if is_death_abort(&error) => {
                 step_bot.log("died smelting, restocking to retry");

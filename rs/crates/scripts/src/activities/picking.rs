@@ -111,7 +111,7 @@ fn pick_field(bot: &mut Bot, kind: &str, banned: &BanSet, now: u64) -> Option<(i
 }
 
 /// Work one tile: walk over (fields never block), click, watch the crop land.
-fn work_field(bot: &mut Bot, x: i32, z: i32, loc: u16, product: u16) -> Result<(WorkOutcome, u32), ScriptError> {
+fn work_field(bot: &mut Bot, x: i32, z: i32, loc: u16, product: u16, until: Option<crate::kit::cycle::WantGoal>) -> Result<(WorkOutcome, u32), ScriptError> {
     match walk_checked(bot, x, z, FIELD_WALK_TICKS) {
         Ok(true) => {}
         Ok(false) => return Ok((WorkOutcome::Unreachable, 0)),
@@ -120,7 +120,7 @@ fn work_field(bot: &mut Bot, x: i32, z: i32, loc: u16, product: u16) -> Result<(
     }
     let had = pack_total(bot, product);
     let mut source = PickSource { loc, x, z };
-    watch_stand(bot, &mut source, x, z, &[product], had)
+    watch_stand(bot, &mut source, x, z, &[product], had, until)
 }
 
 /// Pick banked loads in the open session: `picking [crop] [count]`
@@ -160,7 +160,7 @@ pub fn run_picking(bot: &mut Bot, args: &[String]) -> ScriptResult {
             return Ok(StepControl::Continue);
         };
         empty = 0;
-        let (outcome, _) = work_field(step_bot, x, z, loc, product)?;
+        let (outcome, _) = work_field(step_bot, x, z, loc, product, state.want_goal(step_bot, &spec))?;
         match outcome {
             WorkOutcome::Gone | WorkOutcome::Moved | WorkOutcome::Unreachable | WorkOutcome::UnreachableSpot => {
                 banned.ban_for((x, z), step_bot.world.ticks, GONE_BAN_TICKS);

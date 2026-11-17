@@ -80,8 +80,10 @@ pub fn run_cut_gems(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
         let before = pack_total(step_bot, uncut);
-        while pack_total(step_bot, uncut) > 0 {
-            match cut_one(step_bot, uncut, chisel, &cut_name) {
+        // One stone per click, the counter asks only what `--want` still
+        // wants: the load stops the moment the order is met.
+        while pack_total(step_bot, uncut) > 0 && !state.want_met(step_bot, &spec) {
+            match cut_one(step_bot, uncut, chisel, &cut_name, state.want_left(step_bot, &spec)) {
                 Err(error) if is_death_abort(&error) => {
                     step_bot.log("died cutting, restocking to retry");
                     return Ok(StepControl::Continue);
@@ -114,8 +116,9 @@ fn fill_uncut(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, uncut: u16)
 
 /// Cut one stone: click, answer the choice or counter through the shared
 /// adapters, wait out the consumption. A grid modal is loud (its button
-/// mapping is unverified: never press blind).
-fn cut_one(bot: &mut Bot, uncut: u16, chisel: u16, cut_name: &str) -> Result<(), ScriptError> {
+/// mapping is unverified: never press blind). A counter answers at most
+/// `due` (the `--want` still due, `u32::MAX` without one).
+fn cut_one(bot: &mut Bot, uncut: u16, chisel: u16, cut_name: &str, due: u32) -> Result<(), ScriptError> {
     let had = pack_total(bot, uncut);
     let (com, slot) = inv_slot(bot, uncut)?;
     let (use_com, use_slot) = inv_slot(bot, chisel)?;
@@ -129,7 +132,7 @@ fn cut_one(bot: &mut Bot, uncut: u16, chisel: u16, cut_name: &str) -> Result<(),
             bot.chat_choose(cut_name)?;
         }
         if bot.world.count_dialog {
-            bot.resume_pcount(count_answer(had, 0))?;
+            bot.resume_pcount(count_answer(had, due))?;
         }
         bot.pump(2)?;
         if pack_total(bot, uncut) < had {

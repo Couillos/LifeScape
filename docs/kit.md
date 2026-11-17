@@ -284,6 +284,40 @@ jamais). Le but s'arrête aussi en cours de charge : `CycleState::want_goal`
 connue atteignent base + N (comme un sac plein), le script la banque et
 le cycle s'arrête, plus un sac entier au-delà de N.
 
+`--want` lu DANS la charge (`kit/want.rs`, 2026-11-17, live admin
+`fishing --want raw_lobster 2` : 11 homards, le stand enchaînait jusqu'au
+saut du spot). Même convention (sac + banque connue, base au lancement),
+une primitive pour toutes les boucles : `want::load_done` (sac plein OU
+but atteint), `met`, `left` (unités dues, `u32::MAX` sans `--want`),
+`cap` (borne un make-X, un retrait, un appui), `stage_bounds` (étape de
+transformation), `inputs_for` (intrants pour N sorties). Sans `--want`,
+rien ne change.
+- Stands (`harvest::watch_stand(…, until)`) : le gain qui atteint le but
+  finit le stand comme un sac plein (`WorkOutcome::Full`) ; `run_load`
+  copie `LoadCfg::until` dans `LoopState::until` pour pêche, minage,
+  coupe ; essence, traite, cueillette, tonte passent le but de leur
+  `CycleState`. Fin : la charge est banquée (récolteurs à charge) puis
+  `goal_reached` ; traite/cueillette/tonte s'arrêtent au `poll_stop` du
+  pas suivant (sac compté, comme avant).
+- Transformations (`ProduceJob::until`) : un but sur un produit de
+  l'étape est relu à chaque clic (cuisson, pain, repas, filage, teinture,
+  remplissage, bijoux, fonte : un brûlé ou un fer raté ne compte pas, la
+  boucle continue) et chaque réponse make-X demande au plus le reste ; un
+  but sur une étape suivante (argile façonnée pour un plat cuit) borne
+  l'étape une fois. Pain : farine/eau retirées ≤ reste ; poterie : pièces
+  prêtes + argile ≤ reste ; runes : essence ≤ ⌈reste / runes par
+  essence⌉ (`action_odds::runes_per_essence`).
+- Boucles par objet : taille de gemmes, enfilage, couture (appui
+  `make_press(cuir, reste)`), moulin (passes ≤ reste), ramassage au sol,
+  moules d'or s'arrêtent dès le but.
+- Combat (`farm:<drop>`) : `HuntPlan::want(goal)` → `HuntStop` relu entre
+  deux adversaires (après le butin), comme `--level`.
+Dépassement inévitable : une action en cours (une prise multiple, un
+autel qui lie toute l'essence portée, une pression déjà lancée, un butin
+de plusieurs unités). Déjà bornés avant : forge (`press::make_press`),
+fonte (`load_sets`), sorts (`spell_load::casts_left`), tannage, achat en
+dialogue.
+
 Étages (2026-11-14, 4-5 bots bloqués au sommet du moulin de Lumbridge
 (3165,3306,2)) : aucune banque F2P n'est à l'étage en rév. 274, donc
 `nearest_bank`/`nearest_bank_at` (`gamedata::banks::nearest_free_bank`)

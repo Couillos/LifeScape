@@ -103,7 +103,7 @@ fn pick_cow(bot: &mut Bot, banned: &BanSet, now: u64) -> Option<(u16, i32, i32)>
 }
 
 /// Work one cow: approach, click, watch the milk land.
-fn work_cow(bot: &mut Bot, slot: u16, x: i32, z: i32, milk: u16) -> Result<(WorkOutcome, u32), ScriptError> {
+fn work_cow(bot: &mut Bot, slot: u16, x: i32, z: i32, milk: u16, until: Option<crate::kit::cycle::WantGoal>) -> Result<(WorkOutcome, u32), ScriptError> {
     if let Err(error) = bot.approach_npc(slot, COW_WALK_TICKS) {
         let typed = ScriptError::from(error);
         if is_walk_abort(&typed) {
@@ -113,7 +113,7 @@ fn work_cow(bot: &mut Bot, slot: u16, x: i32, z: i32, milk: u16) -> Result<(Work
     }
     let had = pack_total(bot, milk);
     let mut source = MilkSource { slot, x, z };
-    watch_stand(bot, &mut source, x, z, &[milk], had)
+    watch_stand(bot, &mut source, x, z, &[milk], had, until)
 }
 
 /// Milk banked loads in the open session: `milk [count]`.
@@ -162,7 +162,7 @@ pub fn run_milk(bot: &mut Bot, args: &[String]) -> ScriptResult {
             return Ok(StepControl::Continue);
         };
         empty_fields = 0;
-        let (outcome, _) = work_cow(step_bot, slot, x, z, milk)?;
+        let (outcome, _) = work_cow(step_bot, slot, x, z, milk, state.want_goal(step_bot, &spec))?;
         match outcome {
             WorkOutcome::Gone | WorkOutcome::Moved | WorkOutcome::Unreachable | WorkOutcome::UnreachableSpot => {
                 banned.ban_for((x, z), step_bot.world.ticks, GONE_BAN_TICKS);

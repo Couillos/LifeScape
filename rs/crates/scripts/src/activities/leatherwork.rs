@@ -102,8 +102,10 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
         let before = pack_total(step_bot, leather);
-        while pack_total(step_bot, leather) > 0 && pack_total(step_bot, thread) > 0 {
-            match sew_batch(step_bot, &Sew { leather, needle, thread }, product_name) {
+        // The press asks only what `--want` still wants; the loop stops
+        // the moment the order is met.
+        while pack_total(step_bot, leather) > 0 && pack_total(step_bot, thread) > 0 && !state.want_met(step_bot, &spec) {
+            match sew_batch(step_bot, &Sew { leather, needle, thread }, product_name, state.want_left(step_bot, &spec)) {
                 Err(error) if is_death_abort(&error) => {
                     step_bot.log("died sewing, restocking to retry");
                     return Ok(StepControl::Continue);
@@ -222,10 +224,12 @@ struct Sew {
 /// queue chains a piece every 2-3 ticks until the leather or the thread
 /// runs out (`leather.rs2`); a level-up cut re-presses through the
 /// caller's loop. Hard leather sews direct (no grid, one per click);
-/// chat options or a counter answer when they speak.
-fn sew_batch(bot: &mut Bot, sew: &Sew, product_name: &str) -> Result<(), ScriptError> {
+/// chat options or a counter answer when they speak. `due` (the
+/// `--want` still due, `u32::MAX` without one) bounds the press and the
+/// counter: never a Make 10 for 2 wanted gloves.
+fn sew_batch(bot: &mut Bot, sew: &Sew, product_name: &str, due: u32) -> Result<(), ScriptError> {
     let had = pack_total(bot, sew.leather);
-    let (button_press, items) = make_press(had, u32::MAX);
+    let (button_press, items) = make_press(had, due);
     let (com, slot) = inv_slot(bot, sew.leather)?;
     let (use_com, use_slot) = inv_slot(bot, sew.needle)?;
     bot.op_held_u(sew.leather, slot, com, sew.needle, use_slot, use_com)?;
@@ -249,7 +253,7 @@ fn sew_batch(bot: &mut Bot, sew: &Sew, product_name: &str) -> Result<(), ScriptE
             return if pack_total(bot, sew.leather) < had { Ok(()) } else { Err(ScriptError::Failed(format!("{product_name} never sewed at {:?}", bot.position()))) };
         }
         if bot.world.count_dialog {
-            bot.resume_pcount(count_answer(had, 0))?;
+            bot.resume_pcount(count_answer(had, due))?;
         }
         bot.pump(2)?;
         if pack_total(bot, sew.leather) < had {

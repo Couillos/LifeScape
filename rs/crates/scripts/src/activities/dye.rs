@@ -78,7 +78,7 @@ pub fn run_dye(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if pack_total(step_bot, coins) < FEE_GP {
             return Err(ScriptError::Blocked { missing: vec![format!("{COINS}:{FEE_GP}")] });
         }
-        let job = ProduceJob { spec: &DYEING, input: ingredient, input_name: ingredient_name, want: 0, products: vec![obj_id(step_bot, product_name)?], near: (bank.x as i32, bank.z as i32) };
+        let job = ProduceJob { spec: &DYEING, input: ingredient, input_name: ingredient_name, want: 0, products: vec![obj_id(step_bot, product_name)?], near: (bank.x as i32, bank.z as i32), until: state.want_goal(step_bot, &spec) };
         match produce::run_job(step_bot, &job) {
             Err(error) if is_death_abort(&error) => {
                 step_bot.log("died dyeing, restocking to retry");

@@ -107,7 +107,7 @@ pub fn refill(bot: &mut Bot, vessels: &[(u16, u16)], near: (i32, i32)) -> Result
     let Some((_, empty, full, empty_name)) = carried_kinds.first().copied() else { return Ok(0) };
     let kinds = nearest_kinds(water_stations(empty_name), near);
     let spec = Produce { verb: "filling", site: ProduceSite::Loc(&kinds), ui: ProduceUi::Direct };
-    let job = ProduceJob { spec: &spec, input: empty, input_name: empty_name, want: 0, products: vec![full], near };
+    let job = ProduceJob { spec: &spec, input: empty, input_name: empty_name, want: 0, products: vec![full], near, until: None };
     let site = bot.assigned_site.take();
     let outcome = produce::run_job(bot, &job);
     bot.assigned_site = site;

@@ -102,7 +102,7 @@ pub fn fight(
     ticks_limit: u64,
     no_bank: bool,
     food_required: bool,
-    stop_level: Option<(u8, u8)>,
+    stop: crate::kit::hunt::HuntStop,
 ) -> Result<(u32, bool, bool), ScriptError> {
     let mut kills = 0u32;
     let started = bot.world.ticks;
@@ -153,11 +153,12 @@ pub fn fight(
         if kills_limit > 0 && kills >= kills_limit {
             break;
         }
-        // `--level` goal met: stop between foes (never walking away from
-        // one that is hitting us), at most one kill past the level-up
-        // instead of the rest of the budget (up to 18 000 ticks).
-        if target_npc.is_none() && level_reached(&bot.world.stats, stop_level) {
-            bot.log(&format!("level target {stop_level:?} reached after {kills} kills, stopping the fight"));
+        // `--level` or `--want` goal met: stop between foes (never walking
+        // away from one that is hitting us), at most one kill past the
+        // level-up or the drop that meets the order (looted right after
+        // the kill) instead of the rest of the budget (up to 18 000 ticks).
+        if target_npc.is_none() && stop.reached(bot) {
+            bot.log(&format!("goal reached (level {:?}, want {:?}) after {kills} kills, stopping the fight", stop.level, stop.want));
             break;
         }
         bot.pump(2)?;

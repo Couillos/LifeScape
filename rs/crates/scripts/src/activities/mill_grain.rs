@@ -44,7 +44,7 @@ pub fn pick_hopper(bot: &Bot) -> Option<lifescape_gamedata::stations::Station> {
 /// Mill one pack: upstairs the grain slides down the chute, downstairs the
 /// pots fill from the bin, every click from a side stand (`kit::mill`).
 /// Returns (milled, taken).
-fn mill_pack(bot: &mut Bot, hopper: &lifescape_gamedata::stations::Station, grain: u16, pot: u16, flour: u16) -> Result<(u32, u32), ScriptError> {
+fn mill_pack(bot: &mut Bot, hopper: &lifescape_gamedata::stations::Station, grain: u16, pot: u16, flour: u16, due: u32) -> Result<(u32, u32), ScriptError> {
     let (hx, hz, hl) = (hopper.x as i32, hopper.z as i32, hopper.level as i32);
     bot.travel_to(lifescape_sdk::plan::Tile { x: hx, z: hz, level: hl })?;
     let hopper_name = hopper.loc.to_lowercase();
@@ -53,7 +53,9 @@ fn mill_pack(bot: &mut Bot, hopper: &lifescape_gamedata::stations::Station, grai
     };
     let mut milled = 0;
     let mut passes = 0;
-    while pack_total(bot, grain) > 0 && passes < MILL_PASSES {
+    // One grain per pass, one flour per grain: `due` (the `--want` flour
+    // still due) bounds the passes, never a bin past the order.
+    while pack_total(bot, grain) > 0 && passes < MILL_PASSES && milled < due {
         passes += 1;
         let (use_com, use_slot) = crate::quests::common::inv_slot(bot, grain)?;
         let loaded = click_from_stands(bot, (hx, hz, hopper_id), &mut |step_bot| Ok(step_bot.op_loc_u(hx, hz, hopper_id, grain, u16::from(use_slot), use_com)?), &[MillLine::HopperLoaded])?;
@@ -138,7 +140,7 @@ pub fn run_mill_grain(bot: &mut Bot, args: &[String]) -> ScriptResult {
             return Err(ScriptError::Blocked { missing: vec![GRAIN.to_string(), POT_EMPTY.to_string()] });
         }
         let hopper = pick_hopper(step_bot).ok_or_else(|| ScriptError::Failed(format!("no usable mill hopper near {:?}", step_bot.position())))?;
-        let (milled, taken) = mill_pack(step_bot, &hopper, grain, pot, flour)?;
+        let (milled, taken) = mill_pack(step_bot, &hopper, grain, pot, flour, state.want_left(step_bot, &spec))?;
         if milled + taken == 0 { return Err(ScriptError::Usage(format!("mill gave nothing at {:?}", step_bot.position()))); }
         step_bot.log(&format!("ok milled {milled} grain, took {taken} flour"));
         bank_trip_resilient(step_bot, &mut bank, &task_keep, 0, &[flour])?;

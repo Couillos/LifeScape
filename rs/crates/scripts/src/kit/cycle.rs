@@ -511,7 +511,7 @@ pub struct WantGoal {
 impl WantGoal {
     /// True once pack plus known bank hold `held` units of `obj`.
     pub fn met(&self, bot: &Bot) -> bool {
-        crate::kit::pack::pack_total(bot, self.obj).saturating_add(crate::kit::pack::banked_usable(bot, self.obj)) >= self.held
+        self.left(bot) == 0
     }
 }
 

@@ -56,8 +56,9 @@ pub struct Produce<'a> {
 }
 
 /// One produce order: the input, how many (0 = all carried), the watched
-/// products (outputs plus byproducts like burnt fish) and the reference
-/// tile the station is picked nearest to (the bank).
+/// products (outputs plus byproducts like burnt fish), the reference
+/// tile the station is picked nearest to (the bank) and the run's
+/// `--want` goal (`until`, `None` = the count alone binds).
 pub struct ProduceJob<'a> {
     pub spec: &'a Produce<'a>,
     pub input: u16,
@@ -65,6 +66,7 @@ pub struct ProduceJob<'a> {
     pub want: u32,
     pub products: Vec<u16>,
     pub near: (i32, i32),
+    pub until: Option<crate::kit::cycle::WantGoal>,
 }
 
 /// What one job consumed and made (burnt counts as made: it still proves
@@ -439,12 +441,12 @@ fn died(bot: &Bot, seen: &mut usize) -> bool {
 /// server chain. Stops on the want, an empty pack or a full one. A stand
 /// the server refuses reads as `NextStand` while nothing was consumed
 /// there, so the caller moves on instead of failing the job.
-fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u32, made_before: u32) -> Result<SiteDone, ScriptError> {
+fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u32, goal: Option<crate::kit::cycle::WantGoal>, made_before: u32) -> Result<SiteDone, ScriptError> {
     let single_shot = matches!(job.spec.ui, ProduceUi::Count | ProduceUi::Grid { .. } | ProduceUi::InvGrid { .. } | ProduceUi::Multi { .. });
     let mut consumed = 0u32;
     let mut seen_death = bot.world.messages.len();
     let mut retries = 0u32;
-    while consumed < target && pack_total(bot, job.input) > 0 {
+    while consumed < target && pack_total(bot, job.input) > 0 && !crate::kit::want::met(goal, bot) {
         check_events(bot)?;
         if died(bot, &mut seen_death) {
             let mut hp = hitpoints(bot);
@@ -457,11 +459,12 @@ fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u3
             break;
         }
         let have = pack_total(bot, job.input);
+        let due = crate::kit::want::cap(target - consumed, goal, bot);
         // A refused click (grid never opened, choice never answered) ends
         // the site loud in the log: the caller's "consumed nothing" then
         // names its cause (live 2026-11-14, wheel grid, silent break).
         let seen_click = bot.world.messages.len();
-        if let Err(error) = click_once(bot, job, site, have, target - consumed) {
+        if let Err(error) = click_once(bot, job, site, have, due) {
             let fresh: Vec<String> = bot.world.messages.get(seen_click..).unwrap_or(&[]).to_vec();
             bot.log(&format!("{} click refused: {error}; game: {fresh:?}", job.spec.verb));
             // "I can't reach that!" before any interface: this stand is
@@ -479,8 +482,11 @@ fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u3
                 // One make-X answer runs the whole batch server-side: no
                 // click until the chain stops. A chain cut short (level-up
                 // splash) with inputs left re-opens the menu once more
-                // instead of banking the rest.
-                if single_shot && !drain_chained(bot, job, target, &mut consumed, &mut seen_death) {
+                // instead of banking the rest; so does a chain that ran
+                // its due while the live `--want` still wants (a failed
+                // iron smelt): the loop re-asks only what is still due.
+                let asked = consumed.saturating_sub(units).saturating_add(due);
+                if single_shot && !drain_chained(bot, job, asked, &mut consumed, &mut seen_death) && !crate::kit::want::wants_more(goal, bot) {
                     break;
                 }
             }
@@ -563,8 +569,7 @@ enum SiteDone {
 
 /// Work one station tile: stands nearest-first, refusals move on. Stops
 /// at the first stand that consumes anything.
-fn work_loc(bot: &mut Bot, job: &ProduceJob<'_>, x: i32, z: i32, loc: u16) -> Result<ProduceBatch, ScriptError> {
-    let target = if job.want == 0 { u32::MAX } else { job.want };
+fn work_loc(bot: &mut Bot, job: &ProduceJob<'_>, (x, z, loc): (i32, i32, u16), target: u32, goal: Option<crate::kit::cycle::WantGoal>) -> Result<ProduceBatch, ScriptError> {
     let made_before: u32 = job.products.iter().map(|id| pack_total(bot, *id)).sum();
     for (stand_x, stand_z) in loc_side_stands(bot, x, z, loc) {
         if pack_total(bot, job.input) == 0 {
@@ -577,7 +582,7 @@ fn work_loc(bot: &mut Bot, job: &ProduceJob<'_>, x: i32, z: i32, loc: u16) -> Re
             Err(_) => continue,
         }
         let site = ClickedSite::Loc { x, z, loc };
-        match work_site(bot, job, &site, target, made_before) {
+        match work_site(bot, job, &site, target, goal, made_before) {
             Ok(SiteDone::NextStand) => continue,
             Ok(SiteDone::Done(batch)) => {
                 if batch.consumed > 0 {
@@ -605,7 +610,13 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
     let near = bot.assigned_site.map_or(job.near, |(site_x, site_z, _)| (site_x, site_z));
     bot.log(&format!("{} {} near {:?}", job.spec.verb, job.input_name, near));
     bot.intend(&format!("{} {}", job.spec.verb, job.input_name));
-    let target = if job.want == 0 { u32::MAX } else { job.want };
+    let (target, goal) = crate::kit::want::stage_bounds(if job.want == 0 { u32::MAX } else { job.want }, &job.products, job.until, bot);
+    if target == 0 || crate::kit::want::met(goal, bot) {
+        // The order is already met: nothing to work (never a click past
+        // the `--want`, never a "consumed nothing" failure for it).
+        bot.log(&format!("{} {}: --want already met, nothing to work", job.spec.verb, job.input_name));
+        return Ok(ProduceBatch { consumed: 0, made: 0 });
+    }
     let made_before: u32 = job.products.iter().map(|id| pack_total(bot, *id)).sum();
     let batch = match &job.spec.site {
         ProduceSite::Loc(names) => {
@@ -620,7 +631,7 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
             let Some((x, z, _, loc)) = picked else {
                 return Err(ScriptError::Failed(format!("no produce station {names:?} near {near:?}")));
             };
-            work_loc(bot, job, x, z, loc)?
+            work_loc(bot, job, (x, z, loc), target, goal)?
         }
         ProduceSite::Npc(names) => {
             let slot = crate::kit::npc_spawn::find_or_walk(bot, names, job.spec.verb)?;
@@ -632,7 +643,7 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
                 return Err(ScriptError::Failed(format!("no produce NPC {names:?} near {:?}", bot.position())));
             };
             bot.approach_npc(slot, 15000)?;
-            match work_site(bot, job, &ClickedSite::Npc { slot }, target, made_before)? {
+            match work_site(bot, job, &ClickedSite::Npc { slot }, target, goal, made_before)? {
                 SiteDone::Done(batch) => batch,
                 SiteDone::NextStand => ProduceBatch { consumed: 0, made: 0 },
             }

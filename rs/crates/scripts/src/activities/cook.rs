@@ -79,6 +79,7 @@ pub fn run_cook(bot: &mut Bot, args: &[String]) -> ScriptResult {
             want: 0,
             products: products.clone(),
             near: (bank.x as i32, bank.z as i32),
+            until: state.want_goal(step_bot, &spec),
         };
         match produce::run_job(step_bot, &job) {
             Err(error) if is_death_abort(&error) => {

@@ -105,6 +105,7 @@ pub fn plan_of(rung: &Rung, clusters: &[(i64, i64, i64, usize)], food: Option<u3
         food_required: food.is_some(),
         keep: gate_items(rung, holdings),
         stop_level: None,
+        stop_want: None,
     }
 }
 

@@ -63,6 +63,10 @@ pub struct LoopState {
     pub flees: u32,
     pub seen_death: usize,
     pub spot: Option<(i32, i32)>,
+    /// The run's `--want` goal, copied from `LoadCfg::until` by
+    /// `run_load`: `work` hands it to the stand (`harvest::watch_stand`),
+    /// which ends the moment the gain meets it.
+    pub until: Option<crate::kit::cycle::WantGoal>,
 }
 
 impl LoopState {
@@ -74,6 +78,7 @@ impl LoopState {
             flees: 0,
             seen_death: bot.world.messages.len(),
             spot: None,
+            until: None,
         }
     }
 
@@ -270,11 +275,13 @@ pub fn run_load<Ops: LoopOps>(
 ) -> Result<bool, ScriptError> {
     let mut current: Option<(Ops::Spot, i32, i32)> = None;
     let mut had = 0u32;
+    state.until = cfg.until;
     loop {
         check_events(bot)?;
         // A met `--want` ends the load like a full pack: the caller banks
-        // it and the cycle stops, never a whole extra pack past N.
-        if ops.is_full(bot) || cfg.until.is_some_and(|goal| goal.met(bot)) {
+        // it and the cycle stops, never a whole extra pack past N (the
+        // stand itself stops on it too, `state.until`).
+        if ops.is_full(bot) || crate::kit::want::met(cfg.until, bot) {
             return Ok(true);
         }
         if !ops.has_tool(bot) {
@@ -421,7 +428,7 @@ mod tests {
         assert_eq!((cfg.stall_ticks, cfg.gone_ban, cfg.structural_ban, cfg.unreach_ban), (1000, 250, 7200, 1800));
         assert_eq!((cfg.flee_cap, cfg.flee_ban, cfg.refusal_ban), (2, 500, 500));
         assert_eq!((cfg.repick_tries, cfg.repick_wait, cfg.round_idle, cfg.death_wait, cfg.flee_wait), (16, 15, 12, 40, 200));
-        let mut state = LoopState { banned: BanSet::new(), idle_since: 100, last_hp: 10, flees: 0, seen_death: 0, spot: Some((5, 5)) };
+        let mut state = LoopState { banned: BanSet::new(), idle_since: 100, last_hp: 10, flees: 0, seen_death: 0, spot: Some((5, 5)), until: None };
         assert!(matches!(apply_outcome(&cfg, &mut state, (5, 5), WorkOutcome::Gone, 0, 100, ban_gone, ban_refusal, ban_none), LoadExit::Continue));
         assert!(state.banned.is_banned((5, 5), 100 + cfg.gone_ban - 1) && state.spot.is_none());
         state.spot = Some((6, 6));
@@ -453,7 +460,7 @@ mod tests {
         ), "quiet past the bound aborts");
         assert!(matches!(apply_outcome(&cfg, &mut state, (8, 8), WorkOutcome::Blocked, 0, 500, ban_gone, ban_refusal, ban_none), LoadExit::Abort));
         assert!(matches!(apply_outcome(&cfg, &mut state, (8, 8), WorkOutcome::Full, 0, 500, ban_gone, ban_refusal, ban_none), LoadExit::Full));
-        let mut flee = LoopState { banned: BanSet::new(), idle_since: 0, last_hp: 10, flees: 0, seen_death: 0, spot: Some((9, 9)) };
+        let mut flee = LoopState { banned: BanSet::new(), idle_since: 0, last_hp: 10, flees: 0, seen_death: 0, spot: Some((9, 9)), until: None };
         assert!(!register_hurt(&cfg, &mut flee, 600) && !register_hurt(&cfg, &mut flee, 601), "two flees ride");
         assert!(flee.banned.is_banned((9, 9), 601 + cfg.flee_ban - 1));
         assert!(register_hurt(&cfg, &mut flee, 602), "past the cap the load aborts");
@@ -465,7 +472,7 @@ mod tests {
     fn stall_tail_resets_on_gain() {
         let cfg = LoadCfg::gather();
         let mut state =
-            LoopState { banned: BanSet::new(), idle_since: 100, last_hp: 10, flees: 0, seen_death: 0, spot: Some((1, 1)) };
+            LoopState { banned: BanSet::new(), idle_since: 100, last_hp: 10, flees: 0, seen_death: 0, spot: Some((1, 1)), until: None };
         assert!(matches!(stall_or_continue(&cfg, &mut state, 3, 150), LoadExit::Continue));
         assert_eq!(state.idle_since, 150, "a gain resets the budget");
         assert!(matches!(stall_or_continue(&cfg, &mut state, 0, 150 + 1000), LoadExit::Continue), "exactly on the bound still counts");
@@ -570,6 +577,7 @@ mod tests {
         bot.world.inv.insert(pack, [(0u8, (oak, 1u32)), (1u8, (oak, 1u32))].into_iter().collect());
         let mut state = LoopState::fresh(&bot);
         assert!(run_load(&mut bot, &short, &mut state, &mut DummyOps).expect("goal met"), "2 of 2 held: load done");
+        assert_eq!(state.until, short.until, "the stands read the goal too (`watch_stand` ends on it mid-chain)");
     }
 
     /// Default hooks: keep-all spots, drop-on-NoBait, default outcome map.
@@ -580,7 +588,7 @@ mod tests {
         attach_live_tables(&mut bot);
         let mut ops = DummyOps;
         let mut state =
-            LoopState { banned: BanSet::new(), idle_since: 0, last_hp: 10, flees: 0, seen_death: 0, spot: Some((4, 4)) };
+            LoopState { banned: BanSet::new(), idle_since: 0, last_hp: 10, flees: 0, seen_death: 0, spot: Some((4, 4)), until: None };
         assert!(ops.keep_spot(&mut bot, &mut state, &(), (4, 4)), "default keeps every spot");
         assert!(!ops.on_no_bait(&mut bot, &mut state, &(), (4, 4)).expect("default never fails"), "default drops on NoBait");
         state.spot = Some((4, 4));

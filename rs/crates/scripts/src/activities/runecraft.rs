@@ -45,8 +45,10 @@ pub fn ruin_tile(prefix: &str) -> Option<(i64, i64, i64)> {
 }
 
 /// Top the pack up with the banked talisman (kept, never consumed) then
-/// essence (nothing when the booth is far: the caller reports `blocked`).
-fn fill_essence(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, essence: u16, talisman: u16) -> Result<(), ScriptError> {
+/// essence, at most `cap` (the essence the `--want` runes still need:
+/// one altar click binds all of it), nothing when the booth is far (the
+/// caller reports `blocked`).
+fn fill_essence(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, essence: u16, talisman: u16, cap: u32) -> Result<(), ScriptError> {
     if !crate::kit::withdraw::reach_bank_for(bot, bank, &[essence, talisman])? {
         return Ok(());
     }
@@ -54,8 +56,9 @@ fn fill_essence(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, essence: 
         bank_withdraw_items(bot, bank, &[talisman], 1)?;
     }
     let free = free_slots(bot) as u32;
-    if free > 1 {
-        bank_withdraw_items(bot, bank, &[essence], free - 1)?;
+    let take = free.saturating_sub(1).min(cap.saturating_sub(pack_total(bot, essence)));
+    if take > 0 {
+        bank_withdraw_items(bot, bank, &[essence], take)?;
     }
     Ok(())
 }
@@ -119,7 +122,10 @@ pub fn run_runecraft(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut keep_stock: Vec<u16> = vec![essence, talisman];
     keep_stock.extend(task_keep.iter().copied());
     bank_trip(bot, &bank, &keep_stock, 0)?;
-    fill_essence(bot, &bank, essence, talisman)?;
+    // Runes per essence at this level: the `--want` runes still due set
+    // the essence carried (nothing gained yet before the run).
+    let per_essence = lifescape_gamedata::action_odds::runes_per_essence(rune_name, level).unwrap_or(1).max(1) as u32;
+    fill_essence(bot, &bank, essence, talisman, crate::kit::want::inputs_for(spec.targets.want_count.unwrap_or(u32::MAX), per_essence))?;
     if pack_total(bot, essence) == 0 {
         return Err(ScriptError::Blocked { missing: vec![ESSENCE.to_string()] });
     }
@@ -130,7 +136,8 @@ pub fn run_runecraft(bot: &mut Bot, args: &[String]) -> ScriptResult {
         check_events(step_bot)?;
         if pack_total(step_bot, essence) == 0 || pack_total(step_bot, talisman) == 0 {
             bank_trip(step_bot, &bank, &keep_stock, 0)?;
-            fill_essence(step_bot, &bank, essence, talisman)?;
+            let per = lifescape_gamedata::action_odds::runes_per_essence(rune_name, learn_level(step_bot, RUNECRAFT_STAT, level)).unwrap_or(1).max(1) as u32;
+            fill_essence(step_bot, &bank, essence, talisman, crate::kit::want::inputs_for(state.want_left(step_bot, &spec), per))?;
             if pack_total(step_bot, essence) == 0 {
                 return Err(ScriptError::Blocked { missing: vec![ESSENCE.to_string()] });
             }

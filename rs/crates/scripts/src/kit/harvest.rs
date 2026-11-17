@@ -108,7 +108,10 @@ pub fn after_gain(full: bool, depleted: bool, gain_ends_action: bool) -> (Option
 /// ack). The load-level stall stays the ultimate backstop. Gained
 /// product this stand. Pure delegation for everything skill-specific
 /// (`HarvestSource`); threats, modals and the refusal vocabulary are
-/// shared.
+/// shared. `until` (the run's `--want` goal) ends the stand as a full
+/// pack the moment the gain meets it: a chaining spot never runs on past
+/// the order (live admin 2026-11-17: `--want raw_lobster 2`, 11 caught
+/// before the spot hopped).
 pub fn watch_stand<Source: HarvestSource>(
     bot: &mut Bot,
     source: &mut Source,
@@ -116,6 +119,7 @@ pub fn watch_stand<Source: HarvestSource>(
     spot_z: i32,
     product_ids: &[u16],
     had: u32,
+    until: Option<crate::kit::cycle::WantGoal>,
 ) -> Result<(WorkOutcome, u32), ScriptError> {
     let mut gained = 0u32;
     let mut silences = 0u32;
@@ -173,10 +177,11 @@ pub fn watch_stand<Source: HarvestSource>(
             if now_have > had + gained {
                 gained = now_have - had;
                 // The catch that filled the last slot ends the stand: the
-                // next click could only be refused. A depleted resource
-                // (rock emptied, stump) ends it too: repick, never a click
-                // on the empty loc.
-                let full = crate::kit::pack::free_slots(bot) == 0;
+                // next click could only be refused; so does the one that
+                // meets the `--want` (the load banks, the run stops). A
+                // depleted resource (rock emptied, stump) ends it too:
+                // repick, never a click on the empty loc.
+                let full = crate::kit::want::load_done(bot, until);
                 let depleted = !full && source.depleted(bot);
                 let (end, reclick) = after_gain(full, depleted, source.gain_ends_action());
                 if let Some(outcome) = end {
