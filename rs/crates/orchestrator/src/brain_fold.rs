@@ -220,6 +220,17 @@ pub(crate) fn idle_windows(life: &lifescape_planner::Life, node: &str) -> u32 {
     life.history.iter().rev().filter(|entry| entry.node == node && entry.outcome != "stopped").take_while(|entry| entry.outcome == IDLE_OUTCOME).count() as u32
 }
 
+/// The node's last error as the fold line prints it (tour 2 P2-11): only
+/// when THIS report failed or blocked the node. A success, an engagement
+/// end or a stop never reprints an older error (leo_king's "unknown
+/// server opcode 149" echoed every 6 min, 22 such lines for 0 incident).
+pub(crate) fn fresh_error<'a>(decision: &Verdict, last_error: &'a str) -> &'a str {
+    match decision {
+        Verdict::Failure(_) | Verdict::Contract(_) | Verdict::Travel(_) | Verdict::Blocked(_) => last_error,
+        Verdict::Done | Verdict::AwaitFill | Verdict::EngagementEnd | Verdict::Stopped => "",
+    }
+}
+
 /// Fold one pushed report into the graph; launches nothing (the launch
 /// pass runs right after, same brain tick).
 pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &Value) {
@@ -413,7 +424,7 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             node.failures,
             lifescape_planner::MAX_FAILURES,
             node.blocks,
-            node.last_error
+            fresh_error(&decision, &node.last_error)
         );
     }
     for change in normalize(&mut life) {
@@ -555,6 +566,18 @@ mod tests {
         let progressed = super::gained_toward(&strung, &obtain) > 0;
         assert_eq!(verdict("goal_reached", None, &[], false, false, progressed), Verdict::EngagementEnd);
         assert!(matches!(verdict("goal_reached", None, &[], false, false, false), Verdict::Failure(_)), "nothing brought stays short");
+    }
+
+    /// Tour 2 P2-11: an engagement end, a success or a stop never echoes
+    /// the node's older error; a failure prints it.
+    #[test]
+    fn the_fold_line_never_echoes_an_old_error() {
+        let old = "protocol: unknown server opcode 149";
+        assert_eq!(super::fresh_error(&Verdict::EngagementEnd, old), "");
+        assert_eq!(super::fresh_error(&Verdict::Done, old), "");
+        assert_eq!(super::fresh_error(&Verdict::Stopped, old), "");
+        assert_eq!(super::fresh_error(&Verdict::Failure("x".to_string()), old), old);
+        assert_eq!(super::fresh_error(&Verdict::Blocked(vec!["coal".to_string()]), "Blocked: missing coal"), "Blocked: missing coal");
     }
 
     #[test]
