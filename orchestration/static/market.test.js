@@ -56,3 +56,9 @@ test('WS prints fold into the live quarter, not the live hour', () => {
   assert.deepEqual([rows[94].o, rows[94].c, rows[94].v], [8, 8, 1]);
   assert.equal(rows[93], null, 'nothing known before the first trade');
 });
+
+test('a market maker pseudo is gold, any other plain and escaped', () => {
+  assert.equal(Market.partyHtml('jim_ford', true), '<span class="maker" title="market maker">jim_ford</span>');
+  assert.equal(Market.partyHtml('eva_dale', false), 'eva_dale');
+  assert.equal(Market.partyHtml('<b>', false), '&lt;b&gt;');
+});

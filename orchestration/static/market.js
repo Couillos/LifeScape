@@ -212,13 +212,19 @@ function statusLabel(status) {
   return status === 'settled' ? 'settled' : 'pending';
 }
 
+// A party's pseudo; a market maker's in gold (user 2026-11-17).
+function partyHtml(name, maker) {
+  const text = String(name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return maker ? '<span class="maker" title="market maker">' + text + '</span>' : text;
+}
+
 function renderRecent() {
   const rows = ['<tr><th>item</th><th>qty</th><th>price</th><th>buyer</th><th>seller</th><th>status</th><th>time</th></tr>'];
   for (const trade of recent.slice(0, 15)) {
     const date = new Date(trade.t * 1000);
     const label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
     // The item opens its market (chart, book, last trades) on click.
-    rows.push('<tr><td class="item-link" data-id="' + Number(trade.item) + '" title="open this item">' + itemName(trade.item) + '</td><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + trade.buyer + '</td><td>' + trade.seller + '</td><td>' + statusLabel(trade.status) + '</td><td>' + label + '</td></tr>');
+    rows.push('<tr><td class="item-link" data-id="' + Number(trade.item) + '" title="open this item">' + itemName(trade.item) + '</td><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + partyHtml(trade.buyer, trade.buyerMaker) + '</td><td>' + partyHtml(trade.seller, trade.sellerMaker) + '</td><td>' + statusLabel(trade.status) + '</td><td>' + label + '</td></tr>');
   }
   document.getElementById('recent').innerHTML = rows.join('');
 }
@@ -241,7 +247,7 @@ async function loadRecent() {
       for (const deal of payload.deals) {
         if (deal.name) knownNames.set(deal.item, deal.name);
       }
-      recent = payload.deals.map(deal => ({ item: deal.item, q: deal.qty, p: deal.price, t: deal.t, buyer: deal.buyer, seller: deal.seller, status: deal.status }));
+      recent = payload.deals.map(deal => ({ item: deal.item, q: deal.qty, p: deal.price, t: deal.t, buyer: deal.buyer, seller: deal.seller, buyerMaker: deal.buyer_maker === true, sellerMaker: deal.seller_maker === true, status: deal.status }));
       renderRecent();
       return;
     }
@@ -394,4 +400,4 @@ function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined' && module.exports) module.exports = { VIEWS, viewSlots, chartRows };
+if (typeof module !== 'undefined' && module.exports) module.exports = { VIEWS, viewSlots, chartRows, partyHtml };

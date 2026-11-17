@@ -45,6 +45,10 @@
   #book tr.bid td:first-child { color: #00e676; }
   #book tr.spread td { color: #888; text-align: center; }
   .muted { color: #888; }
+  /* Market makers' pseudos in Latest transactions: shimmering gold. */
+  .maker { font-weight: bold; background: linear-gradient(100deg, #8a6d1a 0%, #ffd700 30%, #fff6c8 50%, #ffd700 70%, #8a6d1a 100%); background-size: 200% auto; -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: 0 0 6px rgba(255, 215, 0, 0.35); animation: maker-shine 3s linear infinite; }
+  @keyframes maker-shine { to { background-position: -200% center; } }
+  @media (prefers-reduced-motion: reduce) { .maker { animation: none; } }
 </style>
 </head>
 <body>

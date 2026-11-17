@@ -159,6 +159,11 @@ pub fn taken_slices() -> Vec<u32> {
     slices_in(&crate::brain::lives_dir())
 }
 
+/// True when `account`'s life is a market maker.
+pub fn is_maker(account: &str) -> bool {
+    crate::brain::load_life(account).is_some_and(|life| lifescape_planner::maker_role(&life).is_some())
+}
+
 /// The role of a new maker account: the first free slice, the common
 /// target.
 /// A typed refusal when every slice has its maker.

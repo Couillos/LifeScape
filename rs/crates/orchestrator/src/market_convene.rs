@@ -377,6 +377,8 @@ impl MarketService {
             let engine = self.lock_engine();
             engine.catalogue.iter().map(|row| (row.id, row.name.clone())).collect()
         };
+        // Market makers flagged for the page (user 2026-11-17: their
+        // pseudos shown in gold in « Latest transactions »).
         let values: Vec<Value> = rows.iter().map(|row| {
             let name = names.get(&row.item_id).cloned().unwrap_or_else(|| format!("#{}", row.item_id));
             object(vec![
@@ -384,6 +386,8 @@ impl MarketService {
                 ("name", str_value(&name)),
                 ("buyer", str_value(&row.buyer)),
                 ("seller", str_value(&row.seller)),
+                ("buyer_maker", Value::Bool(crate::market_maker::is_maker(&row.buyer))),
+                ("seller_maker", Value::Bool(crate::market_maker::is_maker(&row.seller))),
                 ("item", Value::Int(row.item_id)),
                 ("qty", Value::Int(row.quantity)),
                 ("price", Value::Int(row.price)),
