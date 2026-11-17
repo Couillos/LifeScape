@@ -45,6 +45,24 @@ fn heal_hurt(bot: &mut Bot, bank: &knowledge::banks::Bank, pick: &crate::kit::to
     Ok(())
 }
 
+/// Ores of the run's tiers in the pack.
+fn ores_held(bot: &Bot, tiers: &[lifescape_gamedata::rocks::RockTier]) -> u32 {
+    tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).map(|id| crate::kit::pack::pack_total(bot, id)).sum()
+}
+
+/// Pure: a load that ended without filling (rocks dry, stall bound) is
+/// banked as a load when it mined something and the bot is not hurt
+/// (the hurt rules own a hurt load); nothing mined stays a failure.
+pub fn stalled_load_banks(mined: u32, hurt: bool) -> bool {
+    mined > 0 && !hurt
+}
+
+/// True when the bot is under its heal line now (the hurt rules own it).
+fn hurt_now(bot: &Bot) -> bool {
+    let (hp, max_hp) = (crate::kit::survival::hitpoints(bot), crate::kit::survival::max_hitpoints(bot));
+    crate::kit::survival::hurt_return(hp, max_hp, 0) != crate::kit::survival::HurtReturn::NotHurt
+}
+
 pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("mining", args)?;
     crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat, spec.site)?;
@@ -87,9 +105,19 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
             return Ok(state.load_done(step_bot, &format!("healed before a load (mining={level})")));
         }
         let until = state.want_goal(step_bot, &spec);
+        let ores_before = ores_held(step_bot, &tiers);
         let (ok, new_level) = crate::kit::mine::mine_load(step_bot, &tiers, &mut bank, coins, level, until)?;
         level = new_level;
-        if !ok {
+        // A load that mined ore before its rocks ran dry is a load, never
+        // a failure (live 2026-11-17, 223 « no adamantite_ore mined » on
+        // the two Al Kharid adamantite rocks: 800-tick respawn, longer
+        // than the repick window, while "You manage to mine some
+        // adamantite"). The ore is banked; the measured yield prices the
+        // slow spot (R2), the guides steer away from it.
+        let mined = ores_held(step_bot, &tiers).saturating_sub(ores_before);
+        if !ok && stalled_load_banks(mined, hurt_now(step_bot)) {
+            step_bot.log(&format!("rocks dry before a full load: banking the {mined} ore(s) mined"));
+        } else if !ok {
             // Hurt on the site (D3): bank, heal by the meal rules, come
             // back; past `HURT_RETURNS` hurt loads the failure below
             // stands (the brain cools the site for this bot).
@@ -133,6 +161,15 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
 #[cfg(test)]
 mod tests {
     use super::ordered_rock_tiers;
+
+    /// Two ores mined before the rocks ran dry: banked, no failure; none
+    /// mined, or hurt: the failure and hurt rules stand.
+    #[test]
+    fn a_dry_load_with_ore_is_banked() {
+        assert!(super::stalled_load_banks(2, false));
+        assert!(!super::stalled_load_banks(0, false));
+        assert!(!super::stalled_load_banks(2, true));
+    }
 
     /// The brain's ore is the only tier mined (farm:tin_ore at level 20
     /// used to mine iron); above the level it blocks typed.
