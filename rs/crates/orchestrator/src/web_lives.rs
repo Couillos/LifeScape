@@ -177,9 +177,10 @@ pub fn guide_activities(set: &crate::guides_store::GuideSet) -> Vec<Value> {
         .collect()
 }
 
-/// Economy payload from existing sources only: holdings via the `items`
-/// command, market stats via the `market` command, deals/trends/market
-/// makers via the store and the life files, top activities via the
+/// Economy payload from existing sources only: market stats via the
+/// `market` command, deals and market makers via the store and the life
+/// files (money supply, top holdings and trends left the page,
+/// 2026-11-17: the brain reads the store's trends itself), top activities via the
 /// precomputed money guide (`guide_activities`). One JSON fetch for
 /// the economy page; bots never read it.
 pub fn economy_response(dispatch: &Dispatch) -> Value {
@@ -192,7 +193,6 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
         Ok(store) => store,
         Err(error) => return err_json(format!("economy store: {error}")),
     };
-    let holdings = dispatch(object(vec![("cmd", str_value("items"))])).get("data").clone();
     let market = dispatch(object(vec![
         ("cmd", str_value("market")),
         ("op", str_value("stats")),
@@ -211,18 +211,6 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
         }
     }
     let deals_total = settled + failed;
-    let mut trends = Vec::new();
-    if let Ok(catalogue) = store.list_items() {
-        for item in &catalogue {
-            for trend in store.trends_for_item(item.item_id).unwrap_or_default() {
-                if trend.period == "24h" && trend.score != 0.0 {
-                    trends.push((item.item_id, item.name.clone(), trend.shortage, trend.momentum, trend.score));
-                }
-            }
-        }
-    }
-    trends.sort_by(|left, right| right.4.abs().total_cmp(&left.4.abs()));
-    trends.truncate(15);
     // Top activities: the money guide's set; none before its first build.
     let guides = crate::guides_store::current();
     let activities = guides.as_deref().map(guide_activities).unwrap_or_default();
@@ -236,7 +224,6 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
     object(vec![
         ("ok", Value::Bool(true)),
         ("clock", Value::Int(clock)),
-        ("holdings", holdings),
         (
             "market",
             object(vec![
@@ -262,23 +249,6 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
         ),
         ("activities", Value::Arr(activities)),
         ("activities_pending", Value::Bool(guides.is_none())),
-        (
-            "trends",
-            Value::Arr(
-                trends
-                    .iter()
-                    .map(|(item, name, shortage, momentum, score)| {
-                        object(vec![
-                            ("item", Value::Int(*item)),
-                            ("name", str_value(name)),
-                            ("shortage", Value::Float(*shortage)),
-                            ("momentum", Value::Float(*momentum)),
-                            ("score", Value::Float(*score)),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ),
         ("makers", Value::Arr(makers)),
         ("trades", Value::Arr(trades)),
         ("trades_closed", object(vec![("lots", Value::Int(closed as i64)), ("predicted", Value::Int(predicted)), ("realized", Value::Int(realized))])),
@@ -450,12 +420,12 @@ mod tests {
         let dispatch: Dispatch = Arc::new(stub);
         let economy = economy_response_in(&dispatch, &run);
         assert_eq!(economy.get("ok").as_bool(), Some(true), "empty store still serves a shape");
-        assert_eq!(economy.get("holdings").get("liveTotal").as_i64(), Some(42));
+        assert!(economy.get("holdings").is_null(), "money supply and top holdings left the page");
         assert_eq!(economy.get("deals").get("total").as_i64(), Some(0));
         assert_eq!(economy.get("market").get("items").as_i64(), Some(3));
         assert!(economy.get("activities").as_arr().is_some());
         assert!(economy.get("activities_pending").as_bool().is_some(), "top activities say when the guides set is not built yet");
-        assert!(economy.get("trends").as_arr().is_some());
+        assert!(economy.get("trends").is_null(), "the trends card left the page (the brain reads the store's trends)");
         let makers = economy.get("makers").as_arr().expect("makers array");
         assert_eq!(makers.len(), 1, "the maker life file drives the card");
         assert_eq!(makers[0].get("account").as_str(), Some("m1"));

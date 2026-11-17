@@ -1,15 +1,9 @@
-// Economy front: money supply, deals, top activities, trends, market makers,
-// 100 % market lots (predicted vs realized).
+// Economy front: deals, top activities, market makers, 100 % market lots
+// (predicted vs realized).
 // Read-only dashboard page: bots never read it.
 function number(value) {
   if (!isFinite(value)) return "-";
   return Math.round(value * 10) / 10;
-}
-
-function scoreClass(score) {
-  if (score > 0.005) return 'up';
-  if (score < -0.005) return 'down';
-  return '';
 }
 
 async function load() {
@@ -24,15 +18,6 @@ async function load() {
   document.getElementById('clock').textContent = 'updated ' +
     String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0') +
     ':' + String(date.getSeconds()).padStart(2, '0');
-
-  const holdings = payload.holdings || {};
-  const money = holdings.liveTotal !== undefined ? holdings.liveTotal : holdings.live_total;
-  document.getElementById('money').textContent =
-    money !== undefined ? money + ' items across all accounts' : 'no holdings yet';
-  const top = (holdings.items || []).slice(0, 12);
-  document.getElementById('holdings').innerHTML =
-    '<tr><th class="left">item</th><th>count</th></tr>' +
-    top.map(row => '<tr><td class="left">' + row.name + '</td><td>' + row.count + '</td></tr>').join('');
 
   const deals = payload.deals || {};
   const failPct = ((deals.fail_rate || 0) * 100).toFixed(1) + '%';
@@ -52,13 +37,6 @@ async function load() {
     activities.map(row => '<tr><td class="left">' + row.family + '</td><td class="left">' + row.method +
       (row.style ? ' <span class="muted">' + row.style + '</span>' : '') + '</td><td>' + band(row.band) + '</td><td>' +
       number(row.profit_6000) + '</td><td class="left">' + confidence(row) + '</td></tr>').join('');
-
-  const trends = payload.trends || [];
-  document.getElementById('trends').innerHTML =
-    '<tr><th class="left">item</th><th>shortage</th><th>momentum</th><th>score</th></tr>' +
-    trends.map(row => '<tr><td class="left">' + row.name + '</td><td>' + number(row.shortage) +
-      '</td><td>' + number(row.momentum) + '</td><td class="' + scoreClass(row.score) + '">' +
-      number(row.score) + '</td></tr>').join('');
 
   // Market makers (plan marché Q6): one row per maker account.
   const makers = payload.makers || [];
