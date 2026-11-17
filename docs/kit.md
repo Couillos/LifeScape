@@ -591,6 +591,14 @@ le serveur s'en sert. Verrous du marché respectés (`banked_usable`).
 Pêche exclue : un outil par palier (filet, canne, harpon, casier), pas un
 rang (`fish_gear::ensure_gear` retire l'outil exact du palier).
 
+Sac plein au retrait d'un outil (2026-11-17, owen_wood : un filler poulets
+finit son budget sac plein, chaque run mining/essence pressait « retirer
+la pioche de rune », lisait « You don't have enough inventory space. » et
+bloquait « missing bronze_pickaxe » en boucle) : `restore_banked_tool` et
+`restore_from_bank` libèrent d'abord les cases nécessaires (1 outil, 2
+pièces) en déposant les piles les plus larges (`room_deposits`), jamais
+un outil de famille, marteau, briquet, ciseau ni un objet tenu du script.
+
 ## Repas et nourriture de combat (2026-11-17)
 
 Demande utilisateur : la bière n'est jamais une nourriture ; manger tôt,
