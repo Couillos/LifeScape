@@ -438,3 +438,11 @@ Exigences ajoutées à R1/R2/R4 :
     comme les produits ;
   - profit = Σ flux signés × prix courant + flux de pièces (péages) ;
   - test golden par skill, bilan complet (entrées ET sorties).
+
+D21 (2026-11-17) Disponibilité d'un intrant à l'achat dans les guides :
+    INCHANGÉE (asks au repos + boutiques, au volume). Proposition
+    « asks + flux récemment échangé » REJETÉE pour l'instant : on attend
+    que les teneurs de marché (vague 3) tiennent un stock et des asks
+    (ex. runes de nature, absorbées par les bids dès qu'elles
+    apparaissent, alchimie bloquée dans les guides). À réévaluer quand
+    les teneurs cotent.
