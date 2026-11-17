@@ -79,10 +79,10 @@ impl StaticWorld {
         // read, serializing all plan threads on one lock.
         {
             let state = self.state.read().expect("static world lock poisoned");
-            if level > 0 && state.sky_floors.contains(&(tile_x, tile_z, level)) {
-                return OPEN;
-            }
             if !self.has_square(tile_x >> 6, tile_z >> 6) {
+                if level > 0 && state.sky_floors.contains(&(tile_x, tile_z, level)) {
+                    return OPEN;
+                }
                 return if level > 0 { NULL } else { Self::with_blockers(&state, OPEN, tile_x, tile_z, level) };
             }
             if state.pack.is_loaded(tile_x >> 6, tile_z >> 6) {

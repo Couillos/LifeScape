@@ -316,3 +316,11 @@ tarif_alkharid_detour | 3222,3218,0 | 3270,3167,0 | f2p | reachable ; fare=0 ; b
 # Karamja (porte 10 + bateau 30), et retour (bateau 30 + porte 10).
 tarif_alkharid_karamja | 3270,3167,0 | 2924,3178,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_port_sarim_to_karamja ; fare=40 ; budget_ms=1500
 tarif_karamja_alkharid | 2924,3178,0 | 3270,3167,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_karamja_to_port_sarim ; fare=40 ; budget_ms=1500
+# Tour 2 N1 (D5) : bellarhodes, desynchronise sur le bateau, reapparu sur le
+# pont de Port Sarim (3032,3214,1). La case d'appui de la passerelle
+# (3032,3217,1, arrivee du bateau) est un plancher (m47_50 '1 24 17: o5',
+# aucun drapeau f1) mais le pack la laissait OPEN sans peinture = ciel :
+# pont sans sortie. Toute case d'appui ou d'arrivee d'une arete custom est
+# un plancher (Tables::load).
+pont_port_sarim | 3032,3214,1 | 3029,3217,0 | f2p | reachable ; uses_custom=gangplank_port_sarim_dock ; levels=1>0
+pont_port_sarim_banque | 3032,3214,1 | 3092,3243,0 | f2p | reachable ; uses_custom=gangplank_port_sarim_dock

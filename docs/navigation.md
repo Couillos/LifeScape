@@ -655,3 +655,11 @@ Golden `autel_terre_sortie`.
 - Après une traversée scriptée (péage, porte téléportante, ride), le SDK
   attend 2 ticks avant d'envoyer la marche suivante (`travel_settle`,
   `p_delay(0)` serveur).
+- Cases d'appui et d'arrivée des arêtes custom (tour 2, N1) : au-dessus du
+  sol, toute case `stand`/`to` d'une `custom_edges` est un plancher
+  (`tables::edge_floors`, ajoutée à `sky_floors`) ; le pack laissait le
+  pont de Port Sarim (3032,3217,1) OPEN sans peinture, lu comme du ciel,
+  et le pont (3032,3214..3216,1) n'avait plus de sortie. Une entrée
+  `sky_floors` d'un carré chargé garde ses murs peints (seul le ciel
+  devient plancher). Balayage `nav/tests/edge_floors.rs` (appui et arrivée
+  marchables, chaque arrivée rejoint Lumbridge), goldens `pont_port_sarim*`.

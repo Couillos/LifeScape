@@ -149,6 +149,21 @@ pub struct CustomEdge {
     pub reason: String,
 }
 
+/// Upper tiles a custom edge stands on or lands on are floors (tour 2,
+/// N1): the server puts the player there (`to`) or the edge is worked
+/// from there (`stand`). The pack leaves such a tile OPEN without paint
+/// when no wall or loc touches it, which reads as sky: the Port Sarim
+/// deck's gangplank stand (3032,3217,1) (m47_50 `1 24 17: o5`, a floor,
+/// no `f1`) cut the deck off, bellarhodes stranded there for hours.
+pub fn edge_floors(customs: &[CustomEdge]) -> Vec<(i32, i32, i32)> {
+    customs
+        .iter()
+        .flat_map(|edge| [edge.stand, edge.to])
+        .filter(|tile| tile.level > 0)
+        .map(|tile| (tile.x, tile.z, tile.level))
+        .collect()
+}
+
 /// Footprint tiles of the static player-blocking NPCs (`npc_blockers.json`,
 /// `{"blockers": [{x, z, level, size}]}`); an absent file is none.
 pub fn load_npc_blockers(path: &Path) -> Result<HashSet<(i32, i32, i32)>, String> {
@@ -204,7 +219,8 @@ impl Tables {
     pub fn load(data_dir: &Path) -> Result<Tables, String> {
         let transitions = load_transitions(&data_dir.join("transitions.json"))?;
         let (verified, verified_any_level, proven) = load_verified(&data_dir.join("transitions_verified.json"));
-        let (requirements, one_way, customs, blocked, sky_floors) = load_overrides(&data_dir.join("nav_overrides.json"))?;
+        let (requirements, one_way, customs, blocked, mut sky_floors) = load_overrides(&data_dir.join("nav_overrides.json"))?;
+        sky_floors.extend(edge_floors(&customs));
         let loc_names = load_loc_names(&data_dir.join("locs.json"))?;
         let npc_blockers = load_npc_blockers(&data_dir.join("npc_blockers.json"))?;
         Ok(Tables { transitions, verified, verified_any_level, proven, requirements, one_way, customs, blocked, sky_floors, npc_blockers, loc_names })
