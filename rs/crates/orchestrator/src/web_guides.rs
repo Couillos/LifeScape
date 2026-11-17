@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use lifescape_json::{object, str_value, Value};
-use lifescape_planner::guide_model::{Confidence, FlowLine, GuideFilter, GuideWorld, InputRoute, MeasuredKey, MoneyRow, Prereqs, Quote, RateAnswer, RateAsk, TrainingRow, Unrated};
+use lifescape_planner::guide_model::{Confidence, FlowLine, GuideFilter, GuideWorld, InputRoute, MeasuredKey, MoneyRow, Prereqs, Quote, RateAnswer, RateAsk, ShopNeed, TrainingRow, Unrated};
 use lifescape_store::Store;
 
 /// Longest a built guide serves before a rebuild.
@@ -81,30 +81,50 @@ pub fn store_waits(store: &Store) -> Result<StoreWaits, String> {
 /// volume, never the first unit's best case.
 pub const NPC_SALE_VOLUME: i64 = 100;
 
-/// What the best F2P shop pays per unit for a guide line's volume (Q3).
-pub fn npc_volume_value(item: &str) -> Option<f64> {
-    lifescape_gamedata::shop_sale::npc_sale_shops(item)
+/// The guide's condition of a shop (Q7, user 2026-11-16): its F2P quest
+/// (directory `quest_dragon` -> planner key `dragon`) and its door's
+/// quest points.
+pub fn shop_need(quest: Option<&str>, quest_points: i64) -> ShopNeed {
+    let quest = quest.and_then(|dir| lifescape_gamedata::f2p::F2P_QUESTS.iter().find(|(_, known)| *known == dir)).map(|(_, dir)| dir.strip_prefix("quest_").unwrap_or(dir));
+    ShopNeed { quest, quest_points }
+}
+
+/// What the best reachable F2P shop pays per unit for a guide line's
+/// volume (Q3), with its condition (Q7: a shop behind a quest or quest
+/// points buys too, the row then needs them; an open shop first at an
+/// equal value).
+pub fn npc_volume_value(item: &str) -> Option<(f64, ShopNeed)> {
+    lifescape_gamedata::shop_sale::npc_sale_shops_reachable(item)
         .iter()
-        .filter_map(|shop| lifescape_gamedata::shop_sale::unit_value_floor(&shop.shop, item, NPC_SALE_VOLUME))
-        .max()
-        .filter(|value| *value >= 1)
-        .map(|value| value as f64)
+        .filter_map(|shop| lifescape_gamedata::shop_sale::unit_value_floor(&shop.shop, item, NPC_SALE_VOLUME).map(|value| (value, shop.open(), shop_need(shop.quest.as_deref(), shop.quest_points))))
+        .filter(|(value, _, _)| *value >= 1)
+        .max_by_key(|(value, open, _)| (*value, *open))
+        .map(|(value, _, need)| (value as f64, need))
 }
 
-/// What the F2P shops sell of `item` in one window (`WINDOW_TICKS`):
-/// (unit price, units) steps cheapest first (Q7, finite stock §2).
-pub fn shop_window(item: &str) -> Vec<(f64, f64)> {
-    lifescape_gamedata::shop_buy::purchase_steps(item, lifescape_planner::guide_model::WINDOW_TICKS as i64).into_iter().map(|step| (step.price as f64, step.units as f64)).collect()
+/// What the reachable F2P shops sell of `item` in one window
+/// (`WINDOW_TICKS`): (unit price, units, condition) steps cheapest first
+/// (Q7, finite stock §2, a conditioned shop with its condition).
+pub fn shop_window(item: &str) -> Vec<(f64, f64, ShopNeed)> {
+    lifescape_gamedata::shop_buy::purchase_steps(item, lifescape_planner::guide_model::WINDOW_TICKS as i64).into_iter().map(|step| (step.price as f64, step.units as f64, shop_need(step.quest.as_deref(), step.quest_points))).collect()
 }
 
-/// The engine's quote of `display` (D12, `lifescape_market::current_price`
-/// as `rates_price` reads it): the current price, the median of the last
-/// five fills and how many there are, and the resting (non-dormant)
-/// book of both sides as deep as the store's impact walk reads
-/// (`IMPACT_ROWS` orders). Never traded: no price, the book only. An
-/// object the market does not list: no price, no book.
-pub fn quote_of(store: &Store, display: &str) -> Quote {
-    let Ok(Some(item_id)) = store.item_id_by_name(display) else { return Quote { price: 1.0, ..Quote::default() } };
+/// The engine's quote of the object `item` (debug name; D12,
+/// `lifescape_market::current_price` as `rates_price` reads it): the
+/// current price, the median of the last five fills and how many there
+/// are, and the resting (non-dormant) book of both sides as deep as the
+/// store's impact walk reads (`IMPACT_ROWS` orders). Never traded: no
+/// price, the book only. An object the market does not list: no price,
+/// no book. Read by the object's id, never by its display: several
+/// objects share one ("Sapphire amulet" strung and unstrung, live
+/// 2026-11-16), each with its own book.
+pub fn quote_of(store: &Store, item: &str) -> Quote {
+    let unlisted = Quote { price: 1.0, ..Quote::default() };
+    let Some(obj) = lifescape_gamedata::objs_by_name(item).into_iter().next() else { return unlisted };
+    let item_id = obj.obj_id as i64;
+    if !matches!(store.get_item(item_id), Ok(Some(_))) {
+        return unlisted;
+    }
     let last: Vec<lifescape_market::LastFill> = store
         .last_fills(item_id, lifescape_market::PRICE_FILLS as i64)
         .unwrap_or_default()
@@ -147,10 +167,10 @@ pub fn measured_keys(snapshot: &crate::rates_service::Snapshot) -> Vec<MeasuredK
 pub fn answer_of(snapshot: &crate::rates_service::Snapshot, ask: &RateAsk, now: i64) -> Result<RateAnswer, String> {
     let query = crate::rates_read::RateQuery { method: ask.method.clone(), style: ask.style.clone(), site: ask.site, tool: ask.tool.clone(), level: ask.level.max(1) };
     let estimate = crate::rates_read::estimate_using(snapshot.book(), &query, now, &crate::rates_read::cached_guide_prior).map_err(|error| error.to_string())?;
-    let debug = |item: &str| crate::rates_names::debug_of(item);
+    // A display several objects share names the activity's own object.
     Ok(RateAnswer {
-        flows: estimate.flows.iter().map(|(item, cause, qty)| (debug(item), cause.clone(), *qty)).collect(),
-        units: crate::rates_names::units_in_debug(&estimate.units),
+        flows: estimate.flows.iter().map(|(item, cause, qty)| (crate::rates_names::debug_in(&ask.method, item, *qty < 0.0), cause.clone(), *qty)).collect(),
+        units: crate::rates_names::units_in_method(&ask.method, &estimate.units),
         pause_per_6000: estimate.pause_per_6000,
         confidence: Confidence {
             measured: !estimate.prior,
@@ -207,7 +227,7 @@ pub fn build_guide(store: &Store, snapshot: &crate::rates_service::Snapshot, kin
         if let Some(known) = prices.borrow().get(item) {
             return known.clone();
         }
-        let quote = quote_of(store, &crate::rates_names::display_of(item));
+        let quote = quote_of(store, item);
         prices.borrow_mut().insert(item.to_string(), quote.clone());
         quote
     };
@@ -283,6 +303,7 @@ fn prereqs_value(prereqs: &Prereqs) -> Value {
         ("levels", Value::Obj(levels)),
         ("combat", Value::Int(i64::from(prereqs.combat))),
         ("quests", Value::Arr(prereqs.quests.iter().map(|quest| str_value(quest)).collect())),
+        ("quest_points", Value::Int(prereqs.quest_points)),
         ("tools", Value::Arr(prereqs.tools.iter().map(|tool| str_value(tool)).collect())),
         ("capital", Value::Float(prereqs.capital)),
         ("ironman", Value::Bool(prereqs.ironman)),

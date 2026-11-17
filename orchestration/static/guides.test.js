@@ -23,6 +23,7 @@ check('accessible only', GuidesView.visibleRows(rows, { accessibleOnly: true, li
 check('search', GuidesView.visibleRows(rows, { search: 'steel', limit: 0 }).map(function (row) { return row.method; }), ['smelt:steel_bar']);
 check('top N keeps the best first', GuidesView.visibleRows(rows, { limit: 2 }).length, 2);
 check('prerequisites', GuidesView.prereqText({ levels: { smithing: 30 }, combat: 12, quests: ['doric'], tools: ['hammer'], capital: 15000, ironman: false }), 'smithing 30, combat 12, quest doric, hammer, 15k capital, no ironman');
+check('shop condition prerequisite', GuidesView.prereqText({ levels: {}, combat: 3, quests: ['dragon'], quest_points: 32, tools: [], capital: 0, ironman: true }), 'quest dragon, 32 quest points');
 check('stock prerequisite', GuidesView.prereqText({ levels: {}, combat: 3, quests: [], tools: [], capital: 0, ironman: true, stock: { rune_platebody: 28 } }), 'stock 28 rune_platebody');
 check('route farmed', GuidesView.routeText({ item: 'iron_ore', display: 'Iron ore', cause: 'input', route: 'farm', source: 'gather:mining/iron_ore', farm_coins_per_unit: 12.5, buy_coins_per_unit: 20 }), 'Iron ore (input): farm gather:mining/iron_ore [farm 12.5gp, buy 20gp]');
 check('route bought', GuidesView.routeText({ item: 'fishing_bait', cause: 'bait', route: 'buy', source: '', farm_coins_per_unit: null, farm_ticks_per_unit: null, buy_coins_per_unit: 4 }), 'fishing_bait (bait): buy [buy 4gp]');

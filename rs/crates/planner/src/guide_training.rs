@@ -107,6 +107,7 @@ fn autonomous(engine: &Engine, place: &Place) -> Balance {
     let scale = WINDOW_TICKS / (WINDOW_TICKS + extra);
     // Farmed and unsourced flows are never priced as purchases.
     let priced = price_flows(engine, answer, own.as_deref(), InputPricing::Bought, scale, &|item, cause| farmed.iter().any(|(known, why)| known == item && why == cause));
+    crate::guide_prereq::require_shop(&mut prereqs, priced.need);
     let mut blocked = unsourced;
     blocked.extend(priced.missing);
     let coins_6000 = if blocked.is_empty() { priced.revenue - priced.cost + farmed_value * scale } else { 0.0 };
@@ -189,6 +190,7 @@ pub fn quest_rows(engine: &Engine, skill: &str, filter: &GuideFilter) -> Vec<Tra
             prereqs.levels = found.skills.iter().map(|need| (need.skill.clone(), need.level.clamp(1, 99) as u8)).collect();
             prereqs.combat = found.combat_level.clamp(0, 126) as u8;
             prereqs.quests = found.dependencies.iter().map(|dependency| dependency.key.clone()).collect();
+            prereqs.quest_points = found.quest_points;
         }
         let ticks = (engine.world.quest_ticks)(shortcut.quest).filter(|ticks| *ticks > 0.0);
         let xp_6000 = ticks.map(|ticks| shortcut.xp * WINDOW_TICKS / ticks).unwrap_or(0.0);

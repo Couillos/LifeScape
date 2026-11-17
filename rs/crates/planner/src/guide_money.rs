@@ -122,6 +122,7 @@ fn base_row(family: Family, place: &Place, band: i64) -> MoneyRow {
 /// Fills a row's priced flows; a purchase nobody covers blocks the row
 /// and leaves it without a profit (never a made-up price).
 fn apply_flows(row: &mut MoneyRow, priced: PricedFlows) {
+    crate::guide_prereq::require_shop(&mut row.prereqs, priced.need);
     row.price_confidence = price_confidence(&priced.lines);
     row.flows = priced.lines;
     row.other_drops = priced.other;
@@ -206,6 +207,7 @@ fn chain_row(engine: &Engine, place: &Place, band: i64, time: TimePrice) -> Opti
     let mut row = base_row(Family::Chain, place, band);
     row.prereqs = unit.prereqs.clone();
     let priced = engine.sale_at(&product, units_per_6000);
+    crate::guide_prereq::require_shop(&mut row.prereqs, priced.need);
     row.flows = vec![crate::guide_model::FlowLine {
         item: product.clone(),
         cause: "product".to_string(),
@@ -223,6 +225,7 @@ fn chain_row(engine: &Engine, place: &Place, band: i64, time: TimePrice) -> Opti
         if !bought.available {
             missing.push(engine.unavailable_reason(item, units));
         }
+        crate::guide_prereq::require_shop(&mut row.prereqs, bought.need);
         row.flows.push(crate::guide_model::FlowLine { item: item.clone(), cause: "input".to_string(), per_6000: -units, unit_price: bought.price, value_6000: -units * bought.price, outlet: bought.outlet, traded: bought.traded, basis: bought.basis });
     }
     row.price_confidence = price_confidence(&row.flows);

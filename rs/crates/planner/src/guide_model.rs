@@ -163,6 +163,29 @@ pub struct MeasuredKey {
     pub band: i64,
 }
 
+/// What a bot needs to reach an F2P shop (user 2026-11-16, Q7: a shop
+/// behind a condition is open to every bot that fulfils it, the
+/// condition a prerequisite of the row trading there): an F2P quest done
+/// (planner key: Oziach after `dragon`, the only quest gating an F2P
+/// shop in 274) and quest points held (the Champions' Guild door, 32).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShopNeed {
+    pub quest: Option<&'static str>,
+    pub quest_points: i64,
+}
+
+impl ShopNeed {
+    /// Both conditions (the stricter quest points; a quest kept).
+    pub fn and(self, other: ShopNeed) -> ShopNeed {
+        ShopNeed { quest: self.quest.or(other.quest), quest_points: self.quest_points.max(other.quest_points) }
+    }
+
+    /// True for a shop every bot reaches.
+    pub fn is_open(self) -> bool {
+        self.quest.is_none() && self.quest_points == 0
+    }
+}
+
 /// Everything the engine reads, as closures (pure for the engine).
 pub struct GuideWorld<'a> {
     /// The published yield of one ask (`rates_read`: n >= 3 blended with
@@ -171,14 +194,16 @@ pub struct GuideWorld<'a> {
     /// Current market price of an object (D12: median of the last five
     /// fills clamped by the book, else the book, else 1 coin).
     pub price: &'a dyn Fn(&str) -> Quote,
-    /// What the best F2P shop pays for one unit (plan marché Q3).
-    pub npc_sale: &'a dyn Fn(&str) -> Option<f64>,
+    /// What the best reachable F2P shop pays for one unit (plan marché
+    /// Q3), with what reaching it needs (Q7).
+    pub npc_sale: &'a dyn Fn(&str) -> Option<(f64, ShopNeed)>,
     /// What F2P shops sell of an object in ONE window (6000 ticks):
-    /// (unit price, units) steps cheapest first, each shop's base stock
-    /// unit by unit at the server price for the stock left, then the
-    /// window's restock (plan marché Q7, decision 2026-11-16 §2,
-    /// `gamedata::shop_buy`); empty when no shop sells it.
-    pub shop_buy: &'a dyn Fn(&str) -> Vec<(f64, f64)>,
+    /// (unit price, units, condition) steps cheapest first, each
+    /// reachable shop's base stock unit by unit at the server price for
+    /// the stock left, then the window's restock (plan marché Q7,
+    /// decision 2026-11-16 §2, `gamedata::shop_buy`); empty when no shop
+    /// sells it.
+    pub shop_buy: &'a dyn Fn(&str) -> Vec<(f64, f64, ShopNeed)>,
     /// Measured market wait per lot (mean pause of the runs that
     /// paused), `None` when nothing was measured.
     pub market_wait_ticks: Option<f64>,
@@ -275,6 +300,9 @@ pub struct Prereqs {
     /// prerequisite, never a refusal).
     pub combat: u8,
     pub quests: Vec<String>,
+    /// Quest points a shop the row trades with asks at its door
+    /// (Champions' Guild: 32; Q7), 0 for none.
+    pub quest_points: i64,
     pub tools: Vec<String>,
     /// Coins one lot ties up (100 % market).
     pub capital: f64,

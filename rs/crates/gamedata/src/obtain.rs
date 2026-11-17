@@ -339,21 +339,41 @@ fn index() -> &'static Index {
     })
 }
 
+/// How a non-member reaches one F2P shop's keepers (user 2026-11-16, Q7:
+/// a shop behind a condition is open to every bot that fulfils it): the
+/// F2P quest its opener asks (`f2p::f2p_shop_access`: Oziach after
+/// Dragon Slayer), the fewest quest points a keeper's spawn asks at its
+/// door (Champions' Guild: 32), and the keeper sites a bot reaches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShopReach {
+    /// Quest directory (`quest_dragon`), `None` for an ungated opener.
+    pub quest: Option<String>,
+    pub quest_points: i64,
+    pub sites: Vec<(i64, i64, i64)>,
+}
+
+/// `ShopReach` of `shop`; `None` when no keeper is reachable: no F2P
+/// opener (Magic Guild, members; Lundail in the Mage Arena, off the F2P
+/// map), or every keeper behind a door no bot opens.
+pub fn shop_reach(shop: &str) -> Option<ShopReach> {
+    let access = crate::f2p::f2p_shop_access(shop)?;
+    // A keeper behind a door no bot opens is no way at all; the
+    // Champions' Guild keepers carry the door's quest points (Scavvo's
+    // rune pieces, Valaine's adamant platebody).
+    let reached: Vec<((i64, i64, i64), i64)> = access.npcs.iter().flat_map(|npc| npc_sites(*npc)).filter_map(|site| shop_site_need(site).map(|points| (site, points))).collect();
+    let quest_points = reached.iter().map(|(_, points)| *points).min()?;
+    Some(ShopReach { quest: access.quest, quest_points, sites: reached.into_iter().map(|(site, _)| site).collect() })
+}
+
 fn way_of(item: &str, source: ItemSource) -> Option<Way> {
     let way = match source {
         ItemSource::Shop { shop } => {
-            let access = crate::f2p::f2p_shop_access(&shop)?;
-            // A keeper behind a door no bot opens is no way at all; the
-            // Champions' Guild keepers carry the door's quest points
-            // (Scavvo's rune pieces, Valaine's adamant platebody).
-            let reached: Vec<((i64, i64, i64), i64)> =
-                access.npcs.iter().flat_map(|npc| npc_sites(*npc)).filter_map(|site| shop_site_need(site).map(|points| (site, points))).collect();
-            let fewest = reached.iter().map(|(_, points)| *points).min()?;
+            let reach = shop_reach(&shop)?;
             let mut way = Way::new(WayKind::Shop, shop);
             way.coins = price_of(item);
-            way.quest = access.quest;
-            way.quest_points = fewest;
-            way.sites = reached.into_iter().map(|(site, _)| site).collect();
+            way.quest = reach.quest;
+            way.quest_points = reach.quest_points;
+            way.sites = reach.sites;
             way
         }
         ItemSource::Spawn { x, z, level } => {

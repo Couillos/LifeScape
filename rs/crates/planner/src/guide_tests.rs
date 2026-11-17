@@ -48,6 +48,8 @@ struct Fixture {
     shop: HashMap<&'static str, f64>,
     /// A shop's finite window: (price, units) steps, cheapest first.
     shop_ladders: HashMap<&'static str, Vec<(f64, f64)>>,
+    /// The condition of the shops that buy or sell an object (Q7).
+    shop_needs: HashMap<&'static str, crate::guide_model::ShopNeed>,
     wait: Option<f64>,
     quests: HashMap<&'static str, f64>,
     measured: Vec<crate::guide_model::MeasuredKey>,
@@ -65,6 +67,7 @@ impl Fixture {
             npc: HashMap::new(),
             shop: HashMap::new(),
             shop_ladders: HashMap::new(),
+            shop_needs: HashMap::new(),
             wait: Some(100.0),
             quests: HashMap::new(),
             measured: Vec::new(),
@@ -90,10 +93,11 @@ impl Fixture {
                 Quote { price: 1.0, traded: false, bids, asks, ..Quote::default() }
             }
         };
-        let npc = |item: &str| self.npc.get(item).copied();
+        let need = |item: &str| self.shop_needs.get(item).copied().unwrap_or_default();
+        let npc = |item: &str| self.npc.get(item).map(|price| (*price, need(item)));
         let shop = |item: &str| match (self.shop_ladders.get(item), self.shop.get(item)) {
-            (Some(ladder), _) => ladder.clone(),
-            (None, Some(price)) => vec![(*price, f64::INFINITY)],
+            (Some(ladder), _) => ladder.iter().map(|(price, units)| (*price, *units, need(item))).collect(),
+            (None, Some(price)) => vec![(*price, f64::INFINITY, need(item))],
             (None, None) => Vec::new(),
         };
         let quest = |key: &str| self.quests.get(key).copied();
@@ -254,8 +258,9 @@ fn every_f2p_method_has_a_line_or_a_typed_reason() {
     };
     let price = |_: &str| Quote { price: 1.0, ..Quote::default() };
     let none = |_: &str| None;
+    let no_sale = |_: &str| None;
     let no_shop = |_: &str| Vec::new();
-    let world = GuideWorld { rate: &rate, price: &price, npc_sale: &none, shop_buy: &no_shop, market_wait_ticks: None, quest_ticks: &none, measured: &[] };
+    let world = GuideWorld { rate: &rate, price: &price, npc_sale: &no_sale, shop_buy: &no_shop, market_wait_ticks: None, quest_ticks: &none, measured: &[] };
     let engine = Engine::new(&world);
     let (rows, unrated) = money_guide(&engine, &GuideFilter::default());
     let catalogue = crate::guide_methods::catalogue();

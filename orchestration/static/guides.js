@@ -50,6 +50,7 @@ var GuidesView = (function () {
     Object.keys(levels).sort().forEach(function (skill) { parts.push(skill + ' ' + levels[skill]); });
     if (prereqs.combat > 3) parts.push('combat ' + prereqs.combat);
     (prereqs.quests || []).forEach(function (quest) { parts.push('quest ' + quest); });
+    if (prereqs.quest_points > 0) parts.push(prereqs.quest_points + ' quest points');
     (prereqs.tools || []).forEach(function (tool) { parts.push(tool); });
     var stock = prereqs.stock || {};
     Object.keys(stock).sort().forEach(function (item) { parts.push('stock ' + number(stock[item]) + ' ' + item); });

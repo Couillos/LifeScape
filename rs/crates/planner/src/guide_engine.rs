@@ -21,6 +21,9 @@
 //!   together cheapest first for the volume; past both, NOT for sale
 //!   (`available` false: the row needing it is blocked, never priced at
 //!   a made-up figure);
+//! - a shop behind a condition (an F2P quest, quest points; Q7) buys and
+//!   sells like any other, its condition carried by the walk
+//!   (`Priced::need`) to the row's prerequisites;
 //! - a consumable a run must buy (ammo, runes, bait, supply, food, fee)
 //!   is a purchase;
 //! - a recipe's stock (its `input` flows), lost or discarded objects
@@ -31,7 +34,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::guide_flows::{fold_negligible_drops, OtherDrops};
-use crate::guide_model::{FlowLine, GuideWorld, Outlet, PriceBasis, Quote, RateAnswer, RateAsk, WINDOW_TICKS};
+use crate::guide_model::{FlowLine, GuideWorld, Outlet, PriceBasis, Quote, RateAnswer, RateAsk, ShopNeed, WINDOW_TICKS};
 
 /// Causes of the consumables a run buys.
 pub const BOUGHT_CAUSES: [&str; 6] = ["ammo", "rune", "bait", "supply", "food", "fee"];
@@ -55,11 +58,14 @@ pub struct Priced {
     pub traded: bool,
     pub basis: PriceBasis,
     pub available: bool,
+    /// Conditions of the shops the volume trades with (Q7): the row's
+    /// prerequisite (`guide_prereq::require_shop`).
+    pub need: ShopNeed,
 }
 
 impl Priced {
     fn own() -> Self {
-        Priced { price: 1.0, outlet: Outlet::Market, traded: true, basis: PriceBasis::Own, available: true }
+        Priced { price: 1.0, outlet: Outlet::Market, traded: true, basis: PriceBasis::Own, available: true, need: ShopNeed::default() }
     }
 }
 
@@ -84,17 +90,19 @@ enum Tier {
     Shop,
 }
 
-/// One step of a walk: a unit price for at most `depth` units.
+/// One step of a walk: a unit price for at most `depth` units, and what
+/// reaching it needs (a shop's condition, Q7; none for the market).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Step {
     price: f64,
     depth: f64,
     tier: Tier,
+    need: ShopNeed,
 }
 
 /// Resting levels with a price and a depth, best first, as book steps.
 fn book_steps(levels: &[(f64, f64)]) -> impl Iterator<Item = Step> + '_ {
-    levels.iter().filter(|(price, depth)| *price >= 1.0 && *depth > 0.0).map(|(price, depth)| Step { price: *price, depth: *depth, tier: Tier::Book })
+    levels.iter().filter(|(price, depth)| *price >= 1.0 && *depth > 0.0).map(|(price, depth)| Step { price: *price, depth: *depth, tier: Tier::Book, need: ShopNeed::default() })
 }
 
 /// Walks `steps` in order for `units`: each step takes what it holds,
@@ -106,6 +114,7 @@ fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>) -> P
     let units = if units > 0.0 { units } else { 1.0 };
     let (mut remaining, mut value) = (units, 0.0);
     let (mut at_current, mut at_book, mut at_shop) = (0.0, 0.0, 0.0);
+    let mut need = ShopNeed::default();
     for step in steps {
         if remaining <= 0.0 {
             break;
@@ -116,6 +125,7 @@ fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>) -> P
         }
         value += taken * step.price;
         remaining -= taken;
+        need = need.and(step.need);
         match step.tier {
             Tier::Current => at_current += taken,
             Tier::Book => at_book += taken,
@@ -142,7 +152,7 @@ fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>) -> P
     };
     let outlet = if at_shop > at_book + at_current { Outlet::Shop } else { Outlet::Market };
     let price = if available { value / units } else { 0.0 };
-    Priced { price, outlet, traded: basis.weakness() == 0, basis, available }
+    Priced { price, outlet, traded: basis.weakness() == 0, basis, available, need }
 }
 
 /// A traded object's median (its price when the quote carries none).
@@ -174,25 +184,27 @@ fn traded_basis(quote: &Quote) -> PriceBasis {
 /// price (for the units its fills moved when thin; every unit else),
 /// then, past a thin price, the remaining bids and the shop; a shop
 /// paying more than the price takes every unit the bids above it leave.
-/// A never-traded object: the bids above the shop, then the shop.
-fn sale_steps(quote: &Quote, shop: Option<f64>) -> Vec<Step> {
-    let shop_step = |price: f64| Step { price, depth: f64::INFINITY, tier: Tier::Shop };
+/// A never-traded object: the bids above the shop, then the shop. A
+/// shop step carries the shop's condition (Q7).
+fn sale_steps(quote: &Quote, offer: Option<(f64, ShopNeed)>) -> Vec<Step> {
+    let shop = offer.map(|(price, _)| price);
+    let shop_step = |(price, need): (f64, ShopNeed)| Step { price, depth: f64::INFINITY, tier: Tier::Shop, need };
     let above_shop = |step: &Step| shop.map_or(true, |shop| step.price > shop);
     let mut steps: Vec<Step> = Vec::new();
     let base = quote.price.min(median_of(quote));
     if !quote.traded || shop.is_some_and(|shop| shop > base) {
         steps.extend(book_steps(&quote.bids).take_while(above_shop));
-        steps.extend(shop.map(shop_step));
+        steps.extend(offer.map(shop_step));
         return steps;
     }
     let bids: Vec<Step> = book_steps(&quote.bids).collect();
     let lifting = bids.iter().take_while(|step| step.price > base).count();
     steps.extend(bids[..lifting].iter().copied());
     let depth = if thin(quote) { quote.fill_units.max(0.0) } else { f64::INFINITY };
-    steps.push(Step { price: base, depth, tier: Tier::Current });
+    steps.push(Step { price: base, depth, tier: Tier::Current, need: ShopNeed::default() });
     if depth.is_finite() {
         steps.extend(bids[lifting..].iter().copied().take_while(above_shop));
-        steps.extend(shop.map(shop_step));
+        steps.extend(offer.map(shop_step));
     }
     steps
 }
@@ -201,10 +213,11 @@ fn sale_steps(quote: &Quote, shop: Option<f64>) -> Vec<Step> {
 /// 2026-11-16): the resting asks for their depth, each unit at least the
 /// current price of a traded object (max(current price, ask)), and the
 /// shops' window steps (finite stock, §2), merged by price (a shop
-/// first at a tie). Past them all: not for sale.
-fn purchase_steps(quote: &Quote, shop: &[(f64, f64)]) -> Vec<Step> {
+/// first at a tie), each shop step with its shop's condition (Q7). Past
+/// them all: not for sale.
+fn purchase_steps(quote: &Quote, shop: &[(f64, f64, ShopNeed)]) -> Vec<Step> {
     let floor = if quote.traded { quote.price.max(1.0) } else { 0.0 };
-    let mut steps: Vec<Step> = shop.iter().filter(|(price, units)| *price >= 0.0 && *units > 0.0).map(|(price, units)| Step { price: *price, depth: *units, tier: Tier::Shop }).collect();
+    let mut steps: Vec<Step> = shop.iter().filter(|(price, units, _)| *price >= 0.0 && *units > 0.0).map(|(price, units, need)| Step { price: *price, depth: *units, tier: Tier::Shop, need: *need }).collect();
     steps.extend(book_steps(&quote.asks).map(|step| if step.price <= floor { Step { price: floor, tier: Tier::Current, ..step } } else { step }));
     // Stable: the shop steps (pushed first) lead at equal prices.
     steps.sort_by(|left, right| left.price.total_cmp(&right.price));
@@ -220,7 +233,7 @@ pub struct Engine<'a> {
     quotes: RefCell<HashMap<String, Quote>>,
     sources: RefCell<HashMap<(String, u8, usize, crate::guide_chain::Sourcing), Option<crate::guide_chain::ChainUnit>>>,
     best_profit: RefCell<HashMap<(u8, Vec<String>, bool), Option<f64>>>,
-    shops: RefCell<HashMap<String, Vec<(f64, f64)>>>,
+    shops: RefCell<HashMap<String, Vec<(f64, f64, ShopNeed)>>>,
 }
 
 impl<'a> Engine<'a> {
@@ -237,7 +250,7 @@ impl<'a> Engine<'a> {
 
     /// The F2P shops' window of an object (`GuideWorld::shop_buy`), read
     /// once per build.
-    pub fn shop_steps(&self, item: &str) -> Vec<(f64, f64)> {
+    pub fn shop_steps(&self, item: &str) -> Vec<(f64, f64, ShopNeed)> {
         if let Some(known) = self.shops.borrow().get(item) {
             return known.clone();
         }
@@ -314,7 +327,7 @@ impl<'a> Engine<'a> {
         let quote = self.quote(item);
         let depth = quote.asks.iter().fold(0.0, |held, (_, depth)| held + depth.max(0.0));
         let traded = if quote.traded { "" } else { "never traded, " };
-        let shop: f64 = self.shop_steps(item).iter().map(|(_, units)| units.max(0.0)).sum();
+        let shop: f64 = self.shop_steps(item).iter().map(|(_, units, _)| units.max(0.0)).sum();
         let shops = if shop > 0.0 { format!("F2P shops {shop:.0} (stock + restock)") } else { "no F2P shop sells it".to_string() };
         format!("{item}: {traded}asks hold {depth:.0}, {shops}, of {units:.0} per window")
     }
@@ -324,12 +337,18 @@ impl<'a> Engine<'a> {
         if qty >= 0.0 {
             return self.sale_at(item, qty);
         }
-        if BOUGHT_CAUSES.contains(&cause) || (cause == "input" && pricing == InputPricing::Bought) {
+        if bought(cause, pricing) {
             self.buy_at(item, -qty)
         } else {
             self.sale_at(item, -qty)
         }
     }
+}
+
+/// True when an outgoing flow of `cause` is bought (a consumable, or a
+/// 100 % market input), not valued at its sale price.
+fn bought(cause: &str, pricing: InputPricing) -> bool {
+    BOUGHT_CAUSES.contains(&cause) || (cause == "input" && pricing == InputPricing::Bought)
 }
 
 /// Priced flows of one yield over a row's time.
@@ -341,6 +360,10 @@ pub struct PricedFlows {
     pub cost: f64,
     /// Reasons of the purchases nobody covers (the row is blocked).
     pub missing: Vec<String>,
+    /// Conditions of the shops the row sells its output to or buys from
+    /// (Q7): its prerequisite. A stock input valued at its sale price
+    /// (D5) trades with nobody: none.
+    pub need: ShopNeed,
 }
 
 /// The priced lines of a yield's flows scaled by `scale` (the share of
@@ -359,6 +382,9 @@ pub fn price_flows(engine: &Engine, answer: &RateAnswer, own: Option<&str>, pric
         let priced = engine.flow_price(&item, &cause, per_6000, pricing);
         if !priced.available {
             out.missing.push(engine.unavailable_reason(&item, -per_6000));
+        }
+        if per_6000 >= 0.0 || bought(&cause, pricing) {
+            out.need = out.need.and(priced.need);
         }
         let value = per_6000 * priced.price;
         if value >= 0.0 {

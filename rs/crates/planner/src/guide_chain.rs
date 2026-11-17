@@ -299,6 +299,7 @@ pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, lev
                 }
                 Choice::Buy(priced) => {
                     value -= need * priced.price;
+                    crate::guide_prereq::require_shop(&mut prereqs, priced.need);
                     // An input rides the chain line as a bought flow; a
                     // consumable's purchase is in the value only.
                     if cause == "input" {
@@ -312,6 +313,10 @@ pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, lev
         let priced = engine.flow_price(item, cause, *qty, InputPricing::Stock);
         if !priced.available {
             missing.push(engine.unavailable_reason(item, -qty));
+        }
+        // A by-product or drop sold to a shop: its condition (Q7).
+        if *qty > 0.0 {
+            crate::guide_prereq::require_shop(&mut prereqs, priced.need);
         }
         value += per_unit * priced.price;
     }

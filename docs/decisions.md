@@ -1077,3 +1077,34 @@ Décisions utilisateur (`planner::guide_*`, `docs/economy.md` § Rendements) :
 Rejeté : liste écrite à la main des consommables productibles ; boutique
 à profondeur infinie ; « une source l'emporte toujours » ; seuil de
 rareté inventé pour écarter un drop.
+
+## 2026-11-16 — Guides : boutiques à condition, drops rares, objet plutôt que nom affiché
+
+Décisions utilisateur (`planner::guide_*`, `gamedata::shop_buy|shop_sale`,
+`docs/economy.md` § Rendements) :
+1. Boutiques à condition (Q7, plan marché §9) : toute boutique F2P qu'un
+   non-membre atteint (`obtain::shop_reach`) est dans la fenêtre
+   d'achat ET parmi les débouchés PNJ des guides, avec sa condition :
+   quête F2P de l'ouvreur (Oziach : Dragon Slayer) ou points de quête de
+   la porte (Champions' Guild : 32). La ligne qui y achète ou y vend en
+   porte la condition en prérequis (`Prereqs::quests`, nouveau
+   `Prereqs::quest_points`, comparé aux points des quêtes faites).
+   Inaccessibles en F2P, exclues : Magic Guild (membres), Lundail (Mage
+   Arena hors carte F2P). Remplace « boutiques F2P atteignables sans
+   quête » (entrée précédente, §2). Le cerveau (vente PNJ Q3) ne garde
+   que les boutiques ouvertes à tous (`npc_sale_shops` : ni quête ni
+   points ; la Champions' Guild y figurait sans ses points).
+2. Mode AUTONOME : tout drop compte comme productible, même rare (loi sur
+   les hobgobelins, nature sur les gobelins), aucun seuil de rareté ; la
+   ligne montre honnêtement la lenteur (ticks du combat par unité), le
+   mode marché les achète. Comportement déjà en place, épinglé par
+   `guide_sourcing_tests::a_rare_drop_is_farmed_in_autonomous_mode_however_slow`.
+Correctif (même jour) : les prix du guide se lisent sur l'OBJET (id du
+store), jamais sur le premier objet d'un nom affiché, et les flux d'une
+activité se relisent dans les objets de sa voie (`rates_names::debug_in`).
+Cause du 1,24 M/6000 de « enchant strung_sapphire_amulet (market) » au
+niveau 30 : « Sapphire amulet » désigne l'amulette enfilée et la non
+enfilée ; la ligne achetait la non enfilée (150 asks à 540) au lieu de
+l'enfilée (1 ask à 805, aucune boutique F2P), donc n'était pas bloquée.
+Rejeté : condition de boutique ignorée (achat ouvert à tous) ; boutique
+à condition exclue du guide ; seuil de rareté d'un drop.

@@ -142,10 +142,10 @@ mod tests {
     fn shops(item: &str) -> Vec<SaleShop> {
         match item {
             "iron_dagger" => vec![
-                SaleShop { shop: "generalshop1".to_string(), value: 14, sites: vec![(3212, 3246, 0)] },
-                SaleShop { shop: "generalshop4".to_string(), value: 14, sites: vec![(2958, 3390, 0)] },
+                SaleShop { shop: "generalshop1".to_string(), value: 14, sites: vec![(3212, 3246, 0)], ..SaleShop::default() },
+                SaleShop { shop: "generalshop4".to_string(), value: 14, sites: vec![(2958, 3390, 0)], ..SaleShop::default() },
             ],
-            "bronze_med_helm" => vec![SaleShop { shop: "generalshop1".to_string(), value: 9, sites: vec![(3212, 3246, 0)] }],
+            "bronze_med_helm" => vec![SaleShop { shop: "generalshop1".to_string(), value: 9, sites: vec![(3212, 3246, 0)], ..SaleShop::default() }],
             _ => Vec::new(),
         }
     }

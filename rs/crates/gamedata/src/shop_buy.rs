@@ -11,10 +11,15 @@
 //!
 //! So one window of `window_ticks` buys at most the base stock (unit by
 //! unit, the price rising) plus `window_ticks / rate` restocked units,
-//! each bought as it comes back (stock 1). Shops: the F2P ones a
-//! non-member reaches without a quest (`f2p::f2p_shop_access`, as the
-//! sale side, Q3), each at its cheapest F2P opener (keeper param or
-//! scripted `~openshop` multiplier, haggle from `shop_haggle.json`).
+//! each bought as it comes back (stock 1). Shops: every F2P shop a
+//! non-member reaches (`obtain::shop_reach`, as the sale side, Q3),
+//! each at its cheapest F2P opener (keeper param or scripted `~openshop`
+//! multiplier, haggle from `shop_haggle.json`). A shop behind a
+//! condition (an F2P quest: Oziach after Dragon Slayer; quest points:
+//! the Champions' Guild door, 32) sells too, its condition on each of
+//! its steps (user 2026-11-16, Q7: open to every bot that fulfils it);
+//! a shop no F2P bot reaches never does (Magic Guild, members; Lundail,
+//! Mage Arena off the F2P map).
 
 #![forbid(unsafe_code)]
 
@@ -55,12 +60,17 @@ pub fn unit_buy_price(cost: i64, haggle: i64, sell_multiplier: i64, stock: i64, 
     crate::shop_sale::calc_shop_value(cost, haggle, sell_multiplier, stock - base).max(1)
 }
 
-/// One step of a purchase: `units` at `price` each from `shop`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One step of a purchase: `units` at `price` each from `shop`, and
+/// what a bot needs to reach it (`obtain::ShopReach`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ShopStep {
     pub shop: String,
     pub price: i64,
     pub units: i64,
+    /// F2P quest directory the shop's opener asks (`quest_dragon`).
+    pub quest: Option<String>,
+    /// Quest points the keeper's door asks (Champions' Guild: 32).
+    pub quest_points: i64,
 }
 
 /// One shop's window, cheapest first: the base stock unit by unit
@@ -75,7 +85,7 @@ pub fn shop_ladder(shop: &str, cost: i64, haggle: i64, sell_multiplier: i64, bas
         }
         match out.last_mut() {
             Some(last) if last.price == price => last.units += units,
-            _ => out.push(ShopStep { shop: shop.to_string(), price, units }),
+            _ => out.push(ShopStep { shop: shop.to_string(), price, units, ..ShopStep::default() }),
         }
     };
     for stock in (1..=base.max(0)).rev() {
@@ -109,8 +119,9 @@ fn terms(shop: &crate::shops::Shop, npcs: &[usize]) -> Option<(i64, i64)> {
 }
 
 /// What F2P shops sell of `item` in a window of `window_ticks`: every
-/// shop's ladder (`shop_ladder`), merged cheapest first. Empty: no F2P
-/// shop a non-member reaches without a quest sells it.
+/// reachable shop's ladder (`shop_ladder`), each step with its shop's
+/// condition, merged cheapest first. Empty: no F2P shop a non-member
+/// reaches sells it.
 pub fn purchase_steps(item: &str, window_ticks: i64) -> Vec<ShopStep> {
     let Some(obj) = crate::objs_by_name(item).into_iter().next() else { return Vec::new() };
     let mut out: Vec<ShopStep> = Vec::new();
@@ -119,12 +130,10 @@ pub fn purchase_steps(item: &str, window_ticks: i64) -> Vec<ShopStep> {
             continue;
         }
         let Some(stock) = crate::f2p::f2p_stock(&shop).into_iter().find(|stock| stock.obj == item && stock.count > 0) else { continue };
-        let Some(access) = crate::f2p::f2p_shop_access(&shop.name) else { continue };
-        if access.quest.is_some() {
-            continue;
-        }
+        let (Some(access), Some(reach)) = (crate::f2p::f2p_shop_access(&shop.name), crate::obtain::shop_reach(&shop.name)) else { continue };
         let Some((multiplier, haggle)) = terms(&shop, &access.npcs) else { continue };
-        out.extend(shop_ladder(&shop.name, obj.price, haggle, multiplier, stock.count, stock.rate, shop.restock, window_ticks));
+        let ladder = shop_ladder(&shop.name, obj.price, haggle, multiplier, stock.count, stock.rate, shop.restock, window_ticks);
+        out.extend(ladder.into_iter().map(|step| ShopStep { quest: reach.quest.clone(), quest_points: reach.quest_points, ..step }));
     }
     out.sort_by(|left, right| left.price.cmp(&right.price).then_with(|| left.shop.cmp(&right.shop)));
     out
@@ -158,8 +167,26 @@ mod tests {
         assert_eq!(gerrant.first().map(|step| step.price), Some(2));
         assert!(gerrant.windows(2).all(|pair| pair[0].price < pair[1].price), "the price rises as the stock falls");
         assert!(steps.windows(2).all(|pair| pair[0].price <= pair[1].price), "cheapest first");
-        assert!(purchase_steps("rune_platebody", 6000).is_empty(), "no F2P shop sells it");
+        assert!(purchase_steps("rune_full_helm", 6000).is_empty(), "no F2P shop sells it");
+        assert!(steps.iter().all(|step| step.quest.is_none() && step.quest_points == 0), "feathers sell behind no condition");
         assert_eq!(keeper_haggle("gerrant"), haggles().keepers.get("gerrant").copied());
         assert!(keeper_haggle("no_such_keeper").is_some(), "the param default");
+    }
+
+    /// User 2026-11-16 (Q7): a shop behind a condition is in the window,
+    /// its condition on each of its steps: Oziach's rune platebody after
+    /// Dragon Slayer (`runeplateshop`), Scavvo's rune longsword behind the
+    /// Champions' Guild door (32 quest points). A shop no F2P bot reaches
+    /// stays out: Lundail (Mage Arena cellar, off the F2P map) and the
+    /// Magic Guild (members) never sell nature runes here.
+    #[test]
+    fn conditioned_shops_sell_with_their_condition() {
+        let plate = purchase_steps("rune_platebody", 6000);
+        assert!(!plate.is_empty(), "Oziach sells it after Dragon Slayer");
+        assert!(plate.iter().all(|step| step.shop == "runeplateshop" && step.quest.as_deref() == Some("quest_dragon") && step.quest_points == 0), "{plate:?}");
+        let sword = purchase_steps("rune_longsword", 6000);
+        assert!(!sword.is_empty(), "Scavvo sells it upstairs");
+        assert!(sword.iter().all(|step| step.shop == "runiteshop" && step.quest.is_none() && step.quest_points == 32), "{sword:?}");
+        assert!(purchase_steps("naturerune", 6000).iter().all(|step| step.shop != "magearena_runeshop" && step.shop != "magicguildshop"));
     }
 }

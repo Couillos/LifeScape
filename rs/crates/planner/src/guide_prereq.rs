@@ -4,7 +4,7 @@
 //! filter's profile (every skill at one level, its quests done) passes
 //! them.
 
-use crate::guide_model::{GuideFilter, Prereqs};
+use crate::guide_model::{GuideFilter, Prereqs, ShopNeed};
 
 /// The prerequisites of `method` (with `style`) at the band starting at
 /// `band_level`, its tool tier `tool`.
@@ -46,12 +46,25 @@ fn compute_prereqs(method: &str, style: &str, band_level: u8, tool: &str) -> Pre
         }
     }
     let combat = crate::combat::min_combat_for_method(method);
-    Prereqs { levels, combat, quests, tools, capital: 0.0, ironman: true, stock: Vec::new() }
+    Prereqs { levels, combat, quests, quest_points: 0, tools, capital: 0.0, ironman: true, stock: Vec::new() }
+}
+
+/// Adds the condition of a shop a row trades with (Q7, user
+/// 2026-11-16): its quest, its door's quest points.
+pub fn require_shop(into: &mut Prereqs, need: ShopNeed) {
+    if let Some(quest) = need.quest {
+        if !into.quests.iter().any(|known| known == quest) {
+            into.quests.push(quest.to_string());
+        }
+    }
+    into.quest_points = into.quest_points.max(need.quest_points);
 }
 
 /// Union of two prerequisite sets (a chain's stages): the highest level
-/// per skill, the highest combat, every quest and tool, capitals added.
+/// per skill, the highest combat and quest points, every quest and
+/// tool, capitals added.
 pub fn merge(into: &mut Prereqs, other: &Prereqs) {
+    into.quest_points = into.quest_points.max(other.quest_points);
     for (skill, level) in &other.levels {
         match into.levels.iter_mut().find(|(known, _)| known == skill) {
             Some(known) => known.1 = known.1.max(*level),
@@ -81,10 +94,12 @@ pub fn combat_at(level: u8) -> u8 {
 }
 
 /// True when the filter's bot passes `prereqs`: every level at or under
-/// its level, the combat its levels make, every quest done. Without a
-/// level the row is read at its own gate: levels pass, quests still ask.
+/// its level, the combat its levels make, every quest done, the quest
+/// points its quests grant (`quest_points_of`). Without a level the row
+/// is read at its own gate: levels pass, quests still ask.
 pub fn passes(prereqs: &Prereqs, filter: &GuideFilter) -> bool {
-    let quests = prereqs.quests.iter().all(|quest| filter.quests_done.contains(quest));
+    let points = prereqs.quest_points <= 0 || prereqs.quest_points <= lifescape_gamedata::quest_requirements::quest_points_of(&filter.quests_done);
+    let quests = points && prereqs.quests.iter().all(|quest| filter.quests_done.contains(quest));
     match filter.level {
         Some(level) => quests && prereqs.levels.iter().all(|(_, needed)| *needed <= level) && prereqs.combat <= combat_at(level),
         None => quests,

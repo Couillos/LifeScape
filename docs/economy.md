@@ -495,12 +495,37 @@ ticks), jamais le prix d'une unité appliqué à une fenêtre :
   multiplicateur de vente, stock − base)`, au moins 1 pièce : le prix
   monte à chaque unité achetée), puis son réassort de la fenêtre (une
   unité toutes les `rate` ticks sous la base, `World.ts`, achetée au
-  stock 1) ; boutiques F2P atteignables sans quête (comme la vente Q3),
-  chacune à son ouvreur F2P le moins cher, `shop_delta` relu des configs
+  stock 1) ; chacune à son ouvreur F2P le moins cher, `shop_delta` relu des configs
   (`gamedata/data/shop_haggle.json` : param des `.npc`, défaut de
   `shopkeeper.param`, argument des `~openshop`) ; au-delà, la ligne est
   bloquée comme au-delà des asks (raison : « asks hold A, F2P shops S
   (stock + restock), of V per window ») ;
+- BOUTIQUES À CONDITION (Q7, décision 2026-11-16, achat ET vente
+  alignés) : toute boutique F2P qu'un non-membre atteint
+  (`gamedata::obtain::shop_reach`) est dans la fenêtre d'achat
+  (`shop_buy::purchase_steps`) et parmi les débouchés PNJ
+  (`shop_sale::npc_sale_shops_reachable`), sa condition avec elle :
+  quête F2P de l'ouvreur (Oziach, `runeplateshop` : Dragon Slayer) ou
+  points de quête de la porte (Champions' Guild, `championshop` et
+  `runiteshop` : 32). Une ligne qui achète ou vend à une telle boutique
+  en porte la condition en prérequis (`Prereqs::quests`,
+  `Prereqs::quest_points` ; `guide_prereq::require_shop`, points tenus =
+  `quest_points_of(quêtes faites)`) ; une recette valorisant son stock
+  au prix de vente (D5) ne commerce avec personne : aucune condition.
+  Exclues, inaccessibles en F2P : Magic Guild (membres), Lundail (Mage
+  Arena, hors carte F2P). Le cerveau (voyage de vente Q3,
+  `npc_sale_shops`/`npc_sale_value`) ne garde que les boutiques ouvertes
+  à tous (ni quête ni points) ;
+- OBJET ≠ NOM AFFICHÉ (correctif 2026-11-16) : un prix du guide se lit
+  sur l'OBJET (`web_guides::quote_of`, id de l'objet dans le store),
+  jamais sur le premier objet d'un nom affiché ; les flux d'une activité
+  (rapports et prior en noms affichés) se relisent dans les objets de SA
+  voie (`rates_names::debug_in` : sortant = intrants et outils de la voie,
+  entrant = son produit). Cas réel : « Sapphire amulet » = amulette
+  enfilée (que `enchant:strung_sapphire_amulet` prend) ET non enfilée
+  (que `string:` prend) ; la ligne market de l'enchantement achetait
+  les 150 asks à 540 de l'amulette non enfilée et affichait 1,24 M/6000
+  (fixant D17 au niveau 30) quand l'amulette enfilée n'a qu'un ask ;
 - confiance prix par flux (`basis` : traded, thin, shop, book,
   book+shop, book+none, none, own ; prix courant si la majorité du
   volume y est, sinon ce que carnet et PNJ en portent) et par ligne
@@ -525,8 +550,8 @@ toujours après les autres.
   couvre), market
   (D15 : intrants achetés, aller-retour place de Varrock ↔ atelier et
   attente market mesurée par lot, capital d'un lot, Ironman exclu) ;
-  XP/6000 en bonus ; prérequis (niveaux, combat, quêtes, outils,
-  capital) ; confiance (mesuré/estimé, n, âge, dispersion, échec, clé
+  XP/6000 en bonus ; prérequis (niveaux, combat, quêtes, points de
+  quête, outils, capital) ; confiance (mesuré/estimé, n, âge, dispersion, échec, clé
   lue) ;
 - entraînement : skill × tranche × activité × site × outil × mode
   (autonome, D13 « le bot fait tout lui-même » : chaque intrant de
@@ -539,7 +564,10 @@ toujours après les autres.
   2026-11-16 §1) PRODUITS de la même façon quand une activité les fait
   au niveau (sources du guide : jambes de production, drops et
   sous-produits — runes élémentaires par runecraft, plumes des poulets,
-  loi par les drops de hobgobelins), leur temps compté ; seuls ceux
+  loi par les drops de hobgobelins), leur temps compté ; tout drop
+  compte, même rare (décision 2026-11-16 : aucun seuil de rareté, la
+  ligne montre la lenteur, ex. 2 lois par fenêtre = 3000 ticks par rune ;
+  test `a_rare_drop_is_farmed_in_autonomous_mode_however_slow`) ; seuls ceux
   qu'aucune activité ne fait restent achetés (péages et pièces jamais
   produits) ; la ligne affiche la voie de chacun (`routes`) ; marché : intrants achetés selon la règle d'achat ci-dessus,
   volume au-delà des asks + boutique → ligne bloquée ; pièces converties
