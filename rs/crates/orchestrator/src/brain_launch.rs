@@ -149,6 +149,19 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
                 // never a crash (live 2026-11-12: every restart cost each
                 // active node one failure). Same for an operator `unload`,
                 // `close` or `open` (redeploy). Retry uncounted, like `stopped`.
+                // A report received and not folded yet (inbox, or kept
+                // pending on a full inbox) is the run's verdict (P10): wait.
+                _ if !crate::brain_inflight::missing_report(
+                    crate::brain_inflight::in_flight(&job.account),
+                    job.inner.try_lock().map(|inner| inner.report_pending).unwrap_or(true),
+                ) =>
+                {
+                    crate::logln!("brain {}: {active_id} idle with its report in flight, waiting for the fold", job.account);
+                    if dirty {
+                        save_or_log(&life);
+                    }
+                    return;
+                }
                 _ if crate::brain_grace::take_operator_stop(&job.account) || crate::brain_grace::first_idle_since_start(&job.account) => {
                     crate::logln!("brain {}: {active_id} idle after a daemon restart or an operator stop, retrying uncounted", job.account);
                     lifescape_planner::retry_uncounted(&mut life, position);
