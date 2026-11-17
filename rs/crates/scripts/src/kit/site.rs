@@ -33,6 +33,32 @@ pub fn at_site(bot: &Bot) -> bool {
     bot.assigned_site.is_none_or(|(x, z, level)| level == bot.world.level && (bot.world.x - x).abs().max((bot.world.z - z).abs()) <= SITE_RADIUS)
 }
 
+/// Tag of a contended site in `Blocked { missing }` (user decision D4,
+/// 2026-11-17): the brain cools the site for this bot, counts no failure
+/// and no ban, and the next resolve sends it to another site at once.
+pub const CONTENDED_TAG: &str = "contended:";
+
+/// Pure: a load that ended without its resource while other players
+/// work the site is contention, not a broken method (plan P7b, live
+/// 2026-11-17: "5 mithril_ore rocks mined out" with 23 miners on them
+/// banned mining). `players` = other players' tiles, `here` the bot's.
+pub fn contended_at(here: (i32, i32, i32), players: &[(i32, i32, i32)]) -> bool {
+    players.iter().any(|(x, z, level)| *level == here.2 && (x - here.0).abs().max((z - here.1).abs()) <= SITE_RADIUS)
+}
+
+/// `Blocked { contended:<x>,<z>,<level> }` for the assigned site (else
+/// the bot's tile) when other players work within `SITE_RADIUS`; `None`
+/// when the bot was alone (a real failure, counted).
+pub fn contended_error(bot: &Bot) -> Option<ScriptError> {
+    let here = (bot.world.x, bot.world.z, bot.world.level);
+    let players: Vec<(i32, i32, i32)> = bot.world.players.values().map(|player| (player.x, player.z, player.level)).collect();
+    if !contended_at(here, &players) {
+        return None;
+    }
+    let (x, z, level) = bot.assigned_site.unwrap_or(here);
+    Some(ScriptError::Blocked { missing: vec![format!("{CONTENDED_TAG}{x},{z},{level}")] })
+}
+
 /// Walk to the assigned site when the bot is outside it. `Ok(false)`
 /// when there is nothing to do (no site, already there); `Ok(true)` once
 /// arrived. A walk the planner refuses because only the toll gate leads
@@ -68,6 +94,7 @@ pub fn reach_site(bot: &mut Bot) -> Result<bool, ScriptError> {
 mod tests {
     use super::{at_site, site_bank};
     use lifescape_sdk::Bot;
+    use crate::ScriptError;
 
     /// sara_miller's order: Al Kharid mine from Lumbridge. The bank is
     /// the one nearest the mine (Al Kharid), never Draynor; the bot at
@@ -105,6 +132,26 @@ mod tests {
         let error = super::reach_site(&mut bot).expect_err("offline: the trip cannot be sent");
         let text = error.to_string();
         assert!(!text.contains("Disconnected") && !text.contains("NoRoute"), "planned across levels, got: {text}");
+    }
+
+    /// Plan P7b / D4: no resource with other players on the site is a
+    /// contention block, alone it stays a failure.
+    #[test]
+    fn a_stall_among_other_players_is_contention() {
+        assert!(super::contended_at((3046, 9734, 0), &[(3049, 9737, 0)]));
+        assert!(!super::contended_at((3046, 9734, 0), &[]), "alone: a real failure");
+        assert!(!super::contended_at((3046, 9734, 0), &[(3046, 9734, 1)]), "another floor");
+        assert!(!super::contended_at((3046, 9734, 0), &[(3146, 9734, 0)]), "far away");
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.x = 3046;
+        bot.world.z = 9734;
+        bot.assigned_site = Some((3047, 9735, 0));
+        assert!(super::contended_error(&bot).is_none());
+        bot.world.players.insert(7, lifescape_sdk::world::PlayerInfo { x: 3048, z: 9736, level: 0, jump: false, name: None });
+        match super::contended_error(&bot) {
+            Some(ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["contended:3047,9735,0".to_string()]),
+            other => panic!("contention, got {other:?}"),
+        }
     }
 
     /// The bank serving an upper-floor site (the mill hopper, level 2) is

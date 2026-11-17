@@ -64,6 +64,11 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let (ok, new_level) = crate::kit::mine::mine_load(step_bot, &tiers, &mut bank, coins, level, until)?;
         level = new_level;
         if !ok {
+            // Other players on the rocks: contention, never a method
+            // failure (D4: the brain moves the bot to another site).
+            if let Some(contended) = crate::kit::site::contended_error(step_bot) {
+                return Err(contended);
+            }
             // Typed context (rule 6, live 2026-11-15: 272 bare "mine
             // failed" over 34 bots could not be classed).
             let ores: Vec<&str> = tiers.iter().map(|tier| tier.product.as_str()).collect();

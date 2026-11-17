@@ -333,6 +333,16 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             retry_uncounted(&mut life, index);
             push_history(&mut life, &id, "stopped");
         }
+        // A contended site (D4, user 2026-11-17): no failure, no block
+        // counted, no ban; the site cools for this bot and the next
+        // resolve sends it elsewhere at once.
+        Verdict::Blocked(needs) if crate::brain_cool::contended_site(needs).is_some() => {
+            let contended = crate::brain_cool::contended_site(needs).unwrap_or((0, 0, 0));
+            let cooled_site = site.unwrap_or(contended);
+            crate::brain_cool::on_contended(&mut life, &method, cooled_site);
+            retry_uncounted(&mut life, index);
+            push_history(&mut life, &id, "contended");
+        }
         Verdict::Blocked(needs) => {
             // A missing level climbs from the reported live level.
             let level_of = |skill: &str| reach_level(report, skill).unwrap_or(1);

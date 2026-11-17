@@ -35,3 +35,37 @@ pub(crate) fn on_abandon(life: &mut Life, method: &str, site: Option<(i64, i64, 
     }
     keys
 }
+
+/// Tag a script blocks with on a contended site (`kit::site::CONTENDED_TAG`).
+pub(crate) const CONTENDED_TAG: &str = "contended:";
+
+/// The contended site a block names (`contended:<x>,<z>,<level>`).
+pub(crate) fn contended_site(needs: &[String]) -> Option<(i64, i64, i64)> {
+    needs.iter().find_map(|need| {
+        let parts: Vec<i64> = need.strip_prefix(CONTENDED_TAG)?.split(',').filter_map(|part| part.trim().parse::<i64>().ok()).collect();
+        match parts.as_slice() {
+            [x, z, level] => Some((*x, *z, *level)),
+            _ => None,
+        }
+    })
+}
+
+/// Cool one contended site of `method` (D4): no failure counted, no
+/// ban, the next resolve picks another site at once.
+pub(crate) fn on_contended(life: &mut Life, method: &str, site: (i64, i64, i64)) {
+    let key = lifescape_planner::cooldown::cool_key(method, Some(site));
+    crate::logln!("brain {}: {key} contended, site cooled {COOL_TICKS} ticks for this bot (no ban, no failure)", life.account);
+    push_history(life, COOL_NODE, &cool_entry(&key, COOL_TICKS, "contended: other players work every node"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contended_site;
+
+    #[test]
+    fn a_contended_block_names_its_site() {
+        assert_eq!(contended_site(&["contended:3046,9734,0".to_string()]), Some((3046, 9734, 0)));
+        assert_eq!(contended_site(&["coal".to_string()]), None);
+        assert_eq!(contended_site(&["contended:x".to_string()]), None);
+    }
+}
