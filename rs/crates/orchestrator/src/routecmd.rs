@@ -116,6 +116,9 @@ pub fn route_cmd(args: &[String]) -> i32 {
     // pack coins count as held, like the toll gate's.
     if paid {
         options.satisfied.extend(tables.customs.iter().filter(|edge| edge.fare > 0).map(|edge| format!("coins:{}", edge.fare)));
+        // The boat out also `requires` the fare back (`coins:60`,
+        // nav_overrides): without it `--paid` never reached Karamja.
+        options.satisfied.extend(tables.customs.iter().filter(|edge| edge.fare > 0).flat_map(|edge| edge.requires.iter().filter(|tag| tag.starts_with("coins:")).cloned()));
     }
     match plan::plan(&world, &tables, from, dest, &options) {
         Ok(plan) => {

@@ -82,3 +82,34 @@ fn a_pike_quota_needs_the_rod_and_bait() {
     assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:fishing_bait".to_string() });
     assert_eq!(crate::replan::need_count(&life.nodes[0], "fishing_bait"), 50, "one bait per pike");
 }
+
+/// Live 2026-11-17 (kevin_ellis, fisher, fishing 53, harpoon banked,
+/// 28 000 coins): `produce raw_swordfish` blocked at resolve on
+/// `missing:harpoon` while the harpoon obtain read "holds 1 harpoon,
+/// done", four times, then abandoned and fishing banned. A held harpoon
+/// launches the Karamja leg (boat routed).
+#[test]
+fn a_swordfish_quota_with_the_harpoon_launches() {
+    let life = quota("raw_swordfish", 100);
+    let mut node = life.nodes[0].clone();
+    let mut ctx = fisher(&["harpoon"]);
+    ctx.levels = vec![("fishing".to_string(), 53)];
+    ctx.combat = 90;
+    ctx.coins = 28_000;
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some("farm:raw_swordfish"), "status {:?} alts {:?}", node.status, node.alternatives);
+    // The live cause: `farm:raw_swordfish` quarantined (`method_health`,
+    // 19 NoRoute to Karamja). The block names the quarantine, never the
+    // held harpoon (which filed harpoon obtains closed "held" in a loop).
+    let mut node = life.nodes[0].clone();
+    ctx.quarantined = vec!["farm:raw_swordfish".to_string()];
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.status, NodeStatus::Blocked { reason: "quarantined:farm:raw_swordfish".to_string() });
+    // Without the harpoon the tool is still the gap of a healthy method.
+    let mut node = life.nodes[0].clone();
+    let mut bare = fisher(&[]);
+    bare.levels = vec![("fishing".to_string(), 53)];
+    bare.combat = 90;
+    resolve_ready(&mut node, &bare);
+    assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:harpoon".to_string() });
+}

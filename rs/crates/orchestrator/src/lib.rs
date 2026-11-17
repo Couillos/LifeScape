@@ -36,6 +36,7 @@ mod live_check_tests;
 mod loot_check_tests;
 pub mod economy_guard;
 pub mod brain_fold;
+pub mod brain_food;
 pub mod brain_gear;
 pub mod brain_gear_hold;
 pub mod brain_grace;

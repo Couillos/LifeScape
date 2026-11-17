@@ -101,6 +101,7 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     let mut level_gap: Option<(String, i64)> = None;
     let mut tool_gap: Option<String> = None;
     let mut quest_gap: Option<String> = None;
+    let mut sick_gap: Option<String> = None;
     for method in &candidates {
         if method == "market:buy" || method == "shop:buy" || method == "market:bid" || method == "dialogue:buy" {
             continue;
@@ -125,10 +126,18 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
             }
         }
         if !method_feasible(method, ctx) {
-            if tool_gap.is_none() {
+            if ctx.quarantined.iter().any(|sick| sick == method) {
+                // Quarantined (`method_health`): its gear is no gap (live
+                // 2026-11-17, kevin_ellis: `missing:harpoon` with the
+                // harpoon held, `farm:raw_swordfish` quarantined; four
+                // harpoon obtains "held, done", then abandoned and fishing
+                // banned).
+                sick_gap.get_or_insert(method.clone());
+            } else if tool_gap.is_none() {
                 // The tool first; with the tool at hand, the bait it burns
-                // (feathers for trout, fishing bait for pike).
-                tool_gap = required_tool(method).map(|need| need.missing(ctx).unwrap_or_else(|| need.first().to_string()));
+                // (feathers for trout, fishing bait for pike). Gear held:
+                // never named missing.
+                tool_gap = required_tool(method).and_then(|need| need.missing(ctx));
             }
             continue;
         }
@@ -272,7 +281,7 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         } else if let Some(quest) = quest_gap {
             Some(format!("missing:quest:{quest}"))
         } else {
-            access_gap.map(|area| format!("missing:access:{area}"))
+            access_gap.map(|area| format!("missing:access:{area}")).or_else(|| sick_gap.map(|method| format!("quarantined:{method}")))
         };
         if let Some(reason) = reason {
             node.status = NodeStatus::Blocked { reason };
@@ -395,8 +404,16 @@ pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
     let ranked: Vec<Alternative> = keyed.into_iter().map(|(_, alt)| alt).collect();
     node.method = ranked.iter().find(|alt| method_feasible(&alt.method, ctx)).map(|alt| alt.method.clone());
     if node.method.is_none() {
-        if let Some(need) = ranked.first().and_then(|first| required_tool(&first.method)) {
-            node.status = NodeStatus::Blocked { reason: format!("missing:{}", need.missing(ctx).unwrap_or_else(|| need.first().to_string())) };
+        if let Some(first) = ranked.first() {
+            // Gear held: the method is unworkable for another reason
+            // (quarantine, quest, combat fit), never a held tool "missing".
+            if let Some(need) = required_tool(&first.method) {
+                let reason = match need.missing(ctx) {
+                    Some(tool) => format!("missing:{tool}"),
+                    None => format!("unworkable:{}", first.method),
+                };
+                node.status = NodeStatus::Blocked { reason };
+            }
         }
     }
     node.alternatives = ranked;

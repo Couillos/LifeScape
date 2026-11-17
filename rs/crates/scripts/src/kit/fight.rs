@@ -12,7 +12,7 @@ use lifescape_sdk::Bot;
 
 use crate::kit::gear::{current_weapon_category, melee_level, rewear};
 use crate::kit::style::{combat_xp, controlled_button, current_skill, melee_stat, next_style, set_style, weakest_melee};
-use crate::kit::survival::{bank_stocks_food, eat, food_count, should_eat, EAT_FRACTION};
+use crate::kit::survival::{bank_stocks_food, food_count, max_hitpoints};
 use crate::kit::spots::{attack_nearest, BLOCKED_BAN_TICKS, DOOR_BAN_TICKS};
 use crate::kit::pack::free_slots;
 use crate::kit::survival::{check_events, hitpoints};
@@ -112,7 +112,7 @@ pub fn fight(
     let mut foe_tile = (bot.world.x, bot.world.z);
     let mut last_attack = 0u64;
     let mut last_event_check = bot.world.ticks;
-    let mut max_hp = hitpoints(bot).max(10);
+    let foe_max_hit = crate::kit::meals::foe_max_hit(spot.npc_names);
     let mut prev_hp = hitpoints(bot);
     let mut fighting = false;
     let mut acquire_xp = combat_xp(bot);
@@ -181,10 +181,13 @@ pub fn fight(
             bot.log(&format!("died at {} respawned at {:?}", spot.key, bot.position()));
             return Ok((kills, false, true));
         }
-        max_hp = max_hp.max(hp);
-        if should_eat(hp, max_hp, EAT_FRACTION) && !eat(bot)? && food_required {
-            // Eat line, nothing left, a spot that bites: leave the foe
-            // for the bank (the hunt blocks typed if the bank is dry).
+        // Meal turn (`kit::meals`): eat at max minus the best held heal
+        // without waste, the biggest heal under the emergency line (two
+        // foe max hits). Emergency with nothing edible on a spot that
+        // bites: leave the foe for the bank (the hunt blocks typed if the
+        // bank is dry). Base max hitpoints, never the highest seen.
+        if crate::kit::meals::fight_meal(bot, foe_max_hit)? == crate::kit::meals::Meal::Starving && food_required {
+            let max_hp = max_hitpoints(bot);
             bot.log(&format!("out of food at hp {hp}/{max_hp} on {}, back to the bank", spot.key));
             return Ok((kills, true, false));
         }

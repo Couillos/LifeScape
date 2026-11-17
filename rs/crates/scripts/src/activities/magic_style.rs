@@ -199,8 +199,9 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let spot = queue.remove(next);
         bot.log(&format!("=== {} ===", spot.key));
         bot.intend(&format!("magic at {}", spot.key));
-        let remaining = spec.targets.count.map(|want| want.saturating_sub(state.units())).unwrap_or(0);
-        let (total, died, banked) = match crate::kit::fight::run_spot_with(bot, &spot, &crate::kit::fight::HuntPlan::plain().until(&spec), remaining, spec.budget_max_ticks, no_bank) {
+        // Ordered spots follow the food rule (`kit::ladder::ordered_plan`).
+        let (remaining, plan) = (spec.targets.count.map(|want| want.saturating_sub(state.units())).unwrap_or(0), crate::kit::ladder::ordered_plan(bot, spot.key).until(&spec));
+        let (total, died, banked) = match crate::kit::fight::run_spot_with(bot, &spot, &plan, remaining, spec.budget_max_ticks, no_bank) {
             // An ordered spot behind the toll without `toll`: a typed access
             // gap the brain funds or routes, never a Usage.
             Err(crate::ScriptError::Usage(detail)) if !auto && detail.contains("toll fence") => return Err(crate::kit::survival::ordered_spot_tolled(bot, spot.key, &detail)),

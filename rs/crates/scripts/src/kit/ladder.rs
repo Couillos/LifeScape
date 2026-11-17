@@ -108,6 +108,48 @@ pub fn plan_of(rung: &Rung, clusters: &[(i64, i64, i64, usize)], food: Option<u3
     }
 }
 
+/// Share of the bot's base hitpoints under which a spot's NPC max hit
+/// is harmless (user 2026-11-17): fought foodless, like cows.
+pub const HARMLESS_HIT_SHARE: f64 = 0.05;
+
+/// True when a foe max hit is harmless for a bot of `max_hp` base
+/// hitpoints (under `HARMLESS_HIT_SHARE` of them).
+pub fn harmless(foe_max_hit: i64, max_hp: i64) -> bool {
+    (foe_max_hit as f64) < HARMLESS_HIT_SHARE * max_hp as f64
+}
+
+/// True when an ordered spot (`melee goblins`, a drop farm, a ranged or
+/// magic hunt, a filler) must not be fought without food: every spot but
+/// the exempt rungs (cows, chickens; user rule "food everywhere but cows
+/// and chickens", applied to ordered spots since 2026-11-17: live, 57
+/// `fight:melee/men` runs ended in a death, foodless) and the harmless
+/// ones for this bot's base hitpoints `max_hp` (men, max hit 1, for a
+/// 30-HP bot; `kit::meals::foe_max_hit`, server stats).
+pub fn ordered_food_required(spot_key: &str, max_hp: i64) -> bool {
+    if knowledge::melee_ladder::rung_by_key(spot_key).is_some_and(|rung| rung.food_exempt) {
+        return false;
+    }
+    let names: &[&str] = knowledge::combat_spots::by_key(spot_key).map(|spot| spot.npc_names).unwrap_or(&[]);
+    !harmless(crate::kit::meals::foe_max_hit(names), max_hp)
+}
+
+/// Load of an ordered spot: the ladder's sized load when the spot is a
+/// rated rung (burn over a trip plus the reserve), else the usual
+/// `FOOD_TARGET`.
+pub fn ordered_food_load(rated: &[knowledge::melee_ladder::Rated], spot_key: &str) -> u32 {
+    rated.iter().find(|entry| entry.rung.key == spot_key).map(|entry| entry.food).filter(|food| *food > 0).unwrap_or(crate::kit::survival::FOOD_TARGET as u32)
+}
+
+/// The hunt plan of an ordered spot: ranked clusters (no ladder order),
+/// the food rule and load above, no kept items.
+pub fn ordered_plan(bot: &mut Bot, spot_key: &str) -> HuntPlan {
+    if !ordered_food_required(spot_key, base_level(bot, 3, 10)) {
+        return HuntPlan::plain();
+    }
+    let rated = knowledge::melee_ladder::rate(&fighter(bot), &holdings(bot));
+    HuntPlan { food_target: ordered_food_load(&rated, spot_key), food_required: true, ..HuntPlan::plain() }
+}
+
 /// Ask the ladder (rungs in `excluded` left out: killers of this run).
 /// Hunt: the spot and its plan (the toll opened when the rung needs it).
 /// NeedFood: typed `Blocked` on `asked_food`. Nothing workable: Failed.
@@ -152,7 +194,7 @@ pub fn pick(bot: &mut Bot, excluded: &[&str]) -> Result<(knowledge::combat_spots
 
 #[cfg(test)]
 mod tests {
-    use super::{gate_items, holdings_from, plan_of};
+    use super::{gate_items, holdings_from, ordered_food_load, ordered_food_required, plan_of};
     use lifescape_gamedata::melee_ladder::{rung_by_key, BRASS_KEY, EAT_FRACTION};
 
     /// The ladder's eat line is the fight loop's.
@@ -177,6 +219,29 @@ mod tests {
         assert!(plan.food_required);
         assert_eq!(plan.food_target, 9);
         assert!(plan.keep.is_empty(), "open gate keeps nothing");
+    }
+
+    /// Ordered spots follow the food rule too: only cows and chickens
+    /// are fought without food; a rated rung carries its sized load.
+    #[test]
+    fn ordered_spots_need_food_but_cows_and_chickens() {
+        assert!(!ordered_food_required("cows", 30) && !ordered_food_required("chickens", 10));
+        for spot in ["hill_giants", "wild_skeletons", "barbarians"] {
+            assert!(ordered_food_required(spot, 30), "{spot}");
+        }
+        assert!(ordered_food_required("goblins", 10), "goblins bite a 10-HP bot");
+        // User 2026-11-17: a harmless spot (NPC max hit under 5 % of the
+        // bot's base hitpoints) is fought foodless, like cows.
+        assert_eq!(lifescape_gamedata::melee_math::npc_max_hit("man"), Some(1), "men hit 1");
+        assert!(super::harmless(1, 30), "max hit 1 for 30 HP: harmless");
+        assert!(!super::harmless(5, 30), "max hit 5 for 30 HP: food");
+        assert!(!ordered_food_required("men", 30), "men for a 30-HP bot: no food");
+        assert!(ordered_food_required("men", 10), "men for a 10-HP bot: food (1 >= 0.5)");
+        let melee = lifescape_gamedata::melee_math::Fighter::naked(40, 40, 40, 40, 46);
+        let rated = lifescape_gamedata::melee_ladder::rate(&melee, &holdings_from((0, 0), (20, 7), 0, false, false));
+        let giants = ordered_food_load(&rated, "hill_giants");
+        assert!(giants > 0, "sized load");
+        assert_eq!(ordered_food_load(&rated, "wild_skeletons"), crate::kit::survival::FOOD_TARGET as u32, "unrated: the usual 10");
     }
 
     /// Gate items ride every trip: the owned key for the giants (a

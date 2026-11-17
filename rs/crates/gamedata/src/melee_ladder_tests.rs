@@ -250,3 +250,24 @@ fn asked_food_follows_max_hitpoints() {
     assert_eq!(super::food_to_ask(28), "swordfish");
     assert_eq!(super::food_to_ask(99), "swordfish");
 }
+
+/// User 2026-11-17: a foodless fight obtains the best food its wallet
+/// buys at the market, never above the hitpoints fit (the asked food);
+/// nothing priced and affordable keeps the asked food.
+#[test]
+fn foodless_fights_ask_the_best_affordable_food() {
+    let prices = |food: &str| match food {
+        "swordfish" => Some(1_200),
+        "lobster" => Some(400),
+        "trout" => Some(20),
+        "shrimp" => Some(5),
+        _ => None,
+    };
+    assert_eq!(super::affordable_food("swordfish", 20, 30_000, &prices), "swordfish", "rich: the fitted best");
+    assert_eq!(super::affordable_food("swordfish", 20, 10_000, &prices), "lobster", "lobsters fit the wallet");
+    assert_eq!(super::affordable_food("swordfish", 20, 500, &prices), "trout", "trout at 20 each");
+    assert_eq!(super::affordable_food("lobster", 20, 100_000, &prices), "lobster", "never above the fitted heal");
+    assert_eq!(super::affordable_food("swordfish", 20, 10, &|_| None), "swordfish", "nothing priced: asked stays");
+    assert_eq!(super::affordable_food("cabbage", 20, 10, &prices), "cabbage", "off the ladder: asked stays");
+    assert_eq!(super::food_room(20), 10, "a 20-HP bot carries heals up to 10");
+}

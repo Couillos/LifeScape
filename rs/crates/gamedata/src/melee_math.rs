@@ -113,6 +113,15 @@ fn damage_per_tick(fighter: &Fighter, npc: &NpcCombat, self_heal_per_tick: f64) 
     best_chance * ours as f64 / 2.0 / PLAYER_ATTACK_TICKS - self_heal_per_tick
 }
 
+/// Melee max hit of an NPC by name (`npc_combat_melee.rs2`: effective
+/// strength = level + 9); `None` without a melee combat block (magic
+/// and ranged attackers are not modelled).
+pub fn npc_max_hit(name: &str) -> Option<i64> {
+    let npc = crate::npc_combat::by_name(name)?;
+    npc.damage_type.melee_index()?;
+    Some(max_hit(npc.strength + 9, npc.strength_bonus))
+}
+
 /// Expected damage the NPC deals per tick, and its max hit (melee
 /// NPCs only: a ranged or magic attacker is not modelled).
 fn npc_damage(fighter: &Fighter, npc: &NpcCombat) -> Option<(f64, i64)> {
@@ -148,7 +157,17 @@ pub fn estimate(fighter: &Fighter, npc: &NpcCombat, self_heal_per_tick: f64) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{estimate, hit_chance, max_hit, Fighter};
+    use super::{estimate, hit_chance, max_hit, npc_max_hit, Fighter};
+
+    /// Max hits from the server formula: a man hits 1, a hill giant
+    /// more than a goblin; an unknown NPC has none.
+    #[test]
+    fn npc_max_hits_follow_the_formula() {
+        let man = npc_max_hit("man").expect("man melee");
+        let giant = npc_max_hit("giant").expect("giant melee");
+        assert!(man >= 1 && man < giant, "man {man} giant {giant}");
+        assert_eq!(npc_max_hit("no_such_npc"), None);
+    }
     use crate::npc_combat::by_name;
 
     /// `randominc` rolls: equal rolls land a bit under half, a far

@@ -534,3 +534,36 @@ rentrent en banque (jamais deux dans le sac). Un outil porté reste porté
 le serveur s'en sert. Verrous du marché respectés (`banked_usable`).
 Pêche exclue : un outil par palier (filet, canne, harpon, casier), pas un
 rang (`fish_gear::ensure_gear` retire l'outil exact du palier).
+
+## Repas et nourriture de combat (2026-11-17)
+
+Demande utilisateur : la bière n'est jamais une nourriture ; manger tôt,
+sans gâcher, se soigner à la banque, emporter la nourriture adaptée.
+- Boissons alcoolisées (`gamedata::food::ALCOHOLIC_DRINKS`, catégorie
+  serveur `alcoholic_drinks` : bière +1 PV, Attaque −1 et −6 % ; vin +11,
+  Attaque −2 ; bières, stout, mind bomb, grog, alcools) : `heal` = 0,
+  jamais mangées, jamais comptées comme nourriture (avant : 1 478 bières
+  « mangées » en combat d'échelle, la règle sans-nourriture ne tombait pas).
+- Ligne de repas (`kit::meals`, combat) : PV ≤ max − meilleur soin tenu
+  (cette bouchée ne gâche rien), jamais sous la ligne d'urgence = 2 max hits
+  du PNJ (`melee_math::npc_max_hit` : un coup peut tomber pendant les
+  3 ticks du repas, le suivant ne doit pas tuer), au moins 35 % des PV max.
+  Max = PV de base (avant : le plus haut PV courant vu, d'où « 13/26 » sur
+  un bot à 64 PV). Choix : sous l'urgence le plus gros soin ; sinon le plus
+  gros soin ≤ PV manquants, rien quand aucun ne tient (50/55 : ni homard ni
+  truite, une crevette). Sans nourriture sous l'urgence sur un spot qui
+  mord : retour banque.
+- Banque de combat (`prepare_at_bank_for`) : les bouchées qui remplissent
+  les PV manquants sans gâchis (`meals::heal_plan`) sortent en plus de la
+  charge et sont mangées avant de repartir (`eat_to_full`).
+- Charge : la nourriture qui tient dans la moitié des PV max d'abord
+  (`melee_ladder::food_room`, meilleur soin d'abord), les gros soins
+  ensuite (plus petit d'abord) : un bot à 20 PV n'emporte pas d'espadon.
+- Spots ordonnés (`melee <spot>`, fermes de drop, ranged, magie) : même
+  règle que l'échelle (`kit::ladder::ordered_plan`) : nourriture requise
+  partout sauf vaches, poulets et spots inoffensifs (max hit du PNJ sous
+  `HARMLESS_HIT_SHARE` = 5 % des PV de base du bot : hommes, max hit 1,
+  pour un bot à 30 PV ; décision utilisateur 2026-11-17, fillers compris),
+  charge dimensionnée par le barreau ;
+  sans nourriture en banque ⇒ `Blocked: <food_to_ask>` (avant : plan
+  « plain », combat sans nourriture jusqu'à la mort : 57 runs `men` morts).

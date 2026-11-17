@@ -1124,3 +1124,17 @@ sont dans `free2play.csv` (Wilderness F2P jusqu'à z 3903) : un monde F2P ne
 le fait pas apparaître (`GameMap.loadNpcs`) et refuse le telejump ; aucune
 voie (goldens nav `lundail_hors_f2p`, `arene_mages_hors_f2p`). Davon
 (`amuletshop`, Brimhaven) : stock 0, jamais une source.
+
+## Nourriture abordable, quarantaine nommée (2026-11-17)
+
+- Un combat (ou une ferme de drop) bloqué sur une nourriture
+  (`Blocked: swordfish`) obtient la meilleure nourriture dont la bourse
+  couvre une charge (`FOOD_BATCH`) au marché (meilleure offre, sinon prix
+  courant), jamais au-dessus du soin adapté aux PV (`brain_food`,
+  `melee_ladder::affordable_food`) ; rien d'abordable et coté : la
+  nourriture demandée reste (production ou ordre posé). `need_count`
+  donne la charge aux fermes de drop aussi (`combat::is_fight_method`).
+- Une méthode en quarantaine (`method_health`) ne fait plus nommer son
+  outil tenu comme manquant : le blocage dit `quarantined:<méthode>`
+  (avant : `missing:harpoon` harpon en main, quatre obtentions « déjà
+  tenu », abandon, pêche et cuisine bannies — kevin_ellis, espadon).

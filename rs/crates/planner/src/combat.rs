@@ -55,6 +55,12 @@ pub fn combat_level(levels: &BaseLevels) -> u8 {
     (base + melee.max(ranged).max(magic)) as u8
 }
 
+/// True for a method that hunts a combat spot: a `fight:` or a drop
+/// farm (`farm:naturerune` at the goblins).
+pub fn is_fight_method(method: &str) -> bool {
+    matches!(method_sites(method), Some(("fight", _))) && !method.starts_with("curse:")
+}
+
 /// Site family and resource a method works (`None`: no site in the data,
 /// e.g. smithing at any anvil).
 fn method_sites(method: &str) -> Option<(&'static str, String)> {

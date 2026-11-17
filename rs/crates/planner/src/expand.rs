@@ -581,11 +581,16 @@ fn resolve_method(node: &mut Node, ctx: &ReadyCtx) {
                     Some(method) => node.method = Some(method),
                     None => {
                         if let Some(first) = node.alternatives.first() {
-                            let missing = required_tool(&first.method).map(|need| need.missing(ctx).unwrap_or_else(|| need.first().to_string()));
+                            // Gear held: unworkable for another reason
+                            // (quarantine, quest, combat fit), never a held
+                            // tool named missing (a buy-held loop).
+                            let missing = required_tool(&first.method).and_then(|need| need.missing(ctx));
+                            let sick = ctx.quarantined.iter().any(|method| method == &first.method);
                             node.method = None;
                             node.status = match missing {
-                                Some(tool) => NodeStatus::Blocked { reason: format!("missing:{tool}") },
-                                None => NodeStatus::Blocked { reason: format!("unworkable:{}", first.method) },
+                                Some(tool) if !sick => NodeStatus::Blocked { reason: format!("missing:{tool}") },
+                                _ if sick => NodeStatus::Blocked { reason: format!("quarantined:{}", first.method) },
+                                _ => NodeStatus::Blocked { reason: format!("unworkable:{}", first.method) },
                             };
                         }
                     }

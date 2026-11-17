@@ -138,7 +138,7 @@ pub fn need_count_from(node: &Node, need: &str, live: Option<u8>) -> i64 {
             // A melee hunt blocked on food (`Blocked: shrimp`, the ladder
             // never fights a biting spot foodless) asks a full load: one
             // shrimp per block would block again after the first bite.
-            if method.starts_with("fight:") && lifescape_gamedata::food::heal(need) > 0 {
+            if crate::combat::is_fight_method(&method) && lifescape_gamedata::food::heal(need) > 0 {
                 return FOOD_BATCH;
             }
             match method_subject(&method) {
@@ -413,6 +413,9 @@ mod tests {
         // The melee ladder blocks on food: a full load, never one shrimp.
         assert_eq!(super::need_count(&reach("fight:melee/ladder"), "shrimp"), super::FOOD_BATCH);
         assert_eq!(super::FOOD_BATCH, 20);
+        // A drop farm hunting a biting spot blocks on food too (ordered
+        // spots follow the food rule since 2026-11-17): a full load.
+        assert_eq!(super::need_count(&reach("farm:naturerune"), "trout"), super::FOOD_BATCH);
         assert_eq!(super::need_count(&reach("fight:melee/ladder"), "bronze_sword"), 1, "gear still comes alone");
         let mut cook = reach("cook/raw_shrimp");
         let fresh = replan_node(&mut cook, &ReplanCause::Blocked, &["raw_shrimp".to_string()], &mut 7);

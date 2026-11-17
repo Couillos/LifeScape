@@ -50,6 +50,7 @@ pub mod harvest;
 pub mod load;
 pub mod loot;
 pub mod magic;
+pub mod meals;
 pub mod mill;
 pub mod mine;
 pub mod observe;

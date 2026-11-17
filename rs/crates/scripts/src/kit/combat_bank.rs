@@ -253,11 +253,17 @@ pub fn prepare_at_bank_for(bot: &mut Bot, food_target: u32, keep_items: &[(Strin
             let _ = bot.bank_withdraw(obj, stock, 25);
         }
     }
-    let load = food_load(food_target, crate::kit::survival::food_count(bot), free_slots(bot));
+    // Heal by eating before walking out (user 2026-11-17): the bites that
+    // fill the missing hitpoints without waste (`meals::heal_plan`) ride
+    // on top of the trip load and are eaten once the bank closes.
+    let missing = i64::from(crate::kit::survival::max_hitpoints(bot).saturating_sub(crate::kit::survival::hitpoints(bot)));
+    let heal_bites: u32 = crate::kit::meals::heal_plan(missing, &crate::kit::meals::food_stock(bot)).iter().map(|(_, bites)| *bites).sum();
+    let load = food_load(food_target.saturating_add(heal_bites), crate::kit::survival::food_count(bot), free_slots(bot));
     crate::kit::survival::withdraw_food_to(bot, load)?;
     bot.close_modal()?;
     bot.pump(5)?;
     equip_logged(bot, &plan, "equipped")?;
+    crate::kit::meals::eat_to_full(bot)?;
     // A replaced piece fell into the pack: back to the bank, same visit.
     let mut after_keep = keep.clone();
     after_keep.extend(coins);

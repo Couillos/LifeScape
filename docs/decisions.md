@@ -1180,3 +1180,4 @@ Pioche idem (Nurmof) : 2 000 charbons au niveau 41 financent l'adamant,
 jamais la rune à 32 000.
 Rejeté : palier absolu ; financer un outil qui ne paie pas ; viser deux
 fois le prix (part de 50 % du plan d'équipement).
+- 2026-11-17 — Nourriture : les boissons alcoolisées (catégorie serveur `alcoholic_drinks`, vin compris) ne sont jamais de la nourriture ; un spot ordonné (fillers compris) exige de la nourriture sauf vaches, poulets et spots inoffensifs (max hit du PNJ < 5 % des PV de base du bot, `kit::ladder::HARMLESS_HIT_SHARE`). Rejeté : fillers toujours sur vaches/poulets ; vin réadmis.

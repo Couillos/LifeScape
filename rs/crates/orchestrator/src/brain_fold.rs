@@ -234,7 +234,9 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         return;
     }
     let stop = report.get("stop").as_str().unwrap_or("").to_string();
-    let missing = report_missing(report);
+    // A foodless fight obtains the best food its wallet buys (`brain_food`).
+    let fight_method = life.nodes[index].method.clone().unwrap_or_default();
+    let missing = crate::brain_food::afford_food_needs(job, &fight_method, report_missing(report));
     let ticks = report.get("ticks").as_i64().unwrap_or(0).max(0) as u64;
     life.nodes[index].spent_ticks = life.nodes[index].spent_ticks.saturating_add(ticks);
     // A rescue that ran out of budget mid-script is typed in the

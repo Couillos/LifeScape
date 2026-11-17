@@ -70,8 +70,37 @@ pub const FOOD_LADDER: [&str; 9] = ["shrimp", "sardine", "herring", "trout", "pi
 /// d'hp en fonction de leur niveau d'hitpoint max"; every melee bot used
 /// to ask shrimps, the market's top bid). Shrimps at the least.
 pub fn food_to_ask(max_hitpoints: i64) -> &'static str {
-    let room = (max_hitpoints / 2).max(crate::food::heal(FOOD_LADDER[0]));
+    let room = food_room(max_hitpoints);
     FOOD_LADDER.iter().copied().filter(|food| crate::food::heal(food) <= room).max_by_key(|food| crate::food::heal(food)).unwrap_or(FOOD_LADDER[0])
+}
+
+/// Biggest heal a food may restore for a bot of `max_hitpoints`: half
+/// its health (a 20-HP bot never carries +14 swordfish that waste most
+/// of each bite), shrimps at the least.
+pub fn food_room(max_hitpoints: i64) -> i64 {
+    (max_hitpoints / 2).max(crate::food::heal(FOOD_LADDER[0]))
+}
+
+/// The food a foodless fight obtains, the wallet read (user 2026-11-17:
+/// "la meilleure nourriture qu'il peut s'offrir"): the biggest heal of
+/// `FOOD_LADDER` up to the `asked` one (already fitted to the bot's
+/// hitpoints) whose market price (`price_of`: best ask, else current
+/// price; `None` unpriced) covers `count` units with `coins`. Nothing
+/// affordable and priced: the asked food stays (the obtain produces it
+/// or rests a bid). A non-ladder ask stays as asked.
+pub fn affordable_food(asked: &str, count: i64, coins: i64, price_of: &dyn Fn(&str) -> Option<i64>) -> String {
+    let cap = crate::food::heal(asked);
+    if cap <= 0 || !FOOD_LADDER.contains(&asked) {
+        return asked.to_string();
+    }
+    FOOD_LADDER
+        .iter()
+        .copied()
+        .filter(|food| crate::food::heal(food) <= cap)
+        .filter(|food| price_of(food).is_some_and(|price| price.max(1).saturating_mul(count.max(1)) <= coins))
+        .max_by_key(|food| crate::food::heal(food))
+        .unwrap_or(asked)
+        .to_string()
 }
 /// Brass key debugname (`item:983`, the Edgeville dungeon door).
 pub const BRASS_KEY: &str = "edgevilledungeonkey";

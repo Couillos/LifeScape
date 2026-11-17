@@ -24,12 +24,16 @@ pub fn should_eat(hp: u8, max_hp: u8, fraction: f64) -> bool {
     f64::from(hp) <= f64::from(max_hp) * fraction
 }
 
-/// Eat the first edible thing in the pack. True when something was eaten.
+/// Eat one bite, wasting the fewest hitpoints (`kit::meals`): the
+/// biggest heal that fits the missing hitpoints, else the smallest heal.
+/// True when something was eaten (alcoholic drinks are never food).
 pub fn eat(bot: &mut Bot) -> Result<bool, ScriptError> {
-    let found = bot.backpack().1.into_iter().find(|(_, (held, _))| {
-        (bot.tables.obj_name)(*held).is_some_and(|name| lifescape_gamedata::food::heal(&name) > 0)
-    });
-    let Some((slot, (held, _))) = found else {
+    let foods = crate::kit::meals::pack_foods(bot);
+    let heals: Vec<i64> = foods.iter().map(|(_, _, heal)| *heal).collect();
+    let (hp, max_hp) = (hitpoints(bot), max_hitpoints(bot).max(hitpoints(bot)));
+    let pick = crate::kit::meals::pick_food(hp, max_hp, &heals, false)
+        .or_else(|| heals.iter().enumerate().min_by_key(|(_, heal)| **heal).map(|(index, _)| index));
+    let Some((slot, held, _)) = pick.and_then(|index| foods.get(index).copied()) else {
         return Ok(false);
     };
     let Some(pack_com) = bot.backpack().0 else {
@@ -58,16 +62,20 @@ pub fn withdraw_food(bot: &mut Bot) -> Result<u32, ScriptError> {
 }
 
 /// Withdraw banked food up to `target` units (the hunt's sized load),
-/// best heal first, the next food when the best runs short. Returns
-/// food carried.
+/// the food that fits the bot's health first (`meals::carry_rank`: heals
+/// up to half its max hitpoints, best first; oversized heals last,
+/// smallest first), the next food when one runs short. Returns food
+/// carried.
 pub fn withdraw_food_to(bot: &mut Bot, target: u32) -> Result<u32, ScriptError> {
+    let max_hp = max_hitpoints(bot);
     let mut banked: Vec<(i64, u16)> = bot
         .bank_items()
         .keys()
         .filter_map(|id| (bot.tables.obj_name)(*id).map(|name| (lifescape_gamedata::food::heal(&name), *id)))
         .filter(|(heal, _)| *heal > 0)
         .collect();
-    banked.sort_by(|left, right| right.cmp(left));
+    let rank = |heal: i64| crate::kit::meals::carry_rank(heal, max_hp);
+    banked.sort_by(|left, right| rank(left.0).cmp(&rank(right.0)).then(left.1.cmp(&right.1)));
     for (_, food_id) in banked {
         let need = target.saturating_sub(food_count(bot));
         if need == 0 || crate::kit::pack::free_slots(bot) == 0 {
