@@ -50,15 +50,6 @@ struct RowView {
     from: Tile,
 }
 
-/// Transport and operator stops abort the run; anything else is one
-/// skipped row and the loop teleports on.
-fn is_fatal(err: &ScriptError) -> bool {
-    matches!(
-        err,
-        ScriptError::Sdk(Error::Interrupted(_) | Error::Io(_) | Error::Login(_))
-    )
-}
-
 /// Region stream catch-up after a teleport: cross-region jumps deliver
 /// `REBUILD_NORMAL` with the fresh locs; same-region hops just burn the
 /// bound. Lid reads below need post-teleport data, never the
@@ -354,7 +345,9 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
                 entries.push(entry);
             }
             Err(err) => {
-                if is_fatal(&err) {
+                // Transport and operator stops abort the run; anything else is one
+                // skipped row and the loop teleports on.
+                if err.ends_run() {
                     let _ = cheat_teleport(bot, HOME.0, HOME.1, HOME.2, TELEPORT_TIMEOUT);
                     return Err(err);
                 }
@@ -371,7 +364,7 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
             Ok(true) => {}
             Ok(false) => bot.log("safety hop did not settle, next probe re-teleports"),
             Err(err) => {
-                if is_fatal(&err) {
+                if err.ends_run() {
                     return Err(err);
                 }
                 bot.log(&format!("safety hop failed ({err}), next probe re-teleports"));

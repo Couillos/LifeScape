@@ -274,11 +274,7 @@ fn solve_hunt(bot: &mut Bot) -> Result<(), ScriptError> {
         let target = bot.world.ticks + 1200;
         while solver::varp(bot, "crate_bananas") < 10 && bot.world.ticks < target {
             if solver::count(bot, banana) < 1 {
-                let before = solver::count(bot, banana);
-                let inner = bot.world.ticks + 300;
-                while solver::count(bot, banana) == before && bot.world.ticks < inner {
-                    let _ = solver::operate_loc(bot, &["bananatree"], 1, None);
-                }
+                crate::kit::stranded::pick_banana(bot, banana, bot.world.ticks + 300)?;
                 continue;
             }
             solver::use_item_on_loc(bot, "banana", &["bananacrate"])?;

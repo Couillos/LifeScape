@@ -72,6 +72,15 @@ impl std::fmt::Display for ScriptError {
 
 impl std::error::Error for ScriptError {}
 
+impl ScriptError {
+    /// Operator stop or dead transport: the run is over, no retry loop
+    /// may swallow it (a stopped run freezes the tick, so a deadline in
+    /// ticks never ends the loop).
+    pub fn ends_run(&self) -> bool {
+        matches!(self, ScriptError::Sdk(Error::Interrupted(_) | Error::Io(_) | Error::Login(_)))
+    }
+}
+
 impl From<Error> for ScriptError {
     fn from(err: Error) -> ScriptError {
         match err {

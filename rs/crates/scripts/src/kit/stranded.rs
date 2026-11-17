@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 use lifescape_gamedata as knowledge;
+use lifescape_sdk::waits::wait_ticks;
 use lifescape_sdk::Bot;
 
 use crate::kit::pack::{free_slots, is_worn, obj_id, pack_slots, pack_total};
@@ -50,11 +51,7 @@ pub fn earn_fare_if_stranded(bot: &mut Bot) -> Result<(), ScriptError> {
             if free_slots(bot) == 0 {
                 drop_cheapest(bot, banana, coins)?;
             }
-            let before = pack_total(bot, banana);
-            let inner = bot.world.ticks + 300;
-            while pack_total(bot, banana) == before && bot.world.ticks < inner.min(deadline) {
-                let _ = solver::operate_loc(bot, &["bananatree"], 1, None);
-            }
+            pick_banana(bot, banana, (bot.world.ticks + 300).min(deadline))?;
             continue;
         }
         solver::use_item_on_loc(bot, "banana", &["bananacrate"])?;
@@ -119,9 +116,48 @@ fn drop_cheapest(bot: &mut Bot, banana: u16, coins: u16) -> Result<(), ScriptErr
     Ok(())
 }
 
+/// Pick one banana: operate the nearest banana tree until the pack count
+/// moves or `deadline` passes (Ok either way: callers read the pack).
+/// A stopped run or a dead socket returns at once; any other refusal
+/// (trees picked bare, no tree in range) waits one tick before the next
+/// try, so the deadline always advances. james_mason 2026-11-17: the
+/// former `let _ =` retry swallowed an operator stop and spun 2 h 45 at
+/// 100 % CPU on a frozen tick (15 M log lines).
+pub fn pick_banana(bot: &mut Bot, banana: u16, deadline: u64) -> Result<(), ScriptError> {
+    let before = pack_total(bot, banana);
+    while pack_total(bot, banana) == before && bot.world.ticks < deadline {
+        if let Err(error) = solver::operate_loc(bot, &["bananatree"], 1, None) {
+            if error.ends_run() {
+                return Err(error);
+            }
+            wait_ticks(bot, 1)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::stranded;
+    use super::{pick_banana, stranded};
+
+    /// james_mason 2026-11-17: an operator stop mid-pick froze the tick
+    /// (t=150928) and the `let _ =` retry spun 2 h 45 at 100 % CPU, 15 M
+    /// log lines, waiting for a deadline that never came. A stopped run
+    /// returns at once, typed.
+    #[test]
+    fn stopped_run_ends_the_banana_pick() {
+        let (done, outcome) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 9, ".", ".");
+            bot.on_pump = Some(std::sync::Arc::new(|_: &mut lifescape_sdk::Bot| false));
+            let deadline = bot.world.ticks + 300;
+            let _ = done.send(pick_banana(&mut bot, 1963, deadline).map_err(|error| error.to_string()));
+        });
+        let result = outcome
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a stopped run ends the pick instead of spinning on a frozen tick");
+        assert!(result.is_err(), "a stopped run is an error, never a picked banana");
+    }
 
     #[test]
     fn only_the_island_without_the_fare_is_stranded() {
