@@ -321,3 +321,10 @@ prouve que le script n'a pas démarré ; le nœud revient prêt sans échec
 (`brain <c>: nX launch refused, back to ready (uncounted)`, historique
 `launch_refused`) et repart quand le worker est libre. Une erreur de
 transport reste jugée par le détecteur d'inactivité.
+Re-test des quarantaines (tour 2, P2-10, D7) : une file unique vidée en
+parallèle par `admin` et `admin2` ; un compte occupé (exit 3) remet la
+méthode en file et la reprend 300 s plus tard ; un verdict `setup` (harnais,
+p. ex. `check_dispose`) n'est pas un verdict : re-file (2 fois au plus),
+jamais « still quarantined ». Au chargement de `method_health.json`, une
+quarantaine que la règle des 3 comptes ne poserait pas (fiches d'avant P4,
+`accounts {}`) est levée en probation (compteurs gardés).
