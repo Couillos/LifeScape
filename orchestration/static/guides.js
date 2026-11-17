@@ -65,7 +65,9 @@ var GuidesView = (function () {
     var parts = [];
     var levels = prereqs.levels || {};
     Object.keys(levels).sort().forEach(function (skill) { parts.push(skill + ' ' + levels[skill]); });
-    if (prereqs.combat > 3) parts.push('combat ' + prereqs.combat);
+    // 255 = danger::NEVER: no site of the method has a bank in reach.
+    if (prereqs.combat === 255) parts.push('no site within bank reach');
+    else if (prereqs.combat > 3) parts.push('combat ' + prereqs.combat);
     (prereqs.quests || []).forEach(function (quest) { parts.push('quest ' + quest); });
     if (prereqs.quest_points > 0) parts.push(prereqs.quest_points + ' quest points');
     (prereqs.tools || []).forEach(function (tool) { parts.push(tool); });

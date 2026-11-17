@@ -40,6 +40,10 @@ check('confidence html marks estimates', GuidesView.confidenceHtml({ measured: f
 check('confidence html escapes the read label', GuidesView.confidenceHtml({ measured: true, runs: 3, read: '<b>' }), 'measured · n 3 · &lt;b&gt;');
 check('confidence column renders through its formatter', GuidesView.columnFormats('confidence_text'), [true, true]);
 
+// danger::NEVER (255): no site of the method has a bank in reach; never
+// shown as a combat level.
+check('never-safe site is named, not combat 255', GuidesView.prereqText({ levels: { mining: 85 }, combat: 255, quests: [], tools: [], capital: 0, ironman: true }), 'mining 85, no site within bank reach');
+
 if (failures) {
   console.log(failures + ' failure(s)');
   process.exit(1);
