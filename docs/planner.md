@@ -1273,6 +1273,12 @@ que la compétence de sa propre méthode (`banned_scope`). Les buts d'appoint
 et les réponses aux offres ne sont tirés que si une jambe de production
 n'est ni en quarantaine ni refroidie (`side_goal_with`, `goal_feasible`, taux
 0 dans `brain_bids`). Capacité de site et guildes : voir décisions D2/D4.
+Les jalons d'ambition suivent la même règle (tour 3, point 5) :
+`goals::draw_goal_origin_with` (quarantaine de la flotte, refroidissements
+du bot lus dans son historique) tire `ambition::next_feasible_milestone`,
+qui saute un jalon de production dont chaque jambe est malade ou entraîne
+une compétence bannie ; le jalon sauté reste ouvert, tous sautés : voie
+du but d'appoint (`MilestonesBanned`).
 
 ## Stock futur (plan marché M6, 2026-11-17)
 

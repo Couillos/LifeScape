@@ -92,6 +92,15 @@ pub fn draw_goal(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_since: &dyn F
 /// generalist) or the typed reason nothing is drawable. Call
 /// `ambition::refresh` first (met levels and coins close their milestones).
 pub fn draw_goal_origin(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_since: &dyn Fn(i64) -> u64) -> Result<(GoalKind, Option<String>), NoGoal> {
+    draw_goal_origin_with(life, level_of, ticks_since, &|_| false)
+}
+
+/// `draw_goal_origin` skipping the milestones unworkable now (tour 3
+/// point 5): `quarantined` names the fleet's quarantined methods, the
+/// life's own cooldowns (`cooldown`) are read from its history. Every
+/// open milestone banned or unworkable: `MilestonesBanned`, the side goal
+/// path (D-SIDE), the ambition untouched.
+pub fn draw_goal_origin_with(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_since: &dyn Fn(i64) -> u64, quarantined: &dyn Fn(&str) -> bool) -> Result<(GoalKind, Option<String>), NoGoal> {
     // A quoting market maker (plan Q6) keeps its post for good.
     if crate::market_maker::quoting(life) {
         return Ok((GoalKind::MakeMarket, None));
@@ -104,7 +113,9 @@ pub fn draw_goal_origin(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_since:
         return lowest_skill_goal(OVERALL_SKILLS, level_of, &avoid, life.seed, life.history.len() as u64).map(|goal| (goal, None)).ok_or(NoGoal::NothingTrainable);
     }
     if ambition.kind != crate::ambition::GENERALIST {
-        if let Some(stone) = crate::ambition::next_milestone(ambition, &avoid) {
+        let cooled = crate::cooldown::cooled_keys(&life.history, ticks_since);
+        let sick = |method: &str| quarantined(method) || crate::cooldown::method_cooled(&cooled, method);
+        if let Some(stone) = crate::ambition::next_feasible_milestone(ambition, &avoid, &sick) {
             return Ok((crate::ambition::goal_for_milestone(stone), Some(stone.id.clone())));
         }
         let open = ambition.milestones.iter().any(|stone| stone.status != crate::ambition::MilestoneStatus::Done);

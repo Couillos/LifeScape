@@ -18,7 +18,7 @@
 
 use lifescape_json::Value;
 use lifescape_planner::{
-    append_goal, ban_entry, ban_states, draw_goal_origin, goal_closed, mark_drawn, goal_skills, stuck_cause, unban_entry, BanState, GoalKind,
+    append_goal, ban_entry, ban_states, goal_closed, mark_drawn, goal_skills, stuck_cause, unban_entry, BanState, GoalKind,
     Life, NoGoal, StuckCause, DONE_TAG, SIDE_PREFIX, SKILL_BAN_TICKS,
 };
 
@@ -164,7 +164,11 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
         // runes in hand, worth the bot's time like a bid.
         .or_else(|| crate::brain_alch::alch_goal_for(life, live))
         .map(|(goal, origin)| (goal, Some(origin)));
-    let drawn = match answered.map(Ok).unwrap_or_else(|| draw_goal_origin(life, &level_of, &ticks_since)) {
+    // A milestone none of whose ways launches now (quarantine, this bot's
+    // cooldowns) is skipped for the next one (tour 3 point 5).
+    let quarantined = crate::method_health::quarantined();
+    let sick = |method: &str| quarantined.iter().any(|known| known == method);
+    let drawn = match answered.map(Ok).unwrap_or_else(|| lifescape_planner::draw_goal_origin_with(life, &level_of, &ticks_since, &sick)) {
         // No idle bot (D-SIDE): every open milestone banned draws a
         // temporary side goal, the ambition and its milestones untouched;
         // the next draw returns to the ambition once a milestone is free.
