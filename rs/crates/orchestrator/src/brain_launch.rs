@@ -89,6 +89,19 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         Err(_) => return,
     };
     let Some(live) = live else { return };
+    // A bot no route leaves (P2-1a): no launch while it stands there,
+    // its orders retired once; the operator decides (rule 7, D5).
+    let position = crate::errors_model::position_of(live.get("position"));
+    if let Some((tile, first)) = crate::brain_stranded::gate(&job.account, position) {
+        if first {
+            crate::logln!("{}", crate::brain_stranded::verdict_line(&job.account, tile));
+            if let Some(service) = crate::market_service::shared() {
+                let (failed, cancelled) = service.retire_account(&job.account, crate::brain_stranded::STRANDED_REASON);
+                crate::logln!("market: {} stranded, deals {failed:?} failed no_show, {cancelled} order(s) retired", job.account);
+            }
+        }
+        return;
+    }
     let mut dirty = false;
     // A market maker at its capital target leaves every other activity
     // for good and quotes its slice (plan marché Q6).
@@ -206,7 +219,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             let args = vec![lifescape_json::str_value("--node"), lifescape_json::str_value(&id)];
             let reply = crate::cpu_profile::timed("launch.run_job", || orch.run_job(&job.account, "tutorial", &args));
             if reply.get("ok").as_bool() != Some(true) {
-                crate::logln!("brain {}: launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
+                let error = reply.get("error").as_str().unwrap_or("?");
+                crate::logln!("brain {}: launch refused: {error}", job.account);
+                if crate::brain_inflight::refusal_never_ran(error) {
+                    refused_launch(&job.account, &id);
+                }
             }
             return;
         }
@@ -416,7 +433,24 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // An obtain the holdings already meet closes without a launch
     // (positive proof: pack, bank, worn), like a met coin target below.
     if let NodeKind::ObtainItems { item, count } = &life.nodes[position].kind {
-        if ctx.held >= *count {
+        // Only the copies free of the bot's own listings count (P2-7).
+        let exact = lifescape_planner::gear_ladder::is_gear_obtain(&life, position)
+            || matches!(&life.goal, lifescape_planner::GoalKind::Produce { item: made, .. } if made == item);
+        let free_of = |name: &str| (holdings_count(job, name) - crate::brain_tools::listed_units(&job.account, name)).max(0);
+        let free_now = |exact: bool| if exact { free_of(item) } else { lifescape_planner::tools::family_held(item, i64::MAX / 4, &free_of) };
+        let mut free = if ctx.held < *count { 0 } else { free_now(exact) };
+        if crate::brain_tools::held_verdict(*count, ctx.held, free) == crate::brain_tools::HeldVerdict::WithdrawListings {
+            let withdrawn = crate::brain_tools::withdraw_family_listings(&job.account, item);
+            // A copy still in a deal stays locked: the obtain runs.
+            free = free_now(exact);
+            crate::logln!(
+                "brain {}: {} holds {} {item} but its listings locked them: {withdrawn} listing(s) withdrawn, {free} free now",
+                job.account,
+                life.nodes[position].id,
+                ctx.held
+            );
+        }
+        if crate::brain_tools::held_verdict(*count, ctx.held, free) == crate::brain_tools::HeldVerdict::Done {
             let (id, item) = (life.nodes[position].id.clone(), item.clone());
             crate::brain_market::cancel_open_buys(&job.account, &item);
             lifescape_planner::complete_node(&mut life, position, ctx.held);
@@ -704,8 +738,26 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // the supervisor. A refused launch re-queues via crash recovery.
     let reply = crate::cpu_profile::timed("launch.run_job", || orch.run_job(&job.account, &script, &values));
     if reply.get("ok").as_bool() != Some(true) {
-        crate::logln!("brain {}: launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
+        let error = reply.get("error").as_str().unwrap_or("?");
+        crate::logln!("brain {}: launch refused: {error}", job.account);
+        // Never ran (P2-5): back to ready, uncounted, relaunched once the
+        // worker reads idle (no "no report" on a run that never started).
+        if crate::brain_inflight::refusal_never_ran(error) {
+            refused_launch(&job.account, &launched_id);
+        }
     }
+}
+
+/// Folds a refused launch into the life on disk (`fold_refused_launch`)
+/// and drops the launch grace mark.
+fn refused_launch(account: &str, node_id: &str) {
+    let Some(mut life) = load_life(account) else { return };
+    if crate::brain_inflight::fold_refused_launch(&mut life, node_id) {
+        push_history(&mut life, node_id, crate::brain_inflight::LAUNCH_REFUSED);
+        save_or_log(&life);
+        crate::logln!("brain {account}: {node_id} launch refused, back to ready (uncounted)");
+    }
+    launch_marks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(account);
 }
 
 /// Launch grace table (30 s per account, memory only): stops crash

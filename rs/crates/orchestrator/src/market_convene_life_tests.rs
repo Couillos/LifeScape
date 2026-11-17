@@ -189,3 +189,53 @@ fn absent_party_fails_matched_deals_and_loses_orders() {
     assert_eq!(open_orders(&service, "honest"), 1, "honest side relisted");
     cleanup(&path);
 }
+
+/// Decision D8 (tour 2, N1): a bot that lets three deals in a row
+/// expire (`timeout` reported by itself: its lots never reached the
+/// square) loses every order it rests, cancelled with a named reason;
+/// the partners return to the carnet. Two timeouts are not enough and a
+/// settled deal breaks the streak.
+#[test]
+fn three_timeouts_in_a_row_retire_the_bots_orders() {
+    let (service, path) = fresh_service("timeout-streak");
+    service.lock_engine().ring = crate::market_convene::build_ring(&|_, _| true);
+    for account in ["stranded", "partner-a", "partner-b", "partner-c", "partner-d", "partner-e", "partner-f"] {
+        funded(&service, account);
+    }
+    let expire = |partner: &str| {
+        let deal = matched(&service, "stranded", partner, 5, 4);
+        convene(&service, &[deal], 9000.0);
+        arrive(&service, partner, deal);
+        assert_eq!(report(&service, "stranded", deal, "failed", "timeout").get("ok").as_bool(), Some(true));
+        deal
+    };
+    // Two timeouts, then a settled deal: the streak breaks.
+    expire("partner-a");
+    expire("partner-b");
+    let deal = matched(&service, "stranded", "partner-c", 5, 4);
+    convene(&service, &[deal], 9000.0);
+    arrive(&service, "partner-c", deal);
+    arrive(&service, "stranded", deal);
+    report(&service, "stranded", deal, "trading", "");
+    assert_eq!(report(&service, "stranded", deal, "settled", "").get("ok").as_bool(), Some(true));
+    expire("partner-d");
+    expire("partner-e");
+    assert!(open_orders(&service, "stranded") > 0, "two timeouts after a settle keep the orders");
+    let resting: Vec<i64> = service.lock_store().account_orders("stranded").unwrap_or_default().iter().map(|row| row.order_id).collect();
+    // The third in a row retires every order of the bot.
+    let last = expire("partner-f");
+    assert_eq!(status_of(&service, last), DealStatus::Failed);
+    assert_eq!(open_orders(&service, "stranded"), 0, "orders retired after 3 timeouts in a row");
+    assert_eq!(open_orders(&service, "partner-f"), 1, "the partner returns to the carnet");
+    let reasons: Vec<String> = resting
+        .iter()
+        .filter_map(|order| service.lock_store().get_order(*order).ok().flatten())
+        .filter(|row| row.status == lifescape_store::OrderStatus::Cancelled)
+        .map(|row| row.cancel_reason.clone())
+        .collect();
+    assert!(
+        reasons.iter().any(|reason| reason == crate::market_convene_sweep::TIMEOUT_STREAK_REASON),
+        "named reason: {reasons:?}"
+    );
+    cleanup(&path);
+}

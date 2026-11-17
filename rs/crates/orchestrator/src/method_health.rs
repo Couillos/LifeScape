@@ -173,7 +173,12 @@ fn from_value(value: &Value) -> BTreeMap<String, Health> {
 fn table() -> &'static Mutex<BTreeMap<String, Health>> {
     static TABLE: OnceLock<Mutex<BTreeMap<String, Health>>> = OnceLock::new();
     TABLE.get_or_init(|| {
-        let loaded = std::fs::read_to_string(path()).ok().and_then(|text| json::parse(&text).ok()).map(|value| from_value(&value)).unwrap_or_default();
+        let mut loaded = std::fs::read_to_string(path()).ok().and_then(|text| json::parse(&text).ok()).map(|value| from_value(&value)).unwrap_or_default();
+        let lifted = requalify(&mut loaded);
+        if !lifted.is_empty() {
+            crate::logln!("method health: quarantine lifted into probation (fewer than {MIN_ACCOUNTS} failing accounts): {}", lifted.join(", "));
+            save(&loaded);
+        }
         Mutex::new(loaded)
     })
 }
@@ -201,7 +206,7 @@ pub fn record(account: &str, method: &str, outcome: Outcome, error: &str) {
     if apply(&mut guard, account, method, outcome, error, now) {
         let health = guard.get(method).cloned().unwrap_or_default();
         crate::logln!(
-            "method health: {method} QUARANTINED ({}/{} ok over {} launches by {} accounts, under {:.0} %); last error: {}; re-tested on admin at the next deploy",
+            "method health: {method} QUARANTINED ({}/{} ok over {} launches by {} accounts, under {:.0} %); last error: {}; re-tested on admin/admin2 at the next deploy",
             health.ok,
             health.launches(),
             health.launches(),
@@ -220,16 +225,48 @@ pub fn quarantine_stamps() -> BTreeMap<String, i64> {
 }
 
 /// Live checks from `run/method_checks.jsonl`: `(method, worked, at)`.
+/// A `setup` verdict (the harness failed before judging the method,
+/// tour 2 P2-10) is no check: the re-test is still due.
 pub fn live_checks() -> Vec<(String, bool, i64)> {
     checks()
+}
+
+/// Verdict of the latest live check of `method` (`ok`, `setup`, ...).
+pub fn last_verdict(method: &str) -> Option<String> {
+    let text = std::fs::read_to_string(crate::method_check::registry_path()).unwrap_or_default();
+    text.lines()
+        .filter_map(|line| json::parse(line).ok())
+        .filter(|row| row.get("method").as_str() == Some(method))
+        .last()
+        .map(|row| row.get("verdict").as_str().unwrap_or("").to_string())
 }
 
 fn checks() -> Vec<(String, bool, i64)> {
     let text = std::fs::read_to_string(crate::method_check::registry_path()).unwrap_or_default();
     text.lines()
         .filter_map(|line| json::parse(line).ok())
+        .filter(|row| row.get("verdict").as_str() != Some(SETUP_VERDICT))
         .map(|row| (row.get("method").as_str().unwrap_or("").to_string(), row.get("worked").as_bool().unwrap_or(false), row.get("at").as_i64().unwrap_or(0)))
         .collect()
+}
+
+/// Verdict of a check whose harness failed (no judgement of the method).
+pub const SETUP_VERDICT: &str = "setup";
+
+/// Pure requalification at load (tour 2 P2-10c): a quarantine the
+/// current rule would not set (fewer than `MIN_ACCOUNTS` failing
+/// accounts, e.g. the pre-P4 rows with `accounts {}`: chickens quarantined
+/// on one bot's hot loop) is lifted into probation, counts kept: three
+/// accounts failing again quarantine it at once. Returns the methods.
+pub fn requalify(table: &mut BTreeMap<String, Health>) -> Vec<String> {
+    let mut lifted = Vec::new();
+    for (method, health) in table.iter_mut() {
+        if health.quarantined_at > 0 && !health.sick() {
+            health.quarantined_at = 0;
+            lifted.push(method.clone());
+        }
+    }
+    lifted
 }
 
 /// Quarantined methods now (proven fixes lifted first).
@@ -247,7 +284,22 @@ pub fn quarantined() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply, lift_proven, Health, Outcome, MIN_ACCOUNTS, MIN_LAUNCHES};
+    use super::{apply, lift_proven, requalify, Health, Outcome, MIN_ACCOUNTS, MIN_LAUNCHES};
+
+    /// Tour 2 P2-10c red test: the pre-P4 chickens row (20 failures, no
+    /// known account) is lifted into probation at load; a row three
+    /// accounts made sick stays quarantined.
+    #[test]
+    fn an_old_quarantine_without_accounts_is_requalified() {
+        let mut table = BTreeMap::new();
+        table.insert("fight:melee/chickens".to_string(), Health { ok: 0, fail: 20, quarantined_at: 100, last_error: "pack too full".to_string(), accounts: BTreeMap::new() });
+        let sick_accounts: BTreeMap<String, String> = ["a", "b", "c"].iter().map(|name| (name.to_string(), "no F2P leather recipe".to_string())).collect();
+        table.insert("tan:cow_hide".to_string(), Health { ok: 0, fail: 20, quarantined_at: 100, last_error: String::new(), accounts: sick_accounts });
+        assert_eq!(requalify(&mut table), vec!["fight:melee/chickens".to_string()]);
+        assert_eq!(table["fight:melee/chickens"].quarantined_at, 0, "probation");
+        assert_eq!(table["fight:melee/chickens"].fail, 20, "counts kept");
+        assert_eq!(table["tan:cow_hide"].quarantined_at, 100, "three accounts: still quarantined");
+    }
 
     /// Plan P4 red test: 21 failures of one bot (the same error, a hot
     /// loop) never quarantine for the fleet; three bots failing do.

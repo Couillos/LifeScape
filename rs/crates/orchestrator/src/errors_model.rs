@@ -368,6 +368,13 @@ pub fn from_brain_line(line: &str, clock: i64) -> Option<ErrorRecord> {
         row.signature = format!("idle without a script: {}", signature(last, account));
         return Some(row);
     }
+    // `stranded at (x,z,level): …` (`brain_stranded`): no route leaves
+    // the bot's tile, launches held, an operator decision.
+    if rest.starts_with(crate::brain_stranded::STRANDED_MARKER) {
+        row.kind = "stranded".to_string();
+        row.signature = signature(rest, account);
+        return Some(row);
+    }
     if rest.starts_with("revive cap reached") {
         row.kind = "revive_cap".to_string();
         row.signature = signature(rest, account);

@@ -470,6 +470,15 @@ impl Bot {
     /// half then the worn half: four `unattributed` flows (live
     /// 2026-11-16, eva_dale equip:melee, Yogosun fight:melee/men). The
     /// next tick's player info closes the previous tick whole.
+    /// `feed`, a decode error dropping the connection (Client-TS `T2`
+    /// path: logout, never a read on a desynced world).
+    fn feed_or_drop(&mut self, frame: &Frame) -> Result<()> {
+        match self.feed(frame) {
+            Err(Error::Protocol(detail)) => Err(self.conn.drop_desynced(&format!("{} frame: {detail}", frame.name))),
+            other => other,
+        }
+    }
+
     fn feed(&mut self, frame: &Frame) -> Result<()> {
         if frame.name == "PLAYER_INFO" {
             self.observe_ledgers();
@@ -540,7 +549,7 @@ impl Bot {
         for _ in 0..count {
             self.keepalive_if_due()?;
             let frame = self.conn.recv()?;
-            self.feed(&frame)?;
+            self.feed_or_drop(&frame)?;
             frames.push(frame);
             for _ in 0..DRAIN_PER_PUMP {
                 if !self.conn.available()? {
@@ -548,7 +557,7 @@ impl Bot {
                 }
                 self.keepalive_if_due()?;
                 let frame = self.conn.recv()?;
-                self.feed(&frame)?;
+                self.feed_or_drop(&frame)?;
                 frames.push(frame);
             }
         }
@@ -578,7 +587,7 @@ impl Bot {
         while drained < CATCH_UP_CAP && self.conn.available()? {
             self.keepalive_if_due()?;
             let frame = self.conn.recv()?;
-            self.feed(&frame)?;
+            self.feed_or_drop(&frame)?;
             drained += 1;
         }
         if drained > 0 {

@@ -39,6 +39,36 @@ pub(crate) fn in_flight(account: &str) -> bool {
     table().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(account).is_some_and(|count| *count > 0)
 }
 
+/// History outcome of a launch the worker refused.
+pub const LAUNCH_REFUSED: &str = "launch_refused";
+
+/// A launch the worker refused (tour 2, P2-5: "busy: market is running")
+/// never ran: the node goes back to ready, uncounted, the lock released,
+/// so the idle detector has no active node to call "no report" (live
+/// 12:12 lucy_rhodes n868: refused, then 45 s later a counted failure).
+/// The next pass relaunches when the worker reads idle again. Returns
+/// true when `node_id` was the active node and was released.
+pub fn fold_refused_launch(life: &mut lifescape_planner::Life, node_id: &str) -> bool {
+    if life.active.as_deref() != Some(node_id) {
+        return false;
+    }
+    let Some(index) = life.nodes.iter().position(|node| node.id == node_id) else {
+        return false;
+    };
+    if life.nodes[index].status != lifescape_planner::NodeStatus::Active {
+        return false;
+    }
+    lifescape_planner::retry_uncounted(life, index);
+    true
+}
+
+/// True when a launch error proves the script never started: the worker
+/// answered busy, or no session took the run. A transport error is no
+/// proof (the run may have started): crash recovery keeps judging it.
+pub fn refusal_never_ran(error: &str) -> bool {
+    error.starts_with("busy") || error.starts_with("no session") || error.contains(" died, open ")
+}
+
 /// Pure verdict of the idle detector: the active node failed for want of
 /// a report only when none is in flight (inbox) nor kept pending (inbox
 /// full, `report_pending`).
@@ -48,7 +78,40 @@ pub fn missing_report(in_flight: bool, pending: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{folded, in_flight, missing_report, queued};
+    use super::{fold_refused_launch, folded, in_flight, missing_report, queued};
+    use lifescape_planner::{Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
+
+    /// Red test P2-5: a refused launch leaves no active node, counts no
+    /// failure; a node that already moved is left alone.
+    #[test]
+    fn a_refused_launch_is_a_ready_node_not_a_failure() {
+        let mut node = Node::new("n868", NodeKind::ObtainItems { item: "swordfish".to_string(), count: 28 }, Vec::new(), 28);
+        node.method = Some("cook:raw_swordfish".to_string());
+        let mut life = Life {
+            schema: 1,
+            account: "refused".to_string(),
+            created_at: 0,
+            seed: 1,
+            profile: Profile::new(false, 0.5, 0.5, 1, Archetype::Producer),
+            goal: GoalKind::MaxSkills { skills: vec!["cooking".to_string()], level: 40 },
+            nodes: vec![node],
+            engagement: None,
+            active: None,
+            history: Vec::new(),
+            ambition: None,
+            goal_origin: None,
+            memory: Default::default(),
+        };
+        lifescape_planner::mark_launched(&mut life, 0);
+        assert!(fold_refused_launch(&mut life, "n868"));
+        assert_eq!(life.active, None, "no active node for the idle detector");
+        assert_eq!(life.nodes[0].status, NodeStatus::Ready);
+        assert_eq!(life.nodes[0].failures, 0, "uncounted");
+        assert!(!fold_refused_launch(&mut life, "n868"), "already ready: nothing to fold");
+        assert!(super::refusal_never_ran("busy: market is running"));
+        assert!(super::refusal_never_ran("no session, open lucy_rhodes first"));
+        assert!(!super::refusal_never_ran("io: timed out"), "transport: the run may have started");
+    }
 
     /// Plan P10 red test: an idle worker whose report waits in the inbox
     /// (or pending) is no "no report" failure; once folded, a later idle

@@ -58,7 +58,8 @@ pub(crate) fn filler_worked(report: &Value) -> Option<bool> {
 /// Fold one filler report into the history (never into the graph).
 /// Returns the log line.
 pub(crate) fn fold_filler_report(life: &mut Life, node_id: &str, report: &Value) -> String {
-    let method = life
+    // The launch tag names the method at its site (`method@x,z,level`).
+    let launched = life
         .history
         .iter()
         .rev()
@@ -66,6 +67,8 @@ pub(crate) fn fold_filler_report(life: &mut Life, node_id: &str, report: &Value)
         .find_map(|entry| entry.outcome.strip_prefix(FILLER_LAUNCH_TAG))
         .unwrap_or("?")
         .to_string();
+    let (method, site) = lifescape_planner::cooldown::split_key(&launched);
+    let method = method.to_string();
     let stop = report.get("stop").as_str().unwrap_or("?").to_string();
     let ticks = report.get("ticks").as_i64().unwrap_or(0);
     let error = report.get("error").get("message").as_str().unwrap_or("").to_string();
@@ -76,7 +79,15 @@ pub(crate) fn fold_filler_report(life: &mut Life, node_id: &str, report: &Value)
         }
         Some(false) => {
             push_history(life, node_id, &format!("{FILLER_FAILED_TAG}{method}"));
-            format!("filler {node_id} ({method}) failed: {stop} after {ticks} ticks {error}; its skill sits out the fillers for {FILLER_RETRY_TICKS} ticks")
+            // Same cooldown as a node's abandon (tour 2 P2-6): the method
+            // at its site never comes back hot, filler or node (live:
+            // bellarhodes, 34 woodcut fillers in 10 min, "missing
+            // bronze_axe" every time).
+            let cause = if error.is_empty() { format!("filler {stop} after {ticks} ticks") } else { error.clone() };
+            if method != "?" {
+                crate::brain_cool::on_abandon(life, &method, site, &cause);
+            }
+            format!("filler {node_id} ({method}) failed: {stop} after {ticks} ticks {error}; cooled, its skill sits out the fillers for {FILLER_RETRY_TICKS} ticks")
         }
         None => format!("filler {node_id} ({method}) stopped by the operator"),
     }
@@ -205,7 +216,7 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
     crate::site_crowd::note(&job.account, node.site);
     let through = through.map(|skill| format!(" through the {skill} ban (every workable money method is banned)")).unwrap_or_default();
     crate::logln!("brain {}: {} awaiting its fill, working {method} meanwhile{through} ({FILLER_TICKS} ticks): {script} {}", job.account, waiting.join(","), args.join(" "));
-    push_history(life, &node.id, &format!("{FILLER_LAUNCH_TAG}{method}"));
+    push_history(life, &node.id, &format!("{FILLER_LAUNCH_TAG}{}", lifescape_planner::cooldown::cool_key(&method, node.site)));
     if let Err(error) = crate::brain::save_life(life) {
         crate::logln!("{error}");
     }

@@ -96,3 +96,36 @@ fn a_cooled_site_is_skipped_by_the_pick() {
     crate::expand::place_on_site(&mut node, &ctx);
     assert_eq!(node.status, NodeStatus::Blocked { reason: format!("cooled:{method}") });
 }
+
+/// Tour 2 P2-3a: a second rock of the SAME site is the same place, not a
+/// second site (the method itself stays workable elsewhere).
+#[test]
+fn a_second_rock_of_one_site_is_not_a_second_site() {
+    let cooled = vec!["gather:mining/mithril_ore@3242,3160,0".to_string()];
+    let keys = keys_for_abandon(&cooled, "gather:mining/mithril_ore", Some((3243, 3166, 0)));
+    assert_eq!(keys, vec!["gather:mining/mithril_ore@3243,3166,0".to_string()], "same site: the method is not cooled");
+}
+
+/// Tour 2 P2-3b (D6): a node whose locked method is full everywhere moves
+/// to its next method (the alternatives' order), never to a full site.
+#[test]
+fn a_full_method_hands_over_to_the_next_one() {
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.combat = 99;
+    ctx.position = Some((3244, 3165, 0));
+    ctx.levels = vec![("mining".to_string(), 99)];
+    ctx.tools = vec!["rune_pickaxe".to_string()];
+    let full = "gather:mining/mithril_ore";
+    let next = "gather:mining/coal";
+    let table = crate::combat::method_site_table(full).expect("mithril sites");
+    ctx.crowd = table.iter().map(|row| (row.site, 50u32)).collect();
+    let mut node = Node::new("n6", NodeKind::ReachLevel { skill: "mining".to_string(), level: 70 }, Vec::new(), 70);
+    node.status = NodeStatus::Ready;
+    node.method = Some(full.to_string());
+    node.alternatives = vec![
+        Alternative { method: full.to_string(), est_ticks: 6000, est_coins: 0 },
+        Alternative { method: next.to_string(), est_ticks: 6000, est_coins: 0 },
+    ];
+    crate::expand::place_on_site(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some(next), "status {:?}", node.status);
+}

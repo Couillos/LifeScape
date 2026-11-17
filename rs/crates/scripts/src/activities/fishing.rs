@@ -61,6 +61,11 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let (ok, new_level) = crate::kit::fish::fish_load(step_bot, level, &mut bank, coins, target.as_ref(), until)?;
         level = new_level;
         if !ok {
+            // Spots taken or emptied by other players: contention (D4,
+            // tour 2 P2-3c), the site cools for this bot, no failure.
+            if let Some(contended) = crate::kit::site::contended_error(step_bot) {
+                return Err(contended);
+            }
             return Err(ScriptError::Failed(format!("fish failed at {:?}", step_bot.position())));
         }
         // Training a level (`--no-bank`): only XP counts, the catch is
@@ -125,7 +130,12 @@ mod tests {
         bot.world.z = 3243;
         bot.allow_paid = true;
         bot.assigned_site = Some((2925, 3181, 0));
-        let bank = crate::kit::site::site_bank(&bot).expect("Draynor serves Karamja");
+        // Combat 40: the Draynor wizards are no threat, the site's bank is
+        // chosen by route (`site_bank` skips booths a hunter covers).
+        for skill in 0..7u8 {
+            bot.world.stats.insert(skill, (40, 37_224));
+        }
+        let bank = crate::kit::site::site_bank(&mut bot).expect("Draynor serves Karamja");
         let tier = crate::kit::fish_gear::ordered_tier("raw_lobster", 40).expect("lobster at 40");
         let error = super::depart(&mut bot, &tier, &bank).expect_err("offline: nothing leaves");
         match error {

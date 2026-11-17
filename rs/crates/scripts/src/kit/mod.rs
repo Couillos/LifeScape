@@ -31,6 +31,7 @@
 pub mod ammo;
 pub mod anvil;
 pub mod bank;
+pub mod bank_route;
 pub mod bank_full;
 pub mod bans;
 pub mod chain_spec;

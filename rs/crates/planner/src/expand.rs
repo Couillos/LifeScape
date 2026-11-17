@@ -499,6 +499,7 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     let mut fare_short: Option<i64> = None;
     let mut gate_need: Option<String> = None;
     let mut cooled = false;
+    let mut full_everywhere = false;
     // A shop purchase walks to the nearest shop that stocks the object
     // (the planner's shop, `--shop`), never a gated one.
     if locked == "shop:buy" {
@@ -571,6 +572,7 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
             }
             crate::combat::SitePick::Needs(level) => needed = Some(needed.map_or(level, |known| known.min(level))),
             crate::combat::SitePick::Cooled => cooled = true,
+            crate::combat::SitePick::Full => full_everywhere = true,
         }
     }
     node.method = None;
@@ -578,6 +580,9 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
         // Every site this bot works was cooled for it (P1/D4): the
         // method waits out the cooldown, never a combat need.
         (None, _) if cooled && gate_need.is_none() => NodeStatus::Blocked { reason: format!("cooled:{locked}") },
+        // Every site of every candidate is full (D6): waits like a cooled
+        // method, the crowd thins out by itself.
+        (None, _) if full_everywhere && gate_need.is_none() => NodeStatus::Blocked { reason: format!("full:{locked}") },
         // The fare is the cheapest unlock: a `have_coins` dependency
         // earns it, then the node relaunches with `toll`.
         (Some(coins), _) => NodeStatus::Blocked { reason: format!("missing:coins:{coins}") },

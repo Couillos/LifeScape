@@ -407,7 +407,12 @@ mod dry_tests {
         bot.world.z = 3178;
         bot.allow_paid = true;
         bot.assigned_site = Some((2925, 3181, 0));
-        let bank = crate::kit::site::site_bank(&bot).expect("a mainland bank serves Karamja");
+        // Combat 40: the Draynor wizards are no threat, the site's bank is
+        // chosen by route (`site_bank` skips booths a hunter covers).
+        for skill in 0..7u8 {
+            bot.world.stats.insert(skill, (40, 37_224));
+        }
+        let bank = crate::kit::site::site_bank(&mut bot).expect("a mainland bank serves Karamja");
         for fish in ["raw_shrimp", "raw_tuna"] {
             let tier = crate::kit::fish_gear::ordered_tier(fish, 40).expect("tier at level 40");
             assert!(!structurally_dry(&mut bot, 40, &bank, Some(&tier)), "{fish}: Musa Point water is in range");
