@@ -146,6 +146,52 @@ pub fn ensure_gear(bot: &mut Bot, tier: &knowledge::fishing::FishTier, bank: &kn
     restock_bait(bot, tier, bank)
 }
 
+/// What the run withdraws at the bank BEFORE leaving for its site: the
+/// tool when the pack lacks it, the bait topped up to `BAIT_WANT` when
+/// the pack holds less than `BAIT_MIN` (capped by the known bank). Empty
+/// = the pack is ready, no bank visit. Pure (live admin 2026-11-17: a
+/// lobster run sailed to Karamja without its pot, found the gap on the
+/// pier, sailed back to Draynor for it: two crossings, 60 coins lost).
+pub fn departure_withdrawals(bot: &Bot, tier: &knowledge::fishing::FishTier) -> Vec<(u16, u32)> {
+    let mut wants = Vec::new();
+    if let Ok(tool) = obj_id(bot, tier.tool) {
+        if pack_total(bot, tool) == 0 && banked_usable(bot, tool) > 0 {
+            wants.push((tool, 1));
+        }
+    }
+    if let Some(bait) = tier.bait {
+        if let Ok(bait_id) = obj_id(bot, bait) {
+            let carried = pack_total(bot, bait_id);
+            let banked = banked_usable(bot, bait_id);
+            if carried < BAIT_MIN && banked > 0 {
+                wants.push((bait_id, BAIT_WANT.saturating_sub(carried).min(banked)));
+            }
+        }
+    }
+    wants
+}
+
+/// Gear up at `bank` before the trip to the site: tool and bait in one
+/// booth visit (`departure_withdrawals`), nothing when the pack is
+/// ready. The tool still missing afterwards blocks with every exact gap,
+/// so the run never leaves without it.
+pub fn gear_before_departure(bot: &mut Bot, tier: &knowledge::fishing::FishTier, bank: &knowledge::banks::Bank) -> Result<(), ScriptError> {
+    let wants = departure_withdrawals(bot, tier);
+    if !wants.is_empty() {
+        let label = wants.iter().map(|(id, count)| format!("{} x{count}", crate::kit::pack::obj_label(bot, *id))).collect::<Vec<_>>().join(", ");
+        bot.log(&format!("gear before the trip: {label} from the bank at ({},{})", bank.x, bank.z));
+        bot.intend(&format!("taking {label} from the bank before the trip"));
+        crate::kit::withdraw::bank_withdraw_counts(bot, bank, &wants)?;
+    }
+    let tool = obj_id(bot, tier.tool)?;
+    if pack_total(bot, tool) == 0 {
+        let mut missing = vec![tier.tool.to_string()];
+        missing.extend(gear_missing(bot, tier).into_iter().filter(|name| name != tier.tool));
+        return Err(ScriptError::Blocked { missing });
+    }
+    Ok(())
+}
+
 /// Bait back to `BAIT_WANT` from the bank only. True when any bait is
 /// carried afterwards (always true for unbaited tiers): a short stack
 /// fishes until it runs out, the next load blocks by name (live admin
@@ -164,13 +210,13 @@ pub fn restock_bait(bot: &mut Bot, tier: &knowledge::fishing::FishTier, bank: &k
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{gear_missing, ordered_fish_tiers, ordered_tier, select_fish_tier, target_fish_tier};
+pub(crate) mod tests {
+    use super::{departure_withdrawals, gear_missing, ordered_fish_tiers, ordered_tier, select_fish_tier, target_fish_tier};
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
-    fn gear_bot(pack: &[(&str, u32)], bank: &[(&str, u32)]) -> Bot {
+    pub(crate) fn gear_bot(pack: &[(&str, u32)], bank: &[(&str, u32)]) -> Bot {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         let resolve = |bot: &Bot, items: &[(&str, u32)]| -> Vec<(u16, u32)> { items.iter().map(|(name, count)| (obj_id(bot, name).expect("obj"), *count)).collect() };
@@ -226,5 +272,28 @@ mod tests {
         }
         let bait_banned: Vec<&str> = ordered_fish_tiers(&rod, 5, 1000, 10, None).iter().map(|tier| tier.tool).collect();
         assert!(!bait_banned.contains(&"fishing_rod"), "bait-banned tiers skipped: {bait_banned:?}");
+    }
+
+    /// Departure plan: a tool banked only comes out before the trip, a
+    /// packed one never visits the bank; bait below the floor tops up to
+    /// the want, capped by the bank; nothing banked asks nothing.
+    #[test]
+    fn departure_takes_the_banked_tool_and_bait_first() {
+        let lobster = ordered_tier("raw_lobster", 40).expect("lobster at 40");
+        let banked = gear_bot(&[("coins", 60)], &[("lobster_pot", 1)]);
+        let pot = obj_id(&banked, "lobster_pot").expect("pot");
+        assert_eq!(departure_withdrawals(&banked, &lobster), vec![(pot, 1)], "banked pot: bank first");
+        let packed = gear_bot(&[("coins", 60), ("lobster_pot", 1)], &[("lobster_pot", 1)]);
+        assert!(departure_withdrawals(&packed, &lobster).is_empty(), "pot in the pack: straight to the site");
+        let swordfish = ordered_tier("raw_swordfish", 50).expect("swordfish at 50");
+        let harpoon = gear_bot(&[], &[("harpoon", 1)]);
+        assert_eq!(departure_withdrawals(&harpoon, &swordfish), vec![(obj_id(&harpoon, "harpoon").expect("harpoon"), 1)]);
+        let trout = ordered_tier("raw_trout", 20).expect("trout at 20");
+        let fly = gear_bot(&[("fly_fishing_rod", 1), ("feather", 5)], &[("feather", 500)]);
+        assert_eq!(departure_withdrawals(&fly, &trout), vec![(obj_id(&fly, "feather").expect("feather"), 195)], "bait topped to the want");
+        let thin = gear_bot(&[("fly_fishing_rod", 1), ("feather", 5)], &[("feather", 50)]);
+        assert_eq!(departure_withdrawals(&thin, &trout), vec![(obj_id(&thin, "feather").expect("feather"), 50)], "capped by the bank");
+        let dry = gear_bot(&[("fly_fishing_rod", 1), ("feather", 5)], &[]);
+        assert!(departure_withdrawals(&dry, &trout).is_empty(), "nothing banked: no visit");
     }
 }

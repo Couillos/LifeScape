@@ -37,21 +37,18 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
     };
     bot.log(&format!("bank at ({},{})", bank.x, bank.z));
     // Gear before anything: the ordered method's exact gaps (pack and
-    // known bank counted), or on manual runs any geared tier.
-    match target.as_ref() {
+    // known bank counted), or on manual runs the best geared tier.
+    let tier = match target.as_ref() {
         Some(tier) => {
             let missing = crate::kit::fish_gear::gear_missing(bot, tier);
             if !missing.is_empty() {
                 return Err(ScriptError::Blocked { missing });
             }
+            tier.clone()
         }
-        None => {
-            crate::kit::fish_gear::select_fish_tier(bot, level)?;
-        }
-    }
-    // The brain's site first (Karamja by boat, far rivers): water is
-    // judged where the bot was sent, never around the departure dock.
-    crate::kit::site::reach_site(bot)?;
+        None => crate::kit::fish_gear::select_fish_tier(bot, level)?,
+    };
+    depart(bot, &tier, &bank)?;
     // Picker guard: no water in range is structural (spots don't respawn
     // like fish), so fail fast with the reason instead of burning dead
     // repicks in a dry pit while the brain re-assigns fishing in a loop.
@@ -83,6 +80,17 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
     })
 }
 
+/// Leave for the brain's site (Karamja by boat, far rivers): water is
+/// judged where the bot was sent, never around the departure dock. The
+/// tool and bait come out of the bank BEFORE the trip (the travel coins
+/// were carried by `arm_fares`): a banked lobster pot found missing on
+/// the Musa Point pier cost a boat round trip and its 60 coins.
+fn depart(bot: &mut Bot, tier: &lifescape_gamedata::fishing::FishTier, bank: &lifescape_gamedata::banks::Bank) -> Result<(), ScriptError> {
+    crate::kit::fish_gear::gear_before_departure(bot, tier, bank)?;
+    crate::kit::site::reach_site(bot)?;
+    Ok(())
+}
+
 /// Drop every raw fish in the pack (any tier's product), except names
 /// the brain asked to keep. Returns how many stacks went.
 fn drop_catch(bot: &mut Bot, keep: &[u16]) -> Result<u32, ScriptError> {
@@ -101,4 +109,28 @@ fn drop_catch(bot: &mut Bot, keep: &[u16]) -> Result<u32, ScriptError> {
         }
     }
     Ok(dropped)
+}
+
+#[cfg(test)]
+mod tests {
+    /// Live admin 2026-11-17 (`farm:raw_lobster`): at the Draynor bank
+    /// with the pot banked, the run sailed to Karamja first. The bank
+    /// comes first: offline the booth never opens, so the departure stops
+    /// on the pot (`Blocked`), never on the trip to the site.
+    #[test]
+    fn a_banked_tool_is_taken_before_the_trip() {
+        let mut bot = crate::kit::fish_gear::tests::gear_bot(&[("coins", 60)], &[("lobster_pot", 1)]);
+        bot.world.level = 0;
+        bot.world.x = 3092;
+        bot.world.z = 3243;
+        bot.allow_paid = true;
+        bot.assigned_site = Some((2925, 3181, 0));
+        let bank = crate::kit::site::site_bank(&bot).expect("Draynor serves Karamja");
+        let tier = crate::kit::fish_gear::ordered_tier("raw_lobster", 40).expect("lobster at 40");
+        let error = super::depart(&mut bot, &tier, &bank).expect_err("offline: nothing leaves");
+        match error {
+            crate::ScriptError::Blocked { missing } => assert_eq!(missing, vec!["lobster_pot".to_string()]),
+            other => panic!("the pot is fetched before the trip, got: {other}"),
+        }
+    }
 }

@@ -317,7 +317,13 @@ Site, stands et trajets (2026-11-13, erreurs du lot de 21h19) :
   Karamja (Musa Point, `0_45_49_saltfish` filet/appât et
   `0_45_49_rarefish` casier/harpon) banque à Draynor via le bateau
   (ancre du quai), 230 cases plus loin : l'ordre fait foi, plus de
-  « no fishing water in range » une fois débarqué.
+  « no fishing water in range » une fois débarqué. Outil et appât sortent
+  de la banque AVANT le trajet (`fish_gear::gear_before_departure`, une
+  visite au guichet ; pièces de voyage déjà portées par `arm_fares`) :
+  live admin 2026-11-17, un run homard partait à Karamja sans casier,
+  le découvrait sur le quai et refaisait le bateau (2 traversées, 60
+  pièces). Minage, coupe, essence, cisailles, seaux, sorts et combat
+  équipent déjà avant de partir.
 - Minage : client routefinder, le serveur ne marche jamais un joueur vers
   un loc et un rocher (centrepiece) ne s'atteint que par un côté. Le stand
   est un côté du rocher (`mine::rock_stands`, plus proche d'abord), jamais
