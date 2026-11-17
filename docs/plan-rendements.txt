@@ -453,3 +453,14 @@ D21 (2026-11-17) Disponibilité d'un intrant à l'achat dans les guides :
     (ex. runes de nature, absorbées par les bids dès qu'elles
     apparaissent, alchimie bloquée dans les guides). À réévaluer quand
     les teneurs cotent.
+
+D22 (2026-11-17, utilisateur) Les guides ne BLOQUENT plus rien : chaque
+    ligne garde son économie au prix courant et porte ses exigences
+    (niveaux, outils, quêtes, stock, capital, site/danger, disponibilité
+    au marché et en boutique) comme INFORMATIONS ; c'est chaque bot qui
+    évalue sa faisabilité au moment de choisir (ses stats, son stock, son
+    argent, le marché du moment). Remplace la notion de ligne « bloquée »
+    et rend D21 sans objet (un bot qui détient des runes de nature peut
+    alcher). Cohérence : une même règle d'exigence pour toutes les
+    familles (ex. smith:rune_axe chaîne : « no site within bank reach »
+    devient une exigence affichée, pas un profit accessible à tous).
