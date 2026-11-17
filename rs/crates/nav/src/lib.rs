@@ -27,6 +27,7 @@ mod plan_budget_tests;
 pub mod reach;
 pub mod region_lists;
 pub mod route;
+pub mod site_reach;
 pub mod route_cache;
 pub mod route_patch;
 pub mod route_path;

@@ -152,7 +152,14 @@ pub fn sites(kind: &str, resource: &str) -> Vec<(i64, i64, i64)> {
             };
             for name in names {
                 for loc in crate::locs_by_name(&name) {
-                    out.extend(loc.spawns.iter().filter(|spawn| spawn.members != Some(true) && free(spawn.x, spawn.z)).map(|spawn| (spawn.x, spawn.z, spawn.level)));
+                    // A spawn no stand reaches (fence, wall, sealed
+                    // pocket) is no work site (plan P6, `site_reach`).
+                    out.extend(
+                        loc.spawns
+                            .iter()
+                            .filter(|spawn| spawn.members != Some(true) && free(spawn.x, spawn.z) && crate::site_reach::unreachable(spawn.x, spawn.z, spawn.level).is_none())
+                            .map(|spawn| (spawn.x, spawn.z, spawn.level)),
+                    );
                 }
             }
         }

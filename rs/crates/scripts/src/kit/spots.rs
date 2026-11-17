@@ -176,6 +176,7 @@ fn rock_tier_spawns(tier: &knowledge::rocks::RockTier, bank: &knowledge::banks::
             for spawn in entry.spawns {
                 if spawn.level == anchor_level
                     && (spawn.x - anchor_x).abs() + (spawn.z - anchor_z).abs() <= reach
+                    && knowledge::site_reach::unreachable(spawn.x, spawn.z, spawn.level).is_none()
                 {
                     found.push((spawn.x as i32, spawn.z as i32));
                 }
