@@ -453,6 +453,14 @@ pub fn retry_uncounted(life: &mut Life, index: usize) {
     node.method = None;
 }
 
+/// A resolve block the node waits out (`full:` / `cooled:`, tour 3
+/// point 1): the node stays open and ready, no failure nor block
+/// counted, the reason kept for the dashboard.
+pub fn wait_open(life: &mut Life, index: usize, reason: &str) {
+    retry_uncounted(life, index);
+    life.nodes[index].last_error = format!("waits: {reason}");
+}
+
 /// A market buy placed daemon-side rests on the book while the bot works
 /// on (user rule 2026-11-13: no idle bot). The node leaves the lock and
 /// stays ready, its `market:buy` method kept; the brain skips it while

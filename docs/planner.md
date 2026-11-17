@@ -1361,5 +1361,14 @@ d'une récolte planifiée (plumes, appât de pêche :
   plein ne bat plus un site payant libre. `place_on_site` passe alors à la
   méthode suivante du nœud (ordre des alternatives, rendement mesuré, D6) ;
   aucune libre : `Blocked full:<méthode>`.
+- Un blocage de résolution `full:<m>` / `cooled:<m>` n'abandonne JAMAIS le
+  nœud (tour 3, point 1 ; avant : `blocked at resolve (full:…) ->
+  abandoned`) : `brain_cool::on_resolve_wait` refroidit `<m>` pour ce bot
+  (`cool:<m>`) et le nœud reste prêt (`lifecycle::wait_open`) ; la
+  résolution suivante prend la méthode suivante (D6). `<m>` déjà refroidie
+  (toutes les méthodes le sont) : historique `cool_wait:<m>`, le nœud
+  attend ouvert (`cooldown::waiting_nodes`, sauté par `next_ready_except`
+  comme un achat en attente, un filler travaille) jusqu'à la fin du
+  refroidissement.
 - Scripts : pêche (« fish failed ») et sort de malédiction (« no foe took
   … ») rendent `contended:<site>` quand d'autres joueurs travaillent le site.
