@@ -62,7 +62,7 @@ async function load() {
     '<tr><th class="left">bot</th><th>slice</th><th>phase</th><th>target</th><th>capital</th>' +
     '<th>P&amp;L</th><th>spread</th><th>book share</th><th>quotes</th><th class="left">stock</th></tr>' +
     makers.map(row => '<tr><td class="left">' + row.account + '</td><td>' + row.slice + '/' + row.slices +
-      '</td><td>' + row.phase + '</td><td>' + row.capital_target + '</td><td>' + row.capital +
+      '</td><td>' + row.phase + '</td><td>' + row.capital_target + '</td><td>' + (row.capital === null || row.capital === undefined ? 'n/a' : row.capital) +
       '</td><td class="' + (row.pnl >= 0 ? 'up' : 'down') + '">' + row.pnl + '</td><td>' + spread(row.mean_spread) +
       '</td><td>' + pct(row.book_share) + '</td><td>' + row.open_orders + '</td><td class="left">' +
       (row.stock || []).slice(0, 4).map(line => line.name + ' ' + line.units).join(', ') + '</td></tr>').join('');
