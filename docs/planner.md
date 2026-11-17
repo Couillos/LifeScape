@@ -118,9 +118,93 @@ barre du serveur (`smithing.struct` `xpperbar` : bronze 12,5, fer 25, acier
 `gamedata::recipes::smith_xp_per_bar`), une plaque vaut 5 barres.
 Alchimie : un objet, une nature et 3 (basse) ou 5 (haute) feux par lancer.
 
+## Entraînement par le guide et les traits (R6, 2026-11-17)
+
+Remplace, côté cerveau, le choix au prix décrit à la section suivante.
+`orchestrator/src/brain_train.rs` + `planner/src/train_score.rs` (pur).
+Une tranche dont la méthode se choisit à la résolution
+(`training::priced_at_resolve` : forge, magie dès confuse, cuisine,
+artisanat, feu, prière) lit le GUIDE D'ENTRAÎNEMENT PRÉCALCULÉ
+(`guides_store::current()`, `Arc` partagé du dernier cycle, jamais une
+construction à la demande) :
+- lignes du bot : `GuideSet::training` filtré par lecture (niveau live,
+  quêtes faites, compétence), seules celles qu'une montée lance
+  (`mapping::map_method` ; un raccourci de quête reste un nœud de quête) ;
+- score d'une ligne (plus bas gagne) = ticks propres par XP (6000 / XP
+  par 6000 de la ligne) + `coin_weight(thrift)` × pièces par XP
+  converties en ticks au D17 du bot (6000 / profit de sa meilleure ligne
+  money making accessible, lue dans la vue money de sa tranche) ;
+  `coin_weight = 0,5 + thrift` (rapide 0,5 ↔ économe 1,5 ; 1 = total D17
+  neutre) ; une ligne MARCHÉ pèse ×(1,5 − market_affinity) comme
+  `cost::choose_market_or_farm` (un score négatif, ligne qui rapporte
+  plus que son temps, est divisé par ce poids : même ordre) ; une ligne
+  bloquée, inaccessible, sans XP, ou marché pour un Iron, n'a pas de
+  score ;
+- choix : `train_score::choose` = meilleur score (point d'extension R7 :
+  le tirage pondéré D10/D14 prend cette place sur les mêmes lignes
+  classées) ; consommables dont le bot tient moins d'une action
+  (`training::missing_inputs`, tirés du rendement) à obtenir d'abord ;
+  verrouillé par `lock_training_pick` comme avant ;
+- aucun guide publié (premier cycle) ou aucune ligne jouable : aucun
+  choix, loggé, méthode statique de la tranche.
+Log : `brain <compte>: nX firemaking 60->65 trains by fire:yew_logs
+(market, score … = … ticks/XP + … coin ticks/XP, thrift …, affinity …,
+…)`. Exemples testés (`train_score_tests`, `brain_train_tests`) : feu
+d'if, un bot « marché » achète les bûches, un autarcique les coupe ;
+ligne autonome bloquée (pioche rune que personne ne forge) : tous
+achètent ; deux lignes marché, rapide = la chère et rapide, économe =
+la lente et bon marché.
+
+Trait `thrift` (D13, `Profile::thrift`, rapide 0 ↔ économe 1) : tiré de
+la graine (`model::draw_thrift`, splitmix64 de graine ⊕ sel 103,
+`Profile::new` le tire toujours) ; écrit dans la vie (`profile.thrift`) ;
+une vie écrite avant le trait reçoit le MÊME tirage au chargement
+(stable, sauvé à l'écriture suivante), une valeur stockée est gardée.
+
+`training::best_pick` (prix à la demande, section suivante) n'est plus
+appelé par le cerveau ; il reste au planificateur, ses temps lus du
+rendement (R3.3).
+
+## XP et temps dérivés des rendements (R3.3, 2026-11-17)
+
+`planner/src/work_rate.rs` : un `WorkRate` par (méthode, niveau) =
+actions, XP par compétence (dérivée des unités, `unit_xp`) et flux signés
+par 6000 ticks ; lu de la mesure (lecteur passé par l'appelant) ou du
+prior du jeu (`work_rate::prior_rate`, mémoïsé). Tout en découle :
+ticks par XP = 6000 / XP par 6000 ; XP par action = XP / actions ;
+consommables par XP = |flux| / XP (intrant, rune, munition, appât,
+fourniture). Constantes supprimées : presse 5, fonte 5, sort de combat 7,
+`BANK_TRIP_TICKS` 60, `LOAD_SLOTS` 27 (`training`), feu/cuisson/... par
+famille (`training_production::action_ticks`), téléport 5, malédiction
+25, bananes 3 + 60 (`training_spells`), `HIT_ODDS` 0,6 (`sizing`),
+`ticks_each`/`xp_each` des étapes de chaîne (`chains`, D58).
+- `training` : une option = `rated_option` (temps, intrants, produits,
+  péages par XP du rendement) ; `TrainPrices::rate` fournit le
+  rendement (sans rendement, méthode non cotée) ;
+- `sizing` : XP par action, durée (`tranche_ticks`) et consommation d'une
+  tranche sommées NIVEAU PAR NIVEAU (les chances montent), arrondies à
+  l'action entière ; variantes `*_with(lecteur)` pour un appelant mesuré ;
+  le reste du planificateur lit le prior ;
+- tranches `ReachLevel` : `est_ticks` de l'alternative = `tranche_ticks`
+  (rendement), plus 0 → 6000 ;
+- chaînes : `eval_chain_with(lecteur)` (`eval_chain` = prior) ; une étape
+  sans rendement (moulin, méthode sans voie) laisse la chaîne non cotée
+  (`ChainEval::unrated`, profit 0) ; la chaîne `bury` = combat puis
+  enterrement (le prior d'un combat ne paie pas de prière) ;
+- combat distance et magie (prior, `method_rate_fight`) : jets du
+  serveur au lieu de `HIT_ODDS` : attaque = niveau effectif × (bonus +
+  64) (distance : niveau + 8 + 3 en précis ; magie : niveau + 8 + 1),
+  défense = (défense PNJ + 9) × (`rangedefence` + 64) ou (magie PNJ + 9)
+  × (`magicdefence` + 64), dump `npc_combat.json` (clés `magic`,
+  `rangedefence`, `magicdefence` ajoutées à `dump-npc-ranges`).
+Constantes restantes, toutes du serveur : cadences d'action
+(`method_rate`), bonus de style (+3 précis, +1 magie), force d'une flèche
+de bronze (7) quand l'équipement de la clé n'en nomme pas.
+
 ## Entraînement au prix (2026-11-14)
 
-`planner/src/training.rs` (pur) + `orchestrator/src/brain_train.rs`.
+`planner/src/training.rs` (pur) + `orchestrator/src/brain_train.rs`
+(remplacé côté cerveau par le guide, R6 ci-dessus).
 Forge et magie (dès 21) choisissent leur méthode AU LANCEMENT avec le
 marché, comme un joueur : fondre puis forger ce qui paie, alcher plutôt
 que bombarder des vaches quand c'est moins cher par XP.
@@ -864,7 +948,8 @@ spot au-delà du CB (test `launch_never_dispatches_past_the_level`).
 ## L9 : profils et Iron
 
 Tirage à la création (`draw_profile`, graine persistée, reproductible) :
-`market_affinity` (pondère market vs farm, D15), `price_patience`,
+`market_affinity` (pondère market vs farm, D15), `thrift` (rapide ↔
+économe, R6 ci-dessus, `model::draw_thrift`), `price_patience`,
 marge initiale `0.05 + patience × 0.15`, archétype producteur (le tirage
 de 10 % de marchands est supprimé en vague 3 ; le teneur de marché se
 crée exprès : `create-user --role market_maker`). Planner sans aucune

@@ -443,6 +443,21 @@ des trois, distance ×4, magie ×2, PV ×1,33). Les seaux d'XP mesurée sont
 supprimés ; l'XP observée sert au contrôle D4 à l'ingestion (écart > 5 %
 loggé `rates: xp coherence`).
 
+XP et temps dérivés PARTOUT (R3.3, 2026-11-17, `planner::work_rate`) :
+le planificateur ne cote plus une montée avec ses propres constantes
+(presse 5 ticks, `BANK_TRIP_TICKS` 60, `HIT_ODDS` 0,6, ticks et XP écrits
+dans les étapes de chaîne) ; il lit un `WorkRate` (actions, XP dérivée
+des unités, flux signés par 6000 ticks) : ticks par XP = 6000 / XP,
+consommables par XP = |flux| / XP. Lecteurs : `training` (pricer,
+`TrainPrices::rate`), `sizing` (XP par action, durée et consommation
+d'une tranche, niveau par niveau ; prior du jeu, `*_with` pour une
+mesure), durée des tranches `ReachLevel` (`est_ticks`), chaînes D58
+(`eval_chain_with`, une étape sans rendement laisse la chaîne non
+cotée). Le prior des combats à distance et de magie suit les jets du
+serveur (attaque contre `rangedefence` / magie + `magicdefence` du PNJ,
+dump `npc_combat.json`) au lieu de `HIT_ODDS`. Détail :
+`docs/planner.md` § « XP et temps dérivés des rendements ».
+
 Page `rates` = vue MESURES (R2.1, `web_rates::measure_rows`) : une
 ligne par clé exacte mesurée, avec SES sommes (Σ / Σ ticks de travail),
 jamais la valeur d'un cumul ni le prior ; `thin` sous n = 3 ; les
@@ -627,7 +642,16 @@ toujours après les autres.
   serves_what_a_direct_build_gives`). `rates-rebuild <copie>
   --guides-store <dossier> [money|training:requête …]` construit le jeu
   hors ligne et en donne le coût (docs/resources.md) ;
-- les bots ne lisent pas encore les guides (R7 : `guides_store::current`).
+- le cerveau lit le guide d'ENTRAÎNEMENT (R6, 2026-11-17,
+  `brain_train` : `guides_store::current()`, aucune construction à la
+  demande) pour choisir la méthode d'une tranche cotée à la résolution
+  (forge, magie dès confuse, cuisine, artisanat, feu, prière) : score
+  d'une ligne pour le bot = ticks propres par XP + poids(thrift) ×
+  pièces par XP converties au D17 du bot, une ligne marché ×(1,5 −
+  market_affinity) (`planner::train_score`, `docs/planner.md` §
+  « Entraînement par le guide et les traits ») ; meilleur score en
+  attendant le tirage pondéré de R7. Le guide money making n'est pas
+  encore lu par les bots (R7).
 
 Rentabilité d'une (activité, style, tranche), cumul tous sites et outils :
 Σ flux positifs × prix courant (médiane des 5 derniers fills bornée par

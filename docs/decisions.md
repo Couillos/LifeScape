@@ -1207,3 +1207,60 @@ Source : `docs/plan-erreurs.txt` (causes R01-R18, plan P1-P18).
    prochain resolve choisit un autre site.
 Rejeté : priorité de guilde soumise à capacité (D2 a) ; levée manuelle seule
 (D1 c) ; contention comptée comme échec avec seuil plus haut (D4).
+
+## 2026-11-17 — XP dérivée partout (R3.3), guide d'entraînement par profil (R6)
+
+Plan rendements, lots R3.3 et R6 (D13, D17) :
+1. R3.3 : temps et XP d'une montée lus d'un RENDEMENT (`planner::
+   work_rate::WorkRate` : actions, XP dérivée des unités, flux signés par
+   6000 ; mesure passée par l'appelant, sinon prior du jeu
+   `prior_rate`), jamais de constantes du planificateur. Supprimées :
+   `SMITH_PRESS_TICKS` 5, `SMELT_TICKS` 5, `FIGHT_CAST_TICKS` 7,
+   `BANK_TRIP_TICKS` 60, `LOAD_SLOTS` 27 (`training`), `action_ticks` par
+   famille (`training_production`), `TELEPORT_TICKS` 5, `CURSE_TICKS` 25,
+   `BANANA_TICKS` 63 (`training_spells`), `HIT_ODDS` 0,6 (`sizing`), et
+   `ticks_each`/`xp_each` des étapes de chaîne D58 (`chains`). `sizing`
+   somme XP par action, durée (`tranche_ticks`) et consommation niveau
+   par niveau ; `est_ticks` des tranches `ReachLevel` = durée du
+   rendement ; une chaîne dont une étape n'a pas de rendement (moulin)
+   n'est pas cotée (`ChainEval::unrated`). Le prior distance/magie suit
+   les jets du serveur (`npc_defence_roll_specific` : `rangedefence`,
+   magie + `magicdefence` du PNJ, ajoutés au dump `npc_combat.json` ;
+   style précis +3, magie +1) au lieu de `HIT_ODDS`. Restent, toutes du
+   serveur : cadences d'action, bonus de style, force de la flèche de
+   bronze (7) quand la clé ne nomme pas de munition.
+2. R6 trait rapide ↔ économe : `Profile::thrift` ∈ [0, 1] (0 rapide,
+   1 économe), tiré de la graine (`model::draw_thrift`, splitmix64,
+   sel 103) à la création ; migration : une vie sans le trait reçoit le
+   MÊME tirage au chargement (déterministe, sauvé à l'écriture suivante),
+   une valeur stockée est gardée. Tests sur des vies construites en
+   mémoire, jamais lues depuis run/.
+3. R6 score d'une ligne du guide d'entraînement pour un bot
+   (`planner::train_score`, plus bas gagne) : ticks propres par XP
+   + (0,5 + thrift) × pièces par XP × ticks par pièce (D17 : 6000 /
+   profit de la meilleure ligne money making accessible au bot) ; ligne
+   marché ×(1,5 − market_affinity), même poids que
+   `choose_market_or_farm` (score négatif divisé : même ordre) ; ligne
+   bloquée, inaccessible, sans XP, ou marché pour un Iron : aucun score.
+4. R6 cerveau : `brain_train` choisit la méthode d'une tranche cotée à la
+   résolution (forge, magie dès confuse, cuisine, artisanat, feu,
+   prière) dans le guide d'entraînement PRÉCALCULÉ
+   (`guides_store::current()`, aucune construction à la demande), lignes
+   que la montée lance, meilleur score (`train_score::choose`, point
+   d'extension du tirage pondéré R7) ; ses consommables manquants pour
+   une action (`training::missing_inputs`) bloquent la tranche comme
+   avant. Pas de guide publié ou aucune ligne jouable : méthode statique
+   de la tranche, loggé. Le prix à la demande (`training::best_pick`,
+   stock propre à alcher, asks bon marché) n'est plus appelé par le
+   cerveau.
+Tests : `work_rate_tests`, `sizing_tests` (lecteur mesuré qui pilote
+durée et consommation), `method_rate_server_tests::ranged_and_magic_hit_
+the_server_rolls`, `chains::every_chain_step_reads_its_yield`,
+`expand_tests::reach_tranches_carry_their_yield_duration`,
+`model::thrift_is_drawn_from_the_seed_and_migrated`, `train_score_tests`
+(if : marché achète, autarcique coupe ; pioche rune : tous achètent ;
+rapide vs économe), `brain_train_tests` (choix lu dans un `GuideSet`
+construit en mémoire, verrou du résolveur).
+Rejeté : garder `HIT_ODDS` comme constante de modèle ; mélanger
+l'expérience propre du bot au score (D11) ; recalculer le guide pour le
+choix d'un bot.

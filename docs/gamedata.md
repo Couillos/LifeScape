@@ -122,6 +122,12 @@ dbrow n'a pas de colonne XP : le dump écrivait 0 pour les 129 lignes
 `smith_rows_match_the_server_tables` qui relit dbrow + struct : niveau,
 barres, unités produites (clous 2), XP).
 
+Défense distance et magie (R3.3, 2026-11-17) : `npc_combat.json` porte
+aussi `magic` (niveau, défaut moteur 1), `rangedefence` et `magicdefence`
+(`npc_defence_roll_specific`), lus par `NpcCombat::{magic,
+ranged_defence, magic_defence}` : le prior des combats à distance et de
+magie (`planner::method_rate_fight`) en tire les chances de toucher.
+
 Cibles de sorts (D18, 2026-11-16) : `orchestrator dump-npc-ranges` écrit
 aussi `spell_targets.json` (sort → param PNJ exigé, lu dans les procs
 `apnpct` du serveur : `crumble_undead` → `undead`) et ajoute
