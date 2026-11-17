@@ -237,3 +237,33 @@ fn a_bids_training_reads_the_measured_yields() {
     assert!(coins > prior_coins * 1.5, "measured {coins} vs prior {prior_coins}");
     assert!((ticks - prior_ticks).abs() < 1e-6, "the ores are bought: the smelting time is the game's, {ticks} vs {prior_ticks}");
 }
+
+/// User 2026-11-18 (« retire la marge de 25 % ») : a lot that pays more
+/// than the bot's own coin rate and nets the minimum after its time
+/// preempts the ambition; no 1.25 × floor on top (ella_quill: 25-coin
+/// air rune bids, 4.05 coins/tick, refused under 1.25 × 4.34).
+#[test]
+fn a_lot_beating_the_own_rate_preempts_without_margin() {
+    let unit = super::UnitCost { coins: 0.0, ticks: 1.0, plan: Vec::new(), train: Vec::new(), fixed_coins: 0.0, fixed_ticks: 0.0, buy_trip: 0.0, start: None };
+    let ticks = 1000.0;
+    let coin_rate = 4.0;
+    let rate = 4.4;
+    let found = super::Opportunity {
+        item: "airrune".to_string(),
+        count: 100,
+        best_bid: 25,
+        revenue: rate * ticks,
+        from_bids: 100,
+        from_sales: 0,
+        from_alch: 0,
+        unit,
+        ticks,
+        spent: 0.0,
+        rate,
+        profit: (rate - coin_rate) * ticks,
+        score: rate,
+    };
+    assert!(preempts(&found, coin_rate), "10 % over the own rate, 400 coins net: answered");
+    let short = super::Opportunity { rate: 3.9, profit: -100.0, ..found };
+    assert!(!preempts(&short, coin_rate), "under the own rate: the ambition goes first");
+}

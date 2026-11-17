@@ -7,8 +7,8 @@
 //!   6000 ticks) is published in the node's `method_profit` beside the
 //!   gathering and coin spots, only when the cast beats selling
 //!   (`publish`), its runes gated by `tools::required_tool`;
-//! - draw: a stock worth alching (net ≥ `BID_MIN_PROFIT`, rate ≥
-//!   `BID_PREEMPT` × the bot's own coin rate (its D17), runes held) draws a
+//! - draw: a stock worth alching (net ≥ `BID_MIN_PROFIT`, rate ≥ the
+//!   bot's own coin rate (its D17), no margin, runes held) draws a
 //!   `MakeMoney` goal of origin `alch:<object>` (`alch_goal_for`);
 //! - sales: a caster never lists what alchs for more than it sells
 //!   (`alch_keep`), never sells under the cast's net (`alch_floor`: the
@@ -193,8 +193,7 @@ pub(crate) fn alch_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, Stri
     let own_rate = own_coin_rate(life, live);
     let rate = pick.profit_each / lifescape_planner::alchemy::CAST_TICKS;
     let profit = casts as f64 * (pick.profit_each - lifescape_planner::alchemy::CAST_TICKS * own_rate);
-    let bid = lifescape_planner::bid_response::BID_PREEMPT;
-    if rate < bid * own_rate.max(lifescape_planner::market_fit::MIN_COIN_RATE) || profit < lifescape_planner::bid_response::BID_MIN_PROFIT {
+    if rate < own_rate.max(lifescape_planner::market_fit::MIN_COIN_RATE) || profit < lifescape_planner::bid_response::BID_MIN_PROFIT {
         return None;
     }
     crate::logln!(

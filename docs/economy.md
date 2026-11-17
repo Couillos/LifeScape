@@ -1304,8 +1304,8 @@ d'achat que ce bot sait fabriquer avec profit :
 - Règle de score : taux brut = (revenu des bids pris − pièces dépensées)
   / (ticks de production + trajet réel du lot, § Rentabilité de tout le
   marché ; l'ancien forfait de 800 ticks par réponse est retiré). L'offre
-  passe DEVANT l'ambition seulement si ce taux ≥ 2 × le taux du bot
-  (`BID_PREEMPT`) et si le net après le temps ≥ 50 pièces
+  passe DEVANT l'ambition si ce taux ≥ le taux propre du bot (aucune
+  marge : `BID_PREEMPT` retiré le 2026-11-18) et si le net après le temps ≥ 50 pièces
   (`BID_MIN_PROFIT`). Entre plusieurs, le meilleur taux, incliné de
   ±15 % par un mot propre au bot et à l'objet.
 - Étalement (sans état d'un autre bot) : un bot ne répond à un objet que
@@ -1795,8 +1795,8 @@ la remise (2 %).
 pour un bot la réponse aux offres d'achat étape par étape
 (`bid_response::explain`) : tour de l'objet (répartition), recette, demande
 (meilleure offre, profondeur, part des ventes, alchimie), coût unitaire et
-plan, lot absorbé, charge d'entraînement, taux contre le plancher (taux
-propre × 1,25) et profit contre le minimum. Une offre ignorée dit pourquoi.
+plan, lot absorbé, charge d'entraînement, taux contre le taux propre (sans
+marge) et profit contre le minimum. Une offre ignorée dit pourquoi.
 L'objet se nomme par nom de debug, billet, nom affiché ou id
 (`bid_why::resolve_item`) ; la première ligne dit lequel est lu
 (`stringstar = "Unblessed symbol" (id 1716, banknote 1717)`) et, sans offre

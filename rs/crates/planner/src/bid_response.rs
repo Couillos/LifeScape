@@ -44,9 +44,9 @@
 //!
 //! Scoring rule (documented in `docs/economy.md`): the opportunity's
 //! gross rate = (revenue − coins spent) / ticks of the lot. It preempts
-//! the bot's ambition only when it pays at least `BID_PREEMPT` × the
-//! bot's own coin rate and nets at least `BID_MIN_PROFIT` coins after
-//! paying for the time. Among several, the best gross rate wins, tilted
+//! the bot's ambition when it pays at least the bot's own coin rate (no
+//! margin on top: user 2026-11-18) and nets at least `BID_MIN_PROFIT`
+//! coins after paying for the time. Among several, the best gross rate wins, tilted
 //! ±15 % by a per-bot, per-item word so equally good lots spread over the
 //! fleet. Spread: a bot weighs an object only in the windows
 //! (`BID_WINDOW_TICKS`) its word selects (one in `PRODUCER_SPREAD`).
@@ -57,11 +57,6 @@ use crate::model::GoalKind;
 
 /// Prefix of a bid goal's origin (`life.goal_origin`, `bid:<item>`).
 pub const BID_PREFIX: &str = "bid:";
-/// A bid must pay this many times the bot's own coin rate: a real
-/// player switches as soon as a lot pays clearly better than its best
-/// alternative (2.0 before 2026-11-14: no lot ever beat twice the best
-/// realizable rate, nobody forged the demanded gear).
-pub const BID_PREEMPT: f64 = 1.25;
 /// Coins a bid goal must net after paying for the bot's time.
 pub const BID_MIN_PROFIT: f64 = 50.0;
 /// Share of the remaining profitable depth one producer takes (1/2).
@@ -550,12 +545,12 @@ pub fn explain(item: &str, view: &BookView, market: &dyn Fn(&str) -> Option<Book
     };
     match opportunity(item, view, market, bot) {
         Some(found) => {
-            let floor = BID_PREEMPT * bot.coin_rate.max(crate::market_fit::MIN_COIN_RATE);
+            let floor = bot.coin_rate.max(crate::market_fit::MIN_COIN_RATE);
             out.push(format!(
-                "lot {} (revenue {:.0}, training {train_coins:.0} coins + {train_ticks:.0} ticks): {:.2} coins/tick vs floor {floor:.2} (own {:.2} x {BID_PREEMPT}), profit {:.0} vs {BID_MIN_PROFIT}",
-                lot.count, lot.revenue, found.rate, bot.coin_rate, found.profit
+                "lot {} (revenue {:.0}, training {train_coins:.0} coins + {train_ticks:.0} ticks): {:.2} coins/tick vs own rate {floor:.2}, profit {:.0} vs {BID_MIN_PROFIT}",
+                lot.count, lot.revenue, found.rate, found.profit
             ));
-            out.push(if preempts(&found, bot.coin_rate) { "PREEMPTS: the bot answers it".to_string() } else { "below the floor: the ambition goes first".to_string() });
+            out.push(if preempts(&found, bot.coin_rate) { "PREEMPTS: the bot answers it".to_string() } else { "under the own rate: the ambition goes first".to_string() });
         }
         None => out.push("opportunity refused".to_string()),
     }
@@ -597,9 +592,11 @@ fn explain_make(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView
     out
 }
 
-/// True when an opportunity preempts the bot's ambition (scoring rule).
+/// True when an opportunity preempts the bot's ambition (scoring rule):
+/// it pays at least the bot's own coin rate, no margin on top (user
+/// 2026-11-18: the 1.25 × floor kept every producer off the bids).
 pub fn preempts(found: &Opportunity, coin_rate: f64) -> bool {
-    found.rate >= BID_PREEMPT * coin_rate.max(crate::market_fit::MIN_COIN_RATE) && found.profit >= BID_MIN_PROFIT
+    found.rate >= coin_rate.max(crate::market_fit::MIN_COIN_RATE) && found.profit >= BID_MIN_PROFIT
 }
 
 /// Every lot this bot would make now among `books` (object → public
