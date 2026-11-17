@@ -348,6 +348,12 @@ pub fn money_methods(ctx: &ReadyCtx) -> Vec<String> {
     // per object (`brain_alch`, `alchemy::best_alch`) and publishes it in
     // `method_profit` only when the cast beats selling.
     out.extend(ctx.method_profit.iter().filter(|(method, profit)| method.starts_with("alch:") && *profit > 0.0).map(|(method, _)| method.clone()));
+    // 100 % market lots (plan rendements R5): the guide's market rows the
+    // brain published for this bot, ranked on their guide profit like
+    // any money method; never for an Ironman.
+    if !ctx.ironman {
+        out.extend(ctx.trades.iter().filter(|offer| offer.profit_6000 > 0.0).map(|offer| offer.method.clone()));
+    }
     out.dedup();
     out
 }
@@ -367,7 +373,20 @@ pub fn coins_per_kill(method: &str) -> f64 {
 /// Profit per 6000 ticks of a method from the brain's published rates
 /// (0 when unmeasured).
 fn profit_of(ctx: &ReadyCtx, method: &str) -> f64 {
+    if let Some(offer) = crate::trade_craft::offer_in(ctx, method) {
+        return offer.profit_6000;
+    }
     ctx.method_profit.iter().find(|(known, _)| known == method).map(|(_, profit)| *profit).unwrap_or(0.0)
+}
+
+/// A money method the bot can work: a trade lot by its own rule (tools
+/// held, a lot fits: `trade_craft::workable`), any other by
+/// `method_feasible`.
+fn money_feasible(method: &str, ctx: &ReadyCtx) -> bool {
+    if crate::trade_craft::is_trade(method) {
+        return crate::trade_craft::workable(method, ctx);
+    }
+    method_feasible(method, ctx)
 }
 
 /// Coin and money nodes: the most profitable workable money method.
@@ -383,9 +402,14 @@ pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
         node.method = Some(make.to_string());
         return;
     }
+    // Inputs bought for this node's last trade lot are crafted first (R5).
+    if crate::trade_craft::sticky(node, ctx) {
+        return;
+    }
     let mut methods = money_methods(ctx);
     for alt in &node.alternatives {
-        if !methods.contains(&alt.method) && alt.method != make {
+        // A trade lot no longer offered (guide moved, Iron) never ranks.
+        if !methods.contains(&alt.method) && alt.method != make && !crate::trade_craft::is_trade(&alt.method) {
             methods.push(alt.method.clone());
         }
     }
@@ -412,7 +436,14 @@ pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
     // methods still send a coin target to men first.
     let coin_first = matches!(node.kind, crate::model::NodeKind::HaveCoins { .. });
     let class = |method: &str| {
-        if crate::food_gate::ready_now(method, ctx) {
+        // A trade lot starts now when one fits: its purchases are its work.
+        if crate::trade_craft::is_trade(method) {
+            if crate::trade_craft::workable(method, ctx) {
+                0
+            } else {
+                2
+            }
+        } else if crate::food_gate::ready_now(method, ctx) {
             0
         } else if method_feasible(method, ctx) {
             1
@@ -426,7 +457,10 @@ pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
         left_class.cmp(right_class).then_with(|| left.est_ticks.cmp(&right.est_ticks)).then_with(|| right_coins.total_cmp(left_coins))
     });
     let ranked: Vec<Alternative> = keyed.into_iter().map(|(_, _, alt)| alt).collect();
-    node.method = ranked.iter().find(|alt| method_feasible(&alt.method, ctx)).map(|alt| alt.method.clone());
+    node.method = ranked.iter().find(|alt| money_feasible(&alt.method, ctx)).map(|alt| alt.method.clone());
+    // A trade lot sizes on the wallet and the asks, and blocks on the
+    // inputs to buy (`trade_craft::lock`).
+    crate::trade_craft::lock(node, ctx);
     if node.method.is_none() {
         if let Some(first) = ranked.first() {
             // Gear held: the method is unworkable for another reason

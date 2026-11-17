@@ -203,6 +203,10 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
     activities.truncate(10);
     // Market makers (plan marché Q6): operator info, never read by a bot.
     let makers: Vec<Value> = crate::market_maker_report::maker_rows(&store, &lives_dir(run_dir)).iter().map(crate::market_maker_report::row_value).collect();
+    // 100 % market lots (plan rendements R5): predicted vs realized.
+    let trade_rows = crate::trade_report::trade_rows(&store, &lives_dir(run_dir));
+    let (closed, predicted, realized) = crate::trade_report::closed_totals(&trade_rows);
+    let trades: Vec<Value> = trade_rows.iter().take(50).map(crate::trade_report::row_value).collect();
     let clock = SystemTime::now().duration_since(UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
     object(vec![
         ("ok", Value::Bool(true)),
@@ -264,6 +268,8 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
             ),
         ),
         ("makers", Value::Arr(makers)),
+        ("trades", Value::Arr(trades)),
+        ("trades_closed", object(vec![("lots", Value::Int(closed as i64)), ("predicted", Value::Int(predicted)), ("realized", Value::Int(realized))])),
     ])
 }
 

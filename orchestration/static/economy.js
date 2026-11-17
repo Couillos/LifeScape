@@ -1,4 +1,5 @@
-// Economy front: money supply, deals, top activities, trends, market makers.
+// Economy front: money supply, deals, top activities, trends, market makers,
+// 100 % market lots (predicted vs realized).
 // Read-only dashboard page: bots never read it.
 function number(value) {
   if (!isFinite(value)) return "-";
@@ -65,6 +66,24 @@ async function load() {
       '</td><td class="' + (row.pnl >= 0 ? 'up' : 'down') + '">' + row.pnl + '</td><td>' + spread(row.mean_spread) +
       '</td><td>' + pct(row.book_share) + '</td><td>' + row.open_orders + '</td><td class="left">' +
       (row.stock || []).slice(0, 4).map(line => line.name + ' ' + line.units).join(', ') + '</td></tr>').join('');
+
+  // 100 % market lots (plan rendements R5): one row per lot, newest first.
+  const trades = payload.trades || [];
+  const closed = payload.trades_closed || {};
+  document.getElementById('trades_closed').textContent = (closed.lots || 0) + ' closed lots: predicted ' +
+    (closed.predicted || 0) + ', realized ' + (closed.realized || 0);
+  const made = row => row.made === null || row.made === undefined ? '-' : row.made;
+  const craft = row => row.craft_yield === null || row.craft_yield === undefined ? '-' :
+    number(row.craft_yield) + ' (guide ' + number(row.guide_per_6000) + ')';
+  document.getElementById('trades').innerHTML =
+    '<tr><th class="left">bot</th><th class="left">recipe</th><th>lot</th><th>status</th><th>bought</th>' +
+    '<th>made</th><th>craft / 6000</th><th>sold</th><th>predicted</th><th>realized</th></tr>' +
+    trades.map(row => '<tr><td class="left">' + row.account + '</td><td class="left">' +
+      String(row.method).replace('trade:craft/', '') + '</td><td>' + row.lot + ' (' + row.bound + ')</td><td>' +
+      row.status + '</td><td>' + row.bought_units + '/' + row.planned_units + ' for ' + row.bought_coins +
+      '</td><td>' + made(row) + '</td><td>' + craft(row) + '</td><td>' + row.sold_units + ' for ' + row.sold_coins +
+      '</td><td>' + row.predicted + '</td><td class="' + (row.realized >= 0 ? 'up' : 'down') + '">' + row.realized +
+      '</td></tr>').join('');
 }
 
 load();

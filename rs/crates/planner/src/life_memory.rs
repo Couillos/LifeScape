@@ -45,6 +45,10 @@ pub struct LifeMemory {
     pub abandoned_total: u64,
     /// The last `RECENT_CAP` retired nodes, oldest first.
     pub recent: Vec<Retired>,
+    /// The last `trade_craft::LOTS_CAP` lots of 100 % market (plan
+    /// rendements R5), oldest first: predicted profit, purchases, products
+    /// made (the economy report adds the realized coins).
+    pub trades: Vec<crate::trade_craft::TradeLot>,
 }
 
 impl LifeMemory {
@@ -93,6 +97,7 @@ pub fn memory_to_value(memory: &LifeMemory) -> Value {
         ("done_total", Value::Int(memory.done_total as i64)),
         ("abandoned_total", Value::Int(memory.abandoned_total as i64)),
         ("recent", Value::Arr(memory.recent.iter().map(retired_to_value).collect())),
+        ("trades", Value::Arr(memory.trades.iter().map(crate::trade_craft::lot_to_value).collect())),
     ])
 }
 
@@ -110,6 +115,7 @@ pub fn memory_from_value(value: &Value) -> LifeMemory {
         done_total: count("done_total") as u64,
         abandoned_total: count("abandoned_total") as u64,
         recent: value.get("recent").as_arr().map(|rows| rows.iter().filter_map(retired_from_value).collect()).unwrap_or_default(),
+        trades: crate::trade_craft::lots_from_value(&value.get("trades")),
     }
 }
 

@@ -3,7 +3,7 @@
 //! dependencies never count. Replanning fires on blocked/failed/death,
 //! lost stock, price drift over threshold, or engagement end.
 
-use crate::model::{Node, NodeKind, NodeStatus};
+use crate::model::{Alternative, Node, NodeKind, NodeStatus};
 
 /// Engagement bounds (D1 ticks; 6 min–18 min in dev, 1 h–3 h in prod).
 pub const ENGAGE_MIN: u64 = 6000;
@@ -123,6 +123,11 @@ pub fn need_count_from(node: &Node, need: &str, live: Option<u8>) -> i64 {
                 return ((actions as f64) * per_unit).ceil().max(1.0) as i64;
             }
         }
+    }
+    // A 100 % market lot (R5) buys what its lot burns (`node.batch`
+    // products, the recipe's failures counted), never one load.
+    if let Some(units) = node.method.as_deref().and_then(|method| crate::trade_craft::input_count(method, need, node.batch)) {
+        return units;
     }
     // A quest blocked on a brought item obtains the quest's count (20
     // balls of wool for Sheep Shearer, never one).
@@ -261,8 +266,14 @@ pub fn replan_node_from(node: &mut Node, cause: &ReplanCause, missing: &[String]
                 );
                 // Same legs as creation (PRD3: market first, every
                 // production way, the shop under D-A); Iron is filtered
-                // at resolve time, which re-prices them.
-                sub.alternatives = crate::obtain_legs::obtain_alternatives(need, false);
+                // at resolve time, which re-prices them. A 100 % market
+                // lot (R5) buys its inputs on the market only (a tool it
+                // lacks comes by the usual legs).
+                sub.alternatives = if node.method.as_deref().is_some_and(|method| crate::trade_craft::buys_input(method, need)) {
+                    vec![Alternative { method: "market:buy".to_string(), est_ticks: 0, est_coins: 0 }]
+                } else {
+                    crate::obtain_legs::obtain_alternatives(need, false)
+                };
                 fresh.push(sub);
             }
             // The blocked node waits on its new deps (or retries when

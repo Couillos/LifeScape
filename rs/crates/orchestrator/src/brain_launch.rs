@@ -407,6 +407,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     crate::cpu_profile::timed("market.fill_ctx", || crate::brain_market::fill_ctx(&mut ctx, &life.nodes[position], &live));
     // Alchemy of its own stock is a money method too (2026-11-14).
     crate::cpu_profile::timed("alch.publish", || crate::brain_alch::publish(&mut ctx, &life.nodes[position], &life, &live));
+    // 100 % market lots read from the precomputed money guide (R5).
+    crate::cpu_profile::timed("trade.publish", || crate::brain_trade::publish(&mut ctx, &life.nodes[position], &life, &live, job));
     // Smithing and magic (from 21) climbs pick their method with the
     // market: what to hammer or smelt, alchemy or a combat spell.
     crate::cpu_profile::timed("train.fill_ctx", || crate::brain_train::fill_ctx(&mut ctx, &life.nodes[position], &life, &live));
@@ -512,6 +514,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             }
         }
     }
+    // A 100 % market lot locked by the resolve is recorded (R5): its
+    // purchases, cost and predicted profit, before the block buys them.
+    crate::brain_trade::note_lot(&mut life, position, &ctx, now_unix());
     // The planner blocks typed when no method is workable (tool to
     // fund): the block becomes an obtain sub-task now, never a node that
     // flips Ready/Blocked forever without launching.
