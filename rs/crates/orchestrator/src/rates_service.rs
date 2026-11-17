@@ -38,7 +38,7 @@ pub use snapshot_io::{rebuild_from_store, snapshot_path};
 pub(crate) use snapshot_io::write_snapshot_file;
 #[cfg(test)]
 pub(crate) use snapshot_io::snapshot_from_json;
-pub use web_rates::{measure_rows, rates_api, rates_payload};
+pub use web_rates::{measure_rows, rates_api, rates_payload, trading_api};
 use snapshot_io::global_snapshot;
 
 use crate::rates_estimator::YieldBook;
@@ -162,7 +162,7 @@ pub use crate::rates_price::price_estimate;
 
 #[path = "rates_profit.rs"]
 mod profit;
-pub use profit::{cached_profit_rows, profit_per_6000, profit_rows, trend_score, ProfitRow, PROFIT_TTL};
+pub use profit::{cached_profit_rows, generation, profit_per_6000, profit_rows, trend_score, ProfitRow, PROFIT_TTL};
 
 /// Records one report in the live snapshot and marks it dirty: the
 /// `rates-flush` thread persists it at most once per

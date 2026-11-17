@@ -148,6 +148,11 @@ pub fn invalidate() {
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Current snapshot generation (the rates page index rebuilds on change).
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Relaxed)
+}
+
 /// One built table and what it was built from (pure freshness rule).
 pub struct ProfitCache {
     pub built: Instant,

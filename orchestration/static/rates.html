@@ -21,7 +21,13 @@
   td.left, th.left { text-align: left; }
   .muted { color: #888; }
   .prior { color: #e0a030; }
-  #search { padding: 4px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
+  tr.line:hover td, tr.subkey:hover td { background: #141414; }
+  table.detail { margin: 4px 0 6px 12px; }
+  #filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
+  #filters input, #filters select, #pager button { padding: 3px 5px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
+  #pager { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  #pager button:disabled { color: #555; }
+  summary { cursor: pointer; color: #ff0; font-size: 14px; margin: 12px 0 4px; }
 </style>
 </head>
 <body>
@@ -31,21 +37,29 @@
     <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates" aria-current="page">Rates</a><a class="navlink" href="/guides-money">Money guide</a><a class="navlink" href="/guides-training">Training guide</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores">Hiscores</a><a class="navlink" href="/errors">Errors</a></nav>
   </div>
 </div>
-<h1>Rates <span class="muted">· measures per 6000 work ticks, bands of 5 levels (profit: <a href="/guides-money">money guide</a>, XP: <a href="/guides-training">training guide</a>)</span></h1>
-<div>
-  <input id="search" placeholder="Filter method, site, tool, item, skill…" autocomplete="off" oninput="onSearch()">
-  <span id="summary" class="muted"></span>
+<h1>Rates <span class="muted">· measured yields per 6000 work ticks (profit: <a href="/guides-money">money guide</a>, XP: <a href="/guides-training">training guide</a>)</span></h1>
+<div id="filters">
+  <input id="search" placeholder="Search activity, object, site, tool, skill…" autocomplete="off">
+  <select id="group" title="One row per activity (method × style, its keys folded) or per exact key (site × tool × band)"><option value="activity">per activity</option><option value="key">per key (site × tool × band)</option></select>
+  <select id="skill"><option value="">all skills</option></select>
+  <select id="family"><option value="">all families</option></select>
+  <select id="band"><option value="">all bands</option></select>
+  <label title="Keys with at least 3 runs (under it the brain reads the game prior)"><input id="measured" type="checkbox" checked> measured only</label>
+  <label>runs ≥ <input id="min_runs" type="number" min="0" style="width:60px" placeholder="0"></label>
+  <label>rows <select id="limit"></select></label>
 </div>
-<h2>Yields and consumption <span class="muted">(measured keys only, each with its own sums: + in, − out; <span class="prior">thin</span> = under 3 runs; pickups under one per 6000 ticks folded into "other drops", valued at the current price; trades and unattributed flows never rate)</span></h2>
-<table id="yields"></table>
-<h2>XP-bearing units</h2>
-<table id="units"></table>
-<h2>XP per 6000 ticks <span class="muted">(derived: units × XP of the unit, never measured)</span></h2>
-<table id="xp"></table>
-<h2>Trading <span class="muted">(market engagements: profit per 6000 ticks, settled exits, fill rate, residual stock value)</span></h2>
-<table id="trading"></table>
-<h2>Engaged bots <span class="muted">(operator eyes only)</span></h2>
-<table id="engaged"></table>
+<div id="pager"><button id="prev">◀ prev</button><button id="next">next ▶</button><span id="summary" class="muted"></span></div>
+<div class="muted">Each row folds the keys the filters keep: figures are Σ / Σ work ticks over them (never a mean of rates); <span class="prior">estimated (thin)</span> = under 3 runs, the brain reads the game prior. Products: + in, consumption: − out, valued at the current price; XP derived from the units. Click a row for every flow and its keys (click a key for its own flows).</div>
+<table id="rates"></table>
+<div id="timing" class="muted"></div>
+<details>
+  <summary>Trading <span class="muted">(market engagements: profit per 6000 ticks, settled exits, fill rate, residual stock value)</span></summary>
+  <table id="trading"></table>
+</details>
+<details>
+  <summary>Engaged bots <span class="muted">(operator eyes only)</span></summary>
+  <table id="engaged"></table>
+</details>
 <script src="/table.js"></script>
 <script src="/rates.js"></script>
 </body>

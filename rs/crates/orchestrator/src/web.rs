@@ -7,7 +7,7 @@
 //! /hiscores /hiscores.js /api/hiscores (cached snapshot, hiscores_service)
 //! /map/<dir>/<file>.png /map/<dir>/manifest.json /mapscene/<sprite>.png
 //! /api/map /api/status /api/state/<account> /api/items /api/items/history|flows
-//! /api/rates/table /api/lives /api/life/<account> /api/brain/<account> /api/economy
+//! /api/rates/table /api/rates/activities /api/rates/detail /api/rates/trading /api/lives /api/life/<account> /api/brain/<account> /api/economy
 //! /api/market/<op>?… /api/scripts /api/accounts /api/logs/<account> +
 //! POST /api/open|run|unload|pause|resume|close + /ws pushing every 1 s.
 //! Static files are re-read from orchestration/static/ on every request.
@@ -250,6 +250,9 @@ pub(crate) fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Respon
                 cache: "no-store",
                 body: asset("rates.js").map_err(|error| error.to_string())?,
             });
+        }
+        if let Some(reply) = crate::web_rates_view::route(&parts, query, &**dispatch) {
+            return Ok(reply);
         }
         if parts == ["api", "rates", "table"] {
             return Ok(ok_json(crate::rates_service::rates_api(&**dispatch)));

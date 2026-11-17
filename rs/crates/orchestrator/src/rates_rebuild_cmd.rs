@@ -8,14 +8,16 @@
 //! `--guides-store <dir> [money|training:query ...]` builds the whole
 //! precomputed set as the `guides` thread does (`guides_store`), prints
 //! its cost (wall, CPU, resident memory) and writes each read asked to
-//! `<dir>/<n>.json` with its read time.
+//! `<dir>/<n>.json` with its read time. `--view [query ...]` builds the
+//! rates page index (`web_rates_view`) and answers each page query
+//! (`group=key&q=..`) with its time and counts.
 
 #![forbid(unsafe_code)]
 
 /// CLI entry; returns the process exit code.
 pub fn rates_rebuild_cli(args: &[String]) -> i32 {
     let Some(path) = args.first() else {
-        eprintln!("usage: orchestrator rates-rebuild <copy of lifescape.db> [--rows] [--guide money|training [skill=..&level=..]] [--guides-store <dir> [money|training:query ...]]");
+        eprintln!("usage: orchestrator rates-rebuild <copy of lifescape.db> [--rows] [--guide money|training [skill=..&level=..]] [--guides-store <dir> [money|training:query ...]] [--view [query ...]]");
         return 2;
     };
     let path = std::path::PathBuf::from(path);
@@ -50,6 +52,9 @@ pub fn rates_rebuild_cli(args: &[String]) -> i32 {
     println!("buckets: {} ({exact} measured keys, {thin} under n>=3, {} internal roll-ups)", book.buckets.len(), book.buckets.len() - exact);
     println!("activities (method, style): {}", activities.len());
     println!("measure rows: {} flows ({folded} folded 'other drops' lines), {} units, {} xp", flows.len(), units.len(), xp.len());
+    if let Some(at) = args.iter().position(|arg| arg == "--view") {
+        return view_check(&store, &snapshot, args.get(at + 1..).unwrap_or(&[]));
+    }
     if let Some(at) = args.iter().position(|arg| arg == "--guides-store") {
         return guides_store_check(&store, &snapshot, args.get(at + 1..).unwrap_or(&[]));
     }
@@ -150,6 +155,44 @@ fn guides_store_check(store: &lifescape_store::Store, snapshot: &crate::rates_se
             return 1;
         }
         println!("read {spec}: {spent} ms (read + JSON, {} KiB) -> {}", text.len() / 1024, path.display());
+    }
+    0
+}
+
+/// `--view`: the rates page index built as the daemon does, then each
+/// page query answered (time, counts, JSON size).
+fn view_check(store: &lifescape_store::Store, snapshot: &crate::rates_service::Snapshot, queries: &[String]) -> i32 {
+    let began = std::time::Instant::now();
+    let index = crate::web_rates_view::index_of(store, snapshot);
+    println!("rates view: index of {} keys built in {} ms", index.entries.len(), began.elapsed().as_millis());
+    let defaults = [String::new(), "measured=1".to_string(), "group=key".to_string(), "group=key&measured=1&sort=net_value_6000".to_string(), "q=chickens&group=key".to_string()];
+    let asked: &[String] = if queries.is_empty() { &defaults } else { queries };
+    for query in asked {
+        let began = std::time::Instant::now();
+        let fields = crate::web_rates_view::activities_value(&index, &crate::web_rates_view::view_query_of(&crate::web::parse_query(query)));
+        let value = lifescape_json::object(fields);
+        let text = lifescape_json::stringify(&value);
+        println!(
+            "view '{query}': {:.2} ms (page + JSON, {} KiB), {} rows shown, {} matching of {}",
+            began.elapsed().as_secs_f64() * 1000.0,
+            text.len() / 1024,
+            value.get("rows").as_arr().map(|rows| rows.len()).unwrap_or(0),
+            value.get("matched").as_i64().unwrap_or(0),
+            value.get("total").as_i64().unwrap_or(0)
+        );
+        let Some(first) = value.get("rows").as_arr().and_then(|rows| rows.first().cloned()) else { continue };
+        let began = std::time::Instant::now();
+        let mut params = std::collections::HashMap::new();
+        for field in ["method", "style", "site", "tool"] {
+            if let Some(text) = first.get(field).as_str() {
+                params.insert(field.to_string(), text.to_string());
+            }
+        }
+        if first.get("site").as_str().is_some() {
+            params.insert("band".to_string(), first.get("band").as_i64().unwrap_or(0).to_string());
+        }
+        let detail = lifescape_json::stringify(&lifescape_json::object(crate::web_rates_view::detail_value(&index, &params)));
+        println!("  detail of its first row: {:.2} ms ({} KiB)", began.elapsed().as_secs_f64() * 1000.0, detail.len() / 1024);
     }
     0
 }
