@@ -87,7 +87,7 @@ pub fn run_spin(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 return Err(ScriptError::Blocked { missing: vec![input_name.to_string()] });
             }
         }
-        let job = ProduceJob { spec: &SPIN, input: wool, input_name, want: 0, products: products.clone(), near: wheel };
+        let job = ProduceJob { spec: &SPIN, input: wool, input_name, want: 0, products: products.clone(), near: wheel, until: state.want_goal(step_bot, &spec) };
         match produce::run_job(step_bot, &job) {
             Err(error) if is_death_abort(&error) => {
                 step_bot.log("died spinning, restocking to retry");

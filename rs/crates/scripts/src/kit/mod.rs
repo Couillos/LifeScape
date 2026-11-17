@@ -23,7 +23,8 @@
 //! `press` (Make 1/5/10 choice: one press covering the inputs),
 //! `janitor` (bank cleanup budget, chunks, whole-stack drops), `progress`
 //! (silent-loop guard of every `cycle::run`: no output, bank churn), `mill`
-//! (windmill hopper, lever and flour bin clicked from side stands).
+//! (windmill hopper, lever and flour bin clicked from side stands), `want`
+//! (the run's `--want` goal read inside a load: stands, chains, items).
 
 #![forbid(unsafe_code)]
 
@@ -73,6 +74,7 @@ pub mod tool_upgrade;
 pub mod tools;
 pub mod trees;
 pub mod uniform;
+pub mod want;
 pub mod water;
 pub mod withdraw;
 pub mod woodcut;

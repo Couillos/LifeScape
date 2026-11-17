@@ -9,7 +9,7 @@
 
 use lifescape_sdk::Bot;
 use crate::kit::{bans::{BanSet, GONE_BAN_TICKS}, bank::{bank_trip_resilient, nearest_bank}, cycle::{parse_cli, resolve_keep, run, StepControl}};
-use crate::kit::{harvest::{watch_stand, HarvestSource, HarvestTarget, WorkOutcome}, pack::{free_slots, obj_id, pack_total}, survival::{check_events, is_death_abort, is_walk_abort, wait_pack_streamed}, tools::{blocked_tool, recover_pickaxe, PICK_SPEC}};
+use crate::kit::{harvest::{watch_stand, HarvestSource, HarvestTarget, WorkOutcome}, pack::{obj_id, pack_total}, survival::{check_events, is_death_abort, is_walk_abort, wait_pack_streamed}, tools::{blocked_tool, recover_pickaxe, PICK_SPEC}};
 use crate::{skill_walk::walk_checked, ScriptError, ScriptResult};
 pub use crate::kit::essence_mine::{in_mine, live_locs, mine_locs, return_through_portal, teleport_to_mine, MINE_SQUARE};
 
@@ -101,7 +101,7 @@ impl HarvestSource for EssenceSource {
 
 /// Work one rock: walk over (blocked décor settles adjacent, Ok), watch the
 /// essence land.
-fn work_essence(bot: &mut Bot, x: i32, z: i32, loc: u16, essence: u16) -> Result<(WorkOutcome, u32), ScriptError> {
+fn work_essence(bot: &mut Bot, x: i32, z: i32, loc: u16, essence: u16, until: Option<crate::kit::cycle::WantGoal>) -> Result<(WorkOutcome, u32), ScriptError> {
     match walk_checked(bot, x, z, ESSENCE_WALK_TICKS) {
         Ok(true) => {}
         Ok(false) => return Ok((WorkOutcome::Unreachable, 0)),
@@ -110,7 +110,7 @@ fn work_essence(bot: &mut Bot, x: i32, z: i32, loc: u16, essence: u16) -> Result
     }
     let had = pack_total(bot, essence);
     let mut source = EssenceSource { loc, x, z };
-    watch_stand(bot, &mut source, x, z, &[essence], had)
+    watch_stand(bot, &mut source, x, z, &[essence], had, until)
 }
 
 /// Talismans and tools the bank trip keeps (the runecraft chain spends the
@@ -154,7 +154,10 @@ pub fn run_essence_run(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         teleport_to_mine(step_bot)?;
         let mut empty = 0u32;
-        while free_slots(step_bot) > 0 {
+        // A full pack or the met `--want` ends the load (the essence rock
+        // never depletes: the stand would chain to a full pack).
+        let until = state.want_goal(step_bot, &spec);
+        while !crate::kit::want::load_done(step_bot, until) {
             // Pulled out mid-load (market delivery, rescue): back in
             // through Aubury before any rock.
             teleport_to_mine(step_bot)?;
@@ -169,7 +172,7 @@ pub fn run_essence_run(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 continue;
             };
             empty = 0;
-            let (outcome, _) = work_essence(step_bot, x, z, loc, essence)?;
+            let (outcome, _) = work_essence(step_bot, x, z, loc, essence, until)?;
             match outcome {
                 WorkOutcome::Gone | WorkOutcome::Moved | WorkOutcome::Unreachable | WorkOutcome::UnreachableSpot => {
                     banned.ban_for((x, z), step_bot.world.ticks, GONE_BAN_TICKS);

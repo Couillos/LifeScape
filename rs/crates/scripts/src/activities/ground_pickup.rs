@@ -10,7 +10,7 @@ use lifescape_sdk::{Bot, Error};
 use crate::kit::bank::{bank_trip_resilient, nearest_bank};
 use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::kit::loot::TAKE_TICKS;
-use crate::kit::pack::{free_slots, obj_id};
+use crate::kit::pack::obj_id;
 use crate::kit::survival::{check_events, is_death_abort, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
@@ -96,8 +96,11 @@ pub fn run_ground_pickup(bot: &mut Bot, args: &[String]) -> ScriptResult {
             .filter(|(_, oid)| wanted.contains(oid))
             .collect();
         let mut taken = 0u32;
+        let until = state.want_goal(step_bot, &spec);
         for (_, oid) in rank_pickups(floor, here, coins) {
-            if free_slots(step_bot) == 0 {
+            // A full pack or the met `--want` ends the sweep: never a
+            // pickup past the order.
+            if crate::kit::want::load_done(step_bot, until) {
                 break;
             }
             match step_bot.take(Some(oid), None, TAKE_TICKS) {

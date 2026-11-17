@@ -82,6 +82,7 @@ fn work_spot(
     rock_z: i32,
     ore_ids: &[u16],
     had_ore: u32,
+    until: Option<crate::kit::cycle::WantGoal>,
 ) -> Result<(WorkOutcome, u32), ScriptError> {
     if (bot.world.x - rock_x).abs() + (bot.world.z - rock_z).abs() > 4 {
         // Dead socket or operator stop, not an unreachable rock: typed
@@ -123,7 +124,7 @@ fn work_spot(
     }
     let rock_loc = rock_live_loc_id(bot, rock_x, rock_z)?;
     let mut source = RockSource { loc: rock_loc, x: rock_x, z: rock_z };
-    crate::kit::harvest::watch_stand(bot, &mut source, rock_x, rock_z, ore_ids, had_ore)
+    crate::kit::harvest::watch_stand(bot, &mut source, rock_x, rock_z, ore_ids, had_ore, until)
 }
 
 /// Stands to try for a rock, nearest first: the side middles of its
@@ -204,7 +205,7 @@ impl crate::kit::load::LoopOps for MineOps<'_> {
             // Every rock near mined out: watch the stream for the first
             // respawn instead of a blind repick (never a click on an
             // empty rock, never a 250-tick ban on a 20-tick rock).
-            let load_over = crate::kit::load::LoopOps::is_full(self, bot) || cfg.until.is_some_and(|goal| goal.met(bot));
+            let load_over = crate::kit::load::LoopOps::is_full(self, bot) || crate::kit::want::met(cfg.until, bot);
             self.level = learn_level(bot, MINING_STAT, self.level);
             if load_over {
                 return Ok(exit);
@@ -244,12 +245,12 @@ impl crate::kit::load::LoopOps for MineOps<'_> {
     fn work(
         &mut self,
         bot: &mut Bot,
-        _state: &mut crate::kit::load::LoopState,
+        state: &mut crate::kit::load::LoopState,
         _spot: &Self::Spot,
         at: (i32, i32),
         had: u32,
     ) -> Result<(WorkOutcome, u32), ScriptError> {
-        work_spot(bot, at.0, at.1, &self.ore_ids, had)
+        work_spot(bot, at.0, at.1, &self.ore_ids, had, state.until)
     }
 }
 

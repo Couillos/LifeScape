@@ -166,6 +166,7 @@ fn work_spot(
     had_logs: u32,
     banned: &mut BanSet,
     travel_dead: &mut Option<((i32, i32), (i32, i32))>,
+    until: Option<crate::kit::cycle::WantGoal>,
 ) -> Result<(WorkOutcome, u32), ScriptError> {
     if (bot.world.x - tree_x).abs() + (bot.world.z - tree_z).abs() > 4 {
         // Dead socket or operator stop, not an unreachable tree: typed
@@ -250,7 +251,7 @@ fn work_spot(
                 Err(_) => continue,
             }
         }
-        let (end, got) = watch_stand(bot, &mut source, tree_x, tree_z, log_ids, had_logs + gained)?;
+        let (end, got) = watch_stand(bot, &mut source, tree_x, tree_z, log_ids, had_logs + gained, until)?;
         gained += got;
         match end {
             WorkOutcome::Gone => return Ok((WorkOutcome::Gone, gained)),
@@ -422,7 +423,7 @@ impl crate::kit::load::LoopOps for WoodOps<'_> {
         at: (i32, i32),
         had: u32,
     ) -> Result<(WorkOutcome, u32), ScriptError> {
-        work_spot(bot, at.0, at.1, &self.log_ids, had, &mut state.banned, &mut self.travel_dead)
+        work_spot(bot, at.0, at.1, &self.log_ids, had, &mut state.banned, &mut self.travel_dead, state.until)
     }
 
     fn on_outcome(
@@ -688,7 +689,7 @@ mod tests {
         let (tree_x, tree_z) = (3092, 3246);
         let mut banned = crate::kit::bans::BanSet::new();
         let mut travel_dead: Option<((i32, i32), (i32, i32))> = None;
-        let error = super::work_spot(&mut bot, tree_x, tree_z, &[], 0, &mut banned, &mut travel_dead)
+        let error = super::work_spot(&mut bot, tree_x, tree_z, &[], 0, &mut banned, &mut travel_dead, None)
             .expect_err("nav-down fails loud, never a quiet Unreachable");
         assert!(error.to_string().contains("nav-down"), "typed nav-down, got: {error}");
         assert!(!banned.contains((tree_x, tree_z)), "outage bans nothing");

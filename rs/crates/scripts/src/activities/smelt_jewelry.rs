@@ -84,7 +84,7 @@ pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
             if gem.is_some_and(|id| pack_total(step_bot, id) == 0) { return Err(ScriptError::Blocked { missing: vec![gem_name.to_string()] }); }
         }
         if silver {
-            let job = ProduceJob { spec: &SILVER, input: bar, input_name: SILVER_BAR, want: 0, products: vec![obj_id(step_bot, SILVER_PRODUCT)?], near: (bank.x as i32, bank.z as i32) };
+            let job = ProduceJob { spec: &SILVER, input: bar, input_name: SILVER_BAR, want: 0, products: vec![obj_id(step_bot, SILVER_PRODUCT)?], near: (bank.x as i32, bank.z as i32), until: state.want_goal(step_bot, &spec) };
             if cast_outcome(produce::run_job(step_bot, &job), step_bot)?.is_none() { return Ok(StepControl::Continue); }
         } else {
             // The furnace through the produce brick (exact `furnace1`/
@@ -94,8 +94,8 @@ pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
             // ("I can't reach that!"), 0 casts in 38 launches.
             let gold = Produce { verb: "casting", site: ProduceSite::Loc(&FURNACES), ui: ProduceUi::InvGrid { inv: inv_name, slot } };
             let product = obj_id(step_bot, product_name)?;
-            while pack_total(step_bot, bar) > 0 && gem.is_none_or(|id| pack_total(step_bot, id) > 0) {
-                let job = ProduceJob { spec: &gold, input: bar, input_name: GOLD_BAR, want: 0, products: vec![product], near: (bank.x as i32, bank.z as i32) };
+            while pack_total(step_bot, bar) > 0 && gem.is_none_or(|id| pack_total(step_bot, id) > 0) && !state.want_met(step_bot, &spec) {
+                let job = ProduceJob { spec: &gold, input: bar, input_name: GOLD_BAR, want: 0, products: vec![product], near: (bank.x as i32, bank.z as i32), until: state.want_goal(step_bot, &spec) };
                 if cast_outcome(produce::run_job(step_bot, &job), step_bot)?.is_none() { return Ok(StepControl::Continue); }
             }
         }

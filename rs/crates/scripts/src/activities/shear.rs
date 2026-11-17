@@ -120,7 +120,7 @@ fn pick_sheep(bot: &mut Bot, banned: &BanSet, now: u64) -> Option<(u16, i32, i32
 }
 
 /// Work one sheep: approach, click, watch the wool land.
-fn work_sheep(bot: &mut Bot, slot: u16, x: i32, z: i32, wool: u16) -> Result<(WorkOutcome, u32), ScriptError> {
+fn work_sheep(bot: &mut Bot, slot: u16, x: i32, z: i32, wool: u16, until: Option<crate::kit::cycle::WantGoal>) -> Result<(WorkOutcome, u32), ScriptError> {
     if let Err(error) = bot.approach_npc(slot, SHEEP_WALK_TICKS) {
         let typed = ScriptError::from(error);
         if is_walk_abort(&typed) {
@@ -130,7 +130,7 @@ fn work_sheep(bot: &mut Bot, slot: u16, x: i32, z: i32, wool: u16) -> Result<(Wo
     }
     let had = pack_total(bot, wool);
     let mut source = ShearSource { slot, x, z };
-    watch_stand(bot, &mut source, x, z, &[wool], had)
+    watch_stand(bot, &mut source, x, z, &[wool], had, until)
 }
 
 /// Shear banked loads in the open session: `shear [count]`.
@@ -195,7 +195,7 @@ pub fn run_shear(bot: &mut Bot, args: &[String]) -> ScriptResult {
             return Ok(StepControl::Continue);
         };
         empty = 0;
-        let (outcome, _) = work_sheep(step_bot, slot, x, z, wool)?;
+        let (outcome, _) = work_sheep(step_bot, slot, x, z, wool, state.want_goal(step_bot, &spec))?;
         match outcome {
             WorkOutcome::Gone | WorkOutcome::Moved | WorkOutcome::Unreachable | WorkOutcome::UnreachableSpot => {
                 banned.ban_for((x, z), step_bot.world.ticks, GONE_BAN_TICKS);

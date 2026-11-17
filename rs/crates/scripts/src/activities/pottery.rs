@@ -133,7 +133,7 @@ pub fn run_pottery(bot: &mut Bot, args: &[String]) -> ScriptResult {
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
         if pack_total(step_bot, clay) + pack_total(step_bot, soft) + pack_total(step_bot, unfired) == 0 {
-            load(step_bot, &bank, &keep, clay, &ready, &vessels)?;
+            load(step_bot, &bank, &keep, clay, &ready, &vessels, state.want_left(step_bot, &spec))?;
         }
         let near = (bank.x as i32, bank.z as i32);
         if pack_total(step_bot, clay) > 0 {
@@ -142,13 +142,13 @@ pub fn run_pottery(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         let before = pack_total(step_bot, made_id);
         if pack_total(step_bot, soft) > 0 {
-            let job = ProduceJob { spec: &shape_spec, input: soft, input_name: SOFT, want: 0, products: vec![unfired], near };
+            let job = ProduceJob { spec: &shape_spec, input: soft, input_name: SOFT, want: 0, products: vec![unfired], near, until: state.want_goal(step_bot, &spec) };
             if !work_job(step_bot, &job, "shaping")? {
                 return Ok(StepControl::Continue);
             }
         }
         if firing && pack_total(step_bot, unfired) > 0 {
-            let job = ProduceJob { spec: &FIRE, input: unfired, input_name: unfired_name, want: 0, products: vec![fired], near };
+            let job = ProduceJob { spec: &FIRE, input: unfired, input_name: unfired_name, want: 0, products: vec![fired], near, until: state.want_goal(step_bot, &spec) };
             if !work_job(step_bot, &job, "firing")? {
                 return Ok(StepControl::Continue);
             }
@@ -178,7 +178,7 @@ fn run_softclay(bot: &mut Bot, spec: &crate::kit::cycle::TaskSpec) -> ScriptResu
     run(bot, spec, |step_bot, state| {
         check_events(step_bot)?;
         if pack_total(step_bot, clay) == 0 {
-            load(step_bot, &bank, &keep, clay, &[], &vessels)?;
+            load(step_bot, &bank, &keep, clay, &[], &vessels, state.want_left(step_bot, spec))?;
         }
         let mixed = water::mix_all(step_bot, clay, &vessels, soft, (bank.x as i32, bank.z as i32))?;
         if mixed == 0 {
@@ -192,27 +192,31 @@ fn run_softclay(bot: &mut Bot, spec: &crate::kit::cycle::TaskSpec) -> ScriptResu
 /// One load at the bank, one visit: deposit all but the keep-list, take
 /// the banked pieces past the mix (`ready`), then water vessels (full
 /// first) and clay for the rest of the pack. Nothing to work ⇒ `Blocked`
-/// naming clay and water together.
-fn load(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], clay: u16, ready: &[u16], vessels: &[(u16, u16)]) -> Result<(), ScriptError> {
+/// naming clay and water together. `due` (the `--want` pieces still due,
+/// `u32::MAX` without one) bounds the pieces and the clay taken: one clay
+/// per piece, never a pack of clay mixed and shaped for 2 wanted pots.
+fn load(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], clay: u16, ready: &[u16], vessels: &[(u16, u16)], due: u32) -> Result<(), ScriptError> {
     bank_trip(bot, bank, keep, 0)?;
     let mut room = free_slots(bot) as u32;
+    let mut due = due;
     let mut wants: Vec<(u16, u32)> = Vec::new();
     for piece in ready {
-        let take = banked_usable(bot, *piece).min(room);
+        let take = banked_usable(bot, *piece).min(room).min(due);
         if take > 0 {
             wants.push((*piece, take));
             room -= take;
+            due -= take;
         }
     }
     let clay_held = pack_total(bot, clay) + banked_usable(bot, clay);
     if wants.is_empty() {
         blocked_unless(bot, clay_held > 0, !water::none_held(bot, vessels))?;
     }
-    if room > 1 && clay_held > 0 && !water::none_held(bot, vessels) {
+    if room > 1 && due > 0 && clay_held > 0 && !water::none_held(bot, vessels) {
         let plan = water::withdraw_plan(bot, vessels, VESSELS_KEPT.min(room / 2));
         room = room.saturating_sub(plan.iter().map(|(_, count)| *count).sum());
         wants.extend(plan);
-        wants.push((clay, room.min(banked_usable(bot, clay))));
+        wants.push((clay, room.min(banked_usable(bot, clay)).min(due)));
     }
     crate::kit::withdraw::bank_withdraw_counts(bot, bank, &wants)?;
     if ready.iter().any(|piece| pack_total(bot, *piece) > 0) {

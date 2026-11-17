@@ -105,6 +105,7 @@ fn work_spot(
     spot_z: i32,
     product_ids: &[u16],
     had_fish: u32,
+    until: Option<crate::kit::cycle::WantGoal>,
 ) -> Result<(WorkOutcome, u32), ScriptError> {
     if (bot.world.x - spot_x).abs() + (bot.world.z - spot_z).abs() > 4 {
         // Dead socket or operator stop, not an unreachable spot: typed
@@ -132,7 +133,7 @@ fn work_spot(
         return Ok((WorkOutcome::Gone, 0));
     }
     let mut source = FishSource { tier, slot, x: spot_x, z: spot_z, at: (live_x, live_z), patient: false };
-    crate::kit::harvest::watch_stand(bot, &mut source, spot_x, spot_z, product_ids, had_fish)
+    crate::kit::harvest::watch_stand(bot, &mut source, spot_x, spot_z, product_ids, had_fish, until)
 }
 
 /// Fishing policy on the shared driver: the pack-full gate ends the
@@ -281,7 +282,7 @@ impl crate::kit::load::LoopOps for FishOps<'_> {
     fn work(
         &mut self,
         bot: &mut Bot,
-        _state: &mut crate::kit::load::LoopState,
+        state: &mut crate::kit::load::LoopState,
         spot: &Self::Spot,
         at: (i32, i32),
         had: u32,
@@ -317,7 +318,7 @@ impl crate::kit::load::LoopOps for FishOps<'_> {
             return Ok((WorkOutcome::Unreachable, 0));
         }
         let wanted: Vec<u16> = spot.products.iter().filter_map(|product| obj_id(bot, product).ok()).collect();
-        work_spot(bot, spot, spot_x, spot_z, &wanted, had)
+        work_spot(bot, spot, spot_x, spot_z, &wanted, had, state.until)
     }
 }
 

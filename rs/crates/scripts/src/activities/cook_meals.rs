@@ -129,7 +129,7 @@ pub fn run_cook_meals(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 return Err(ScriptError::Failed(format!("wine never fermented at {:?}", step_bot.position())));
             }
         } else {
-            let job = ProduceJob { spec: &BAKE, input, input_name: meal.input, want: 0, products: products.clone(), near: (bank.x as i32, bank.z as i32) };
+            let job = ProduceJob { spec: &BAKE, input, input_name: meal.input, want: 0, products: products.clone(), near: (bank.x as i32, bank.z as i32), until: state.want_goal(step_bot, &spec) };
             match produce::run_job(step_bot, &job) {
                 Err(error) if is_death_abort(&error) => {
                     step_bot.log("died baking, restocking to retry");

@@ -36,18 +36,47 @@ pub struct HuntPlan {
     /// the hunt and the fight stop the moment it is reached instead of
     /// running the budget out past the goal.
     pub stop_level: Option<(u8, u8)>,
+    /// The run's `--want` goal (`farm:<drop>`): the hunt and the fight
+    /// stop once the looted drop meets it, never a spot's worth of kills
+    /// (a whole pack, a whole budget) past N.
+    pub stop_want: Option<crate::kit::cycle::WantGoal>,
+}
+
+/// Goal checks of one fight: the `--level` target and the `--want` drop.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HuntStop {
+    pub level: Option<(u8, u8)>,
+    pub want: Option<crate::kit::cycle::WantGoal>,
+}
+
+impl HuntStop {
+    /// True once either goal is met (never without one).
+    pub fn reached(&self, bot: &Bot) -> bool {
+        level_reached(&bot.world.stats, self.level) || crate::kit::want::met(self.want, bot)
+    }
 }
 
 impl HuntPlan {
     /// The pre-ladder hunt: ranked clusters, the usual 10 food when the
     /// bank has some, food optional, no level target.
     pub fn plain() -> HuntPlan {
-        HuntPlan { clusters: None, food_target: FOOD_TARGET as u32, food_required: false, keep: Vec::new(), stop_level: None }
+        HuntPlan { clusters: None, food_target: FOOD_TARGET as u32, food_required: false, keep: Vec::new(), stop_level: None, stop_want: None }
     }
 
     /// The same plan stopping at the task's `--level` target.
     pub fn until(self, spec: &crate::kit::cycle::TaskSpec) -> HuntPlan {
         HuntPlan { stop_level: stop_level_of(spec), ..self }
+    }
+
+    /// The same plan stopping at the run's `--want` goal
+    /// (`CycleState::want_goal`).
+    pub fn want(self, goal: Option<crate::kit::cycle::WantGoal>) -> HuntPlan {
+        HuntPlan { stop_want: goal, ..self }
+    }
+
+    /// The goal checks the fight loop reads between foes.
+    pub fn stop(&self) -> HuntStop {
+        HuntStop { level: self.stop_level, want: self.stop_want }
     }
 }
 
@@ -221,8 +250,8 @@ pub fn run_spot_with(
             }
             // Level goal met (between fights, after a bank trip): stop
             // here, the caller's poll_stop reads it as goal_reached.
-            if level_reached(&bot.world.stats, plan.stop_level) {
-                bot.log(&format!("level target {:?} reached, ending the hunt", plan.stop_level));
+            if plan.stop().reached(bot) {
+                bot.log(&format!("goal reached (level {:?}, want {:?}), ending the hunt", plan.stop_level, plan.stop_want));
                 return Ok((total, false, banked_trip));
             }
             // Hunt entry: the one full evaluation (pack + bank when near
@@ -274,7 +303,7 @@ pub fn run_spot_with(
                 budget_left(ticks_limit, run_started, bot.world.ticks),
                 no_bank,
                 plan.food_required,
-                plan.stop_level,
+                plan.stop(),
             )?;
             total += kills;
             if died {
@@ -291,6 +320,25 @@ pub fn run_spot_with(
 #[cfg(test)]
 mod tests {
     use super::{food_blocked, foodless, level_reached, stop_level_of, HuntPlan};
+
+    /// `farm:cowhide --want cowhide 2`: the fight stops between foes once
+    /// the looted hides meet the order (before: a whole spot visit, a
+    /// pack or the budget, past N); no `--want` never stops on drops.
+    #[test]
+    fn want_drop_stops_the_fight() {
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        crate::tables_live::attach_live_tables(&mut bot);
+        let hide = crate::kit::pack::obj_id(&bot, "cow_hide").expect("cow_hide");
+        let pack = (bot.tables.com_id)("inventory:inv").expect("inventory");
+        let goal = Some(crate::kit::cycle::WantGoal { obj: hide, held: 2 });
+        let plan = HuntPlan::plain().want(goal);
+        assert_eq!(plan.stop().want, goal);
+        bot.world.inv.insert(pack, [(0u8, (hide, 1u32))].into_iter().collect());
+        assert!(!plan.stop().reached(&bot), "1 hide of 2: keep fighting");
+        bot.world.inv.insert(pack, [(0u8, (hide, 1u32)), (1u8, (hide, 1u32))].into_iter().collect());
+        assert!(plan.stop().reached(&bot), "2 hides: stop between foes");
+        assert!(!HuntPlan::plain().stop().reached(&bot), "no --want, no --level: never");
+    }
 
     /// `--level strength 40` rides into the hunt plan and stops the
     /// hunt and the fight once the live level reaches it (agent A: a

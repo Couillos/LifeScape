@@ -30,7 +30,7 @@ fn run_ladder(bot: &mut Bot, spec: &crate::kit::cycle::TaskSpec, no_bank: bool) 
             return exit_code(stop);
         }
         let (spot, plan) = crate::kit::ladder::pick(bot, tally.excluded())?;
-        let plan = plan.until(spec);
+        let plan = plan.until(spec).want(state.want_goal(bot, spec));
         bot.log(&format!("=== {} (ladder, food {} required={}) ===", spot.key, plan.food_target, plan.food_required));
         bot.intend(&format!("melee at {} (ladder)", spot.key));
         let remaining = spec.targets.count.map(|want| want.saturating_sub(state.units())).unwrap_or(0);
@@ -123,7 +123,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
         // Remaining kills under the quantity target (0 = unlimited, as
         // the fight loop reads it); the budget poll above caps ticks.
         // Ordered spots follow the food rule (`kit::ladder::ordered_plan`).
-        let (remaining, plan) = (spec.targets.count.map(|want| want.saturating_sub(state.units())).unwrap_or(0), crate::kit::ladder::ordered_plan(bot, spot.key).until(&spec));
+        let (remaining, plan) = (spec.targets.count.map(|want| want.saturating_sub(state.units())).unwrap_or(0), crate::kit::ladder::ordered_plan(bot, spot.key).until(&spec).want(state.want_goal(bot, &spec)));
         let (total, died, banked) = match crate::kit::fight::run_spot_with(bot, &spot, &plan, remaining, spec.budget_max_ticks, no_bank) {
             // An ordered spot behind the toll without `toll`: a typed access
             // gap the brain funds or routes, never a Usage.

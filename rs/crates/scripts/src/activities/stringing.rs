@@ -81,7 +81,7 @@ pub fn run_stringing(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
         let before = pack_total(step_bot, unstrung);
-        while pack_total(step_bot, unstrung) > 0 && pack_total(step_bot, ball) > 0 {
+        while pack_total(step_bot, unstrung) > 0 && pack_total(step_bot, ball) > 0 && !state.want_met(step_bot, &spec) {
             match string_one(step_bot, unstrung, ball, strung_name) {
                 Err(error) if is_death_abort(&error) => {
                     step_bot.log("died stringing, restocking to retry");

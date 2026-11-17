@@ -62,7 +62,7 @@ pub fn run_bake_bread(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut keep_dough: Vec<u16> = vec![flour, water, dough];
     keep_dough.extend(task_keep.iter().copied());
     bank_trip(bot, &bank, &keep_dough, 0)?;
-    fill_bread(bot, &bank, flour, water)?;
+    fill_bread(bot, &bank, flour, water, spec.targets.want_count.unwrap_or(u32::MAX))?;
     if pack_total(bot, flour) == 0 || pack_total(bot, water) == 0 {
         return Err(ScriptError::Blocked { missing: vec![FLOUR.to_string(), WATER.to_string()] });
     }
@@ -71,7 +71,7 @@ pub fn run_bake_bread(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if pack_total(step_bot, dough) == 0 {
             if pack_total(step_bot, flour) == 0 || pack_total(step_bot, water) == 0 {
                 bank_trip(step_bot, &bank, &keep_dough, 0)?;
-                fill_bread(step_bot, &bank, flour, water)?;
+                fill_bread(step_bot, &bank, flour, water, state.want_left(step_bot, &spec))?;
             }
             pour(step_bot, &bank, &keep_dough, FLOUR, WATER, Some("Bread dough"))?;
             if pack_total(step_bot, dough) == 0 {
@@ -85,6 +85,7 @@ pub fn run_bake_bread(bot: &mut Bot, args: &[String]) -> ScriptResult {
             want: 0,
             products: products.clone(),
             near: (bank.x as i32, bank.z as i32),
+            until: state.want_goal(step_bot, &spec),
         };
         match produce::run_job(step_bot, &job) {
             Err(error) if is_death_abort(&error) => {
@@ -102,12 +103,14 @@ pub fn run_bake_bread(bot: &mut Bot, args: &[String]) -> ScriptResult {
 }
 
 /// Top the pack with flour and water, one slot left free (the dough
-/// choice refuses on a full pack).
-fn fill_bread(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, flour: u16, water: u16) -> Result<(), ScriptError> {
+/// choice refuses on a full pack), at most `due` of each (the `--want`
+/// loaves still due: one flour and one water per dough, never a pack of
+/// dough mixed for 2 wanted loaves).
+fn fill_bread(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, flour: u16, water: u16, due: u32) -> Result<(), ScriptError> {
     let free = free_slots(bot).saturating_sub(1) as u32;
     if free >= 2 {
-        bank_withdraw_items(bot, bank, &[flour], free / 2 + free % 2)?;
-        bank_withdraw_items(bot, bank, &[water], free / 2)?;
+        bank_withdraw_items(bot, bank, &[flour], (free / 2 + free % 2).min(due.saturating_sub(pack_total(bot, flour))))?;
+        bank_withdraw_items(bot, bank, &[water], (free / 2).min(due.saturating_sub(pack_total(bot, water))))?;
     }
     Ok(())
 }
