@@ -257,6 +257,10 @@ pub struct MakerInput {
     pub capital: i64,
     /// The maker's resting bid, if any (the no-demand walk toward 1).
     pub own_bid: Option<i64>,
+    /// What the alchemy outlet pays one unit (`discovery::
+    /// alch_outlet_price`, public: the best fleet caster's net less its
+    /// share), if any: with the shop's offer, the floor bid's exit.
+    pub alch_exit: Option<i64>,
 }
 
 /// How the fair value was found.
@@ -296,6 +300,16 @@ fn book_cap(caps: &MakerCaps, others: i64, lot: i64) -> i64 {
         return lot;
     }
     ((others as f64 * caps.max_book_share / (1.0 - caps.max_book_share)).floor() as i64).max(1)
+}
+
+/// Plan prix §4 (user 2026-11-18, every object of the slice): the lowest
+/// bid a maker keeps, a real buyer on every book: under its exit (what
+/// an NPC shop or the alchemy outlet pays, less the half spread), at
+/// least a quarter of the fair value, at least 1 coin.
+pub fn floor_bid(input: &MakerInput, fair: i64, half: f64) -> i64 {
+    let exit = input.outside.unwrap_or(0).max(input.alch_exit.unwrap_or(0));
+    let under_exit = (exit as f64 * (1.0 - half) + 1e-9).floor() as i64;
+    under_exit.max(fair / 4).max(1)
 }
 
 /// The maker's quotes for one object (see the module rules).
@@ -350,7 +364,7 @@ pub fn quote(caps: &MakerCaps, input: &MakerInput) -> MakerQuote {
     let bid_lot = if regime == Regime::Discovery { (lot / 4).max(1) } else { lot };
     if regime == Regime::NoDemand {
         let walked = input.own_bid.map_or(bid_price, |own| (own as f64 * (1.0 - NO_DEMAND_STEP)).floor() as i64);
-        bid_price = bid_price.min(walked).max(1);
+        bid_price = bid_price.min(walked).max(floor_bid(input, fair, half).min(bid_price)).max(1);
     }
     let mut ask_price = (reservation * (1.0 + half) - 1e-9).ceil() as i64;
     ask_price = ask_price.max(fair + 1).max(bid_price + 1);

@@ -397,6 +397,7 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
             stock_cost: held.get(id).map(|position| position.cost).unwrap_or(0),
             capital: equity,
             own_bid: bids.first().map(|(_, price, _)| *price),
+            alch_exit: crate::market_discovery::outlet_alch_net(item.name).and_then(lifescape_market::discovery::alch_outlet_price),
         };
         let quote = lifescape_market::maker_quote(&MAKER_CAPS, &input);
         let bid = quote.bid.filter(|_| may_bid(held_types, units));

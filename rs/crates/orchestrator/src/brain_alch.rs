@@ -32,6 +32,10 @@ pub const ALCH_PREFIX: &str = "alch:";
 pub const ALCH_EVERY_SECS: f64 = 600.0;
 /// Most units one alchemy purchase or rune bid asks for.
 pub const ALCH_LOT: i64 = 100;
+/// Books an alcher bids on ahead of their asks (plan prix §4).
+pub const STANDING_ALCH_ITEMS: usize = 5;
+/// Units of one standing alchemy bid.
+pub const STANDING_ALCH_LOT: i64 = 28;
 
 pub(crate) fn obj_id(item: &str) -> Option<i64> {
     lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.obj_id as i64)
@@ -265,6 +269,14 @@ fn wall_now() -> f64 {
 /// `(object, book id, ask, units resting, ceiling)` (a banknote book
 /// bids on its own id).
 fn alch_asks(mage: &Caster, account: &str, own_rate: f64) -> Vec<(String, i64, i64, i64, i64)> {
+    let mut out: Vec<(String, i64, i64, i64, i64)> = alch_book(mage, account, own_rate).into_iter().filter(|row| row.2 <= row.4).collect();
+    rank_by_profit(&mut out);
+    out
+}
+
+/// Every alchable book's cheapest other ask with the caster's ceiling:
+/// `(object, book id, ask, units resting, ceiling)`, whatever the ask.
+fn alch_book(mage: &Caster, account: &str, own_rate: f64) -> Vec<(String, i64, i64, i64, i64)> {
     let Some(service) = crate::market_service::shared() else { return Vec::new() };
     let asks: Vec<(i64, i64, i64)> = {
         let engine = service.lock_engine();
@@ -284,12 +296,20 @@ fn alch_asks(mage: &Caster, account: &str, own_rate: f64) -> Vec<(String, i64, i
     for (item_id, ask, qty) in asks {
         let Some(item) = usize::try_from(item_id).ok().and_then(lifescape_gamedata::obj_by_id).and_then(|obj| obj.name).map(|name| name.strip_prefix("cert_").unwrap_or(name).to_string()) else { continue };
         let Some(ceiling) = alch_bid_ceiling(mage, &item, own_rate) else { continue };
-        if ask <= ceiling {
-            out.push((item, item_id, ask, qty, ceiling));
-        }
+        out.push((item, item_id, ask, qty, ceiling));
     }
-    rank_by_profit(&mut out);
     out
+}
+
+/// Objects an alcher bids on ahead (plan prix §4, user 2026-11-18): books
+/// whose cheapest ask still sits over its ceiling, the dearest cast
+/// first (the most coins per cast once the sellers' learned floors come
+/// down to it), `STANDING_ALCH_ITEMS` at most.
+fn standing_targets(book: Vec<(String, i64, i64, i64, i64)>) -> Vec<(String, i64, i64, i64, i64)> {
+    let mut over: Vec<(String, i64, i64, i64, i64)> = book.into_iter().filter(|row| row.2 > row.4).collect();
+    over.sort_by(|left, right| right.4.cmp(&left.4).then_with(|| left.0.cmp(&right.0)));
+    over.truncate(STANDING_ALCH_ITEMS);
+    over
 }
 
 /// Biggest profit per cast (`ceiling - ask`) first, then the object name
@@ -380,6 +400,23 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
             }
         }
     }
+    // An alcher bids ahead under the asks still over its ceiling (plan
+    // prix §4): a real buyer the sellers' learned floors walk down to.
+    if lifescape_planner::is_alcher(life) {
+        let mut coins_left = crate::brain_gear::free_coins(job, None);
+        for (item, id, ask, resting, ceiling) in standing_targets(alch_book(&mage, &job.account, own_rate)) {
+            let qty = resting.min(STANDING_ALCH_LOT).min(coins_left / ceiling.max(1));
+            if qty < 1 {
+                continue;
+            }
+            claim(&job.account, id);
+            if let Ok(crate::market_reprice::StandingBid::Placed { price, .. }) = crate::market_reprice::keep_bid(&service, &job.account, id, qty, ceiling, crate::market_lineage::STOCK) {
+                crate::logln!("brain {}: bids ahead {qty} {item} @ {price} to alch (ask {ask} over its ceiling {ceiling})", job.account);
+            }
+            placed += 1;
+            coins_left -= qty * ceiling;
+        }
+    }
     placed
 }
 
@@ -406,6 +443,24 @@ mod notes_tests {
         assert!(means.iter().any(|name| name == "naturerune") && means.iter().any(|name| name == "firerune"));
         assert_eq!(super::nature_ceiling(1.0, 400.0), 201, "a 400-coin cast pays a nature up to 201");
         assert_eq!(super::nature_ceiling(4.0, -3.0), 4, "a losing cast never lifts the bid");
+    }
+
+    /// Plan prix §4: an alcher bids ahead on the books whose ask is still
+    /// over its ceiling, the dearest cast first, five at most.
+    #[test]
+    fn an_alcher_bids_ahead_under_the_dearest_casts() {
+        let row = |item: &str, ask: i64, ceiling: i64| (item.to_string(), 0, ask, 5, ceiling);
+        let book = vec![
+            row("mithril_kiteshield", 1_241, 1_205),
+            row("mithril_full_helm", 838, 737),
+            row("iron_platebody", 150, 221),
+            row("rune_scimitar", 15_000, 14_000),
+            row("steel_platelegs", 700, 590),
+            row("bronze_axe", 30, 4),
+            row("iron_dagger", 20, 5),
+        ];
+        let order: Vec<String> = super::standing_targets(book).into_iter().map(|row| row.0).collect();
+        assert_eq!(order, vec!["rune_scimitar", "mithril_kiteshield", "mithril_full_helm", "steel_platelegs", "iron_dagger"], "the iron platebody ask is under its ceiling: bought, not bid ahead");
     }
 
     /// Buys go down the list by profit per cast, biggest first.

@@ -135,6 +135,7 @@ impl MakerState {
             stock_cost: self.stock_cost,
             capital: self.coins + self.stock * reference.price.max(1),
             own_bid: self.own_bid,
+            alch_exit: None,
         }
     }
 

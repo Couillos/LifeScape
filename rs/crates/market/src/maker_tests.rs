@@ -24,6 +24,7 @@ fn liquid(stock: i64) -> MakerInput {
         stock_cost: stock * 100,
         capital: 100_000,
         own_bid: None,
+        alch_exit: None,
     }
 }
 
@@ -161,22 +162,31 @@ fn stock_moves_both_sides() {
     }
 }
 
+/// Plan prix §4 (user 2026-11-18): a maker keeps a real bid on every
+/// object of its slice. Nobody buys: the bid walks down to its floor bid
+/// (the shop's 30 or the alchemy outlet, less the half spread; a quarter
+/// of the fair value at the least), never to 1.
 #[test]
-fn an_object_nobody_buys_walks_its_bid_to_one_and_dumps_to_the_shop() {
+fn an_object_nobody_buys_walks_its_bid_to_its_floor_and_dumps_to_the_shop() {
     let idle = MakerInput { best_bid: None, recent_buys: 0, stock: 300, capital: 1_000_000, own_bid: Some(40), ..liquid(0) };
     let first = quote(&MAKER_CAPS, &idle);
     assert_eq!(first.regime, Regime::NoDemand);
     assert_eq!(first.bid.map(|leg| leg.price), Some(38), "5 % down a pass");
     let mut own = Some(100);
     let mut passes = 0;
-    while own != Some(1) && passes < 200 {
+    let floor = floor_bid(&idle, 100, MAKER_CAPS.half_spread_thin);
+    assert_eq!(floor, 27, "the shop's 30 less 8 %, over a quarter of 100");
+    while own != Some(floor) && passes < 200 {
         let next = quote(&MAKER_CAPS, &MakerInput { own_bid: own, ..idle }).bid.map(|leg| leg.price);
         assert!(next < own, "always down: {next:?} after {own:?}");
         own = next;
         passes += 1;
     }
-    assert_eq!(own, Some(1), "reaches 1");
-    assert!((30..=72).contains(&passes), "inside one loot horizon of 1000-tick passes: {passes}");
+    assert_eq!(own, Some(floor), "reaches its floor bid");
+    assert_eq!(quote(&MAKER_CAPS, &MakerInput { own_bid: own, ..idle }).bid.map(|leg| leg.price), Some(floor), "and stays there");
+    assert!(passes <= 40, "{passes} passes");
+    let alch = MakerInput { alch_exit: Some(60), own_bid: Some(20), ..idle };
+    assert_eq!(quote(&MAKER_CAPS, &alch).bid.map(|leg| leg.price), Some(55), "the alchemy outlet's 60 less 8 %");
     assert_eq!(first.npc_dump, 300 - lot_units(&MAKER_CAPS, 100), "past one lot goes to the shop");
     let no_shop = quote(&MAKER_CAPS, &MakerInput { outside: None, ..idle });
     assert_eq!(no_shop.npc_dump, 0, "no shop pays: nothing dumped");
@@ -199,6 +209,7 @@ fn a_never_traded_object_is_discovered_prudently() {
         stock_cost: 0,
         capital: 100_000,
         own_bid: None,
+        alch_exit: None,
     };
     let seen = quote(&MAKER_CAPS, &fresh);
     assert_eq!(seen.regime, Regime::Discovery);
@@ -264,6 +275,7 @@ fn discovery_centres_on_the_published_cost_inside_the_public_bounds() {
         stock_cost: 90,
         capital: 100_000,
         own_bid: None,
+        alch_exit: None,
     };
     let seen = quote(&MAKER_CAPS, &fresh);
     assert_eq!((seen.regime, seen.fair), (Regime::Discovery, 30), "the published cost, not 200 / 1.1: {seen:?}");
