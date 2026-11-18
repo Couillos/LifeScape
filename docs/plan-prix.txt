@@ -152,6 +152,30 @@ Décision 2026-11-18 (Q3) : a) cotation par lot. Lot D à détailler
 marché).
 
 
+5 bis. LOT D — COTATION PAR LOT (décision Q3, design 2026-11-18)
+-----------------------------------------------------------------
+Taille de lot FIXE par objet (un carnet ne change jamais d'unité), de sa
+valeur de jeu (`obj.price`, stable) : ≤ 5 pièces → 100 ; 6 à 15 → 10 ;
+au-delà → 1 (inchangé). `lifescape_market::quote_lot(item)`.
+  - Prix d'un ordre, d'un deal, d'une exécution, des chandelles et de
+    la référence : en pièces POUR UN LOT ; quantités toujours en unités,
+    multiples du lot (une annonce arrondit à son multiple inférieur, un
+    achat au supérieur ; le reste hors lot ne se cote pas : banque ou
+    PNJ).
+  - Pièces d'un deal = quantité × prix / lot, un seul helper
+    (`lifescape_market::lot_coins`) : convocation, audit des bourses,
+    remise (scripts market_lots), rapports économiques.
+  - Cerveau : ses prix restent PAR UNITÉ (coûts, planchers, plafonds,
+    guides) ; la frontière avec le service marché convertit (× lot à la
+    pose, ÷ lot à la lecture, `lot_unit_price` en f64).
+  - Migration store : prix existants des objets cotés par lot × lot
+    (ordres ouverts, deals ouverts, exécutions, chandelles) ; les ordres
+    dont la quantité n'est pas un multiple sont arrondis ou annulés.
+  - Page marché : prix « / 100 » ou « / 10 » affiché à côté du prix.
+Tests : lot_coins (exact), pose arrondie au multiple, remise du bon
+nombre d'objets et de pièces, migration (prix × lot).
+
+
 6. NETTOYAGE (faible)
 ---------------------
   - market_reprice::reprice_round : sauter les ordres `Matched` (en

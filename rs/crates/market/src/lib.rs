@@ -9,6 +9,7 @@ pub mod book;
 pub mod concession;
 pub mod deals;
 pub mod discovery;
+pub mod lots;
 pub mod error;
 pub mod guards;
 pub mod maker;
