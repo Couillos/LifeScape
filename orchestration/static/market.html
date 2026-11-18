@@ -44,6 +44,16 @@
   #book tr.ask td:first-child { color: #ff1744; }
   #book tr.bid td:first-child { color: #00e676; }
   #book tr.spread td { color: #888; text-align: center; }
+  /* Ticker strip (exchange-style): last trade and 24 h change in the
+     candles' colours, then the bots' reference and the day's volume. */
+  #ticker { display: flex; gap: 22px; align-items: baseline; flex-wrap: wrap; margin: 2px 0 8px; }
+  #ticker .tk-last { font-size: 28px; font-weight: bold; }
+  #ticker .tk-change { font-size: 20px; font-weight: bold; }
+  #ticker .tk-up { color: #00e676; }
+  #ticker .tk-down { color: #ff1744; }
+  #ticker .tk-flat { color: #eee; }
+  #ticker .tk-stat { font-size: 15px; color: #eee; }
+  #ticker .tk-label { display: block; font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.04em; }
   /* Last trades: a buyer took the asks (green), a seller hit the bids
      (red), in the candles' hues, toned down on black. */
   #trades tr.taker-buy td { background: rgba(0, 230, 118, 0.35); color: #fff; }
@@ -77,12 +87,12 @@
   </div>
   <div id="detail">
     <h2 id="title">Pick an item</h2>
+    <div id="ticker"></div>
     <div id="views">
       <button id="v-hour" class="cur" onclick="setView('hour')">24h / 15m</button>
       <button id="v-week" onclick="setView('week')">7d / 1h</button>
       <button id="v-month" onclick="setView('month')">30d / 1d</button>
       <button id="v-day" onclick="setView('day')">6M / 1d</button>
-      <span id="refline" class="muted"></span>
     </div>
     <canvas id="chart" width="720" height="340"></canvas>
     <div id="tables">

@@ -48,6 +48,11 @@ pub enum Provenance {
     Unattributed,
     /// Coins paid for a service: toll, fare, tanning (`coin_ledger`).
     Fee,
+    /// Turned into coins by low alchemy (user 2026-11-18: a sink of its
+    /// own, apart from the recipe inputs `Consumed` counts).
+    AlchLow,
+    /// Turned into coins by high alchemy.
+    AlchHigh,
 }
 
 impl Provenance {
@@ -64,6 +69,8 @@ impl Provenance {
             Provenance::Death => "death",
             Provenance::Unattributed => "unattributed",
             Provenance::Fee => "fee",
+            Provenance::AlchLow => "alch_low",
+            Provenance::AlchHigh => "alch_high",
         }
     }
 
@@ -80,11 +87,13 @@ impl Provenance {
             "death" => Some(Provenance::Death),
             "unattributed" => Some(Provenance::Unattributed),
             "fee" => Some(Provenance::Fee),
+            "alch_low" => Some(Provenance::AlchLow),
+            "alch_high" => Some(Provenance::AlchHigh),
             _ => None,
         }
     }
 
-    pub fn all() -> [&'static str; 11] {
+    pub fn all() -> [&'static str; 13] {
         [
             "produced",
             "loot",
@@ -97,6 +106,8 @@ impl Provenance {
             "death",
             "unattributed",
             "fee",
+            "alch_low",
+            "alch_high",
         ]
     }
 }
@@ -190,7 +201,7 @@ mod tests {
     /// Provenance names round-trip; the set is exactly the report contract.
     #[test]
     fn provenance_names_round_trip() {
-        assert_eq!(Provenance::all().len(), 11);
+        assert_eq!(Provenance::all().len(), 13);
         for name in Provenance::all() {
             assert_eq!(Provenance::parse(name).map(|provenance| provenance.as_str()), Some(name));
         }

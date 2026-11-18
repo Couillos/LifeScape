@@ -53,13 +53,13 @@ impl Store {
     }
 
     /// Item lines of the task reports created at or after `since`, summed
-    /// by (item, provenance): where every object came from and went
+    /// by (item, provenance, sign): where every object came from and went
     /// (staff accounts left out; `item` filters one display name,
     /// case-insensitive).
     pub fn item_flows_since(&self, since: i64, excluded: &[String], item: Option<&str>) -> Result<Vec<(String, String, i64, i64)>, Error> {
         let mut statement = self.connection.prepare(
             "SELECT r.account, y.item_name, y.provenance, SUM(y.quantity), COUNT(*) FROM task_yields y JOIN task_reports r ON r.report_id = y.report_id \
-             WHERE r.created_clock >= ?1 AND y.item_name != '' AND (?2 = '' OR LOWER(y.item_name) = LOWER(?2)) GROUP BY r.account, y.item_name, y.provenance",
+             WHERE r.created_clock >= ?1 AND y.item_name != '' AND (?2 = '' OR LOWER(y.item_name) = LOWER(?2)) GROUP BY r.account, y.item_name, y.provenance, y.quantity > 0",
         )?;
         let rows = statement.query_map(params![since, item.unwrap_or("")], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, i64>(4)?))
@@ -70,7 +70,9 @@ impl Store {
             if excluded.iter().any(|staff| staff.eq_ignore_ascii_case(&account)) {
                 continue;
             }
-            match out.iter_mut().find(|(known, origin, _, _)| *known == name && *origin == provenance) {
+            // In and out apart (user 2026-11-18: a trade between bots read
+            // as a net sink): one row per name, provenance and sign.
+            match out.iter_mut().find(|(known, origin, sum, _)| *known == name && *origin == provenance && (*sum > 0) == (quantity > 0)) {
                 Some(entry) => {
                     entry.2 += quantity;
                     entry.3 += lines;

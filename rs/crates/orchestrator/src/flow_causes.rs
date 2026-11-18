@@ -244,11 +244,41 @@ pub fn coin_cause(kind: &str, delta: i64, ctx: &RunCtx) -> &'static str {
     }
 }
 
-/// The frozen D45 provenance the current aggregation reads, from a
-/// cause. Trading runs keep `traded` for every non-food line (D45).
-pub fn legacy_provenance(cause_name: &str, delta: i64, trading: bool) -> &'static str {
+/// The alchemy a run cast (its confirmed spells), if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Alchemy {
+    Low,
+    High,
+}
+
+impl Alchemy {
+    /// High when the run cast high alchemy, low for low alchemy only.
+    pub fn of_spells(spells: &[&str]) -> Option<Alchemy> {
+        if spells.contains(&"highlvl_alchemy") {
+            Some(Alchemy::High)
+        } else if spells.contains(&"lowlvl_alchemy") {
+            Some(Alchemy::Low)
+        } else {
+            None
+        }
+    }
+}
+
+/// The provenance of a report line (`task_yields`), from its cause.
+/// Trading runs keep `traded` for their market lines, never for an NPC
+/// shop leg nor a fee (user 2026-11-18: the janitor's NPC sales read as
+/// player trades in Item holdings); the object an alchemy run (`alch`)
+/// eats reads `alch_low` / `alch_high`, its runes stay consumed.
+pub fn provenance_of(cause_name: &str, delta: i64, trading: bool, alch: Option<Alchemy>) -> &'static str {
     use lifescape_sdk::provenance::Provenance;
-    if trading && cause_name != cause::FOOD {
+    if cause_name == cause::INPUT && delta < 0 {
+        match alch {
+            Some(Alchemy::High) => return Provenance::AlchHigh.as_str(),
+            Some(Alchemy::Low) => return Provenance::AlchLow.as_str(),
+            None => {}
+        }
+    }
+    if trading && !matches!(cause_name, cause::FOOD | cause::SHOP_BOUGHT | cause::SHOP_SOLD | cause::FEE) {
         return Provenance::Traded.as_str();
     }
     let provenance = match cause_name {

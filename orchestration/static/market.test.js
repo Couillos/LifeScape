@@ -69,3 +69,12 @@ test('a last trade is green when a buyer took the asks, red when a seller hit th
   assert.match(Market.tradeRowHtml({ t, q: 1, p: 823, s: 'sell' }), /^<tr class="taker-sell".*<td>823<\/td>/);
   assert.match(Market.tradeRowHtml({ t, q: 1, p: 10, s: null }), /^<tr><td>1<\/td><td>10<\/td>/, 'unknown taker: plain');
 });
+
+test('the ticker shows the last trade and its change in the candle colour, then the bots ref and volume', () => {
+  const down = Market.tickerHtml({ price: 1241, change24h: -627, ref: 1303, volume24h: 66 });
+  assert.match(down, /<span class="tk-last tk-down">1241<\/span><span class="tk-change tk-down">-62.7% /);
+  assert.match(down, /Réf. bots<\/span>1303/);
+  assert.match(down, /Volume 24 h<\/span>66/);
+  assert.match(Market.tickerHtml({ price: 142, change24h: 141000, ref: 1, volume24h: 2 }), /tk-last tk-up">142/);
+  assert.equal(Market.tickerHtml(null), '');
+});

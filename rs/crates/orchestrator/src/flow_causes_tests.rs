@@ -1,7 +1,7 @@
 //! Golden balances, one per F2P skill (plan rendements §8): every input
 //! AND every output of a run gets its cause, the units (P, C) follow.
 
-use super::{balance, cause, cause_of, coin_cause, legacy_provenance, made_products, object_units, RawFlow, RunCtx};
+use super::{balance, cause, cause_of, coin_cause, provenance_of, made_products, object_units, RawFlow, RunCtx};
 use std::collections::BTreeMap;
 
 fn flow(name: &str, kind: &str, delta: i64, skills: &[&str]) -> RawFlow {
@@ -253,17 +253,31 @@ fn actions_and_alerts() {
     assert_eq!(coin_cause("unattributed", -9_860, &context), cause::UNATTRIBUTED);
 }
 
-/// The D45 provenance the current aggregation reads, per cause.
+/// The provenance of a report line, per cause. User
+/// 2026-11-18 (Item holdings): an NPC sale in a merchant run reads
+/// `shop_sold`, never a player trade; the object an alchemy run turns
+/// into coins reads `alch_low` / `alch_high`, apart from recipe inputs.
 #[test]
-fn legacy_provenance_keeps_the_aggregation() {
-    assert_eq!(legacy_provenance(cause::PRODUCT, 5, false), "produced");
-    assert_eq!(legacy_provenance(cause::AMMO, -5, false), "consumed");
-    assert_eq!(legacy_provenance(cause::FOOD, -1, true), "consumed", "lunch at the maker's post stays consumed");
-    assert_eq!(legacy_provenance(cause::SHOP_BOUGHT, 1, true), "traded", "merchant legs read traded (D45)");
-    assert_eq!(legacy_provenance(cause::DISCARDED, -2, false), "lost");
-    assert_eq!(legacy_provenance(cause::UNATTRIBUTED, 3, false), "unattributed");
-    assert_eq!(legacy_provenance(cause::UNATTRIBUTED, -3, false), "lost");
+fn provenance_of_keeps_the_aggregation() {
+    use super::Alchemy;
+    assert_eq!(provenance_of(cause::PRODUCT, 5, false, None), "produced");
+    assert_eq!(provenance_of(cause::AMMO, -5, false, None), "consumed");
+    assert_eq!(provenance_of(cause::FOOD, -1, true, None), "consumed", "lunch at the maker's post stays consumed");
+    assert_eq!(provenance_of(cause::SHOP_BOUGHT, 1, true, None), "shop_bought", "a merchant leg's shop purchase");
+    assert_eq!(provenance_of(cause::SHOP_SOLD, -28, true, None), "shop_sold", "the janitor's NPC sale is no player trade");
+    assert_eq!(provenance_of(cause::FEE, -30, true, None), "fee");
+    assert_eq!(provenance_of(cause::TRADED, -4, true, None), "traded");
+    assert_eq!(provenance_of(cause::INPUT, -250, false, Some(Alchemy::High)), "alch_high");
+    assert_eq!(provenance_of(cause::INPUT, -40, false, Some(Alchemy::Low)), "alch_low");
+    assert_eq!(provenance_of(cause::RUNE, -250, false, Some(Alchemy::High)), "consumed", "the cast's runes stay consumed");
+    assert_eq!(provenance_of(cause::INPUT, -5, false, None), "consumed");
+    assert_eq!(provenance_of(cause::DISCARDED, -2, false, None), "lost");
+    assert_eq!(provenance_of(cause::UNATTRIBUTED, 3, false, None), "unattributed");
+    assert_eq!(provenance_of(cause::UNATTRIBUTED, -3, false, None), "lost");
     for name in cause::ALL {
-        assert!(lifescape_sdk::provenance::Provenance::parse(legacy_provenance(name, 1, false)).is_some(), "{name}");
+        assert!(lifescape_sdk::provenance::Provenance::parse(provenance_of(name, 1, false, None)).is_some(), "{name}");
     }
+    assert_eq!(Alchemy::of_spells(&["highlvl_alchemy"]), Some(Alchemy::High));
+    assert_eq!(Alchemy::of_spells(&["lowlvl_alchemy", "wind_strike"]), Some(Alchemy::Low));
+    assert_eq!(Alchemy::of_spells(&["wind_strike"]), None);
 }

@@ -17,8 +17,10 @@ const ItemFlows = (() => {
     ground_spawn: 'ramassé au sol',
     shop_bought: 'acheté au PNJ',
     shop_sold: 'vendu au PNJ',
-    traded: 'échangé entre joueurs',
+    traded: 'échangé entre bots',
     consumed: 'consommé',
+    alch_low: 'low alch',
+    alch_high: 'high alch',
     lost: 'perdu',
     death: 'mort',
     fee: 'frais',
@@ -32,7 +34,11 @@ const ItemFlows = (() => {
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  function label(provenance) {
+  // A trade between bots moves objects, it creates or removes none: its
+  // in and out rows read as such (user 2026-11-18).
+  function label(provenance, quantity) {
+    if (provenance === 'traded' && Number(quantity) > 0) return 'acheté à un bot';
+    if (provenance === 'traded' && Number(quantity) < 0) return 'vendu à un bot';
     return LABELS[provenance] || String(provenance || '?');
   }
 
@@ -61,7 +67,7 @@ const ItemFlows = (() => {
     const rows = flows.map((flow) => {
       net += Number(flow.quantity) || 0;
       lines += Number(flow.lines) || 0;
-      return '<tr><td class="left" title="' + esc(flow.provenance) + '">' + esc(label(flow.provenance)) + '</td><td>'
+      return '<tr><td class="left" title="' + esc(flow.provenance) + '">' + esc(label(flow.provenance, flow.quantity)) + '</td><td>'
         + quantityCell(flow.quantity) + '</td><td>' + esc(flow.lines) + '</td></tr>';
     });
     return '<tr><th class="left">Provenance / destination</th><th>Quantité</th><th>Rapports</th></tr>'

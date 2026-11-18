@@ -12,10 +12,10 @@
 //! of its flows raises a `residual` alert, like every `unattributed`
 //! flow. Alerts are logged, never yields.
 //!
-//! The legacy `items` lines (frozen D45 provenances, one per name and
-//! provenance) are derived from the causes so the current rates
-//! aggregation reads the same contract until R2 replaces it. Market runs
-//! keep `traded` on every non-food line (D44, D45).
+//! The `items` lines (provenances, `flow_causes::provenance_of`, one per
+//! name and provenance) are derived from the causes: market lines read
+//! `traded`, NPC shop legs and fees their own, the object an alchemy run
+//! casts away `alch_low` / `alch_high` (user 2026-11-18).
 
 #![forbid(unsafe_code)]
 
@@ -133,7 +133,7 @@ pub struct ReportCtx {
     pub meta: RunMeta,
 }
 
-/// One legacy item line (frozen D45 provenance), in display names.
+/// One item line (its provenance, `flow_causes::provenance_of`), in display names.
 pub struct FlowLine {
     pub name: String,
     pub provenance: &'static str,
@@ -390,11 +390,13 @@ pub fn build_report(
             alerts.push(Alert { kind: "residual", name: display_name(bot, id), qty: residual, detail });
         }
     }
-    let mut legacy: BTreeMap<(String, &'static str), i64> = BTreeMap::new();
+    let spells: Vec<String> = events.casts.keys().filter_map(|com| spell_of_com(*com)).collect();
+    let alch = flow_causes::Alchemy::of_spells(&spells.iter().map(String::as_str).collect::<Vec<_>>());
+    let mut by_provenance: BTreeMap<(String, &'static str), i64> = BTreeMap::new();
     for (name, cause_name, qty) in &flows {
-        *legacy.entry((name.clone(), flow_causes::legacy_provenance(cause_name, *qty, trading))).or_insert(0) += qty;
+        *by_provenance.entry((name.clone(), flow_causes::provenance_of(cause_name, *qty, trading, alch))).or_insert(0) += qty;
     }
-    let items: Vec<FlowLine> = legacy.into_iter().filter(|(_, qty)| *qty != 0).map(|((name, provenance), qty)| FlowLine { name, provenance, qty }).collect();
+    let items: Vec<FlowLine> = by_provenance.into_iter().filter(|(_, qty)| *qty != 0).map(|((name, provenance), qty)| FlowLine { name, provenance, qty }).collect();
     let (products, inputs) = flow_causes::object_units(&flows);
     let npc = |npc_type: &u16| (bot.tables.npc_name)(*npc_type).unwrap_or_else(|| format!("npc{npc_type}"));
     let mut units = Units { products, inputs, ..Units::default() };

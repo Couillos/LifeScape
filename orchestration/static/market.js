@@ -194,6 +194,21 @@ function renderBook(book) {
   document.getElementById('book').innerHTML = out.join('');
 }
 
+// Exchange-style ticker of the picked item (user 2026-11-18): the last
+// trade and its 24 h change large, coloured by the change's sign, then
+// the bots' reference price and the day's volume.
+function tickerHtml(item) {
+  if (!item) return '';
+  const change = Number(item.change24h) || 0;
+  const tone = change > 0 ? 'tk-up' : (change < 0 ? 'tk-down' : 'tk-flat');
+  const ref = item.ref === undefined ? item.price : item.ref;
+  const stat = (label, value) => '<span class="tk-stat"><span class="tk-label">' + label + '</span>' + value + '</span>';
+  return '<span class="tk-last ' + tone + '">' + item.price + '</span>'
+    + '<span class="tk-change ' + tone + '">' + changeText(change) + ' <span class="tk-label" style="display:inline">24 h</span></span>'
+    + stat('Réf. bots', ref)
+    + stat('Volume 24 h', item.volume24h);
+}
+
 // Last trades row (user 2026-11-18): green background when a buyer took
 // the ask liquidity (taker side `buy`), red when a seller hit the bids
 // (`sell`), plain when the taker is unknown.
@@ -314,7 +329,7 @@ function draw() {
   const canvas = document.getElementById('chart');
   const item = items.find(entry => entry.item === selected);
   document.getElementById('title').textContent = item ? item.name : (selected === null ? 'Pick an item' : itemName(selected));
-  document.getElementById('refline').textContent = item ? ' last ' + item.price + ' · 24h ' + changeText(item.change24h) + ' · bots ref ' + (item.ref === undefined ? item.price : item.ref) + ' · vol ' + item.volume24h : '';
+  document.getElementById('ticker').innerHTML = tickerHtml(item);
 
   const { slots, width } = currentSlots();
   // Live tail: the newest WS prints stretch the live slot.
@@ -405,4 +420,4 @@ function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined' && module.exports) module.exports = { VIEWS, viewSlots, chartRows, partyHtml, tradeRowHtml };
+if (typeof module !== 'undefined' && module.exports) module.exports = { VIEWS, viewSlots, chartRows, partyHtml, tradeRowHtml, tickerHtml };

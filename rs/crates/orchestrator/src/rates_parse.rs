@@ -30,7 +30,7 @@ pub fn is_trading_method(method: &str) -> bool {
 
 /// Provenances that count as an engagement input cost (bait, food).
 pub fn is_input_provenance(provenance: &str) -> bool {
-    matches!(provenance, "consumed")
+    matches!(provenance, "consumed" | "alch_low" | "alch_high")
 }
 
 /// First level of the band holding `level`: 1-5 -> 1, 6-10 -> 6.

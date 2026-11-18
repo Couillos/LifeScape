@@ -16,10 +16,14 @@ function check(name, actual, expected) {
 
 check('label produced', ItemFlows.label('produced'), 'produit');
 check('label shop bought', ItemFlows.label('shop_bought'), 'acheté au PNJ');
-check('label traded', ItemFlows.label('traded'), 'échangé entre joueurs');
+check('label traded', ItemFlows.label('traded'), 'échangé entre bots');
+check('label traded in', ItemFlows.label('traded', 4), 'acheté à un bot');
+check('label traded out', ItemFlows.label('traded', -4), 'vendu à un bot');
+check('label high alch', ItemFlows.label('alch_high', -50), 'high alch');
+check('label low alch', ItemFlows.label('alch_low', -200), 'low alch');
 check('label unattributed', ItemFlows.label('unattributed'), 'non attribué');
 check('label unknown kept raw', ItemFlows.label('mystery'), 'mystery');
-check('every provenance labelled', ['produced', 'loot', 'ground_spawn', 'shop_bought', 'shop_sold', 'traded', 'consumed', 'lost', 'death', 'fee', 'unattributed']
+check('every provenance labelled', ['produced', 'loot', 'ground_spawn', 'shop_bought', 'shop_sold', 'traded', 'consumed', 'lost', 'death', 'fee', 'unattributed', 'alch_low', 'alch_high']
   .filter(function (key) { return !ItemFlows.LABELS[key]; }), []);
 
 check('period hours', ['day', 'week', 'month', 'half'].map(ItemFlows.hoursFor), [24, 168, 720, 4380]);
