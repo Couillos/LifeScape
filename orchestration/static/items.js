@@ -78,9 +78,49 @@ const ItemFlows = (() => {
   return { LABELS, PERIOD_HOURS, esc, label, hoursFor, flowsUrl, quantityCell, tableHtml, unavailableHtml };
 })();
 
+// Supply indices (user 2026-11-18): families of objects summed into one
+// count and one curve (`indices` of /api/items, `index=` of the
+// history route). Pure helpers, no DOM: `node --test items.test.js`.
+const ItemIndices = (() => {
+  'use strict';
+
+  // Table body of the indices (payload `indices`), the current one bold.
+  function tableHtml(indices, currentKey) {
+    if (!indices || !indices.length) return '<tr><td class="left muted">no index</td></tr>';
+    const rows = indices.map((index) => '<tr data-index="' + ItemFlows.esc(index.key) + '"'
+      + (index.key === currentKey ? ' class="cur"' : '') + '><td class="left">' + ItemFlows.esc(index.label)
+      + '</td><td>' + ItemFlows.esc(index.count) + '</td><td>' + changeCell(index.change24h) + '</td></tr>');
+    return '<tr><th class="left">Index</th><th>Qty</th><th>24 h</th></tr>' + rows.join('');
+  }
+
+  // History URL of the curve shown: an item, else an index, else the total.
+  function historyUrl(res, itemId, indexKey) {
+    let url = '/api/items/history?res=' + res;
+    if (itemId !== null && itemId !== undefined) url += '&item=' + encodeURIComponent(itemId);
+    else if (indexKey) url += '&index=' + encodeURIComponent(indexKey);
+    return url;
+  }
+
+  function find(indices, key) {
+    return (indices || []).find((index) => index.key === key) || null;
+  }
+
+  // Items of the list kept by an index filter (its object ids).
+  function keep(items, index) {
+    if (!index) return items;
+    const ids = new Set(index.ids || []);
+    return items.filter((item) => ids.has(item.id));
+  }
+
+  return { tableHtml, historyUrl, find, keep };
+})();
+
 const PAGE_SIZE = 25;
 let list = null;
 let selected = null;
+// Supply index key: filters the item list and, with no item picked,
+// draws the index curve.
+let indexKey = null;
 let pageIndex = 0;
 let query = "";
 // Chart periods: the API serves every retained point of a resolution
@@ -107,15 +147,15 @@ async function loadList() {
   } catch (e) { /* daemon down: keep the last list */ }
   if (list) {
     if (selected !== null && !list.items.some(item => item.id === selected)) selected = null;
+    if (indexKey !== null && !ItemIndices.find(list.indices, indexKey)) indexKey = null;
     renderList();
   }
 }
 
 async function loadCurve() {
-  const key = selected === null ? '' : '&item=' + encodeURIComponent(selected);
   const res = PERIODS[period].res;
   try {
-    const payload = await getJson('/api/items/history?res=' + res + key);
+    const payload = await getJson(ItemIndices.historyUrl(res, selected, indexKey));
     if (payload.ok) curve = payload;
   } catch (e) { /* daemon down: keep the last curve */ }
   draw();
@@ -145,20 +185,31 @@ async function loadFlows() {
 
 function filtered() {
   if (!list) return [];
+  const inIndex = ItemIndices.keep(list.items, ItemIndices.find(list.indices, indexKey));
   const needle = query.trim().toLowerCase();
-  if (!needle) return list.items;
-  return list.items.filter(item => item.name.toLowerCase().includes(needle));
+  if (!needle) return inIndex;
+  return inIndex.filter(item => item.name.toLowerCase().includes(needle));
+}
+
+function currentIndex() {
+  return list ? ItemIndices.find(list.indices, indexKey) : null;
 }
 
 function title() {
-  if (selected === null) return 'Total items';
-  const found = (list.items || []).find(item => item.id === selected);
+  if (selected === null) {
+    const index = currentIndex();
+    return index ? index.label + ' (index)' : 'Total items';
+  }
+  const found = ((list && list.items) || []).find(item => item.id === selected);
   return found ? found.name : ('obj ' + selected);
 }
 
 function liveCount() {
   if (!list) return 0;
-  if (selected === null) return list.liveTotal || 0;
+  if (selected === null) {
+    const index = currentIndex();
+    return index ? index.count : (list.liveTotal || 0);
+  }
   const found = list.items.find(item => item.id === selected);
   return found ? found.count : 0;
 }
@@ -188,8 +239,9 @@ function renderList() {
   const pages = Math.max(1, Math.ceil(matches.length / PAGE_SIZE));
   pageIndex = Math.min(Math.max(pageIndex, 0), pages - 1);
   const slice = matches.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + PAGE_SIZE);
+  document.getElementById('indices').innerHTML = ItemIndices.tableHtml(list.indices, indexKey);
   const total = document.getElementById('total');
-  total.className = selected === null ? 'cur' : '';
+  total.className = selected === null && indexKey === null ? 'cur' : '';
   total.innerHTML = 'Total <span class="qty">' + (list.liveTotal || 0) + '</span> ' + changeCell(list.totalChange24h);
   if (slice.length) {
     TableSort.render('items', ITEM_COLUMNS, slice, {
@@ -208,6 +260,10 @@ if (typeof document !== 'undefined') {
     const row = event.target.closest('tr[data-id]');
     if (row) pick(Number(row.getAttribute('data-id')));
   });
+  document.getElementById('indices').addEventListener('click', (event) => {
+    const row = event.target.closest('tr[data-index]');
+    if (row) pickIndex(row.getAttribute('data-index'));
+  });
 }
 
 function page(delta) {
@@ -223,8 +279,20 @@ function onSearch() {
   if (match) pick(match.id);
 }
 
+// Total row: no item, no index. An item keeps the index filter.
 function pick(id) {
   selected = id;
+  if (id === null) indexKey = null;
+  renderList();
+  loadCurve();
+  loadFlows();
+}
+
+// An index row: its curve and its members in the list; again = off.
+function pickIndex(key) {
+  indexKey = indexKey === key ? null : key;
+  selected = null;
+  pageIndex = 0;
   renderList();
   loadCurve();
   loadFlows();
@@ -262,7 +330,7 @@ function draw() {
 
 let resizeTimer = null;
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = ItemFlows;
+  module.exports = Object.assign({}, ItemFlows, { ItemIndices });
 } else {
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);

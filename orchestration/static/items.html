@@ -28,6 +28,13 @@
   #items tr[data-id] { cursor: pointer; }
   #items tr[data-id]:hover { background: #1a1a1a; }
   #items tr.cur { font-weight: bold; color: #ff0; }
+  #indices { border-collapse: collapse; font-size: 12px; width: 100%; margin: 4px 0 8px; }
+  #indices td, #indices th { border: 1px solid #333; padding: 2px 8px; text-align: right; white-space: nowrap; }
+  #indices th { color: #888; font-weight: normal; }
+  #indices td.left, #indices th.left { text-align: left; }
+  #indices tr[data-index] { cursor: pointer; }
+  #indices tr[data-index]:hover { background: #1a1a1a; }
+  #indices tr.cur { font-weight: bold; color: #ff0; }
   .up { color: #00e676; }
   .down { color: #ff1744; }
   #search { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
@@ -56,6 +63,8 @@
 <h1>Item holdings</h1>
 <div id="layout">
   <div id="list">
+    <h2>Supply indices</h2>
+    <table id="indices"></table>
     <h2>Items held</h2>
     <input id="search" placeholder="Search an item…" autocomplete="off" oninput="onSearch()">
     <div id="total" onclick="pick(null)"></div>

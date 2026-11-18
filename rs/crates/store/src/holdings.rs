@@ -137,6 +137,36 @@ impl Store {
         Ok(points)
     }
 
+    fn holdings_sum_in(&self, table: &str, time_column: &str, item_ids: &[i64]) -> Result<Vec<(i64, i64)>, Error> {
+        if item_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Integers only: the id list is inlined, never user text.
+        let list: Vec<String> = item_ids.iter().map(|item| item.to_string()).collect();
+        let sql = format!(
+            "SELECT {time_column}, SUM(count) FROM {table} WHERE item_id IN ({}) GROUP BY {time_column} ORDER BY {time_column}",
+            list.join(",")
+        );
+        let mut statement = self.connection.prepare(&sql)?;
+        let mut points = Vec::new();
+        for mapped_row in statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))? {
+            points.push(mapped_row?);
+        }
+        Ok(points)
+    }
+
+    /// Hourly curve of a supply index, oldest first: the counts of
+    /// `item_ids` summed per hour (a slot where none was held is absent).
+    pub fn hourly_points_sum(&self, item_ids: &[i64]) -> Result<Vec<(i64, i64)>, Error> {
+        self.holdings_sum_in("holdings_hourly", "taken_at", item_ids)
+    }
+
+    /// Daily curve of a supply index, oldest first (last measure of
+    /// each day, summed over `item_ids`).
+    pub fn daily_points_sum(&self, item_ids: &[i64]) -> Result<Vec<(i64, i64)>, Error> {
+        self.holdings_sum_in("holdings_daily", "day_start", item_ids)
+    }
+
     /// Hourly curve, oldest first: one item (`Some`) or the whole
     /// economy summed per hour (`None`).
     pub fn hourly_points(&self, item_id: Option<i64>) -> Result<Vec<(i64, i64)>, Error> {
@@ -204,6 +234,19 @@ mod holdings_tests {
         assert_eq!(store.hourly_points(None)?, vec![(hour, 10)]);
         assert_eq!(store.daily_points(None)?.len(), 1);
         assert_eq!(store.holdings_latest()?, Some(hour));
+        Ok(())
+    }
+
+    #[test]
+    fn index_sums_its_items_per_slot() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        let hour = 1_762_675_200;
+        store.record_holdings(hour, &[(995, 7), (1511, 3), (1521, 4)])?;
+        store.record_holdings(hour + HOUR_SECONDS, &[(1511, 5), (1521, 1)])?;
+        assert_eq!(store.hourly_points_sum(&[1511, 1521])?, vec![(hour, 7), (hour + HOUR_SECONDS, 6)]);
+        assert_eq!(store.daily_points_sum(&[1511, 1521])?, vec![((hour / DAY_SECONDS) * DAY_SECONDS, 6)]);
+        assert_eq!(store.hourly_points_sum(&[42])?, vec![], "nothing held, no point");
+        assert_eq!(store.hourly_points_sum(&[])?, vec![]);
         Ok(())
     }
 

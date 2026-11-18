@@ -4,7 +4,8 @@
 //! points:[{t,v}]}`) over the store tables: `holdings_hourly` (8 days,
 //! `res=1h`, the 24 h default) and `holdings_daily` (400 days, `res=1d`,
 //! each value the last measure of its day). `item` is an obj id, an
-//! exact item name, or absent for the whole-economy total.
+//! exact item name, or absent for the whole-economy total; `index` a
+//! supply index key (`holdings_indices`), its objects summed per slot.
 //! `/api/items/flows` serves an object's sources and sinks by provenance
 //! (task report lines, `Store::item_flows_since`), staff excluded.
 
@@ -40,16 +41,41 @@ fn resolve_item(raw: Option<&str>) -> Result<(Option<i64>, String), String> {
     }
 }
 
-fn history_points(store: &lifescape_store::Store, item: Option<i64>, res: HoldingsRes) -> Result<Vec<(i64, i64)>, String> {
-    match res {
-        HoldingsRes::Hour1 => store.hourly_points(item).map_err(|error| error.to_string()),
-        HoldingsRes::Day1 => store.daily_points(item).map_err(|error| error.to_string()),
-    }
+/// What one history curve sums: one object, the whole economy, or a
+/// supply index (its objects and their notes).
+enum Curve {
+    Item(Option<i64>),
+    Index(Vec<i64>),
 }
 
-/// `GET /api/items/history?res=1h|1d&item=`: the frozen history shape
-/// for one item (or the total). Unknown `res` and unknown `item` read
-/// loud; an empty history is a valid empty curve, not an error.
+fn history_points(store: &lifescape_store::Store, curve: &Curve, res: HoldingsRes) -> Result<Vec<(i64, i64)>, String> {
+    let points = match (curve, res) {
+        (Curve::Item(item), HoldingsRes::Hour1) => store.hourly_points(*item),
+        (Curve::Item(item), HoldingsRes::Day1) => store.daily_points(*item),
+        (Curve::Index(ids), HoldingsRes::Hour1) => store.hourly_points_sum(ids),
+        (Curve::Index(ids), HoldingsRes::Day1) => store.daily_points_sum(ids),
+    };
+    points.map_err(|error| error.to_string())
+}
+
+/// The curve a query asks for: `index=<key>` (a supply index, alone) or
+/// `item=` (see `resolve_item`).
+fn resolve_curve(params: &std::collections::HashMap<String, String>) -> Result<(Curve, String), String> {
+    let Some(key) = params.get("index").map(|raw| raw.trim()).filter(|key| !key.is_empty()) else {
+        let (item, label) = resolve_item(params.get("item").map(String::as_str))?;
+        return Ok((Curve::Item(item), label));
+    };
+    if params.get("item").is_some_and(|item| !item.trim().is_empty()) {
+        return Err("item and index are exclusive".to_string());
+    }
+    let index = lifescape_gamedata::supply_indices::SupplyIndex::parse(key).ok_or_else(|| format!("unknown index '{key}'"))?;
+    Ok((Curve::Index(crate::holdings_indices::index_ids(index)), index.label().to_string()))
+}
+
+/// `GET /api/items/history?res=1h|1d&item=|index=`: the frozen history
+/// shape for one item, the total, or a supply index (`item` then carries
+/// the index label). Unknown `res`, `item` or `index` read loud; an
+/// empty history is a valid empty curve, not an error.
 pub(crate) fn items_history_api(query: &str, run_dir: &Path) -> Response {
     let params = parse_query(query);
     let res = match params.get("res").map(String::as_str) {
@@ -59,7 +85,7 @@ pub(crate) fn items_history_api(query: &str, run_dir: &Path) -> Response {
             None => return ok_json(err_json(format!("bad res '{raw}': want 1h or 1d"))),
         },
     };
-    let (item, label) = match resolve_item(params.get("item").map(String::as_str)) {
+    let (curve, label) = match resolve_curve(&params) {
         Ok(resolved) => resolved,
         Err(error) => return ok_json(err_json(error)),
     };
@@ -68,7 +94,7 @@ pub(crate) fn items_history_api(query: &str, run_dir: &Path) -> Response {
         Ok(store) => store,
         Err(error) => return ok_json(err_json(error)),
     };
-    let points = match history_points(&store, item, res) {
+    let points = match history_points(&store, &curve, res) {
         Ok(points) => points,
         Err(error) => return ok_json(err_json(error)),
     };
@@ -264,6 +290,28 @@ mod tests {
         assert_eq!(empty.get("points").as_arr().map(Vec::len), Some(0));
         let _ = std::fs::remove_dir_all(&run);
         let _ = std::fs::remove_dir_all(&bare);
+    }
+
+    /// A supply index sums its objects (and their notes) per slot and
+    /// names itself; an unknown index or one mixed with an item reads loud.
+    #[test]
+    fn history_serves_supply_indices() {
+        let run = scratch_run("index");
+        let store = lifescape_store::Store::open(&run.join("lifescape.db")).unwrap();
+        let id_of = |name: &str| lifescape_gamedata::objs_by_name(name)[0].obj_id as i64;
+        store.record_holdings(1_762_675_200, &[(id_of("raw_shrimp"), 4), (id_of("cert_raw_shrimp"), 6), (id_of("shrimp"), 9), (995, 50)]).unwrap();
+        let cooking = body(&items_history_api("res=1h&index=cooking", &run));
+        assert_eq!(cooking.get("ok").as_bool(), Some(true));
+        assert_eq!(cooking.get("item").as_str(), Some("Cooking"));
+        assert_eq!(cooking.get("points").as_arr().unwrap()[0].get("v").as_i64(), Some(10), "raw shrimps and their notes");
+        let food = body(&items_history_api("res=1d&index=food", &run));
+        assert_eq!(food.get("res").as_str(), Some("1d"));
+        assert_eq!(food.get("points").as_arr().unwrap()[0].get("v").as_i64(), Some(9));
+        let tools = body(&items_history_api("res=1h&index=tools", &run));
+        assert_eq!(tools.get("points").as_arr().map(Vec::len), Some(0), "nothing held: empty curve");
+        assert_eq!(body(&items_history_api("res=1h&index=nope", &run)).get("ok").as_bool(), Some(false));
+        assert_eq!(body(&items_history_api("res=1h&index=food&item=995", &run)).get("ok").as_bool(), Some(false));
+        let _ = std::fs::remove_dir_all(&run);
     }
 
     fn report_with(store: &lifescape_store::Store, account: &str, clock: i64, lines: &[(&str, &str, i64)]) {

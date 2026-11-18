@@ -45,6 +45,7 @@ pub mod site_banks;
 pub mod spawns;
 pub mod spells;
 pub mod stations;
+pub mod supply_indices;
 pub mod toll;
 pub mod trees;
 pub mod underground;

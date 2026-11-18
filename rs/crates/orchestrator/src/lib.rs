@@ -122,6 +122,7 @@ mod market_taker_tests;
 mod market_impact_tests;
 pub mod jobs;
 pub mod holdings;
+pub(crate) mod holdings_indices;
 pub(crate) mod live_items;
 pub mod hiscores;
 pub mod hiscores_service;

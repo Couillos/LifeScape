@@ -494,7 +494,13 @@ fn snapshot_in(described: &[Value], items: &Path, save_dir: &str) -> Value {
         })
         .collect();
     let total_change = change_of(live_total, baseline.as_ref().map(|(_, total)| *total));
-    object(vec![("liveTotal", Value::Int(live_total)), ("totalChange24h", total_change), ("items", Value::Arr(items_list))])
+    let indices = crate::holdings_indices::indices_value(&live, baseline.as_ref().map(|(counts, _)| counts));
+    object(vec![
+        ("liveTotal", Value::Int(live_total)),
+        ("totalChange24h", total_change),
+        ("items", Value::Arr(items_list)),
+        ("indices", indices),
+    ])
 }
 
 /// The dashboard payload: live totals plus the ranked item list.
@@ -822,6 +828,8 @@ mod tests {
         let save_arg = dir.join("saves").to_string_lossy().to_string();
         let data = snapshot_in(&live, &items, &save_arg);
         assert_eq!(data.get("liveTotal").as_i64(), Some(3));
+        let logs = data.get("indices").as_arr().unwrap().iter().find(|row| row.get("key").as_str() == Some("logs")).cloned();
+        assert_eq!(logs.map(|row| row.get("count").as_i64()), Some(Some(3)), "oak logs feed the logs index");
         let rows = data.get("items").as_arr().unwrap();
         assert_eq!(rows.len(), 2, "live item plus the coins row");
         assert_eq!(rows[0].get("id").as_i64(), Some(1521), "live count ranks first");

@@ -120,6 +120,17 @@ alimente sous le graphique de l'objet choisi le tableau « Provenance /
 destination » (provenance en clair, quantité signée + entrée / − sortie,
 rapports, ligne nette) sur la période des boutons (24/168/720/4380 h) ;
 sans données, le tableau reste vide (aucun message).
+Indices de supply `/items` (2026-11-18) : 11 familles (`cooking`, `food`,
+`melee_equipment`, `range_equipment`, `range_supply`, `magic_equipment`,
+`magic_supply`, `logs`, `tools`, `mining_supply`, `smithing_supply`)
+dérivées des dumps par `lifescape_gamedata::supply_indices` (F2P,
+échangeables, billets repliés sur leur objet, familles disjointes ;
+compositions figées par `supply_indices_tests`). `GET /api/items` porte
+`indices:[{key,label,count,change24h,ids}]` (`src/holdings_indices.rs`,
+mêmes comptes que la liste) ; `GET /api/items/history?res=&index=<key>`
+sert la courbe de l'indice (somme par créneau de `holdings_hourly` /
+`holdings_daily`, `Store::hourly_points_sum`). Clic sur un indice : sa
+courbe et la liste filtrée sur ses objets ; « Total » efface le filtre.
 Onglet « Cerveau » de la page Lives (`/life`, `brain.js`, 2026-11-13) :
 `GET /api/brain/<compte>` (`src/web_brain.rs`, lecture seule) agrège le
 fichier de vie (ambition passée telle quelle si présente, but + jalon

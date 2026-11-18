@@ -44,8 +44,26 @@ check('empty table', ItemFlows.tableHtml({ ok: true, flows: [] }), '<tr><td clas
 check('no flows: an empty table, no message', ItemFlows.unavailableHtml(404, null), '');
 check('error: empty too', ItemFlows.unavailableHtml(200, 'bad hours'), '');
 
+var ItemIndices = ItemFlows.ItemIndices;
+var indices = [
+  { key: 'cooking', label: 'Cooking', count: 40, change24h: 1000, ids: [317, 318] },
+  { key: 'food', label: 'Food', count: 5, change24h: null, ids: [315] },
+];
+var indexHtml = ItemIndices.tableHtml(indices, 'food');
+check('index header', indexHtml.indexOf('<th class="left">Index</th><th>Qty</th><th>24 h</th>') >= 0, true);
+check('index row', indexHtml.indexOf('<tr data-index="cooking"><td class="left">Cooking</td><td>40</td><td><span class="up">+100.0%</span></td></tr>') >= 0, true);
+check('current index bold, no baseline dash', indexHtml.indexOf('<tr data-index="food" class="cur"><td class="left">Food</td><td>5</td><td><span class="muted">—</span></td></tr>') >= 0, true);
+check('no index', ItemIndices.tableHtml([], null), '<tr><td class="left muted">no index</td></tr>');
+check('history url total', ItemIndices.historyUrl('1h', null, null), '/api/items/history?res=1h');
+check('history url index', ItemIndices.historyUrl('1d', null, 'melee_equipment'), '/api/items/history?res=1d&index=melee_equipment');
+check('history url item wins', ItemIndices.historyUrl('1h', 995, 'food'), '/api/items/history?res=1h&item=995');
+check('find index', ItemIndices.find(indices, 'food').label, 'Food');
+check('find unknown', ItemIndices.find(indices, 'nope'), null);
+check('index keeps its members', ItemIndices.keep([{ id: 317 }, { id: 995 }, { id: 318 }], indices[0]).map(function (item) { return item.id; }), [317, 318]);
+check('no index keeps all', ItemIndices.keep([{ id: 995 }], null).length, 1);
+
 if (failures) {
   console.log(failures + ' FAILURE(S)');
   process.exit(1);
 }
-console.log('items.js: all flow checks pass');
+console.log('items.js: all flow and index checks pass');
