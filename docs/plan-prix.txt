@@ -153,6 +153,9 @@ marché).
 
 
 5 bis. LOT D — COTATION PAR LOT (décision Q3, design 2026-11-18)
+RETIRÉ le 2026-11-18 (user : un bot doit acheter à l'unité, pas de
+« /100 ») : `market_units::LOT_QUOTATION = false`, le service remet tout
+carnet coté par lot aux prix unitaires au démarrage.
 -----------------------------------------------------------------
 Taille de lot FIXE par objet (un carnet ne change jamais d'unité),
 décidée une fois au premier démarrage sur le prix unitaire observé

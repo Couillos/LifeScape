@@ -283,6 +283,17 @@ impl MarketService {
                 }
             }
             crate::market_units::load_lots(&lots);
+        } else {
+            // Lots off (user 2026-11-18): every book quoted per lot comes
+            // back to unit prices once (`Store::set_item_lot` rescales).
+            let quoted = store.item_lots().map_err(|error| error.to_string())?;
+            for (item, lot) in &quoted {
+                store.set_item_lot(*item, 1).map_err(|error| error.to_string())?;
+                crate::logln!("market: item {item} back to unit prices (was per {lot})");
+            }
+            if !quoted.is_empty() {
+                crate::market_units::load_lots(&[]);
+            }
         }
         let service = MarketService { store: Mutex::new(store), engine: Mutex::new(Engine::new(catalogue)) };
         // The public record is settled handovers only (match-time rows

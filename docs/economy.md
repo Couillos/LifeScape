@@ -104,7 +104,8 @@ jamais sur le plancher, au moins plancher × (1 + marge de profil), une
 pièce au-dessus au minimum (`discovery::open_over_floor`) ; un bid hors
 besoin bloquant s'ouvre sous son plafond (`bid_under_ceiling`). Le
 repricing saute un ordre sorti du carnet (deal en livraison). Cotation
-par lot (plan prix lot D, 2026-11-18) : un objet qui s'échange en vrac
+par lot (plan prix lot D, 2026-11-18, RETIRÉE le même jour : tout est
+coté à l'unité, `LOT_QUOTATION = false`) : un objet qui s'échange en vrac
 (empilable, ou ingrédient d'une recette ; jamais un équipement, un outil
 transporté ni les pièces) et vaut ≤ 5 pièces se cote pour 100 unités,
 ≤ 20 pour 10 ; décidé une fois au premier démarrage sur le prix observé

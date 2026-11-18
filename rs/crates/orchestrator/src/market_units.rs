@@ -13,7 +13,9 @@
 use lifescape_market::lots;
 
 /// Lot quotation switch: off, every object is quoted per unit (lot 1).
-pub const LOT_QUOTATION: bool = true;
+/// Off since 2026-11-18 (user: a bot must buy one unit; no "/100"): the
+/// market service brings every lot-quoted book back to unit prices.
+pub const LOT_QUOTATION: bool = false;
 
 #[cfg(test)]
 thread_local! {
