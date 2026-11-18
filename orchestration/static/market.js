@@ -201,7 +201,9 @@ function tradeRowHtml(trade) {
   const date = new Date(trade.t * 1000);
   const label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
   const taker = trade.s === 'buy' ? ' class="taker-buy" title="a buyer took the asks"' : trade.s === 'sell' ? ' class="taker-sell" title="a seller hit the bids"' : '';
-  return '<tr' + taker + '><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + label + '</td></tr>';
+  // A shape beside the colour (deuteranopia): ▲ buyer took, ▼ seller hit.
+  const mark = trade.s === 'buy' ? '▲ ' : trade.s === 'sell' ? '▼ ' : '';
+  return '<tr' + taker + '><td>' + trade.q + '</td><td>' + mark + trade.p + '</td><td>' + label + '</td></tr>';
 }
 
 function renderTrades() {
