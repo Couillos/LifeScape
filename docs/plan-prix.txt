@@ -1,0 +1,186 @@
+PLAN — PRIX : DES ORDRES QUI BOUGENT
+====================================
+Date : 2026-11-18. Statut : plan validé (Q1-Q3 tranchées le 2026-11-18,
+Q4 en attente), lot A en cours.
+Source : audit du 2026-11-18 (run/lifescape.db en lecture seule, 24 h ;
+run/orchestrator.log ; code market/src/{concession,zip,discovery,price,
+maker}.rs, orchestrator/src/{market_reprice,market_seller,brain_sales,
+market_lineage,market_orders}.rs). Suite de docs/plan-marche.txt (qui a
+posé la concession vers une limite propre) : ce plan corrige pourquoi
+cette concession tourne à vide.
+
+
+0. CONSTAT (24 h, staff exclu)
+------------------------------
+  - fenêtres de repricing : 263 000, dont 252 000 sans changement (96 %) ;
+  - chaînes de vente au même prix du début à la fin : 38 900 / 47 000 (83 %) ;
+  - annonces OUVERTES À LEUR PLANCHER : 10 254 / 11 042 (93 %), aucune
+    sous ; source du plancher : coût de fabrication 4 430, achat 2 571,
+    butin 2 170, mesuré 809 ;
+  - retraits à l'horizon (Q4) : 38 000, après 37 min en médiane ; remise
+    en vente 25 min après en médiane, AU MÊME PRIX dans 60 % des cas ;
+  - carnets à un seul côté : 334 / 530 ; écart bid/ask médian 50 % (les
+    objets à 1-2 pièces), 4-8 % sur les objets liquides (barres) ;
+  - amendements refusés : 8 142 / 19 437 (ordres appariés en livraison).
+Tick serveur 60 ms : un horizon `surplus` de 36 000 ticks = 36 min.
+
+Cause racine : la limite d'un vendeur est son coût passé ; quand le
+marché est sous ce coût, l'ouverture tombe sur la limite (seller_open :
+`base.max(reserve)`), la courbe n'a aucune course, l'annonce attend 36
+min, est retirée, revient au même prix. Rien n'apprend qu'à ce prix
+personne n'achète.
+
+
+1. LE PLANCHER APPREND (impact majeur)
+--------------------------------------
+Règle. Chaque (vendeur, objet) garde un « plancher appris » :
+  - un horizon terminé SANS vente baisse le plancher suivant de
+    DECAY_PCT (proposé 10 %) ;
+  - jamais sous la meilleure option extérieure (vente PNJ à la
+    profondeur réelle, exutoire alchimie `alch_outlet_price`), ni sous
+    1 pièce ;
+  - une vente (même partielle) remonte le plancher d'un cran (le ZIP
+    remonte déjà le prix de 5 % : le plancher suit, plafonné au coût) ;
+  - le coût propre reste l'OUVERTURE de la première annonce et la
+    référence des rendements (guide, brain), plus une limite dure.
+Le surstock (point 4 du 2026-11-18) devient un cas de cette règle : un
+surstock part directement de l'exutoire alchimie.
+
+Code.
+  - market/src/concession.rs : fonction pure `learned_floor(cost,
+    outside, failures, fills) -> i64` (DECAY_PCT, borne basse).
+  - orchestrator/src/market_reprice.rs (Step::Withdraw) : compter
+    l'échec par (compte, objet) ; market_seller::plan_sale lit le
+    plancher appris au lieu de `reserve.coins.max(outside)`.
+  - Persistance : la mémoire `horizon_withdrawn` vit en RAM et se perd à
+    chaque redémarrage du daemon (une des causes des remises en vente à
+    25 min) : la porter au carnet (table `seller_floors` : compte, objet,
+    plancher, échecs, horloge) — migration store 9.
+Tests (rouges d'abord).
+  - concession_tests : coût 858, extérieur 300, 3 échecs → 625 ; 20
+    échecs → 300 ; une vente après 3 échecs → 694.
+  - market_seller_tests : un vendeur à 858 sans acheteur sur 2 horizons
+    rouvre à 858 et marche jusqu'à 694.
+Mesure de succès. Part des chaînes de vente plates < 40 % ; remises au
+même prix après retrait < 15 %.
+Risque. Les vendeurs vendent à perte : voulu (coût passé = coût
+irrécupérable). Le guide argent doit valoriser au prix réalisé (point 2
+du plan production) pour ne pas relancer une production perdante.
+
+
+2. JAMAIS D'OUVERTURE SUR LE PLANCHER (impact majeur, avec le 1)
+---------------------------------------------------------------
+Règle. L'ouverture d'une annonce est au moins plancher × (1 + marge de
+profil) (5-20 %, `discovery::margin_of`), arrondie à la pièce
+supérieure, au moins plancher + 1 ; si le prix courant ou un meilleur
+ask concurrent est plus haut, on s'y aligne comme aujourd'hui. La courbe
+a toujours une course ; avec le point 1, la course descend sous le prix
+courant quand le marché est plus bas.
+Code. market/src/zip.rs `seller_open` et `found_open` (le `.max(reserve)`
+final devient `.max(ceil(reserve × (1 + margin)))`), market/src/
+discovery.rs `listing_open` (passe la marge).
+Côté acheteurs, symétrique : un bid ne s'ouvre jamais à son plafond
+(88 bids sur 604 le font, surtout `need`) ; ouverture ≤ plafond × (1 −
+marge), sauf ordre pressé (besoin bloquant) qui franchit l'écart comme
+aujourd'hui.
+Tests. zip tests : réserve 858, marge 10 %, prix courant 700 → ouverture
+944, plancher 858 (puis appris, §1) ; prix courant 1 000 → 1 000.
+Mesure. Annonces ouvertes au plancher < 10 % (93 % aujourd'hui).
+
+
+3. UN PRIX DE RÉFÉRENCE QUI SUIT LE CARNET (impact moyen)
+--------------------------------------------------------
+Constat. `price::current_price` = médiane des 5 derniers trades, bornée
+par les prix d'impact du carnet. Quand les seuls trades se font aux
+cotes des teneurs (±4-10 % autour de cette médiane), la médiane se
+nourrit d'elle-même ; des trades anciens (heures) pèsent comme des
+récents.
+Règle.
+  - Fraîcheur : un trade plus vieux que REF_STALE_TICKS (proposé un
+    horizon `surplus`, 36 000) ne compte plus dans la médiane ; sans
+    trade frais, la référence est le milieu du carnet (impact bid / ask),
+    sinon son côté unique, comme un objet jamais échangé.
+  - Teneurs (`maker::quote`) : la valeur juste penche vers le meilleur
+    ask quand le carnet n'a que des asks depuis DEMAND_LOOKBACK (le bid
+    marche déjà vers le bas ; l'ask suit le meilleur ask concurrent au
+    lieu de rester à v + h).
+Code. market/src/price.rs `current_price` (horloge des LastFill déjà
+présente), market/src/maker.rs `quote`.
+Tests. price tests : 5 trades à 858 vieux de 2 horizons, asks à 700 →
+référence 700 ; trades frais → inchangé. maker_tests : carnet sans bid
+depuis le lookback → ask du teneur ≤ meilleur ask concurrent.
+Mesure. Écart médian bid/ask sur les objets à plus de 10 pièces.
+
+
+4. PLUS D'ACHETEURS (impact moyen, dépend du 1)
+-----------------------------------------------
+Constat. 334 carnets sans bid : les bids ne naissent que d'un besoin
+(recette, équipement, outil, stock planifié) ou d'un teneur.
+Règle.
+  - Teneurs : sur chaque objet de leur tranche, un bid plancher
+    permanent à l'option extérieure moins h (vente PNJ à la profondeur,
+    exutoire alchimie) : ils achètent ce qu'ils peuvent écouler au PNJ
+    ou à l'alcher avec profit (arbitrage public, D22) ;
+  - Consommateurs : un bot dont l'ambition consomme un intrant (cuisson,
+    forge, fletch, runes de magie) pose un bid `stock` quand le prix
+    courant passe sous la valeur de cet intrant pour lui
+    (`brain_bids::production_costs_for`), pour un lot borné à sa
+    consommation planifiée (stock_target existant).
+  - L'alcher (ambition « alcher ») pose des bids à son gain net − marge
+    sur les objets en surstock au lieu d'attendre les asks.
+Code. market/src/maker.rs (jambe bid plancher), orchestrator/src/
+brain_stock*.rs / brain_market.rs (bid `stock` sur prix bas),
+brain_alch.rs (bids de l'alcher).
+Tests. maker_tests : objet sans demande, vente PNJ 300 → bid ≤ 300 × (1
+− h). brain tests : cuisinier, raw_lobster à 40 sous sa valeur 90 →
+bid `stock` pour sa tranche.
+Mesure. Carnets à un seul côté < 150 (334).
+
+
+5. GRANULARITÉ DES OBJETS À 1-2 PIÈCES (impact faible, chantier lourd)
+----------------------------------------------------------------------
+Constat. Prix entier par unité : à 1-2 pièces, un pas = ±50 %, rien
+sous 1. Runes, minerais, cuir bloqués à 1/2 (écart 50 %).
+Options.
+  a) cotation par lot (prix pour 10 ou 100 unités) sur les objets dont
+     le prix courant < 10 : carnet, deals, remises, affichage — tout le
+     marché change d'unité pour ces objets ;
+  b) ne rien changer et accepter 1/2 comme prix plancher réel du jeu
+     (un vrai joueur ne vend pas une rune d'air sous 1 pièce non plus).
+Décision 2026-11-18 (Q3) : a) cotation par lot. Lot D à détailler
+(unité de cotation par objet, carnet, deals, remise physique, page
+marché).
+
+
+6. NETTOYAGE (faible)
+---------------------
+  - market_reprice::reprice_round : sauter les ordres `Matched` (en
+    livraison) au lieu de tenter l'amendement (8 142 refus / 24 h, CPU).
+  - Retraits Q4 revenus en 25 min : vérifier les trois portes (mémoire
+    RAM perdue au redémarrage — réglée par la table du §1 ; exception
+    banque pleine `pressed` ; exception surstock ajoutée le 2026-11-18).
+Tests. reprice : un ordre Matched n'est ni amendé ni compté refusé.
+
+
+7. ORDRE DES LOTS ET VALIDATION
+-------------------------------
+  Lot A : §2 + §1 (ouverture avec course + plancher appris + table),
+          puis §6 ; un crate à la fois (market pur, puis orchestrator,
+          puis store), tests rouges d'abord ;
+  Lot B : §3 (référence fraîche, teneurs) ;
+  Lot C : §4 (bids teneurs, consommateurs, alcher) ;
+  Lot D : §5 a) cotation par lot.
+Après chaque lot : déploiement (daemon), 1 h de mesure contre 2 heures
+de référence depuis run/lifescape.db : part des fenêtres sans
+mouvement, chaînes plates, ouvertures au plancher, remises au même
+prix, carnets à un côté, volume réglé, erreurs ; correction si négatif.
+
+
+8. DÉCISIONS À PRENDRE
+----------------------
+  Q1. DECAY_PCT = 10 % par horizon sans vente (décidé 2026-11-18).
+  Q2. Le plancher appris descend sous le coût de fabrication quand rien
+      ne se vend (décidé 2026-11-18).
+  Q3. Cotation par lot (décidé 2026-11-18) : lot D.
+  Q4. Bids plancher des teneurs : sur toute leur tranche, ou seulement
+      les objets avec un exutoire (PNJ, alchimie) ?
