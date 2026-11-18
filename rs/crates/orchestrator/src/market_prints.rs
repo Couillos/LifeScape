@@ -28,7 +28,8 @@ pub(crate) fn side_value(side: Option<OrderSide>) -> Value {
     side.map(|known| str_value(known.as_str())).unwrap_or(Value::Null)
 }
 
-/// One live-tail print `{item,q,p,t,s}` (`op_trades`, `op_tick`).
+/// One live-tail print `{item,q,p,t,s,buyer,seller}` (`op_trades`,
+/// `op_tick`, `history`), makers flagged for the page.
 pub(crate) fn print_value(print: &Print) -> Value {
     object(vec![
         ("item", Value::Int(print.item)),
@@ -36,6 +37,10 @@ pub(crate) fn print_value(print: &Print) -> Value {
         ("p", Value::Int(print.price)),
         ("t", Value::Int(print.clock)),
         ("s", side_value(print.taker)),
+        ("buyer", str_value(&print.buyer)),
+        ("seller", str_value(&print.seller)),
+        ("buyer_maker", Value::Bool(crate::market_maker::is_maker(&print.buyer))),
+        ("seller_maker", Value::Bool(crate::market_maker::is_maker(&print.seller))),
     ])
 }
 
@@ -48,21 +53,24 @@ impl MarketService {
     /// lived in memory only, so after a restart `trades` listed the prints
     /// settled since (Bronze axe: 1) while `history` listed them all (8).
     pub(crate) fn reload_prints(&self) {
-        let fills = match self.lock_store().latest_executions(RING_PRINTS) {
-            Ok(fills) => fills,
+        // The settled deals (the executions' source) carry the parties.
+        let deals = match self.lock_store().settled_deals(None, RING_PRINTS) {
+            Ok(deals) => deals,
             Err(error) => {
                 crate::logln!("market: print ring not reloaded ({error})");
                 return;
             }
         };
         let mut engine = self.lock_engine();
-        for fill in fills {
+        for deal in deals.into_iter().rev() {
             engine.remember(Print {
-                item: fill.item_id,
-                quantity: fill.quantity,
-                price: fill.price,
-                clock: fill.clock,
-                taker: fill.taker_side,
+                item: deal.item_id,
+                quantity: deal.quantity,
+                price: deal.price,
+                clock: deal.updated_clock,
+                taker: deal.taker_side,
+                buyer: deal.buyer,
+                seller: deal.seller,
             });
         }
     }
@@ -74,13 +82,14 @@ impl MarketService {
     /// handovers that failed still showed as trades ("Last trades",
     /// volumes, candles).
     pub(crate) fn settle_print(&self, deal_id: i64, item: i64, qty: i64, price: i64, clock: i64) {
-        let taker = {
+        let (taker, buyer, seller) = {
             let mut store = self.lock_store();
-            let taker = match store.get_deal(deal_id) {
-                Ok(found) => found.and_then(|deal| deal.taker_side),
+            let (taker, buyer, seller) = match store.get_deal(deal_id) {
+                Ok(Some(deal)) => (deal.taker_side, deal.buyer, deal.seller),
+                Ok(None) => (None, String::new(), String::new()),
                 Err(error) => {
                     crate::logln!("market: deal {deal_id} taker side unreadable ({error}), printed as unknown");
-                    None
+                    (None, String::new(), String::new())
                 }
             };
             let recorded = store.record_execution(&lifescape_store::NewExecution {
@@ -99,10 +108,10 @@ impl MarketService {
             if let Err(error) = store.rebuild_all_candles(item) {
                 crate::logln!("market: candles of item {item} not repainted ({error})");
             }
-            taker
+            (taker, buyer, seller)
         };
         let mut engine = self.lock_engine();
         engine.note_fill(item, price, qty);
-        engine.remember(Print { item, quantity: qty, price, clock, taker });
+        engine.remember(Print { item, quantity: qty, price, clock, taker, buyer, seller });
     }
 }

@@ -296,6 +296,23 @@ impl Store {
         Ok(latest)
     }
 
+    /// Settled deals, newest first (`item` narrows, `None`: every item):
+    /// the public trades with their buyer and seller (user 2026-11-18,
+    /// « Last trades »).
+    pub fn settled_deals(&self, item: Option<i64>, limit: i64) -> Result<Vec<Deal>, Error> {
+        let query = format!(
+            "SELECT {DEAL_COLUMNS} FROM deals WHERE status = 'settled' AND (?1 < 0 OR item_id = ?1) \
+             ORDER BY updated_clock DESC, deal_id DESC LIMIT ?2"
+        );
+        let mut statement = self.connection.prepare(&query)?;
+        let mut found_rows = statement.query(rusqlite::params![item.unwrap_or(-1), limit.clamp(1, 1000)])?;
+        let mut out = Vec::new();
+        while let Some(row) = found_rows.next()? {
+            out.push(map_deal(row)?);
+        }
+        Ok(out)
+    }
+
     /// Fails every non-final deal left by a dead daemon (both parties
     /// disconnected with it, no handover can resume). Returns the count.
     /// The market service calls this on boot so `my_deals` never shows
@@ -383,6 +400,36 @@ impl Store {
 #[cfg(test)]
 mod deals_tests {
     use super::*;
+
+    /// Settled trades with their parties, newest first (« Last trades »,
+    /// user 2026-11-18); an open or failed deal is no trade.
+    #[test]
+    fn settled_deals_name_their_parties() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 1519)?;
+        let deal = |buyer: &str, seller: &str, price: i64, clock: i64| NewDeal {
+            buyer: buyer.to_string(),
+            seller: seller.to_string(),
+            item_id: 1519,
+            quantity: 10,
+            price,
+            meeting_x: 0,
+            meeting_y: 0,
+            meeting_level: 0,
+            deadline_tick: 0,
+            clock,
+            taker_side: crate::OrderSide::Buy,
+        };
+        let open = store.create_deal(&deal("bob", "lara_lane", 9, 100))?;
+        let _ = open;
+        let settled = store.create_deal(&deal("eva_dale", "lara_lane", 7, 400))?;
+        store.set_deal_status(settled, DealStatus::Settled, "", 410)?;
+        let rows = store.settled_deals(Some(1519), 10)?;
+        assert_eq!(rows.iter().map(|row| (row.buyer.as_str(), row.seller.as_str(), row.price)).collect::<Vec<_>>(), vec![("eva_dale", "lara_lane", 7)]);
+        assert!(store.settled_deals(Some(42), 10)?.is_empty());
+        assert_eq!(store.settled_deals(None, 10)?.len(), 1);
+        Ok(())
+    }
 
     /// Plan prix §1: listings withdrawn at their horizon and settled
     /// sales per object since a clock; other reasons, other accounts and

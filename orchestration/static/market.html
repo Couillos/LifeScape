@@ -41,6 +41,10 @@
   #tables table { border-collapse: collapse; font-size: 12px; }
   #tables td, #tables th { border: 1px solid #333; padding: 2px 8px; text-align: right; }
   #tables th { color: #888; font-weight: normal; }
+  /* Last trades right of the book, never wrapped under it; under it on a
+     phone (user 2026-11-18). */
+  #booktrades { display: flex; gap: 16px; align-items: flex-start; flex-wrap: nowrap; }
+  @media (max-width: 700px) { #booktrades { flex-direction: column; } }
   #book tr.ask td:first-child { color: #ff1744; }
   #book tr.bid td:first-child { color: #00e676; }
   #book tr.spread td { color: #888; text-align: center; }
@@ -62,6 +66,9 @@
   #trades tr.taker-buy td { background: rgba(0, 230, 118, 0.35); color: #fff; }
   #trades tr.taker-sell td { background: rgba(255, 23, 68, 0.35); color: #fff; }
   .muted { color: #888; }
+  /* A party's spectate link (user 2026-11-18). */
+  a.party { color: inherit; text-decoration: underline dotted; }
+  a.party:hover { color: #ff0; }
   /* Lot quotation: "140 /100" (plan prix lot D). */
   .lot { color: #888; font-size: 0.75em; font-weight: normal; }
   /* Market makers' pseudos in Latest transactions: shimmering gold. */
@@ -103,8 +110,10 @@
     </div>
     <canvas id="chart" width="720" height="340"></canvas>
     <div id="tables">
-      <div><h2>Book</h2><table id="book"></table></div>
-      <div><h2>Last trades</h2><table id="trades"></table></div>
+      <div id="booktrades">
+        <div><h2>Book</h2><table id="book"></table></div>
+        <div><h2>Last trades</h2><table id="trades"></table></div>
+      </div>
       <div><h2>Latest transactions</h2><table id="recent"></table><div class="muted">all items, live · buyer/seller from the backend feed</div></div>
     </div>
   </div>

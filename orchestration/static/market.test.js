@@ -58,9 +58,11 @@ test('WS prints fold into the live quarter, not the live hour', () => {
 });
 
 test('a market maker pseudo is gold, any other plain and escaped', () => {
-  assert.equal(Market.partyHtml('jim_ford', true), '<span class="maker" title="market maker">jim_ford</span>');
-  assert.equal(Market.partyHtml('eva_dale', false), 'eva_dale');
-  assert.equal(Market.partyHtml('<b>', false), '&lt;b&gt;');
+  assert.equal(Market.partyHtml('jim_ford', true), '<a class="party" href="/#jim_ford" title="spectate jim_ford"><span class="maker" title="market maker">jim_ford</span></a>');
+  assert.equal(Market.partyHtml('eva_dale', false), '<a class="party" href="/#eva_dale" title="spectate eva_dale">eva_dale</a>', 'a link to its spectate view');
+  assert.equal(Market.partyHtml('<b>', false), '<a class="party" href="/#%3Cb%3E" title="spectate &lt;b&gt;">&lt;b&gt;</a>');
+  assert.equal(Market.partyHtml('—', false), '—', 'an unknown party links nowhere');
+  assert.equal(Market.partyHtml(undefined, false), '—');
 });
 
 test('a last trade is green when a buyer took the asks, red when a seller hit the bids', () => {
@@ -84,4 +86,9 @@ test('a lot-quoted price carries its lot, a unit price nothing', () => {
   assert.equal(Market.lotSuffix(1), '');
   assert.equal(Market.lotSuffix(undefined), '');
   assert.match(Market.tickerHtml({ price: 140, lot: 100, change24h: 0, ref: 140, volume24h: 3000 }), /tk-last tk-flat">140 <span class="lot">\/100<\/span>/);
+});
+
+test('a last trade names its buyer and seller, each a spectate link', () => {
+  const row = Market.tradeRowHtml({ t: 20_500 * 86400, q: 3, p: 1329, s: 'buy', buyer: 'felix_rook', seller: 'nathan_t', seller_maker: false });
+  assert.match(row, /<td><a class="party" href="\/#felix_rook"[^>]*>felix_rook<\/a><\/td><td><a class="party" href="\/#nathan_t"[^>]*>nathan_t<\/a><\/td>/);
 });

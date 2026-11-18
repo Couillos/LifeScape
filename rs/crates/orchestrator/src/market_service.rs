@@ -104,6 +104,9 @@ pub(crate) struct Print {
     pub(crate) clock: i64,
     /// Taker side of the settled deal (`None`: unknown, pre-split).
     pub(crate) taker: Option<OrderSide>,
+    /// The deal's buyer and seller (user 2026-11-18, « Last trades »).
+    pub(crate) buyer: String,
+    pub(crate) seller: String,
 }
 
 pub(crate) struct Engine {
@@ -630,17 +633,22 @@ impl MarketService {
                 ])
             })
             .collect();
+        // The prints with their parties (user 2026-11-18): an execution is
+        // its settled deal's (same item, clock, quantity and price).
+        let mut parties: Vec<(i64, i64, i64, String, String)> = store
+            .settled_deals(Some(item), 100)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|deal| (deal.updated_clock, deal.quantity, deal.price, deal.buyer, deal.seller))
+            .collect();
         let tail: Vec<Value> = executions
             .iter()
             .rev()
             .take(30)
             .map(|exec| {
-                object(vec![
-                    ("q", Value::Int(exec.quantity)),
-                    ("p", Value::Int(exec.price)),
-                    ("t", Value::Int(exec.clock)),
-                    ("s", crate::market_prints::side_value(exec.taker_side)),
-                ])
+                let found = parties.iter().position(|(clock, quantity, price, _, _)| *clock == exec.clock && *quantity == exec.quantity && *price == exec.price);
+                let (buyer, seller) = found.map(|at| parties.remove(at)).map(|(_, _, _, buyer, seller)| (buyer, seller)).unwrap_or_default();
+                crate::market_prints::print_value(&Print { item, quantity: exec.quantity, price: exec.price, clock: exec.clock, taker: exec.taker_side, buyer, seller })
             })
             .collect();
         object(vec![

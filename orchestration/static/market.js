@@ -218,11 +218,11 @@ function tradeRowHtml(trade) {
   const date = new Date(trade.t * 1000);
   const label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
   const taker = trade.s === 'buy' ? ' class="taker-buy" title="a buyer took the asks"' : trade.s === 'sell' ? ' class="taker-sell" title="a seller hit the bids"' : '';
-  return '<tr' + taker + '><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + label + '</td></tr>';
+  return '<tr' + taker + '><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + partyHtml(trade.buyer, trade.buyer_maker) + '</td><td>' + partyHtml(trade.seller, trade.seller_maker) + '</td><td>' + label + '</td></tr>';
 }
 
 function renderTrades() {
-  const rows = ['<tr><th>qty</th><th>price' + lotSuffix(tradesLot) + '</th><th>time</th></tr>'];
+  const rows = ['<tr><th>qty</th><th>price' + lotSuffix(tradesLot) + '</th><th>buyer</th><th>seller</th><th>time</th></tr>'];
   for (const trade of trades.slice(0, 12)) rows.push(tradeRowHtml(trade));
   document.getElementById('trades').innerHTML = rows.join('');
 }
@@ -234,10 +234,15 @@ function statusLabel(status) {
   return status === 'settled' ? 'settled' : 'pending';
 }
 
-// A party's pseudo; a market maker's in gold (user 2026-11-17).
+// A party's pseudo; a market maker's in gold (user 2026-11-17); a link to
+// its spectate view (user 2026-11-18). An unknown party ('—', empty)
+// links nowhere.
 function partyHtml(name, maker) {
-  const text = String(name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return maker ? '<span class="maker" title="market maker">' + text + '</span>' : text;
+  const raw = String(name === undefined || name === null ? '' : name);
+  const text = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const shown = maker ? '<span class="maker" title="market maker">' + text + '</span>' : text;
+  if (!raw || raw === '—') return shown || '—';
+  return '<a class="party" href="/#' + encodeURIComponent(raw) + '" title="spectate ' + text + '">' + shown + '</a>';
 }
 
 // Plan prix lot D (user 2026-11-18): a cheap object is quoted per lot of
