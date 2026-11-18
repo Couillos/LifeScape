@@ -148,16 +148,15 @@ pub fn current_price(last_fills: &[LastFill], bids: &[(i64, i64)], asks: &[(i64,
     Reference { price: price.max(1), traded: false }
 }
 
-/// 24 h change of the displayed reference (thousandths): today's VWAP
-/// against the previous 24 h VWAP, or against today's first print when
-/// nothing traded the day before. Measured on the same VWAP the list shows
-/// as its price (2026-11-13: wool listed at 2 showed +800 % because the
-/// change compared the first print, 1, with a lone last print at 9).
-pub fn change_thousandths(today: &[PricedFill], previous_day: &[PricedFill]) -> i64 {
-    let Some(now) = vwap(today) else { return 0 };
-    let before = vwap(previous_day).or_else(|| today.iter().find(|fill| fill.quantity > 0 && fill.price >= 1).map(|fill| fill.price));
-    match before {
-        Some(base) if base >= 1 => (((now - base) as f64 / base as f64) * 1000.0).round() as i64,
+/// 24 h change of the last price (thousandths), as an exchange ticker
+/// reads it (user 2026-11-18: iron kiteshield showed +70 000 % beside a
+/// listed price of 1, a VWAP change next to a median price): the last
+/// trade against the price 24 h ago (the last trade at or before then),
+/// else the window's first trade (its open) for an object first traded
+/// within the day. 0 without a last trade or a base.
+pub fn ticker_change_thousandths(last: Option<i64>, day_ago: Option<i64>, window_open: Option<i64>) -> i64 {
+    match (last, day_ago.or(window_open)) {
+        (Some(now), Some(base)) if base >= 1 => (((now - base) as f64 / base as f64) * 1000.0).round() as i64,
         _ => 0,
     }
 }
@@ -205,15 +204,16 @@ mod tests {
         PricedFill { quantity: qty, price, clock }
     }
 
+    /// Live 2026-11-18, iron kiteshield: last trades at 142 after a day
+    /// at 1-2 coins. The ticker compares the last price with the price
+    /// 24 h ago; an object first traded today with its first trade.
     #[test]
-    fn change_follows_the_displayed_vwap() {
-        // Wool 2026-11-13: listed at its VWAP 2, the old change compared
-        // the first print (1) with a lone last print (9): +800 %.
-        let day_before = [fill(100, 1, -5)];
-        assert_eq!(change_thousandths(&[fill(10, 1, 1), fill(10, 3, 2)], &day_before), 1000, "1 → 2 is +100 %");
-        assert_eq!(change_thousandths(&[fill(10, 1, 1), fill(10, 3, 2)], &[]), 1000, "no previous day: first print is the base");
-        assert_eq!(change_thousandths(&[], &day_before), 0, "nothing traded today: no change");
-        assert_eq!(change_thousandths(&[fill(5, 4, 1)], &[fill(5, 4, -1)]), 0);
+    fn the_ticker_change_is_last_price_against_a_day_ago() {
+        assert_eq!(ticker_change_thousandths(Some(142), Some(1), Some(2)), 141_000, "1 → 142");
+        assert_eq!(ticker_change_thousandths(Some(2), Some(2), None), 0, "flat");
+        assert_eq!(ticker_change_thousandths(Some(9), None, Some(3)), 2000, "first traded today: its open");
+        assert_eq!(ticker_change_thousandths(Some(5), Some(10), Some(7)), -500, "the day-ago price wins over the open");
+        assert_eq!(ticker_change_thousandths(None, Some(10), None), 0, "never traded: no change");
     }
 
     #[test]

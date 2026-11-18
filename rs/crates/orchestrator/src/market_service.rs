@@ -663,11 +663,8 @@ impl MarketService {
             }
             let mut volume = 0i64;
             let mut fills: Vec<lifescape_market::PricedFill> = Vec::new();
-            let mut previous_day: Vec<lifescape_market::PricedFill> = Vec::new();
             let mut volumes: Vec<(i64, i64)> = Vec::new();
             for (id, _shop) in members {
-                let before = store.executions_for_item(*id, clock - 2 * 86400, clock - 86400).unwrap_or_default();
-                previous_day.extend(before.iter().map(|exec| lifescape_market::PricedFill { quantity: exec.quantity, price: exec.price, clock: exec.clock }));
                 let day = store.executions_for_item(*id, clock - 86400, clock + 1).unwrap_or_default();
                 let member_volume: i64 = day.iter().map(|exec| exec.quantity).sum();
                 volume += member_volume;
@@ -687,12 +684,11 @@ impl MarketService {
                 .map(|member| member.1)
                 .unwrap_or(1);
             let _ = shop;
-            previous_day.sort_by_key(|fill| fill.clock);
-            // Display only (no bot reads it): today's VWAP against the day
-            // before (a lone print at 9 read +800 % against the first).
-            let change = lifescape_market::change_thousandths(&fills, &previous_day);
+            // The day's first trade: the ticker's base for an object
+            // first traded within the day.
+            let window_open = fills.iter().find(|fill| fill.quantity > 0 && fill.price >= 1).map(|fill| fill.price);
             let forms: Vec<i64> = volumes.iter().map(|member| member.0).collect();
-            items.push((name.clone(), canonical, forms, change, volume, order_count, open_qty));
+            items.push((name.clone(), canonical, forms, window_open, volume, order_count, open_qty));
         }
         drop(store);
         // Descending 24h volume, then the largest open quantity, then the name.
@@ -702,18 +698,25 @@ impl MarketService {
         let rows: Vec<Value> = items
             .into_iter()
             .take(limit)
-            .map(|(name, id, forms, change, volume, order_count, open_qty)| {
-                // The current price bots read (last five fills of the
-                // form that traded, clamped by its book), only for the
-                // rows shown.
+            .map(|(name, id, forms, window_open, volume, order_count, open_qty)| {
+                // The form that traded; the current price bots read (last
+                // five fills clamped by its book) rides as `ref`.
                 let priced = forms.iter().copied().find(|form| !self.last_fill_prices(*form).is_empty()).unwrap_or(id);
                 let reference = self.reference(priced).price;
+                // Displayed like an exchange ticker (user 2026-11-18): the
+                // last trade, its change against the price 24 h ago.
+                let (last, day_ago) = {
+                    let store = self.lock_store();
+                    (store.last_price_before(priced, clock + 1).ok().flatten(), store.last_price_before(priced, clock - 86_400 + 1).ok().flatten())
+                };
+                let change = lifescape_market::ticker_change_thousandths(last, day_ago, window_open);
                 object(vec![
                     ("orders", Value::Int(order_count as i64)),
                     ("open_qty", Value::Int(open_qty)),
                     ("item", Value::Int(id)),
                     ("name", str_value(&name)),
-                    ("price", Value::Int(reference)),
+                    ("price", Value::Int(last.unwrap_or(reference))),
+                    ("ref", Value::Int(reference)),
                     ("change24h", Value::Int(change)),
                     ("volume24h", Value::Int(volume)),
                 ])

@@ -314,7 +314,7 @@ function draw() {
   const canvas = document.getElementById('chart');
   const item = items.find(entry => entry.item === selected);
   document.getElementById('title').textContent = item ? item.name : (selected === null ? 'Pick an item' : itemName(selected));
-  document.getElementById('refline').textContent = item ? ' ref ' + item.price + ' · 24h ' + changeText(item.change24h) + ' · vol ' + item.volume24h : '';
+  document.getElementById('refline').textContent = item ? ' last ' + item.price + ' · 24h ' + changeText(item.change24h) + ' · bots ref ' + (item.ref === undefined ? item.price : item.ref) + ' · vol ' + item.volume24h : '';
 
   const { slots, width } = currentSlots();
   // Live tail: the newest WS prints stretch the live slot.

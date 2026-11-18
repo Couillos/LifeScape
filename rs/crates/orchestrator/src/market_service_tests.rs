@@ -594,14 +594,37 @@ fn list_merges_same_name_forms_and_sorts_by_volume() {
     // Volume descends: Logs (5 + 7) before Coal (3).
     assert_eq!(rows[0].get("name").as_str(), Some("Logs"));
     assert_eq!(rows[0].get("volume24h").as_i64(), Some(12));
-    // Canonical id carries the volume; its price is the current price
-    // bots read (2026-11-14: median of its last five fills, 12).
+    // Canonical id carries the volume; its displayed price is the last
+    // trade (12), the bots' current price rides as `ref`.
     assert_eq!(rows[0].get("item").as_i64(), Some(101));
     assert_eq!(rows[0].get("price").as_i64(), Some(12));
-    // Display-only change: today's VWAP (11) against the base (no previous
-    // day: today's first print, 10): +10 %, not first-vs-last print.
-    assert_eq!(rows[0].get("change24h").as_i64(), Some(100));
+    assert_eq!(rows[0].get("ref").as_i64(), Some(12));
+    // Ticker change: the last trade (12) against the day's first (10),
+    // nothing traded 24 h ago: +20 %.
+    assert_eq!(rows[0].get("change24h").as_i64(), Some(200));
     assert_eq!(rows[1].get("name").as_str(), Some("Coal"));
+    cleanup(&path);
+}
+
+/// Live 2026-11-18: iron kiteshield listed at 1 (median of its last five
+/// fills, three at 1) beside +70 000 % (a VWAP change). The row shows the
+/// last trade (142) and its change against the price 24 h ago (2).
+#[test]
+fn the_list_shows_the_last_trade_and_its_change_since_a_day_ago() {
+    let path = temp_db("list-ticker");
+    let catalogue = vec![CatalogueItem { id: 1191, name: "Iron kiteshield".to_string(), shop_price: 238, alch_value: 142 }];
+    let service = MarketService::open(&path, catalogue).expect("opens");
+    let clock = MarketService::now_clock();
+    for (price, at) in [(2, clock - 90_000), (1, clock - 3_000), (1, clock - 2_000), (1, clock - 1_000), (142, clock - 200), (142, clock - 100)] {
+        service
+            .lock_store()
+            .record_execution(&lifescape_store::NewExecution { item_id: 1191, quantity: 1, price, clock: at, server_tick: at, taker_side: None })
+            .expect("prints");
+    }
+    let list = service.handle(&request(vec![("op", str_value("list")), ("limit", Value::Int(2000))]));
+    let row = &list.get("items").as_arr().expect("item rows")[0];
+    assert_eq!(row.get("price").as_i64(), Some(142), "the last trade");
+    assert_eq!(row.get("change24h").as_i64(), Some(70_000), "142 against 2 a day ago: +7 000 %");
     cleanup(&path);
 }
 
