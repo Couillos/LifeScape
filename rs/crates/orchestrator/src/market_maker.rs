@@ -373,15 +373,10 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
         let (bids, asks) = (resting(lifescape_store::OrderSide::Buy), resting(lifescape_store::OrderSide::Sell));
         let (others_bid, others_ask, bid_depth, ask_depth) = others_book(&service, *id, account);
         let units = stock.get(id).copied().unwrap_or(0);
-        // M7: a never-traded object is quoted on its public anchors (the
-        // published production cost, a low alchemy cast's net); read only
-        // then (a traded object's fair value is its current price).
-        let (make_cost, alch_net) = if references[id].traded {
-            (None, None)
-        } else {
-            let anchors = crate::market_discovery::public_anchors(item.name);
-            (anchors.make_cost, anchors.alch_net)
-        };
+        // M7: a never-traded object is quoted on its public anchor (the
+        // published production cost); read only then (a traded object's
+        // fair value is its current price).
+        let make_cost = if references[id].traded { None } else { crate::market_discovery::public_anchors(item.name).make_cost };
         let input = MakerInput {
             reference: references[id],
             best_bid: others_bid,
@@ -392,12 +387,10 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
             anchor: item.anchor,
             outside: item.outside,
             make_cost,
-            alch_net,
             stock: units,
             stock_cost: held.get(id).map(|position| position.cost).unwrap_or(0),
             capital: equity,
             own_bid: bids.first().map(|(_, price, _)| *price),
-            alch_exit: crate::market_discovery::outlet_alch_net(item.name).and_then(lifescape_market::discovery::alch_outlet_price),
         };
         let quote = lifescape_market::maker_quote(&MAKER_CAPS, &input);
         let bid = quote.bid.filter(|_| may_bid(held_types, units));

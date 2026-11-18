@@ -972,17 +972,18 @@ triche (règle 13) : leur stock vient de leurs deals.
   jamais sur la courbe de concession) :
   juste valeur v = prix courant échangé, sinon milieu bid/ask des autres,
   sinon (jamais échangé, M7) le coût de production publié par les guides,
-  borné à [plancher / (1 − h), plafond / (1 + h)] où plancher = max(offre
-  boutique + 1, net de basse alchimie) et plafond = min(valeur boutique,
-  meilleur ask des autres), à défaut plafond / (1 + h) ; lot = 1000 / v (1..500) ;
+  borné par plafond / (1 + h) où plafond = min(valeur boutique, meilleur
+  ask des autres), à défaut plafond / (1 + h) ; AUCUN plancher (décision
+  2026-11-18 : « les teneurs doivent s'adapter au marché ») ; lot =
+  1000 / v (1..500) ;
   biais de stock r = clamp((stock − lot)/lot, −1, 1), prix de réserve
   p = v (1 − h r) ; bid = ⌊p (1 − h)⌋ ≤ v − 1 ; ask = ⌈p (1 + h)⌉ ≥ v + 1,
-  > bid, > ce que paie une boutique. h = 4 % (liquide : achats d'autres
+  > bid (peut passer sous ce que paie une boutique). h = 4 % (liquide : achats d'autres
   ≥ un lot sur 72 000 ticks), 8 % (mince), 10 % (découverte, quart de
   lot, jamais relevé par un stock bas). Stock haut → bid ET ask baissent ;
   stock bas → les deux montent. Sans demande (échangé, aucun bid d'un
   autre, aucun achat d'un autre depuis 72 000 ticks) : le bid descend de
-  5 % par passe vers 1, le stock au-delà d'un lot part au magasin PNJ
+  5 % par passe jusqu'à 1 (plus de bid plancher), le stock au-delà d'un lot part au magasin PNJ
   (Q3, `take_dumps` → plan de vente de `brain_sales`). Plafonds :
   capital engagé par objet (stock à max(valeur, coût) + bid) ≤ 10 % des
   fonds propres, stock ≤ 500 unités, part d'un côté ≤ 25 % de la

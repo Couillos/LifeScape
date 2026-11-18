@@ -244,11 +244,9 @@ pub struct MakerInput {
     pub anchor: i64,
     /// What an F2P shop pays for one unit (Q3 outside option).
     pub outside: Option<i64>,
-    /// Discovery anchors (M7, public): the production cost the guides
-    /// publish and the net of one alchemy cast (a caster's outside
-    /// option), runes at current prices.
+    /// Discovery anchor (M7, public): the production cost the guides
+    /// publish.
     pub make_cost: Option<i64>,
-    pub alch_net: Option<i64>,
     /// The maker's own stock (bank, pack) and equity (coins plus stock
     /// at the current price).
     pub stock: i64,
@@ -257,10 +255,6 @@ pub struct MakerInput {
     pub capital: i64,
     /// The maker's resting bid, if any (the no-demand walk toward 1).
     pub own_bid: Option<i64>,
-    /// What the alchemy outlet pays one unit (`discovery::
-    /// alch_outlet_price`, public: the best fleet caster's net less its
-    /// share), if any: with the shop's offer, the floor bid's exit.
-    pub alch_exit: Option<i64>,
 }
 
 /// How the fair value was found.
@@ -302,16 +296,6 @@ fn book_cap(caps: &MakerCaps, others: i64, lot: i64) -> i64 {
     ((others as f64 * caps.max_book_share / (1.0 - caps.max_book_share)).floor() as i64).max(1)
 }
 
-/// Plan prix §4 (user 2026-11-18, every object of the slice): the lowest
-/// bid a maker keeps, a real buyer on every book: under its exit (what
-/// an NPC shop or the alchemy outlet pays, less the half spread), at
-/// least a quarter of the fair value, at least 1 coin.
-pub fn floor_bid(input: &MakerInput, fair: i64, half: f64) -> i64 {
-    let exit = input.outside.unwrap_or(0).max(input.alch_exit.unwrap_or(0));
-    let under_exit = (exit as f64 * (1.0 - half) + 1e-9).floor() as i64;
-    under_exit.max(fair / 4).max(1)
-}
-
 /// The maker's quotes for one object (see the module rules).
 pub fn quote(caps: &MakerCaps, input: &MakerInput) -> MakerQuote {
     let demand = input.recent_buys > 0 || input.best_bid.is_some();
@@ -329,18 +313,16 @@ pub fn quote(caps: &MakerCaps, input: &MakerInput) -> MakerQuote {
         (((bid + ask) / 2).max(1), Regime::Thin)
     } else {
         // Never traded (M7, public anchors only): a buyer pays at most
-        // the shop value or the cheapest public listing (the ceiling), a
-        // seller takes at least the shop's offer or a cast's net (the
-        // floor). The fair value is the production cost the guides
-        // publish, kept where the bid draws a seller (>= floor) and the
-        // ask a buyer (<= ceiling); unknown, the ask joins the ceiling
-        // and the bid sits one spread under (fair = ceiling / (1 + h)).
+        // the shop value or the cheapest public listing (the ceiling). The
+        // fair value is the production cost the guides publish, kept
+        // where the ask draws a buyer (<= ceiling), no sellers' floor
+        // (user 2026-11-18); unknown, the ask joins the ceiling and the
+        // bid sits one spread under (fair = ceiling / (1 + h)).
         let half = caps.half_spread_discovery;
-        let floor = input.outside.map_or(1, |paid| paid + 1).max(input.alch_net.unwrap_or(0));
-        let ceiling = input.best_ask.map_or(input.anchor, |ask| ask.min(input.anchor)).max(floor).max(1);
+        let ceiling = input.best_ask.map_or(input.anchor, |ask| ask.min(input.anchor)).max(1);
         let top = ((ceiling as f64 / (1.0 + half)).floor() as i64).max(1);
         let fair = match input.make_cost.filter(|cost| *cost >= 1) {
-            Some(cost) => cost.max((floor as f64 / (1.0 - half) - 1e-9).ceil() as i64).min(top),
+            Some(cost) => cost.min(top),
             None => top,
         };
         (fair.max(1), Regime::Discovery)
@@ -364,13 +346,11 @@ pub fn quote(caps: &MakerCaps, input: &MakerInput) -> MakerQuote {
     let bid_lot = if regime == Regime::Discovery { (lot / 4).max(1) } else { lot };
     if regime == Regime::NoDemand {
         let walked = input.own_bid.map_or(bid_price, |own| (own as f64 * (1.0 - NO_DEMAND_STEP)).floor() as i64);
-        bid_price = bid_price.min(walked).max(floor_bid(input, fair, half).min(bid_price)).max(1);
+        // No floor (user 2026-11-18): the bid walks down to 1.
+        bid_price = bid_price.min(walked).max(1);
     }
     let mut ask_price = (reservation * (1.0 + half) - 1e-9).ceil() as i64;
     ask_price = ask_price.max(fair + 1).max(bid_price + 1);
-    if let Some(paid) = input.outside {
-        ask_price = ask_price.max(paid + 1);
-    }
     // Risk caps: capital engaged per object, stock, book share.
     // Engaged = the stock at its current value or at what it cost, the
     // higher: a falling price never reopens room (no averaging down).

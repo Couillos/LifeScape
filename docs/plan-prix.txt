@@ -117,6 +117,7 @@ Mesure. Écart médian bid/ask sur les objets à plus de 10 pièces.
 Constat. 334 carnets sans bid : les bids ne naissent que d'un besoin
 (recette, équipement, outil, stock planifié) ou d'un teneur.
 Règle.
+  - [RETIRÉ 2026-11-18 : plus aucun plancher, ni vendeur ni teneur]
   - Teneurs : sur chaque objet de leur tranche, un bid plancher
     permanent à l'option extérieure moins h (vente PNJ à la profondeur,
     exutoire alchimie) : ils achètent ce qu'ils peuvent écouler au PNJ

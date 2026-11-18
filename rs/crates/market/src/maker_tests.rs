@@ -19,12 +19,10 @@ fn liquid(stock: i64) -> MakerInput {
         anchor: 80,
         outside: Some(30),
         make_cost: None,
-        alch_net: None,
         stock,
         stock_cost: stock * 100,
         capital: 100_000,
         own_bid: None,
-        alch_exit: None,
     }
 }
 
@@ -162,34 +160,36 @@ fn stock_moves_both_sides() {
     }
 }
 
-/// Plan prix §4 (user 2026-11-18): a maker keeps a real bid on every
-/// object of its slice. Nobody buys: the bid walks down to its floor bid
-/// (the shop's 30 or the alchemy outlet, less the half spread; a quarter
-/// of the fair value at the least), never to 1.
+/// No price floor for the makers (user 2026-11-18: "les market makers
+/// doivent s'adapter au marché"). Nobody buys: the bid walks down 5 % a
+/// pass all the way to 1, never held at the shop's offer nor the alchemy
+/// outlet; past one lot the stock still goes to the shop (a real buyer).
 #[test]
-fn an_object_nobody_buys_walks_its_bid_to_its_floor_and_dumps_to_the_shop() {
+fn an_object_nobody_buys_walks_its_bid_to_one_and_dumps_to_the_shop() {
     let idle = MakerInput { best_bid: None, recent_buys: 0, stock: 300, capital: 1_000_000, own_bid: Some(40), ..liquid(0) };
     let first = quote(&MAKER_CAPS, &idle);
     assert_eq!(first.regime, Regime::NoDemand);
     assert_eq!(first.bid.map(|leg| leg.price), Some(38), "5 % down a pass");
     let mut own = Some(100);
     let mut passes = 0;
-    let floor = floor_bid(&idle, 100, MAKER_CAPS.half_spread_thin);
-    assert_eq!(floor, 27, "the shop's 30 less 8 %, over a quarter of 100");
-    while own != Some(floor) && passes < 200 {
+    while own != Some(1) && passes < 400 {
         let next = quote(&MAKER_CAPS, &MakerInput { own_bid: own, ..idle }).bid.map(|leg| leg.price);
         assert!(next < own, "always down: {next:?} after {own:?}");
         own = next;
         passes += 1;
     }
-    assert_eq!(own, Some(floor), "reaches its floor bid");
-    assert_eq!(quote(&MAKER_CAPS, &MakerInput { own_bid: own, ..idle }).bid.map(|leg| leg.price), Some(floor), "and stays there");
-    assert!(passes <= 40, "{passes} passes");
-    let alch = MakerInput { alch_exit: Some(60), own_bid: Some(20), ..idle };
-    assert_eq!(quote(&MAKER_CAPS, &alch).bid.map(|leg| leg.price), Some(55), "the alchemy outlet's 60 less 8 %");
+    assert_eq!(own, Some(1), "down to 1, under the shop's 30");
     assert_eq!(first.npc_dump, 300 - lot_units(&MAKER_CAPS, 100), "past one lot goes to the shop");
     let no_shop = quote(&MAKER_CAPS, &MakerInput { outside: None, ..idle });
     assert_eq!(no_shop.npc_dump, 0, "no shop pays: nothing dumped");
+}
+
+/// No price floor: the maker's ask follows its fair value, even under
+/// what an NPC shop pays for the object.
+#[test]
+fn the_ask_may_go_under_the_shop_offer() {
+    let cheap = quote(&MAKER_CAPS, &MakerInput { reference: traded(10), outside: Some(30), stock: 50, ..liquid(0) });
+    assert!(cheap.ask.expect("ask").price < 30, "{cheap:?}");
 }
 
 #[test]
@@ -204,12 +204,10 @@ fn a_never_traded_object_is_discovered_prudently() {
         anchor: 200,
         outside: Some(60),
         make_cost: None,
-        alch_net: None,
         stock: 0,
         stock_cost: 0,
         capital: 100_000,
         own_bid: None,
-        alch_exit: None,
     };
     let seen = quote(&MAKER_CAPS, &fresh);
     assert_eq!(seen.regime, Regime::Discovery);
@@ -225,9 +223,10 @@ fn a_never_traded_object_is_discovered_prudently() {
     // Prudence: an empty stock never raises a discovery bid.
     let lot = lot_units(&MAKER_CAPS, seen.fair);
     assert_eq!(seen.bid.map(|leg| leg.price), quote(&MAKER_CAPS, &MakerInput { stock: lot, ..fresh }).bid.map(|leg| leg.price));
-    // Never under what a shop pays when asking.
+    // No floor at what a shop pays (user 2026-11-18): a public listing at
+    // 30 sets the ceiling, the ask follows it under the shop's 60.
     let cheap = quote(&MAKER_CAPS, &MakerInput { best_ask: Some(30), stock: 3, ..fresh });
-    assert!(cheap.ask.expect("ask").price > 60, "{cheap:?}");
+    assert!(cheap.ask.expect("ask").price <= 30, "{cheap:?}");
 }
 
 #[test]
@@ -256,8 +255,8 @@ fn risk_caps_bound_capital_stock_and_book_share() {
 }
 
 /// M7: a never-traded object with a published production cost is quoted
-/// around that cost, its bid over the sellers' outside options (shop
-/// offer, a cast's net) and its ask under the buyers' ceiling.
+/// around that cost (no sellers' floor, user 2026-11-18) and its ask under
+/// the buyers' ceiling.
 #[test]
 fn discovery_centres_on_the_published_cost_inside_the_public_bounds() {
     let fresh = MakerInput {
@@ -270,20 +269,15 @@ fn discovery_centres_on_the_published_cost_inside_the_public_bounds() {
         anchor: 200,
         outside: Some(24),
         make_cost: Some(30),
-        alch_net: None,
         stock: 3,
         stock_cost: 90,
         capital: 100_000,
         own_bid: None,
-        alch_exit: None,
     };
     let seen = quote(&MAKER_CAPS, &fresh);
     assert_eq!((seen.regime, seen.fair), (Regime::Discovery, 30), "the published cost, not 200 / 1.1: {seen:?}");
     let (bid, ask) = (seen.bid.expect("bid").price, seen.ask.expect("ask").price);
-    assert!(bid >= 25 && bid < 30 && ask > 30 && ask <= 33, "around the cost: {seen:?}");
-    // A cast nets 40: no seller takes less, the bid climbs over it.
-    let caster = quote(&MAKER_CAPS, &MakerInput { alch_net: Some(40), ..fresh });
-    assert!(caster.bid.expect("bid").price >= 40, "{caster:?}");
+    assert!(bid < 30 && ask > 30 && ask <= 33, "around the cost: {seen:?}");
     // A cheap public listing caps the fair value whatever the cost.
     let listed = quote(&MAKER_CAPS, &MakerInput { best_ask: Some(28), ..fresh });
     assert!(listed.ask.expect("ask").price <= 28, "{listed:?}");
