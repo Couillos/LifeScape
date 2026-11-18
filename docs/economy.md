@@ -86,7 +86,15 @@ est sa valeur de garde, `max(coût propre, ce qu'une boutique F2P paie
 REJOINT le meilleur ask d'un autre vendeur au lieu de le sous-coter
 d'une pièce (fin de la cascade à 1) ; seul un vendeur pressé (banque
 pleine) frappe un bid ≥ son plancher ou sous-cote d'un pas relatif de
-1 % (≥ 1 pièce). Filtre de ramassage (`brain_loot`) : un combattant
+1 % (≥ 1 pièce). Surstock (règle universelle, 2026-11-18, point 4) :
+un stock libre au-delà des bids + 2 jours de volume (au moins un
+inventaire, `market_fit::overstocked`) a pour plancher le prix de
+l'exutoire alchimie (`discovery::alch_outlet_price` : net du meilleur
+sort lancé par un bot de la flotte, runes au prix courant, moins 10 %
+laissés au lanceur), coût propre et boutique écartés ; ce stock n'est ni
+détourné vers la boutique (Q3) ni retenu en banque après un retrait (Q4).
+Un objet sans alchimie rentable garde son plancher. Les méthodes
+`alch:<objet>` du guide argent remontent d'elles-mêmes. Filtre de ramassage (`brain_loot`) : un combattant
 laisse au sol les drops de son spot dont la pile vaut moins de 20 ticks
 de son propre taux (`--skip-loot`, valeur publique = prix courant
 échangé ou prix boutique, le plus riche ; jamais les pièces ni les os).
@@ -1095,6 +1103,17 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
   offres de TOUS les autres comptes, jamais les siennes
   (`market_demand::signals_for`) ; l'affectation de flotte lit la demande
   globale.
+
+## Équipement obtenable maintenant (2026-11-18)
+
+Un bot marché ne vise que les pièces obtenables MAINTENANT
+(`gear_plan::obtainable_now`) : un ask au carnet, une boutique que ses
+points de quête ouvrent, ou une voie de fabrication dont un bot de la
+flotte a le niveau (`brain_gear_fleet`, niveaux relevés à chaque passe
+d'équipement, staff exclu ; le plan attend 75 % de la flotte relevée
+après un démarrage du daemon). Live : felix_rook (défense 76) enchérissait
+sur un rune kiteshield que personne ne vend ni ne forge pendant que 529
+mithril kiteshields restaient invendus.
 
 ## Équipement par paliers (2026-11-13)
 
