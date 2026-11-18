@@ -65,6 +65,64 @@ impl Store {
         }
     }
 
+    /// Quotation lot of one item (plan prix lot D): its prices are coins
+    /// per `lot` units; 1 when unknown.
+    pub fn item_lot(&self, item_id: i64) -> Result<i64, Error> {
+        let mut statement = self.connection.prepare_cached("SELECT lot FROM items WHERE item_id = ?1")?;
+        let mut rows = statement.query(rusqlite::params![item_id])?;
+        Ok(match rows.next()? {
+            Some(row) => row.get::<_, i64>(0)?.max(1),
+            None => 1,
+        })
+    }
+
+    /// Every item's quotation lot over 1 (`item_id`, `lot`).
+    pub fn item_lots(&self) -> Result<Vec<(i64, i64)>, Error> {
+        let mut statement = self.connection.prepare("SELECT item_id, lot FROM items WHERE lot > 1 ORDER BY item_id")?;
+        let mapped = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut out = Vec::new();
+        for row in mapped {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Sets an item's quotation lot (plan prix lot D). A changed lot is a
+    /// migration of the item's own history: every stored price of it
+    /// (orders, deals, executions, candles) is rescaled from the old lot
+    /// to the new one in the same savepoint, so a book never mixes units.
+    /// Returns true when the lot changed.
+    pub fn set_item_lot(&self, item_id: i64, lot: i64) -> Result<bool, Error> {
+        let lot = lot.max(1);
+        let old = self.item_lot(item_id)?;
+        if old == lot {
+            return Ok(false);
+        }
+        let scale = |column: &str| format!("{column} = ({column} * {lot} + {half}) / {old}", half = old / 2);
+        self.connection.execute_batch("SAVEPOINT relot")?;
+        let statements = [
+            format!("UPDATE orders SET {} WHERE item_id = {item_id}", scale("price")),
+            format!("UPDATE deals SET {} WHERE item_id = {item_id}", scale("price")),
+            format!("UPDATE executions SET {} WHERE item_id = {item_id}", scale("price")),
+            format!(
+                "UPDATE candles SET {}, {}, {}, {} WHERE item_id = {item_id}",
+                scale("open_price"),
+                scale("high_price"),
+                scale("low_price"),
+                scale("close_price")
+            ),
+            format!("UPDATE items SET lot = {lot} WHERE item_id = {item_id}"),
+        ];
+        for statement in &statements {
+            if let Err(error) = self.connection.execute_batch(statement) {
+                let _ = self.connection.execute_batch("ROLLBACK TO relot; RELEASE relot");
+                return Err(error.into());
+            }
+        }
+        self.connection.execute_batch("RELEASE relot")?;
+        Ok(true)
+    }
+
     /// Whole catalogue ordered by id.
     pub fn list_items(&self) -> Result<Vec<Item>, Error> {
         let mut statement = self.connection.prepare(
@@ -121,6 +179,37 @@ mod items_tests {
             })
         );
         assert_eq!(store.list_items()?.len(), 2);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod lot_tests {
+    use crate::{Error, Item, Store};
+
+    /// Plan prix lot D: air runes quoted per 100 rescale their stored
+    /// prices (×100) once; setting the same lot again changes nothing;
+    /// other items stay.
+    #[test]
+    fn a_new_lot_rescales_the_items_prices_once() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        store.upsert_item(&Item { item_id: 556, name: "Air rune".to_string(), shop_price: 4, alch_value: 1 })?;
+        store.upsert_item(&Item { item_id: 2353, name: "Steel bar".to_string(), shop_price: 100, alch_value: 60 })?;
+        store.connection.execute_batch(
+            "INSERT INTO orders(account, side, item_id, quantity, remaining, price, status, dormant, created_clock, updated_clock) VALUES ('a', 'sell', 556, 300, 300, 2, 'open', 0, 1, 1), ('b', 'sell', 2353, 5, 5, 99, 'open', 0, 1, 1);
+             INSERT INTO executions(item_id, quantity, price, clock, server_tick) VALUES (556, 100, 1, 5, 5);",
+        )?;
+        assert_eq!(store.item_lot(556)?, 1);
+        assert!(store.set_item_lot(556, 100)?);
+        assert!(!store.set_item_lot(556, 100)?, "idempotent");
+        let price = |item: i64| -> Result<i64, Error> { Ok(store.connection.query_row("SELECT price FROM orders WHERE item_id = ?1", [item], |row| row.get(0))?) };
+        assert_eq!(price(556)?, 200, "2 per unit = 200 per 100");
+        assert_eq!(price(2353)?, 99, "a unit-quoted item stays");
+        let print: i64 = store.connection.query_row("SELECT price FROM executions WHERE item_id = 556", [], |row| row.get(0))?;
+        assert_eq!(print, 100);
+        assert_eq!(store.item_lots()?, vec![(556, 100)]);
+        assert!(store.set_item_lot(556, 10)?, "100 -> 10");
+        assert_eq!(price(556)?, 20);
         Ok(())
     }
 }

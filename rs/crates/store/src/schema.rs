@@ -5,7 +5,7 @@
 use crate::Error;
 
 /// Latest schema version this build understands.
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 pub(crate) const MIGRATION_V1: &str = "
 CREATE TABLE IF NOT EXISTS items(
@@ -299,6 +299,13 @@ fn pending_steps(connection: &rusqlite::Connection, found: u32) -> Result<(), Er
     }
     if found < 8 {
         crate::provenance_v8::apply_provenance_v8(connection)?;
+    }
+    if found < 9 {
+        // Plan prix lot D: each object's quotation lot (1 = per unit until
+        // the catalogue sets it, `Store::set_item_lot`).
+        connection
+            .execute_batch("ALTER TABLE items ADD COLUMN lot INTEGER NOT NULL DEFAULT 1; PRAGMA user_version = 9;")
+            .map_err(|source| Error::Sql(format!("migration 9: {source}")))?;
     }
     Ok(())
 }
