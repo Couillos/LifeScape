@@ -95,12 +95,12 @@ fn brain_choice_bench() {
         let read = crate::brain_money::bot_rows(&set, &level_of, &[]);
         let rows = read.all();
         println!("  {} rows read, {} priced and earning", rows.len(), rows.iter().filter(|row| row.priced && row.profit_6000 > 0.0).count());
-        per_call("  of which lines_for", 20, || crate::brain_money::lines_for(&rows, &ctx, &bot, &[], 0.5).len());
+        per_call("  of which lines_for", 20, || crate::brain_money::lines_for(&rows, &ctx, &bot, &[], 0.5, &|_| None).len());
         after_money += per_call("R7 money: bot_rows + lines_for + draw", 20, || {
             let read = crate::brain_money::bot_rows(&set, &level_of, &[]);
             let rows = read.all();
             let mut drawn = ctx.clone();
-            drawn.money_guide = crate::brain_money::lines_for(&rows, &drawn, &bot, &[], life.profile.market_affinity);
+            drawn.money_guide = crate::brain_money::lines_for(&rows, &drawn, &bot, &[], life.profile.market_affinity, &|_| None);
             drawn.draw_seed = 7;
             let mut node = Node::new("n1", NodeKind::MakeMoney, Vec::new(), 0);
             lifescape_planner::resolve_ready(&mut node, &drawn);

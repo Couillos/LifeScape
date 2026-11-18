@@ -142,8 +142,11 @@ fn launched(row: &MoneyRow, ctx: &ReadyCtx) -> Option<String> {
 /// The lines of `rows` the bot may take (module doc), one per method. A
 /// recipe's stock is judged on `stock` (its free stock minus what it
 /// keeps: never its gear, its tools, its plan's inputs), every other
-/// object on `bot.held`.
-pub fn lines_for(rows: &[&MoneyRow], ctx: &ReadyCtx, bot: &BotState, stock: &[(String, f64)], affinity: f64) -> Vec<GuideLine> {
+/// object on `bot.held`. A recipe's lot never makes more than its
+/// product's market absorbs (point 2, user 2026-11-18:
+/// `product_room(method)`, actions, `None` unknown): a lot it cannot
+/// sell is no line.
+pub fn lines_for(rows: &[&MoneyRow], ctx: &ReadyCtx, bot: &BotState, stock: &[(String, f64)], affinity: f64, product_room: &dyn Fn(&str) -> Option<i64>) -> Vec<GuideLine> {
     let mut best: HashMap<String, GuideLine> = HashMap::new();
     for row in rows.iter().filter(|row| row.priced && row.profit_6000 > 0.0) {
         let Some(method) = launched(row, ctx) else { continue };
@@ -164,6 +167,10 @@ pub fn lines_for(rows: &[&MoneyRow], ctx: &ReadyCtx, bot: &BotState, stock: &[(S
         let profit = lifescape_planner::trade_craft::offer_in(ctx, &method).map(|offer| offer.profit_6000).unwrap_or(row.profit_6000);
         // A recipe on its own stock runs the lot its free stock covers.
         let lot = if row.family == Family::Recipe { lifescape_planner::stock_lot::lot_of(&method, &stock_held) } else { 0 };
+        let lot = if lot > 0 { product_room(&method).map_or(lot, |room| lot.min(room)) } else { lot };
+        if row.family == Family::Recipe && lifescape_planner::stock_lot::stock_inputs(&method).is_some() && lot == 0 {
+            continue;
+        }
         let line = GuideLine { method: method.clone(), family: row.family.as_str().to_string(), profit_6000: profit, weight: merit_money(profit, row.family == Family::Market, affinity), runs: row.confidence.runs, feasible, lot };
         let better = best.get(&method).is_none_or(|known| (line.feasible, line.profit_6000) > (known.feasible, known.profit_6000));
         if better {
@@ -207,7 +214,15 @@ pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value
     let wallet = crate::brain_gear::free_coins(job, None);
     let quests = ctx.quests_done.clone();
     let bot = BotState { level_of: &level_of, combat: ctx.combat, quests_done: &quests, held: &held, coins: Some(wallet as f64), ironman: life.profile.ironman, asks: &asks };
-    let lines = lines_for(&rows, ctx, &bot, &stock, life.profile.market_affinity);
+    let service = crate::market_service::shared();
+    let product_room = |method: &str| -> Option<i64> {
+        let (product, way) = lifescape_planner::method_way::method_way(method)?;
+        let id = crate::brain_gear::obj_id(&product)?;
+        let view = service.as_ref()?.public_view(&job.account, id);
+        let per_action = way.qty.map_or(1, |(least, most)| (least + most + 1) / 2).max(1);
+        Some(lifescape_planner::market_fit::absorbable_actions(&view, crate::brain_plan::holdings_count(job, &product), per_action))
+    };
+    let lines = lines_for(&rows, ctx, &bot, &stock, life.profile.market_affinity, &product_room);
     if lines.is_empty() {
         crate::logln!("brain {}: {} money: no earning guide line within reach ({} rows read), static money methods", job.account, node.id, rows.len());
     }

@@ -94,7 +94,11 @@ sort lancé par un bot de la flotte, runes au prix courant, moins 10 %
 laissés au lanceur), coût propre et boutique écartés ; ce stock n'est ni
 détourné vers la boutique (Q3) ni retenu en banque après un retrait (Q4).
 Un objet sans alchimie rentable garde son plancher. Les méthodes
-`alch:<objet>` du guide argent remontent d'elles-mêmes. Filtre de ramassage (`brain_loot`) : un combattant
+`alch:<objet>` du guide argent remontent d'elles-mêmes. Production
+(point 2) : un lot argent sur stock (`--use`) ne fait jamais plus
+d'actions que ce que le marché de son produit absorbe
+(`market_fit::absorbable_actions` : bids + 2 jours de volume, moins ce
+qui est en vente et ce que le bot détient) ; sans place, pas de ligne. Filtre de ramassage (`brain_loot`) : un combattant
 laisse au sol les drops de son spot dont la pile vaut moins de 20 ticks
 de son propre taux (`--skip-loot`, valeur publique = prix courant
 échangé ou prix boutique, le plus riche ; jamais les pièces ni les os).

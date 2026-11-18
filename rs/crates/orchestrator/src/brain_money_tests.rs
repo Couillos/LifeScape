@@ -77,17 +77,17 @@ fn rows_map_to_the_methods_a_money_node_launches() {
     let mut ctx = ReadyCtx::blind(0.5);
     let none = |_: &str| 0.0;
     let rows: Vec<&MoneyRow> = rows.iter().collect();
-    let lines = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 0.5));
+    let lines = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 0.5, &|_| None));
     assert_eq!(methods(&lines), vec![("fight:melee/cows", true), ("gather:fishing/raw_shrimp", false)]);
     ctx.trades = vec![TradeOffer { method: "trade:craft/smelt:bronze_bar".to_string(), product: "bronze_bar".to_string(), profit_6000: 1100.0, product_per_6000: 100.0, unit_sale: 30.0, inputs: Vec::new() }];
     let stock = vec![("iron_platebody".to_string(), 40.0)];
-    let lines = judge(&none, |bot| lines_for(&rows, &ctx, bot, &stock, 0.5));
+    let lines = judge(&none, |bot| lines_for(&rows, &ctx, bot, &stock, 0.5, &|_| None));
     assert_eq!(methods(&lines), vec![("alch:iron_platebody", true), ("trade:craft/smelt:bronze_bar", true), ("fight:melee/cows", true), ("gather:fishing/raw_shrimp", false)]);
     assert_eq!(lines[1].profit_6000, 1100.0, "a trade lot ranks on its offer");
     assert_eq!(lines[2].runs, 4, "the yield's measured runs ride along (D14)");
     // Platebodies it keeps (gear) are no stock: never alched.
     let worn = |item: &str| if item == "iron_platebody" { 40.0 } else { 0.0 };
-    let kept = judge(&worn, |bot| lines_for(&rows, &ctx, bot, &[], 0.5));
+    let kept = judge(&worn, |bot| lines_for(&rows, &ctx, bot, &[], 0.5, &|_| None));
     assert!(!kept.iter().any(|line| line.method == "alch:iron_platebody"), "{:?}", methods(&kept));
 }
 
@@ -101,8 +101,8 @@ fn market_affinity_weighs_a_market_line() {
     let mut ctx = ReadyCtx::blind(0.5);
     ctx.trades = vec![TradeOffer { method: "trade:craft/smelt:bronze_bar".to_string(), product: "bronze_bar".to_string(), profit_6000: 1200.0, product_per_6000: 100.0, unit_sale: 30.0, inputs: Vec::new() }];
     let none = |_: &str| 0.0;
-    let trader = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 1.0));
-    let hermit = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 0.0));
+    let trader = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 1.0, &|_| None));
+    let hermit = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 0.0, &|_| None));
     assert!((trader[0].weight - 2400.0).abs() < 1e-6 && (hermit[0].weight - 800.0).abs() < 1e-6);
     assert_eq!(trader[0].profit_6000, hermit[0].profit_6000);
 }
@@ -155,11 +155,11 @@ fn a_recipe_on_its_own_stock_is_a_money_line_with_its_lot() {
     let ctx = ReadyCtx::blind(0.5);
     let none = |_: &str| 0.0;
     let stock = vec![("raw_trout".to_string(), 200.0), ("copper_ore".to_string(), 200.0), ("tin_ore".to_string(), 50.0)];
-    let lines = judge(&none, |bot| lines_for(&rows, &ctx, bot, &stock, 0.5));
+    let lines = judge(&none, |bot| lines_for(&rows, &ctx, bot, &stock, 0.5, &|_| None));
     assert_eq!(methods(&lines), vec![("cook:trout", true), ("smelt:bronze_bar", true)]);
     assert_eq!((lines[0].lot, lines[0].family.as_str()), (200, "recipe"));
     assert_eq!(lines[1].lot, 50, "the tin binds the bronze");
-    let lines = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 0.5));
+    let lines = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 0.5, &|_| None));
     assert!(lines.is_empty(), "no stock, no recipe line: {:?}", methods(&lines));
     assert!(super::stock_recipe(&owned[0]) && super::stock_recipe(&owned[1]), "every launchable recipe, not only alchemy");
 }
@@ -179,4 +179,25 @@ fn a_money_node_reads_its_stock_without_its_own_candidates() {
     let for_money = crate::brain_sales::working_keep_except(&life, &[], Some("n9"));
     assert!(!for_money.contains(&"raw_lobster".to_string()), "its own candidate: {for_money:?}");
     assert!(for_money.contains(&"raw_trout".to_string()), "the climb's raw fish stays kept: {for_money:?}");
+}
+
+/// Point 2 (user 2026-11-18): nathan_t turned 3274 mithril bars into 564
+/// full helms for a market that took one a day. A recipe's lot stops at
+/// what its product's market absorbs; a product nobody absorbs is no
+/// line at all (the bars stay bars for another use or buyer).
+#[test]
+fn a_stock_lot_stops_at_what_its_product_market_absorbs() {
+    let mut trout = row(Family::Recipe, "cook:trout", 3000.0);
+    trout.prereqs.stock = vec![("raw_trout".to_string(), 28.0)];
+    let mut bronze = row(Family::Recipe, "smelt:bronze_bar", 900.0);
+    bronze.prereqs.stock = vec![("copper_ore".to_string(), 14.0), ("tin_ore".to_string(), 14.0)];
+    let owned = [trout, bronze];
+    let rows: Vec<&MoneyRow> = owned.iter().collect();
+    let ctx = ReadyCtx::blind(0.5);
+    let none = |_: &str| 0.0;
+    let stock = vec![("raw_trout".to_string(), 200.0), ("copper_ore".to_string(), 200.0), ("tin_ore".to_string(), 50.0)];
+    let room = |method: &str| Some(if method == "cook:trout" { 40 } else { 0 });
+    let lines = judge(&none, |bot| lines_for(&rows, &ctx, bot, &stock, 0.5, &room));
+    assert_eq!(methods(&lines), vec![("cook:trout", true)], "no room for bronze bars: no line");
+    assert_eq!(lines[0].lot, 40, "200 trout held, 40 cooked the market takes");
 }

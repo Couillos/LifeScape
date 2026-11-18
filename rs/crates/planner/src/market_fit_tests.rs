@@ -74,3 +74,19 @@ fn stock_beyond_two_days_of_demand_is_overstock() {
     assert!(!overstocked(SALE_LOT_MIN, &BookView::default()), "one inventory never is");
     assert!(overstocked(SALE_LOT_MIN + 1, &BookView::default()), "nothing traded: past one inventory");
 }
+
+/// Point 2 (user 2026-11-18): nathan_t smithed 564 mithril full helms in
+/// one money lot (`--use mithril_bar 3274`) for a market that took one a
+/// day. A stock lot runs only the actions whose product the market
+/// absorbs: bids plus two days of volume, less what rests offered and
+/// what the bot already holds.
+#[test]
+fn a_stock_lot_never_makes_past_what_the_market_absorbs() {
+    use super::absorbable_actions;
+    let helms = BookView { bids: vec![(823, 1)], asks: vec![(858, 60)], volume_24h: 1, ..BookView::default() };
+    assert_eq!(absorbable_actions(&helms, 0, 1), 0, "60 already offered against 3 absorbed");
+    let bars = BookView { bids: vec![(60, 100)], asks: vec![(62, 50)], volume_24h: 400, ..BookView::default() };
+    assert_eq!(absorbable_actions(&bars, 0, 1), 850, "100 bid + 800 in two days - 50 offered");
+    assert_eq!(absorbable_actions(&bars, 300, 1), 550, "its own 300 sell first");
+    assert_eq!(absorbable_actions(&bars, 0, 5), 170, "five units per action");
+}

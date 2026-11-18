@@ -106,6 +106,15 @@ pub fn overstocked(stock: i64, view: &BookView) -> bool {
     stock > SALE_LOT_MIN.max(view.bid_depth() + OVERSTOCK_DAYS * view.volume_24h.max(0))
 }
 
+/// Actions of a stock lot whose product the market absorbs (point 2,
+/// user 2026-11-18: never transform a stock into overstock): the bids
+/// plus `OVERSTOCK_DAYS` of volume, less the units resting offered and
+/// the `held` units the bot already has, over `per_action` units made.
+pub fn absorbable_actions(view: &BookView, held: i64, per_action: i64) -> i64 {
+    let room = view.bid_depth() + OVERSTOCK_DAYS * view.volume_24h.max(0) - view.ask_depth() - held.max(0);
+    (room.max(0)) / per_action.max(1)
+}
+
 pub fn sale_lot(spare: i64, view: Option<&BookView>) -> i64 {
     let absorbed = view.map(|book| book.bid_depth() + book.volume_24h.max(0)).unwrap_or(0);
     absorbed.max(SALE_LOT_MIN).min(spare.max(0))
