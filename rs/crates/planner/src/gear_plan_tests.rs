@@ -162,3 +162,26 @@ fn champions_guild_pieces_wait_for_the_quest_points() {
     assert!(!super::shop_route_open("rune_chainbody", &["runemysteries"]), "1 point is not 32");
     assert!(super::shop_route_open("bronze_axe", &[]), "the kit axe stays a shop route");
 }
+
+/// Live 2026-11-18: felix_rook (defence 76, iron kiteshield, 328k coins)
+/// bid on a rune kiteshield nobody sells or smiths (best fleet smith 68)
+/// while nathan_t's 529 mithril kiteshields went unsold. The plan reads
+/// pieces obtainable NOW: a resting ask, an open shop route, or a way a
+/// fleet bot has the level for.
+#[test]
+fn the_plan_wants_what_can_be_obtained_now() {
+    use super::{obtainable_now, plan_gear_from};
+    let fighter = [("attack", 76), ("defence", 76), ("strength", 76), ("hitpoints", 76)];
+    let owned = vec!["iron_kiteshield".to_string()];
+    let fleet_level = |skill: &str| if skill == "smithing" { 68 } else { 40 };
+    let asks = ["mithril_kiteshield"];
+    let allowed = |item: &str| obtainable_now(item, asks.contains(&item), false, &fleet_level);
+    assert!(!allowed("rune_kiteshield"), "no ask, no shop, smithing 99 beyond the fleet");
+    assert!(!allowed("adamant_kiteshield"), "smithing 87 beyond the fleet");
+    assert!(allowed("mithril_kiteshield"), "a resting ask");
+    assert!(allowed("mithril_full_helm"), "a fleet smith at 68 makes it");
+    assert!(obtainable_now("rune_kiteshield", false, true, &fleet_level), "an open shop route");
+    let wants = plan_gear_from(Style::Melee, &fighter, &[], &owned, 300_000, &alch_price, &allowed);
+    let shield = wants.iter().find(|want| want.wearpos == SHIELD).map(|want| want.item.as_str());
+    assert_eq!(shield, Some("mithril_kiteshield"), "{:?}", names(&wants));
+}

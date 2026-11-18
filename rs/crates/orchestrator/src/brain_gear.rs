@@ -30,7 +30,10 @@
 //! - a want whose ceiling is under the object's public floor bids
 //!   nothing (§3.6 credibility, C5);
 //! - an Iron (no market) plans only the pieces an NPC shop sells (D-A,
-//!   `shop_only`), priced at the shop, and files them as steps.
+//!   `shop_only`), priced at the shop, and files them as steps;
+//! - a market bot plans only pieces obtainable NOW (user 2026-11-18,
+//!   `obtainable_now`: a resting ask, an open shop, a way a fleet bot has
+//!   the level for), never a tier nobody sells or can make.
 //!
 //! Tools are the permanent kit's (`brain_tool_shop`, steps through
 //! `file_step`: same cooldown, same no-ban rule); smithed-only axe tiers
@@ -203,6 +206,14 @@ fn expected_price(service: Option<&std::sync::Arc<crate::market_service::MarketS
     traded.unwrap_or_else(|| lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.alch_high).unwrap_or(1)).max(1)
 }
 
+/// A piece the bot can obtain now (`gear_plan::obtainable_now`): a
+/// resting ask, a shop route its quest points open, or a way a fleet bot
+/// has the level for (`brain_gear_fleet`).
+fn obtainable_now(service: Option<&std::sync::Arc<crate::market_service::MarketService>>, item: &str, quests: &[&str], now: f64) -> bool {
+    let has_ask = service.zip(obj_id(item)).is_some_and(|(service, id)| service.lock_engine().books.get(&id).and_then(|book| book.best().1).is_some());
+    gear_plan::obtainable_now(item, has_ask, gear_plan::shop_route_open(item, quests), &|skill| crate::brain_gear_fleet::best(skill, now))
+}
+
 /// What the gear plan would buy next at this wallet (its wants at their
 /// expected prices, same budget as `gear_pass`): the part of a donor's
 /// reserve kept for its own gear (`funding_plan`). An Iron buys none.
@@ -217,7 +228,9 @@ pub(crate) fn next_gear_cost(job: &Job, life: &Life, live: &Value) -> i64 {
     let (owned, _) = holdings(job);
     let service = crate::market_service::shared();
     let budget = gear_ladder::wallet_ceiling(gear_free_coins(job), gear_ladder::GEAR_SHARE_PCT);
-    let wants = gear_plan::plan_gear(goal_style(life), &levels, &quests, &owned, budget, &|item| expected_price(service.as_ref(), item));
+    let now = wall_now();
+    let allowed = |item: &str| obtainable_now(service.as_ref(), item, &quests, now);
+    let wants = gear_plan::plan_gear_from(goal_style(life), &levels, &quests, &owned, budget, &|item| expected_price(service.as_ref(), item), &allowed);
     wants.iter().map(|want| want.expected.max(0)).sum()
 }
 
@@ -384,6 +397,7 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
         return changed;
     }
     let levels: Vec<(&str, i64)> = levels_owned.iter().map(|(name, level)| (name.as_str(), i64::from(*level))).collect();
+    crate::brain_gear_fleet::record(&job.account, now, &levels);
     let quests_owned = crate::brain_rescue::quests_done(life);
     let quests: Vec<&str> = quests_owned.iter().map(String::as_str).collect();
     let style = goal_style(life);
@@ -414,12 +428,18 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
         }
         return changed;
     }
+    // "Obtainable now" reads the fleet's levels: never plan (and hold)
+    // from a table a daemon start left partial.
+    if !crate::brain_gear_fleet::warm(now) {
+        return changed;
+    }
     let service = crate::market_service::shared();
     let budget = gear_ladder::wallet_ceiling(gear_free_coins(job), gear_ladder::GEAR_SHARE_PCT);
     let owned_wearables: Vec<String> = owned.iter().filter(|name| gear_wearable(name)).cloned().collect();
     let signature = crate::brain_gear_hold::gear_signature(style_name(style), &levels, &owned_wearables);
     let now_tick = crate::brain_stuck::seconds_to_ticks(now as i64);
-    let plan = |budget: i64| gear_plan::plan_gear(style, &levels, &quests, &owned, budget, &|item| expected_price(service.as_ref(), item));
+    let allowed = |item: &str| obtainable_now(service.as_ref(), item, &quests, now);
+    let plan = |budget: i64| gear_plan::plan_gear_from(style, &levels, &quests, &owned, budget, &|item| expected_price(service.as_ref(), item), &allowed);
     let wants = crate::brain_gear_hold::held_wants(&job.account, budget, now_tick, &signature, &plan);
     let wanted: Vec<String> = wants.iter().map(|want| want.item.clone()).collect();
     cancel_stale_bids(job, life, &wanted);

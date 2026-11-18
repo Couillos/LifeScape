@@ -101,6 +101,12 @@ fn fleet_accounts() -> &'static Mutex<std::collections::BTreeSet<String>> {
     &FLEET
 }
 
+/// Running fleet accounts (staff and personal ones excluded), as of the
+/// last launch.
+pub(crate) fn fleet_size() -> usize {
+    fleet_accounts().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len()
+}
+
 fn refresh_fleet(orch: &Orchestrator) {
     let Ok(jobs) = orch.jobs.try_lock() else { return };
     let excluded = crate::economy_guard::excluded_accounts();

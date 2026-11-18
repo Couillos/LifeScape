@@ -147,8 +147,22 @@ pub fn plan_gear(style: Style, levels: &[(&str, i64)], quests_done: &[&str], own
     plan_gear_from(style, levels, quests_done, owned, budget, price_of, &|_| true)
 }
 
+/// True when `item` can be obtained now (live 2026-11-18: felix_rook,
+/// defence 76, bid on a rune kiteshield nobody sells or smiths while
+/// nathan_t's 529 mithril kiteshields went unsold): a resting ask on the
+/// book, a shop route open to the bot, or a production way some fleet bot
+/// has the level for (`fleet_level`: best fleet level of a skill). A
+/// theoretical way (`obtainable_f2p`) is not enough.
+pub fn obtainable_now(item: &str, has_ask: bool, shop_open: bool, fleet_level: &dyn Fn(&str) -> i64) -> bool {
+    has_ask
+        || shop_open
+        || lifescape_gamedata::obtain::ways(item)
+            .iter()
+            .any(|way| way.is_production() && way.skill.as_ref().is_none_or(|(skill, level)| fleet_level(skill) >= *level))
+}
+
 /// `plan_gear` over the pieces `allowed` lets the bot obtain (an Iron:
-/// shop-only pieces, no market).
+/// shop-only pieces, no market; a market bot: `obtainable_now`).
 pub fn plan_gear_from(
     style: Style,
     levels: &[(&str, i64)],
