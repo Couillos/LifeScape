@@ -43,3 +43,18 @@ fn the_operator_makes_an_alchemist() {
     let drawn = crate::goals::draw_goal_origin(&life, &|_| 60, &|_| 0).expect("a goal");
     assert_eq!(drawn, (GoalKind::MakeMoney, None), "nothing to alch: money funds the buys");
 }
+
+/// ryan_mason 2026-11-18: the switch's abandoned nodes read as a stuck
+/// graph and banned magic 6000 ticks ("contract error (node n1476,
+/// role:alcher)"), the alchemist's own skill. A ban the role switch
+/// caused lifts; any other ban stays.
+#[test]
+fn bans_the_switch_caused_lift() {
+    use crate::model::HistoryEntry;
+    let entry = |outcome: &str| HistoryEntry { node: "goal".to_string(), outcome: outcome.to_string(), started: 100, ended: 100 };
+    let history = vec![
+        entry("stuck:magic@6000:contract error (node n1476, role:alcher)"),
+        entry("stuck:mining@6000:3 failures (node n9, no coal mined)"),
+    ];
+    assert_eq!(super::role_lifted_bans(&history, &|_| 10), vec!["magic".to_string()]);
+}

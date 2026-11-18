@@ -33,12 +33,15 @@ pub fn request(account: &str, kind: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Apply the switch filed for this life, if any; true when the life
-/// changed (the caller saves it).
+/// Apply the switch filed for this life, if any, and lift the bans a
+/// switch caused (ryan_mason 2026-11-18: its abandoned nodes read as a
+/// stuck graph, magic banned 6000 ticks); true when the life changed
+/// (the caller saves it).
 pub(crate) fn apply_pending(life: &mut Life, live: &Value) -> bool {
-    let Some(kind) = pending().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&life.account) else { return false };
+    let lifted = lift_role_bans(life);
+    let Some(kind) = pending().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&life.account) else { return lifted };
     if kind != ALCHER {
-        return false;
+        return lifted;
     }
     let stamp = crate::brain_ambition::stamp_now();
     let switched = crate::brain_ambition::with_now(live, |now| lifescape_planner::become_alcher(life, now, stamp));
@@ -46,11 +49,33 @@ pub(crate) fn apply_pending(life: &mut Life, live: &Value) -> bool {
         Ok(abandoned) => {
             crate::brain::push_history(life, "goal", "role:alcher (operator)");
             crate::logln!("brain {}: ambition -> alcher (operator), {} nodes abandoned: {}", life.account, abandoned.len(), abandoned.join(","));
+            // The next goal at once (alchemy first), like the market
+            // maker's switch: never a stuck graph that bans its skills.
+            match crate::brain_succession::draw_next(life, live) {
+                Some(label) => crate::logln!("brain {}: alcher's first goal {label}", life.account),
+                None => crate::logln!("brain {}: alcher drew no goal yet (see the reason above)", life.account),
+            }
+            lifescape_planner::normalize(life);
             true
         }
         Err(error) => {
             crate::logln!("brain {}: operator ambition alcher refused: {error:?}", life.account);
-            false
+            lifted
         }
     }
+}
+
+/// Unban the skills a role switch banned (`planner::role_lifted_bans`).
+fn lift_role_bans(life: &mut Life) -> bool {
+    if !lifescape_planner::is_alcher(life) {
+        return false;
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+    let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now - stamp);
+    let skills = lifescape_planner::role_lifted_bans(&life.history, &ticks_since);
+    for skill in &skills {
+        crate::brain::push_history(life, "goal", &lifescape_planner::unban_entry(skill));
+        crate::logln!("brain {}: unban:{skill} (the alcher switch caused it)", life.account);
+    }
+    !skills.is_empty()
 }

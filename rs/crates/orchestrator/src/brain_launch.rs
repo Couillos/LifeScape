@@ -633,6 +633,13 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // reach boxes at one window and retries; farm obtains work one
     // window then recheck holdings; cleanup works one window per pass.
     let budget: Option<(u64, u64)> = match &life.nodes[launch].kind {
+        // The alchemist's money funds its buys between alchemies: one
+        // filler window, then the draw looks at the stock again.
+        NodeKind::MakeMoney if lifescape_planner::is_alcher(&life) => {
+            let window = crate::brain_filler::FILLER_TICKS;
+            life.engagement = Some(Engagement { node: life.nodes[launch].id.clone(), min_ticks: window, max_ticks: window, chosen: window });
+            Some((window, window))
+        }
         NodeKind::MakeMoney => {
             let chosen = draw_engagement_ticks(life.seed, life.history.len() as u64);
             life.engagement = Some(Engagement {

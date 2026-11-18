@@ -30,6 +30,19 @@ pub fn become_alcher(life: &mut Life, now: &BotNow, stamp: Stamp) -> Result<Vec<
     Ok(abandoned)
 }
 
+/// Active bans whose cause is the role switch itself (its abandoned
+/// nodes read as a stuck graph): lifted at once (the brain writes
+/// `unban:<skill>` for each), sorted by skill.
+pub fn role_lifted_bans(history: &[crate::model::HistoryEntry], ticks_since: &dyn Fn(i64) -> u64) -> Vec<String> {
+    crate::bans::ban_states(history, ticks_since)
+        .into_iter()
+        .filter_map(|(skill, state)| match state {
+            crate::bans::BanState::Active { cause, .. } if cause.contains(ALCHER_ROLE_CAUSE) => Some(skill),
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "alcher_tests.rs"]
 mod tests;
