@@ -221,11 +221,12 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     let pick: Option<String> = if granted.is_some() && quest_first {
         // The quest hands it over: no drop farm, no purchase.
         None
-    } else if shop_listed && shop_cover <= ctx.coins && ctx.best_ask.is_none_or(|ask| ask >= ctx.shop_price.max(1)) {
+    } else if shop_listed && shop_cover <= ctx.coins && ctx.best_ask.is_none_or(|ask| ask >= ctx.shop_price.max(1)) && ctx.shop_window_units.is_none_or(|units| units >= need) {
         // 0. The keeper is the cheapest seller and the wallet pays it
         // (user 2026-11-15: every stocked object may be bought, the shop
         // price caps the market): buy there, like a player buying his
-        // hammer instead of smithing one. Coins leave the world.
+        // hammer instead of smithing one. Coins leave the world. Only
+        // when the keepers' window covers the need (`shop_window_units`).
         Some("shop:buy".to_string())
     } else if (ask_covered || ask_partial) && producible.is_some() {
         // 1a. The bid takes the ask at once (`market:bid` at the ask, the

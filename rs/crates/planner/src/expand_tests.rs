@@ -614,3 +614,27 @@ fn a_combat_level_climb_locks_the_guides_pick() {
     resolve_ready(&mut node, &ctx);
     assert_eq!(node.method.as_deref(), Some("fight:melee/chickens"), "the static training without a pick");
 }
+
+/// Live 2026-11-18: the keeper is the cheapest seller of uncut sapphires
+/// (25 coins) but the two gem shops sell 2 in a window; a bot needing 70
+/// never takes the keeper first (31 bots bounced between the empty
+/// shops), it buys the resting asks. A need the window covers still
+/// takes the keeper.
+#[test]
+fn a_keeper_short_of_the_need_is_not_the_first_seller() {
+    let mut nodes = expand_goal(&GoalKind::Obtain { item: "uncut_sapphire".to_string(), count: 70 }, &profile());
+    let mut ctx = ReadyCtx::blind(0.72);
+    ctx.coins_per_tick = 2.0;
+    ctx.price = 45;
+    ctx.shop_price = 25;
+    ctx.coins = 100000;
+    ctx.best_ask = Some(42);
+    ctx.shop_window_units = Some(2);
+    let mut short = nodes[0].clone();
+    resolve_ready(&mut short, &ctx);
+    assert_ne!(short.method.as_deref(), Some("shop:buy"), "2 units a window for a need of 70: {:?}", short.alternatives);
+    let mut covered = ctx.clone();
+    covered.shop_window_units = Some(100);
+    resolve_ready(&mut nodes[0], &covered);
+    assert_eq!(nodes[0].method.as_deref(), Some("shop:buy"), "the window covers the need: the keeper");
+}

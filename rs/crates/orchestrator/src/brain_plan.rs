@@ -42,6 +42,13 @@ fn shop_floor(item_debug: &str) -> i64 {
     lifescape_gamedata::obtain::merchant_price(item_debug).unwrap_or(1).max(1)
 }
 
+/// Units the F2P keepers sell of `item_debug` in one window (base stock
+/// + restock); `None` when no keeper ladder is known.
+fn shop_window_units(item_debug: &str) -> Option<i64> {
+    let steps = lifescape_gamedata::shop_buy::purchase_steps(item_debug, lifescape_planner::guide_model::WINDOW_TICKS as i64);
+    (!steps.is_empty()).then(|| steps.iter().map(|step| step.units).sum())
+}
+
 /// Debug names of everything the live bot owns (pack, bank, worn).
 pub(crate) fn live_owned(live: &Value) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
@@ -102,6 +109,7 @@ pub(crate) fn ready_ctx(life: &Life, node: &Node, live: &Value) -> ReadyCtx {
             let (price, _) = crate::rates_service::price_estimate(&store, &display);
             ctx.price = price.max(1.0) as i64;
             ctx.shop_price = shop_floor(&item_debug);
+            ctx.shop_window_units = shop_window_units(&item_debug);
             ctx.yield_per_6000 = obtain_yield(&snapshot, node, &item_debug, &display, live);
         }
     }

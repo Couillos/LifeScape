@@ -204,6 +204,15 @@ mod tests {
         assert!(keeper_haggle("no_such_keeper").is_some(), "the param default");
     }
 
+    /// The gem shops (Falador, Al Kharid) stock 1 uncut sapphire each,
+    /// one more every 25 000 ticks: a window sells a handful, never the
+    /// 70 a cutting lot needs (live 2026-11-18).
+    #[test]
+    fn gem_shops_sell_a_handful_of_uncut_sapphires() {
+        let units: i64 = purchase_steps("uncut_sapphire", 6000).iter().map(|step| step.units).sum();
+        assert!((1..=4).contains(&units), "{units}");
+    }
+
     /// User 2026-11-16 (Q7): a shop behind a condition is in the window,
     /// its condition on each of its steps: Oziach's rune platebody after
     /// Dragon Slayer (`runeplateshop`), Scavvo's rune longsword behind the

@@ -19,6 +19,12 @@ pub struct ReadyCtx {
     pub trip_ticks: u64,
     pub price: i64,
     pub shop_price: i64,
+    /// Units the F2P keepers sell of the item in one window (base stock
+    /// + restock, `gamedata::shop_buy::purchase_steps`); `None` when no
+    /// ladder is known. A need over it never takes the keeper first (live
+    /// 2026-11-18: 31 bots sent for 70 uncut sapphires to two gem shops
+    /// stocking 1 each, restocked every 25 000 ticks).
+    pub shop_window_units: Option<i64>,
     pub yield_per_6000: f64,
     pub xp_per_6000: f64,
     /// Carried + banked coins of the ordering bot. A market leg it
@@ -108,6 +114,7 @@ impl ReadyCtx {
             trip_ticks: 800,
             price: 10,
             shop_price: 10,
+            shop_window_units: None,
             yield_per_6000: 200.0,
             xp_per_6000: 4000.0,
             coins: 0,
