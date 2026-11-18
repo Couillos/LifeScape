@@ -182,6 +182,11 @@ fn areas() -> Vec<Area> {
         Area { x: (3254, 3254), z: (3451, 3453), levels: (0, 0), gate: Gate::Sealed { area: "varrock_museum_display" }, door: None },
         // Karamja (F2P north half), south of the Rimmington coast.
         Area { x: (2740, 2975), z: (2880, 3186), levels: (0, 1), gate: Gate::Boat { area: "karamja", fare: crate::services::BOAT_FARE_GP }, door: None },
+        // The volcano dungeon under Karamja (entrance (2856,3168) ->
+        // (2856,9568); Elvarg's lair starts past the secret door at z
+        // 9600): same boat, same fare back (live 2026-11-18, three bots
+        // stranded 8 hours at (2836,9599) with 20 coins).
+        Area { x: (2820, 2880), z: (9530, 9599), levels: (0, 0), gate: Gate::Boat { area: "karamja", fare: crate::services::BOAT_FARE_GP }, door: None },
         // Crandor: Ned's ship during Dragon Slayer only.
         Area { x: (2813, 2869), z: (3222, 3310), levels: (0, 0), gate: Gate::Boat { area: "crandor", fare: 0 }, door: None },
     ]
@@ -336,6 +341,21 @@ mod tests {
                 assert!(gates.iter().any(|gate| matches!(gate, Gate::Boat { area: "karamja", .. })), "{fish} at ({x},{z}) not behind the boat: {gates:?}");
             }
         }
+    }
+
+    /// Live 2026-11-18: alicefield, ryan_park and kevin_ellis looped
+    /// NoRoute for 8 hours at (2836,9599), the volcano dungeon under
+    /// Karamja, 20 coins carried for a 30-coin fare back: the dungeon was
+    /// no boat area, so the run's Luthas job (`kit::stranded`) never
+    /// started. The dungeon is behind the boat; Elvarg's lair under
+    /// Crandor (past the secret door at z 9600) is not Karamja.
+    #[test]
+    fn the_volcano_dungeon_is_behind_the_boat() {
+        for (x, z) in [(2836, 9599), (2856, 9568), (2845, 9580)] {
+            assert!(behind_boat(x, z, 0), "({x},{z}) under Karamja: {:?}", gates_at(x, z, 0));
+        }
+        assert!(!behind_boat(2833, 9657, 0), "Elvarg's lair is Crandor's");
+        assert!(!behind_boat(3222, 9618, 0), "another dungeon");
     }
 
     /// The crafting guild's gold and silver rocks are inside its door.
