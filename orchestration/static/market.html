@@ -44,11 +44,10 @@
   #book tr.ask td:first-child { color: #ff1744; }
   #book tr.bid td:first-child { color: #00e676; }
   #book tr.spread td { color: #888; text-align: center; }
-  /* Last trades: a buyer took the asks (green, ▲), a seller hit the
-     bids (red, ▼): the candles' colours, full, and a shape that reads
-     without them (user 2026-11-18, deuteranopia). */
-  #trades tr.taker-buy td { background: #00e676; color: #000; font-weight: bold; }
-  #trades tr.taker-sell td { background: #ff1744; color: #000; font-weight: bold; }
+  /* Last trades: a buyer took the asks (green), a seller hit the bids
+     (red), in the candles' hues, toned down on black. */
+  #trades tr.taker-buy td { background: rgba(0, 230, 118, 0.35); color: #fff; }
+  #trades tr.taker-sell td { background: rgba(255, 23, 68, 0.35); color: #fff; }
   .muted { color: #888; }
   /* Market makers' pseudos in Latest transactions: shimmering gold. */
   .maker { font-weight: bold; background: linear-gradient(100deg, #8a6d1a 0%, #ffd700 30%, #fff6c8 50%, #ffd700 70%, #8a6d1a 100%); background-size: 200% auto; -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: 0 0 6px rgba(255, 215, 0, 0.35); animation: maker-shine 3s linear infinite; }
