@@ -401,6 +401,16 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
         };
         let quote = lifescape_market::maker_quote(&MAKER_CAPS, &input);
         let bid = quote.bid.filter(|_| may_bid(held_types, units));
+        // Plan prix lot D: the ask offers whole lots of the stock, none
+        // under one lot (the market refuses it).
+        let quote_lot = crate::market_units::lot_of(*id);
+        let quote = lifescape_market::MakerQuote {
+            ask: quote.ask.and_then(|leg| {
+                let qty = lifescape_market::lots::whole_lots_down(leg.qty, quote_lot);
+                (qty > 0).then_some(lifescape_market::Leg { qty, ..leg })
+            }),
+            ..quote
+        };
         for (side, leg, rows_now) in [("buy", bid, &bids), ("sell", quote.ask, &asks)] {
             for planned in reconcile(leg, rows_now) {
                 moves += apply(&service, account, *id, side, planned, item.name);
