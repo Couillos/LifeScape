@@ -94,11 +94,11 @@ fn route_to_east_stand_from_inside_walks() {
     );
 }
 
-/// La sortie clique depuis l'est, jamais depuis la tuile : le handler
-/// op n'a pas le bras src==dest du dispatcher (clic tuile refuse live),
-/// seul le stand est ouvre (silencieux, scripts doors.rs2 commentes).
+/// La sortie clique depuis la tuile porte : `ReachStrategy.reached` a
+/// le bras src==dest pour un mur, et admin l'a ouverte ainsi en live
+/// (2026-11-18, aucun « I can't reach that! »).
 #[test]
-fn peksa_exit_clicks_from_the_east_stand() {
+fn peksa_exit_clicks_from_the_door_tile() {
     let (world, tables) = setup();
     let plan = plan::plan(
         &world,
@@ -121,7 +121,36 @@ fn peksa_exit_clicks_from_the_east_stand() {
     assert_eq!((door.x, door.z, door.level), (3076, 3427, 0));
     assert_eq!(
         (*stand, *cross_to),
-        (Tile { x: 3077, z: 3427, level: 0 }, Tile { x: 3076, z: 3426, level: 0 }),
-        "clic est puis traversee vers le sud, jamais src==dest",
+        (Tile { x: 3076, z: 3427, level: 0 }, Tile { x: 3076, z: 3426, level: 0 }),
+        "clic depuis la tuile puis traversee vers le sud",
     );
+}
+
+/// Live 2026-11-18 (Yogosun stranded at (3232,3500,0), behind Varrock
+/// palace): the cellar side of the sewer door 1530 at (3241,9910) has no
+/// stand but the door tile itself. The engine reaches a wall loc from
+/// its own tile (`ReachStrategy.reached` src==dest arm, `reachWall` line
+/// 79) and `[oploc1,_door_closed]` checks no side: admin opened both this
+/// door and Peksa's 1530 from their own tiles live (no "I can't reach
+/// that!"). The cellar, the palace pocket above it and the way back to
+/// the bank are connected.
+#[test]
+fn a_shut_wall_door_opens_from_its_own_tile() {
+    let (world, tables) = setup();
+    let options = NavOptions { f2p_only: true, ..NavOptions::default() };
+    let cellar = Tile { x: 3231, z: 9904, level: 0 };
+    let past_the_door = Tile { x: 3241, z: 9911, level: 0 };
+    let crossing = plan::plan(&world, &tables, cellar, past_the_door, &options).expect("the cellar opens the sewer door from its tile");
+    let (door, stand) = crossing
+        .segments
+        .iter()
+        .find_map(|segment| match segment {
+            Segment::OpenDoor { door, stand, .. } if door.loc == 1530 && (door.x, door.z) == (3241, 9910) => Some((door, *stand)),
+            _ => None,
+        })
+        .expect("the crossing opens the sewer door 1530");
+    assert_eq!(stand, Tile { x: door.x, z: door.z, level: door.level }, "the only cellar-side stand is the door tile");
+    let pocket = Tile { x: 3232, z: 3500, level: 0 };
+    let bank = Tile { x: 3186, z: 3446, level: 0 };
+    plan::plan(&world, &tables, pocket, bank, &options).expect("Yogosun's pocket reaches the Varrock west bank");
 }

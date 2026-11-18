@@ -61,10 +61,10 @@ fn peksa_enter_swings_door_1530() {
     assert_eq!((stand.x, stand.z), (3076, 3426), "stand exterieur, le seul que le moteur accepte");
 }
 
-/// Sortie porte 1530 : le plan marche jusqu'au stand est (3077,3427)
-/// — atteignable depuis l'interieur par la tuile porte marchable — puis
-/// clique depuis l'est (le seul clic interieur que le handler accepte)
-/// et traverse aussitot vers le sud, avant la re-fermeture.
+/// Sortie porte 1530 : le plan marche sur la tuile porte, clique depuis
+/// elle (le moteur atteint un mur depuis sa propre tuile, prouve live
+/// par admin le 2026-11-18) et traverse aussitot vers le sud, avant la
+/// re-fermeture.
 /// L'entree par le stand exterieur est inchangee (voir ci-dessus).
 #[test]
 fn peksa_exit_stands_on_the_door_tile() {
@@ -87,8 +87,8 @@ fn peksa_exit_stands_on_the_door_tile() {
     assert_eq!((door.x, door.z, door.level), (3076, 3427, 0));
     assert_eq!(
         (*stand, *cross_to),
-        (Tile { x: 3077, z: 3427, level: 0 }, Tile { x: 3076, z: 3426, level: 0 }),
-        "stand est (marche dessus) puis clic et traversee vers le sud, avant la re-fermeture",
+        (Tile { x: 3076, z: 3427, level: 0 }, Tile { x: 3076, z: 3426, level: 0 }),
+        "tuile porte (marche dessus) puis clic et traversee vers le sud, avant la re-fermeture",
     );
 }
 

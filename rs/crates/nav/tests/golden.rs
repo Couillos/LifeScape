@@ -315,10 +315,9 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
     // from: an orthogonal neighbour passing the server reach rule for
     // the door's shape and angle. A diagonal or wrong-sided stand reads
     // "I can't reach that!" live (castle double doors 1516/1519). The
-    // door tile itself (manhattan 0) never clicks on a straight wall
-    // door: the op handler runs reachWall1 with no src==dest arm, so a
-    // shut door only opens from a real stand (Peksa 1530: tile click
-    // refused live, east-stand click opens).
+    // door tile itself (manhattan 0) clicks too: the engine reaches a
+    // wall loc from its own tile (src==dest arm; admin live 2026-11-18,
+    // sewer 1530 (3241,9910) and Peksa 1530 open from their tiles).
     if let Ok(plan) = &result {
         for seg in &plan.segments {
             if let Segment::OpenDoor { door, stand, cross_to } = seg {
@@ -334,11 +333,6 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
                     .door_at(door.x, door.z, door.level)
                     .unwrap_or_else(|| panic!("route {name}: door {} has no static shape", door.loc));
                 if manhattan == 0 {
-                    assert!(
-                        !matches!(shape, 0 | 1 | 2 | 3 | 9),
-                        "route {name}: door {} clicks from its own tile, refused live on wall doors (stand east/west/north/south)",
-                        door.loc,
-                    );
                     continue;
                 }
                 let (width, height) = world

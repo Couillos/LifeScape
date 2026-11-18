@@ -359,4 +359,19 @@ mod tests {
         }
         assert!(!memo.is_empty(), "verdicts kept");
     }
+
+    /// Live tim_thorn-105223: Varrock west bank to the air temple floor
+    /// (entered only by a talisman on the ruins) is a sealed destination.
+    /// Its NoRoute must not name the start as the closest tile: the brain
+    /// reads a closest beside the start as a walled-in origin and held a
+    /// bot standing at a bank (`brain_stranded`).
+    #[test]
+    fn a_sealed_destination_never_names_the_start_closest() {
+        let (world, tables) = setup();
+        let options = NavOptions { f2p_only: true, ..NavOptions::default() };
+        let (bank, temple_floor) = (tile(3185, 3436, 0), tile(2841, 4829, 0));
+        let refused = crate::plan::plan(&world, &tables, bank, temple_floor, &options).expect_err("the temple floor is sealed");
+        assert_eq!(refused.reason, crate::plan::NoRouteReason::Disconnected);
+        assert_eq!(refused.closest_reachable, temple_floor, "the verdict is about the destination");
+    }
 }

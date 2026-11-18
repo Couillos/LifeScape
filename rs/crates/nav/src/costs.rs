@@ -314,9 +314,8 @@ pub(crate) fn plan_costs_capped(
     let mut costs: Vec<Option<u32>> = vec![None; dests.len()];
     let mut dist: U64Map<u32> = U64Map::default();
     // Tiles reached through a door click (door stands open), apart from
-    // the cheap walked-onto shut tiles (same rule as `dijkstra`: shut
-    // wall doors never open from their own tile, the click needs a real
-    // stand). No prev map here: costs never rebuild a chain.
+    // the cheap walked-onto shut tiles (same rule as `dijkstra`). No prev
+    // map here: costs never rebuild a chain.
     let mut dist_open: U64Map<u32> = U64Map::default();
     let mut heap: BinaryHeap<(Reverse<u32>, Reverse<Key>, bool)> = BinaryHeap::new();
     dist.insert(from.key(), 0);
@@ -423,11 +422,9 @@ pub(crate) fn plan_costs_capped(
             if here != door_tile && !search.tables.side_ok(id, door_tile, here) {
                 continue;
             }
-            // A step off the door tile itself only continues an opening
-            // the click made (open state: arrived through this door's
-            // edge). Same rule as `dijkstra`: a shut wall door never
-            // opens from its own tile, the click needs a real stand.
-            if here == door_tile && matches!(shape, 0 | 1 | 2 | 3 | 9) && !opened {
+            // A click from the door tile itself opens it (same rule as
+            // `dijkstra`: engine src==dest reach, one-way side kept).
+            if here == door_tile && !opened && !search.tables.side_ok(id, door_tile, here) {
                 continue;
             }
             // Clickable stand only: the engine takes the op from an
@@ -563,8 +560,8 @@ mod tests {
     }
 
     /// Porte Peksa : le batch cote comme le plan unitaire, y compris la
-    /// sortie par le stand est (pas de clic src==dest). Meme regle
-    /// d'ouverture des deux cotes, jamais de divergence.
+    /// sortie cliquee depuis la tuile porte. Meme regle d'ouverture des
+    /// deux cotes, jamais de divergence.
     #[test]
     fn peksa_exit_costs_match_the_unit_plan() {
         let (world, tables) = setup();
@@ -576,9 +573,9 @@ mod tests {
             planned.segments.iter().any(|segment| matches!(
                 segment,
                 plan::Segment::OpenDoor { door, stand, .. }
-                if door.loc == 1530 && (stand.x, stand.z) == (3077, 3427)
+                if door.loc == 1530 && (stand.x, stand.z) == (3076, 3427)
             )),
-            "le plan clique depuis l'est, got: {:?}",
+            "le plan clique depuis la tuile porte, got: {:?}",
             planned.segments,
         );
         let costs = plan_costs(&world, &tables, from, &[dest], &options);

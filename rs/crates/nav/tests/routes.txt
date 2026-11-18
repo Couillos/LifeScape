@@ -87,15 +87,14 @@ hache_rimmington | 2971,3375,0 | 2970,3376,1 | f2p | reachable ; rides>=1 ; uses
 # budget relevé.
 traversee_sud | 3174,3410,0 | 3225,3218,0 | - | reachable ; walk_tiles<=260
 # 20-21. poche Peksa (boutique des casques, 3074-3077x3428-3431) :
-# la porte est 1530 (mur droit angle SUD, (3076,3427)). Le handler op
-# n'a pas le bras src==dest du dispatcher `reachWall` (clic depuis la
-# tuile refuse live avec message) : l'entree clique depuis le stand sud
-# exterieur (3076,3426), la sortie marche jusqu'au stand est (3077,3427,
-# bord EST ouvert, prouve live) puis clique (ouverture silencieuse) et
-# traverse aussitot vers le sud (re-fermeture auto ~500 ticks : passer
-# vite). Une porte sans stand atteignable reste scellee.
+# la porte est 1530 (mur droit angle SUD, (3076,3427)). Le moteur
+# atteint un mur depuis sa propre tuile (bras src==dest de `reachWall`,
+# prouve live par admin le 2026-11-18) : l'entree clique depuis le stand
+# sud exterieur (3076,3426), la sortie marche sur la tuile porte puis
+# clique (ouverture silencieuse) et traverse aussitot vers le sud
+# (re-fermeture auto ~500 ticks : passer vite).
 peksa_entree | 3076,3424,0 | 3075,3429,0 | - | reachable ; uses_loc=1530 ; doors<=1
-peksa_sortie | 3077,3429,0 | 3081,3428,0 | f2p | reachable ; uses_loc=1530 ; doors<=2 ; stand=3077,3427
+peksa_sortie | 3077,3429,0 | 3081,3428,0 | f2p | reachable ; uses_loc=1530 ; doors<=2 ; stand=3076,3427
 # 22-23. guichet de la banque ouest de Falador (booth 2945,3367, angle 2) :
 # la cible est le guichet (tuile bloquee). L'ancien rang de repli
 # (niveau, Chebyshev, cout) prenait la diagonale exterieure (2944,3366),
@@ -193,7 +192,10 @@ porte_verrouillee_varrock | 3269,3435,0 | 3268,3436,0 | f2p | unreachable=Discon
 # Mysteries) est au niveau 1 en (3210..3214,3218..3222). Niveau 2 par
 # la tour nord seulement : le haut de la tour sud est du ciel pour la
 # carte (tuiles OPEN sans toit, pas dans sky_floors).
-chateau_escalier_sud_montee | 3222,3218,0 | 3212,3220,1 | f2p | reachable ; uses_loc=1738 ; levels=0>1 ; stand=3206,3208
+# Depart (3215,3212) au sud de la porte 1536 (2026-11-18) : depuis la cour
+# (3222,3218) la porte nord cliquee depuis sa tuile rend l'escalier nord
+# moins cher (83 contre 109), le trajet sud reste celui-ci.
+chateau_escalier_sud_montee | 3215,3212,0 | 3212,3220,1 | f2p | reachable ; uses_loc=1738 ; levels=0>1 ; stand=3206,3208
 chateau_escalier_nord_montee | 3215,3225,0 | 3205,3228,1 | f2p | reachable ; uses_loc=1738 ; levels=0>1 ; stand=3205,3228
 chateau_escalier_sud_descente | 3206,3211,1 | 3206,3210,0 | f2p | reachable ; uses_loc=1739 ; levels=1>0 ; stand=3205,3209
 chateau_escalier_nord_descente | 3206,3226,1 | 3207,3228,0 | f2p | reachable ; uses_loc=1739 ; levels=1>0 ; stand=3205,3228

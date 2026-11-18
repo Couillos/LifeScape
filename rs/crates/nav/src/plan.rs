@@ -379,9 +379,12 @@ fn plan_budgeted_memo(
 ) -> Result<Plan, NoRoute> {
     // Sealed pocket (walkable, walled in, no edge lands in it): the
     // searches below would sweep the whole world to say Disconnected.
+    // The closest names the destination: the verdict is about it, and a
+    // closest beside the start reads as a walled-in origin
+    // (`brain_stranded`, live tim_thorn-105223 held at the Varrock bank).
     if crate::pocket::sealed_with(memo, world, tables, shared, from, dest) {
         return Err(NoRoute {
-            closest_reachable: from,
+            closest_reachable: dest,
             blocked_by_requirements: Vec::new(),
             disabled_transitions_nearby: disabled_nearby(tables, dest),
             reason: NoRouteReason::Disconnected,
@@ -953,15 +956,14 @@ pub(crate) fn dijkstra(
             if here != door_tile && !search.tables.side_ok(id, door_tile, here) {
                 continue;
             }
-            // A step off the door tile itself only continues an opening
-            // the click made (fresh state: arrived through this door's
-            // edge): the op handler runs reachWall1 with no src==dest
-            // arm, so a shut wall door never opens from its own tile
-            // (Peksa 1530 live: tile click refused, east-stand click
-            // opens). Walking onto the tile stays free (stands live
-            // there), but the click needs a real stand. Non-wall shapes
-            // keep the legacy edge (their handlers are unprobed).
-            if here == door_tile && matches!(shape, 0 | 1 | 2 | 3 | 9) && !fresh {
+            // A click from the door tile itself: the engine reaches a
+            // wall loc from its own tile (`ReachStrategy.reached` src==dest
+            // arm) and `[oploc1,_door_closed]` checks no side (admin live
+            // 2026-11-18: sewer 1530 (3241,9910) and Peksa 1530 open from
+            // their tiles). A one-way door keeps its side rule for that
+            // stand; a fresh state only continues the opening its click
+            // already made from the previous stand.
+            if here == door_tile && !fresh && !search.tables.side_ok(id, door_tile, here) {
                 continue;
             }
             // Clickable stand only: the engine takes the op from an
