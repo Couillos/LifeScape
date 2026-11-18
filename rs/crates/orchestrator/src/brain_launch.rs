@@ -677,7 +677,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             }
             _ => None,
         };
-        match crate::cpu_profile::timed("market.obtain_bid", || crate::brain_market::place_obtain_bid(job, &node_snapshot, &ctx, worth)) {
+        // An input of a product the graph makes: never over the product.
+        let reserve = crate::brain_market::derived_reserve(&life, launch, &live);
+        match crate::cpu_profile::timed("market.obtain_bid", || crate::brain_market::place_obtain_bid(job, &node_snapshot, &ctx, worth, reserve)) {
             Ok(_) => {
                 // Parked, not locked (no idle bot, 2026-11-13): the bid
                 // rests while the worker runs the next node or a filler.

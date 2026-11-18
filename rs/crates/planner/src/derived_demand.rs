@@ -96,6 +96,18 @@ pub fn derived_bounds(reserve: f64, wallet_ceiling: i64) -> (i64, i64) {
     (open, ceiling)
 }
 
+/// Ceiling of a `market:buy` bid on an input (live 2026-11-18: 31
+/// sapphire cutters bid up to 1 092 coins an uncut sapphire for a
+/// sapphire worth 175, the wallet their only limit): the wallet's,
+/// capped by the reservation price when the object feeds a product
+/// (`derived_bounds`); the wallet alone otherwise (a purchase for itself).
+pub fn obtain_ceiling(wallet_ceiling: i64, reserve: Option<f64>) -> i64 {
+    match reserve {
+        Some(reserve) => derived_bounds(reserve, wallet_ceiling).1,
+        None => wallet_ceiling.max(1),
+    }
+}
+
 #[cfg(test)]
 #[path = "derived_demand_tests.rs"]
 mod tests;

@@ -177,20 +177,23 @@ pub fn buying_in_flight(account: &str, item: i64, deals: &[lifescape_store::Deal
 ///
 /// `worth`: what one unit is worth to this buyer (its own make cost at
 /// its coin rate, `brain_bids::production_costs_for`): the bid opens
-/// there, capped by the wallet (user 2026-11-18 levier 2).
-pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx, worth: Option<i64>) -> Result<i64, String> {
+/// there, capped by the wallet (user 2026-11-18 levier 2). `reserve`:
+/// the input's reservation price when it feeds a product
+/// (`derived_reserve`): the ceiling never passes it.
+pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx, worth: Option<i64>, reserve: Option<f64>) -> Result<i64, String> {
     let NodeKind::ObtainItems { item, count } = &node.kind else { return Err("not an obtain node".to_string()) };
     let service = crate::market_service::shared().ok_or("market service not running")?;
     let id = obj_id(item).ok_or_else(|| format!("unknown item {item}"))?;
     let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
-    let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity);
+    let ceiling = lifescape_planner::derived_demand::obtain_ceiling(lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity), reserve);
     let (order, price, kept) = match keep_need_bid(&service, &job.account, id, quantity, worth.unwrap_or(1), ceiling)? {
         crate::market_reprice::StandingBid::Placed { order, price } => (order, price, false),
         crate::market_reprice::StandingBid::Kept { order, price } => (order, price, true),
     };
     let how = if kept { "kept (its lineage goes on)" } else { "placed" };
     let worth_note = worth.map(|value| format!(", worth {value}")).unwrap_or_default();
-    crate::logln!("brain {}: bid {quantity}/{count} {item} @ {price} {how} (ceiling {ceiling}{worth_note}, held {}), awaiting the fill", job.account, ctx.held);
+    let reserve_note = reserve.map(|value| format!(", derived reserve {value:.0}")).unwrap_or_default();
+    crate::logln!("brain {}: bid {quantity}/{count} {item} @ {price} {how} (ceiling {ceiling}{worth_note}{reserve_note}, held {}), awaiting the fill", job.account, ctx.held);
     Ok(order)
 }
 

@@ -1,6 +1,6 @@
 //! Derived demand: inputs priced from the product a producer makes.
 
-use super::{derived_bounds, input_reserve, DerivedPrices, DERIVED_MARGIN_PCT};
+use super::{derived_bounds, input_reserve, obtain_ceiling, DerivedPrices, DERIVED_MARGIN_PCT};
 use crate::model::{Node, NodeKind};
 
 /// A helm quota whose smith blocked on bars, whose smelting blocked on
@@ -51,4 +51,15 @@ fn bounds_cap_by_wallet_and_reservation() {
     assert_eq!(derived_bounds(46.7, 500), (24, 46));
     assert_eq!(derived_bounds(46.7, 20), (20, 20), "the wallet caps");
     assert_eq!(derived_bounds(-12.0, 500), (1, 1), "a loss never bids up");
+}
+
+/// A bought input never bids over what its product pays (the
+/// reservation), whatever the wallet; a purchase for itself keeps the
+/// wallet as its only limit.
+#[test]
+fn a_bought_input_bids_under_its_reservation() {
+    assert_eq!(obtain_ceiling(1092, Some(150.4)), 150);
+    assert_eq!(obtain_ceiling(80, Some(150.0)), 80, "the wallet still caps");
+    assert_eq!(obtain_ceiling(1092, Some(-3.0)), 1, "a product worth less than its inputs");
+    assert_eq!(obtain_ceiling(1092, None), 1092);
 }
