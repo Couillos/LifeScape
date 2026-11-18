@@ -58,3 +58,19 @@ fn own_milestones_keep_what_they_consume() {
     assert!(own_use_items(&done).is_empty(), "done milestones keep nothing");
     assert!(firemaker.milestones.iter().any(|stone| matches!(&stone.target, Target::Level { skill, .. } if skill == "firemaking")));
 }
+
+/// Live 2026-11-18: nathan_t held 564 mithril full helms against one
+/// trade in 30 hours; 529 kiteshields against ~61 a day. Overstock: the
+/// free stock beyond the bids plus two days of volume (at least one
+/// inventory). Willow logs sold by the thousand a day are not.
+#[test]
+fn stock_beyond_two_days_of_demand_is_overstock() {
+    use super::overstocked;
+    let helms = BookView { bids: vec![(823, 1)], asks: vec![(858, 60)], volume_24h: 1, ..BookView::default() };
+    assert!(overstocked(564, &helms));
+    let kites = BookView { bids: vec![(1131, 2)], asks: Vec::new(), volume_24h: 61, ..BookView::default() };
+    assert!(overstocked(529, &kites));
+    assert!(!overstocked(120, &kites), "two days of kites sell");
+    assert!(!overstocked(SALE_LOT_MIN, &BookView::default()), "one inventory never is");
+    assert!(overstocked(SALE_LOT_MIN + 1, &BookView::default()), "nothing traded: past one inventory");
+}

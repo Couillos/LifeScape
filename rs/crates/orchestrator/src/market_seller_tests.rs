@@ -159,3 +159,23 @@ fn never_traded_objects_list_on_their_public_anchors() {
     let loot = FoundMarks { discovery: lifescape_market::Anchors { shop_buy: Some(31), ..anchors }, anchor: Some(12), ..marks };
     assert_eq!(plan_sale(5, found(), UNTRADED, None, None, loot, &asks(Vec::new())), SaleDecision::List { qty: 5, price: 31, floor: 24 });
 }
+
+/// User 2026-11-18 (point 4): nathan_t's 564 mithril full helms (own
+/// cost 900, the shop's first unit 858 = high alch value) never sold: the
+/// floor sat at the alcher's net, no caster could buy. Overstocked, the
+/// floor is the alchemy outlet's price (`overstock_floor`), under the
+/// shop's first unit and the own cost: the alcher buys, the stock moves.
+#[test]
+fn an_overstocked_lot_walks_down_to_the_alch_outlet() {
+    let marks = FoundMarks { outside: 858, overstock_floor: Some(677), ..FoundMarks::default() };
+    let traded = Reference { price: 858, traded: true };
+    match plan_sale(564, reserve(900), traded, Some(823), None, marks, &demand(1, vec![(823, 1)])) {
+        SaleDecision::List { floor, .. } => assert_eq!(floor, 677),
+        other => panic!("{other:?}"),
+    }
+    let normal = FoundMarks { outside: 858, ..FoundMarks::default() };
+    match plan_sale(564, reserve(900), traded, Some(823), None, normal, &demand(1, vec![(823, 1)])) {
+        SaleDecision::List { floor, .. } => assert_eq!(floor, 900, "no overstock: the own cost"),
+        other => panic!("{other:?}"),
+    }
+}

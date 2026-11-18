@@ -65,6 +65,12 @@ pub(crate) fn best(skill: &str, now: f64) -> i64 {
     table().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).best(skill, now)
 }
 
+/// Best fleet level of `skill` at the wall clock.
+pub(crate) fn best_now(skill: &str) -> i64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs_f64()).unwrap_or(0.0);
+    best(skill, now)
+}
+
 /// True once the table holds enough of the running fleet.
 pub(crate) fn warm(now: f64) -> bool {
     let fleet_size = crate::brain_ambition::fleet_size();

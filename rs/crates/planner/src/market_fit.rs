@@ -96,6 +96,16 @@ pub fn saturation_factor(view: Option<&BookView>, adding: f64) -> f64 {
 /// Units of a spare stack a real player lists at once: what buyers take
 /// now (bid depth + a day of volume), at least one inventory, never more
 /// than the stack. No book: one inventory.
+/// Days of traded volume a stock may hold before it is overstock.
+pub const OVERSTOCK_DAYS: i64 = 2;
+
+/// True when `stock` free units exceed what the market absorbs: the bids
+/// plus `OVERSTOCK_DAYS` of volume, never under one inventory (user
+/// 2026-11-18: nathan_t's 564 mithril full helms, one trade in 30 h).
+pub fn overstocked(stock: i64, view: &BookView) -> bool {
+    stock > SALE_LOT_MIN.max(view.bid_depth() + OVERSTOCK_DAYS * view.volume_24h.max(0))
+}
+
 pub fn sale_lot(spare: i64, view: Option<&BookView>) -> i64 {
     let absorbed = view.map(|book| book.bid_depth() + book.volume_24h.max(0)).unwrap_or(0);
     absorbed.max(SALE_LOT_MIN).min(spare.max(0))

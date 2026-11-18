@@ -81,6 +81,17 @@ pub fn public_alch_net(item: &str) -> Option<i64> {
     (net >= 1.0).then(|| net.floor() as i64)
 }
 
+/// Net of one cast on `item` by the alchemy outlet (point 4): the best
+/// spell a fleet bot casts (`brain_gear_fleet`: high at magic 55, low at
+/// 21), runes at their current price, fire runes paid (`None`: no fleet
+/// caster, not alchable, or the cast loses).
+pub fn outlet_alch_net(item: &str) -> Option<i64> {
+    let magic = crate::brain_gear_fleet::best_now("magic").clamp(1, 99) as u8;
+    let caster = lifescape_planner::alchemy::caster(magic, false, &rune_price)?;
+    let net = caster.net(item)?;
+    (net >= 1.0).then(|| net.floor() as i64)
+}
+
 /// Anchors a buyer or a market maker reads for `item`.
 pub fn public_anchors(item: &str) -> Anchors {
     Anchors {

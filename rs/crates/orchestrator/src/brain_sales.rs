@@ -255,10 +255,13 @@ fn adopt_listings(
         let make_cost = make_costs.get(name).copied();
         // Today's opening for this stock (2026-11-14: an ask anchored on
         // an old reserve or an outlier comes down to it).
-        let (today, reserve) = service.sale_decision(account, name, row.item_id, row.remaining, costs, Some(life), make_cost, false, crate::brain_alch::alch_floor(live, name));
-        // Never walked under what an F2P shop pays (Q3 outside option).
+        let stock = crate::brain_ambition::live_count(live, name).max(row.remaining);
+        let (today, reserve) = service.sale_decision(account, name, row.item_id, row.remaining, stock, costs, Some(life), make_cost, false, crate::brain_alch::alch_floor(live, name));
+        // Never walked under what an F2P shop pays (Q3 outside option),
+        // unless overstock walks it down to the alchemy outlet (point 4).
         let outside = lifescape_gamedata::shop_sale::npc_sale_value(name).unwrap_or(0);
-        let reserve = reserve.map(|reserve| reserve.coins.max(outside));
+        let overstock = service.overstock_floor(account, name, row.item_id, stock);
+        let reserve = reserve.map(|reserve| overstock.unwrap_or(reserve.coins.max(outside)));
         let alch = crate::brain_alch::alch_floor(live, name).unwrap_or(0);
         let opening = match today {
             SaleDecision::List { price, .. } => Some(price.max(alch)),
@@ -503,11 +506,16 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         }
         // Q4: a lot withdrawn at its horizon with no buyer stays banked
         // for a horizon (never relisted at once), unless the bank is full.
+        // Overstock (point 4) walks lower than the withdrawn lot: listed
+        // again at once, to the alchemy outlet on the market (the shop
+        // takes a few units before its price sinks, the rest would stay
+        // banked forever).
+        let overstock = service.overstock_floor(&job.account, &name, item, qty).is_some();
         let horizon = crate::market_lineage::horizon_ticks(crate::market_lineage::LOOT, true);
-        if !pressed && crate::market_reprice::withdrawn_recently(&service, &job.account, item, horizon, now) {
+        if !pressed && !overstock && crate::market_reprice::withdrawn_recently(&service, &job.account, item, horizon, now) {
             continue;
         }
-        if let Some(shop_value) = lifescape_gamedata::shop_sale::npc_sale_value(&name) {
+        if let Some(shop_value) = lifescape_gamedata::shop_sale::npc_sale_value(&name).filter(|_| !overstock) {
             let reference = service.reference(item);
             let (bid, _) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
             if lifescape_market::npc_sale_beats_market(shop_value, bid, reference) {
@@ -515,7 +523,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
                 continue;
             }
         }
-        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, &costs, Some(life), make_costs.get(&name).copied(), pressed, crate::brain_alch::alch_floor(&live, &name));
+        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, qty, &costs, Some(life), make_costs.get(&name).copied(), pressed, crate::brain_alch::alch_floor(&live, &name));
         let (lot, price, floor) = match decision {
             // The alch floor (2026-11-14): a caster never sells under what
             // the cast nets it.

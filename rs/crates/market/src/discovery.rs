@@ -60,6 +60,19 @@ pub fn margin_of(patience: f64) -> f64 {
     0.05 + patience.clamp(0.0, 1.0) * 0.15
 }
 
+/// Share of an alchemy cast's net an overstocked seller leaves the
+/// caster (user 2026-11-18, point 4).
+pub const ALCH_OUTLET_MARGIN_PCT: i64 = 10;
+
+/// What the alchemy outlet pays per unit (user 2026-11-18, point 4,
+/// universal): the cast's net (`net`: alchemy value less the runes) less
+/// the caster's `ALCH_OUTLET_MARGIN_PCT`; `None` when nothing is left
+/// (a cast that loses is no outlet).
+pub fn alch_outlet_price(net: i64) -> Option<i64> {
+    let price = net.saturating_mul(100 - ALCH_OUTLET_MARGIN_PCT) / 100;
+    (price >= 1).then_some(price)
+}
+
 /// A seller's floor: its own keep value, never under the public outside
 /// options, at least 1 coin.
 pub fn seller_floor(keep: i64, anchors: &Anchors) -> i64 {

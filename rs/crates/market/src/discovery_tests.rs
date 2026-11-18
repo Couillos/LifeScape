@@ -82,3 +82,14 @@ fn untraded_loot_anchors_on_the_cost_else_its_alch_value() {
     assert_eq!(loot_anchor(Reference { price: 9, traded: true }, Some(12), 5, &cost, 0.10), Some(12), "traded: untouched");
     assert_eq!(loot_anchor(UNTRADED, Some(12), 1, &Anchors::default(), 0.10), Some(12), "no anchor: untouched");
 }
+
+/// User 2026-11-18 (point 4, universal): an overstocked seller's floor
+/// is the alchemy outlet's buy price, the cast's net less the caster's
+/// 10 %: mithril full helm net 753 (858 less a nature at 105) → 677.
+#[test]
+fn the_alch_outlet_leaves_the_caster_a_tenth() {
+    assert_eq!(alch_outlet_price(753), Some(677));
+    assert_eq!(alch_outlet_price(1221), Some(1098));
+    assert_eq!(alch_outlet_price(1), None, "nothing left for the seller");
+    assert_eq!(alch_outlet_price(-40), None, "a losing cast is no outlet");
+}
