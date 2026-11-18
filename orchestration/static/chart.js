@@ -110,11 +110,35 @@ const LifeChart = (() => {
 
   // Tooltip lines for one candle: period, O/H/L/C, volume, trade count
   // (PRD2 §6.2). Tolerates rows without `n` (old payloads).
+  // Change of a candle from its open, in percent ((close - open) / open),
+  // `null` without an open price.
+  function candleChangePct(row) {
+    return row && row.o > 0 ? (row.c - row.o) / row.o * 100 : null;
+  }
+
+  // Amplitude of a candle in percent ((high - low) / low), `null`
+  // without a low price.
+  function candleRangePct(row) {
+    return row && row.l > 0 ? (row.h - row.l) / row.l * 100 : null;
+  }
+
+  function pctText(value, signed) {
+    if (value === null) return '—';
+    const sign = signed && value > 0 ? '+' : '';
+    return sign + value.toFixed(1) + '%';
+  }
+
+  // Hover lines of one candle (user 2026-11-18: its change from the open
+  // in the candle colours, and its low-high amplitude). A line is a
+  // string, or `{ text, color }` for a coloured one.
   function candleTooltip(slotStart, width, row) {
     const split = volumeSplit(row);
+    const change = candleChangePct(row);
     return [
       periodLabel(slotStart, width),
       'O ' + row.o + ' H ' + row.h + ' L ' + row.l + ' C ' + row.c,
+      { text: 'Variation ' + pctText(change, true), color: change === null || change === 0 ? FLAT : (change > 0 ? UP : DOWN) },
+      'Amplitude ' + pctText(candleRangePct(row), false),
       'Volume ' + row.v,
       'Buy vol ' + split.buy,
       'Sell vol ' + split.sell,
@@ -515,7 +539,8 @@ const LifeChart = (() => {
         ? candleTooltip(model.slots[index], model.width, row)
         : lineTooltip(model.slots[index], model.width, row));
     ctx.font = '11px monospace';
-    const boxW = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 16;
+    const textOf = (line) => (typeof line === 'string' ? line : line.text);
+    const boxW = Math.max(...lines.map((line) => ctx.measureText(textOf(line)).width)) + 16;
     const boxH = lines.length * 14 + 10;
     let boxX = x + 12;
     if (boxX + boxW > geometry.plotX + geometry.plotW) boxX = x - boxW - 12;
@@ -525,8 +550,10 @@ const LifeChart = (() => {
     ctx.strokeStyle = '#555';
     ctx.fillRect(boxX, boxY, boxW, boxH);
     ctx.strokeRect(boxX, boxY, boxW, boxH);
-    ctx.fillStyle = '#eee';
-    lines.forEach((line, i) => ctx.fillText(line, boxX + 8, boxY + 16 + i * 14));
+    lines.forEach((line, i) => {
+      ctx.fillStyle = typeof line === 'string' ? '#eee' : (line.color || '#eee');
+      ctx.fillText(textOf(line), boxX + 8, boxY + 16 + i * 14);
+    });
   }
 
   // Index of the slot with data nearest to `index` (itself when filled,
@@ -563,7 +590,7 @@ const LifeChart = (() => {
   }
 
   return {
-    slotStarts, liveSlots, fillSlots, carryFlat, candleColor, niceTicks, periodLabel, axisLabel, candleTooltip, lineTooltip, nearestFilled, labelEvery, tickCount, spaced,
+    slotStarts, liveSlots, fillSlots, carryFlat, candleColor, niceTicks, periodLabel, axisLabel, candleTooltip, candleChangePct, candleRangePct, lineTooltip, nearestFilled, labelEvery, tickCount, spaced,
     volumeSplit, volumeScaleMax, foldPrint, draw, chartHeight, UP, DOWN, FLAT,
   };
 })();

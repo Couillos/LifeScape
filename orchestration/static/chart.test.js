@@ -45,17 +45,21 @@ test('niceTicks graduates a volume range from zero', () => {
 
 test('candleTooltip shows period, O/H/L/C, volume, buy/sell volume and trade count', () => {
   const lines = LifeChart.candleTooltip(1_700_000_000, 3600, { o: 4, h: 9, l: 3, c: 8, v: 120, n: 11 });
-  assert.equal(lines.length, 6);
+  assert.equal(lines.length, 8);
   assert.match(lines[0], /\d\d\/\d\d \d\d:\d\d–\d\d:\d\d/);
   assert.equal(lines[1], 'O 4 H 9 L 3 C 8');
-  assert.equal(lines[2], 'Volume 120');
-  assert.deepEqual(lines.slice(3), ['Buy vol 0', 'Sell vol 0', 'Trades 11'], 'no split in the row: 0/0');
+  assert.deepEqual(lines[2], { text: 'Variation +100.0%', color: LifeChart.UP }, '4 -> 8 from the open, green');
+  assert.equal(lines[3], 'Amplitude 200.0%', 'low 3 to high 9');
+  assert.equal(lines[4], 'Volume 120');
+  assert.deepEqual(lines.slice(5), ['Buy vol 0', 'Sell vol 0', 'Trades 11'], 'no split in the row: 0/0');
 });
 
 test('candleTooltip tolerates rows without an execution count', () => {
   const lines = LifeChart.candleTooltip(1_700_000_000, 86400, { o: 4, h: 4, l: 4, c: 4, v: 5 });
   assert.match(lines[0], /^\d\d\/\d\d$/);
-  assert.equal(lines[5], 'Trades —');
+  assert.deepEqual(lines[2], { text: 'Variation 0.0%', color: LifeChart.FLAT });
+  assert.equal(lines[3], 'Amplitude 0.0%');
+  assert.equal(lines[lines.length - 1], 'Trades —');
 });
 
 test('carryFlat draws one flat candle per empty slot at the last close', () => {
@@ -185,4 +189,13 @@ test('chartHeight keeps the 720:340 ratio, capped by maxHeight', () => {
   assert.equal(LifeChart.chartHeight(1800), 850);
   assert.equal(LifeChart.chartHeight(1800, 260), 260, 'a wide screen stays under the cap');
   assert.equal(LifeChart.chartHeight(400, 260), 189, 'a narrow one keeps its ratio');
+});
+
+test("a candle's change and amplitude in percent (user 2026-11-18)", () => {
+  assert.equal(LifeChart.candleChangePct({ o: 1300, c: 1241 }).toFixed(1), '-4.5');
+  assert.equal(LifeChart.candleRangePct({ l: 1241, h: 1379 }).toFixed(1), '11.1');
+  assert.equal(LifeChart.candleChangePct({ o: 0, c: 5 }), null, 'no open, no percentage');
+  assert.equal(LifeChart.candleRangePct({ l: 0, h: 5 }), null);
+  const falling = LifeChart.candleTooltip(1_700_000_000, 3600, { o: 10, h: 10, l: 5, c: 5, v: 1 });
+  assert.deepEqual(falling[2], { text: 'Variation -50.0%', color: LifeChart.DOWN });
 });
