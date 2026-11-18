@@ -122,6 +122,24 @@ pub(crate) fn same_flank_clusters(home: (i32, i32), targets: &[(i32, i32, usize)
     }
 }
 
+/// Where the hunt's flank is read from: the brain's site when it fixed
+/// one (it priced the route there), else the bot. rose_young
+/// 2026-11-18: read from the bot at the Al Kharid bank, it dropped the
+/// Lumbridge site's camp and kept a wall centroid in Varrock.
+pub(crate) fn flank_home(site: Option<(i32, i32, i32)>, here: (i32, i32)) -> (i32, i32) {
+    site.map(|(x, z, _)| (x, z)).unwrap_or(here)
+}
+
+/// End of a hunt over every cluster: no kill and no cluster ever
+/// reached is a typed failure (the brain counts it), never "ok killed
+/// 0" relaunched every pass.
+pub(crate) fn hunt_end(total: u32, reached: bool, spot: &str, at: (i32, i32, i32)) -> Result<u32, ScriptError> {
+    if total == 0 && !reached {
+        return Err(ScriptError::Failed(format!("no {spot} cluster reached from {at:?}: every walk failed")));
+    }
+    Ok(total)
+}
+
 /// Kills still wanted: 0 means unlimited, so a plain subtraction panics
 /// on the second cluster once anything died (t02 live).
 pub(crate) fn remaining_kills(kills_limit: u32, total: u32) -> u32 {
@@ -229,7 +247,7 @@ pub fn run_spot_with(
     // oscillation inside the fight; this stops it between clusters.
     let mut targets = targets;
     if let Some(line) = crate::kit::bank::toll_gate_x(bot) {
-        let kept = same_flank_clusters((bot.world.x, bot.world.z), &targets, bot.allow_paid);
+        let kept = same_flank_clusters(flank_home(bot.assigned_site, (bot.world.x, bot.world.z)), &targets, bot.allow_paid);
         if kept.len() != targets.len() {
             bot.log(&format!("toll fence line {line}: hunting {} of {} clusters on this flank", kept.len(), targets.len()));
         }
@@ -253,6 +271,7 @@ pub fn run_spot_with(
     // remainder shrinks as the run spends ticks anywhere (bank trips,
     // walks, fights alike).
     let run_started = bot.world.ticks;
+    let mut reached = false;
     for (center_x, center_z, count) in targets {
         // Pace retries: instant walk failures consume no ticks, so an
         // unpaced loop machine-guns the server into kicking us.
@@ -310,6 +329,7 @@ pub fn run_spot_with(
                 }
                 Ok(true) => {
                     walk_fails = 0;
+                    reached = true;
                 }
             }
             // The status line reads the last intent: without this the
@@ -334,12 +354,31 @@ pub fn run_spot_with(
             }
         }
     }
+    let total = hunt_end(total, reached, spot.key, bot.position())?;
     Ok((total, false, banked_trip))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{food_blocked, foodless, level_reached, stop_level_of, HuntPlan};
+    use super::{flank_home, food_blocked, foodless, hunt_end, level_reached, same_flank_clusters, stop_level_of, HuntPlan};
+
+    /// rose_young / Yogosun 2026-11-18: at the Al Kharid bank, sent to
+    /// the Lumbridge castle men (`--site 3206,3219,1`, a 311-tile walk
+    /// without the toll), the flank filter read the BOT's side and kept
+    /// only the Varrock palace centroid (3232,3392,1), a brick wall: two
+    /// NoRoute a run, "ok men killed 0", relaunched every 10 s for hours.
+    /// The flank is the site's; a hunt that reached no cluster fails typed.
+    #[test]
+    fn the_hunt_flank_is_the_sites_and_a_hunt_reaching_nothing_fails() {
+        let targets = vec![(3206, 3219, 1usize), (3232, 3392, 2usize)];
+        let home = flank_home(Some((3206, 3219, 1)), (3269, 3169));
+        let kept = same_flank_clusters(home, &targets, false);
+        assert!(kept.iter().any(|(x, z, _)| (*x, *z) == (3206, 3219)), "the site's camp stays: {kept:?}");
+        assert_eq!(flank_home(None, (3269, 3169)), (3269, 3169), "no site: the bot's side");
+        assert!(hunt_end(0, false, "men", (3269, 3169, 0)).is_err(), "no cluster reached, no kill: typed failure");
+        assert_eq!(hunt_end(0, true, "men", (3269, 3169, 0)).ok(), Some(0), "reached but nothing died: a quiet camp, ok");
+        assert_eq!(hunt_end(3, false, "men", (3269, 3169, 0)).ok(), Some(3));
+    }
 
     /// Live 2026-11-17 (george_97, lucy_rhodes, ryan_park, frank_lane…):
     /// `melee hill_giants --site 3308,3661,0` (the Wilderness surface
