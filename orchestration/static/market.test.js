@@ -62,3 +62,10 @@ test('a market maker pseudo is gold, any other plain and escaped', () => {
   assert.equal(Market.partyHtml('eva_dale', false), 'eva_dale');
   assert.equal(Market.partyHtml('<b>', false), '&lt;b&gt;');
 });
+
+test('a last trade is green when a buyer took the asks, red when a seller hit the bids', () => {
+  const t = 20_500 * 86400;
+  assert.match(Market.tradeRowHtml({ t, q: 3, p: 1329, s: 'buy' }), /^<tr class="taker-buy"/);
+  assert.match(Market.tradeRowHtml({ t, q: 1, p: 823, s: 'sell' }), /^<tr class="taker-sell"/);
+  assert.match(Market.tradeRowHtml({ t, q: 1, p: 10, s: null }), /^<tr><td>1<\/td><td>10<\/td>/, 'unknown taker: plain');
+});

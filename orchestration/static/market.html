@@ -44,6 +44,9 @@
   #book tr.ask td:first-child { color: #ff1744; }
   #book tr.bid td:first-child { color: #00e676; }
   #book tr.spread td { color: #888; text-align: center; }
+  /* Last trades: a buyer took the asks (green), a seller hit the bids (red). */
+  #trades tr.taker-buy td { background: #0f4d24; color: #fff; }
+  #trades tr.taker-sell td { background: #5c1414; color: #fff; }
   .muted { color: #888; }
   /* Market makers' pseudos in Latest transactions: shimmering gold. */
   .maker { font-weight: bold; background: linear-gradient(100deg, #8a6d1a 0%, #ffd700 30%, #fff6c8 50%, #ffd700 70%, #8a6d1a 100%); background-size: 200% auto; -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: 0 0 6px rgba(255, 215, 0, 0.35); animation: maker-shine 3s linear infinite; }

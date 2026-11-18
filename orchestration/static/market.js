@@ -194,14 +194,19 @@ function renderBook(book) {
   document.getElementById('book').innerHTML = out.join('');
 }
 
+// Last trades row (user 2026-11-18): green background when a buyer took
+// the ask liquidity (taker side `buy`), red when a seller hit the bids
+// (`sell`), plain when the taker is unknown.
+function tradeRowHtml(trade) {
+  const date = new Date(trade.t * 1000);
+  const label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
+  const taker = trade.s === 'buy' ? ' class="taker-buy" title="a buyer took the asks"' : trade.s === 'sell' ? ' class="taker-sell" title="a seller hit the bids"' : '';
+  return '<tr' + taker + '><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + label + '</td></tr>';
+}
+
 function renderTrades() {
   const rows = ['<tr><th>qty</th><th>price</th><th>time</th></tr>'];
-  const last = trades.slice(0, 12);
-  for (const trade of last) {
-    const date = new Date(trade.t * 1000);
-    const label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
-    rows.push('<tr><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + label + '</td></tr>');
-  }
+  for (const trade of trades.slice(0, 12)) rows.push(tradeRowHtml(trade));
   document.getElementById('trades').innerHTML = rows.join('');
 }
 
@@ -400,4 +405,4 @@ function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined' && module.exports) module.exports = { VIEWS, viewSlots, chartRows, partyHtml };
+if (typeof module !== 'undefined' && module.exports) module.exports = { VIEWS, viewSlots, chartRows, partyHtml, tradeRowHtml };
