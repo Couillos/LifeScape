@@ -218,10 +218,14 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     // (c)): the coins of a credible one first, never the noise bid.
     let credible_unit = unit.max(credible_floor(item, ctx));
     let incredible = market_ok && !quest_first && bid_ceiling(ctx, need) < credible_floor(item, ctx);
+    // The keepers' window (stock + restock) covers the need: a shop
+    // short of it is never chosen while the market can sell (live
+    // 2026-11-18: gem shops stocking 1 uncut sapphire, 31 bots sent).
+    let shop_covers = ctx.shop_window_units.is_none_or(|units| units >= need);
     let pick: Option<String> = if granted.is_some() && quest_first {
         // The quest hands it over: no drop farm, no purchase.
         None
-    } else if shop_listed && shop_cover <= ctx.coins && ctx.best_ask.is_none_or(|ask| ask >= ctx.shop_price.max(1)) && ctx.shop_window_units.is_none_or(|units| units >= need) {
+    } else if shop_listed && shop_cover <= ctx.coins && ctx.best_ask.is_none_or(|ask| ask >= ctx.shop_price.max(1)) && shop_covers {
         // 0. The keeper is the cheapest seller and the wallet pays it
         // (user 2026-11-15: every stocked object may be bought, the shop
         // price caps the market): buy there, like a player buying his
@@ -244,8 +248,9 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
             priced.push(Alternative { method: "market:bid".to_string(), est_ticks: 0, est_coins: bid_ceiling(ctx, need) * need });
         }
         Some(best.method.clone())
-    } else if shop_listed && shop_cover <= ctx.coins {
-        // 3. Merchant, D-A allowed.
+    } else if shop_listed && shop_cover <= ctx.coins && (shop_covers || !market_ok) {
+        // 3. Merchant, D-A allowed (short of the need only when the
+        // market cannot sell it: an Iron, an untradeable).
         Some("shop:buy".to_string())
     } else if dialogue_cover.is_some_and(|cover| cover <= ctx.coins) {
         // 3b. A dialogue seller, same rule (the seller's site may add the

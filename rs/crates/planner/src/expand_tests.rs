@@ -633,6 +633,13 @@ fn a_keeper_short_of_the_need_is_not_the_first_seller() {
     let mut short = nodes[0].clone();
     resolve_ready(&mut short, &ctx);
     assert_ne!(short.method.as_deref(), Some("shop:buy"), "2 units a window for a need of 70: {:?}", short.alternatives);
+    // No ask at all (the fallback merchant, rule 3): still not the
+    // keeper, a resting bid.
+    let mut no_ask = ctx.clone();
+    no_ask.best_ask = None;
+    let mut bare = nodes[0].clone();
+    resolve_ready(&mut bare, &no_ask);
+    assert_eq!(bare.method.as_deref(), Some("market:buy"), "no seller, a short keeper: bid {:?}", bare.alternatives);
     let mut covered = ctx.clone();
     covered.shop_window_units = Some(100);
     resolve_ready(&mut nodes[0], &covered);
