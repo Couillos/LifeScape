@@ -12,15 +12,9 @@ fn anchors(shop_sale: Option<i64>, alch_net: Option<i64>, make_cost: Option<i64>
 }
 
 #[test]
-fn the_floor_is_the_best_outside_option() {
-    assert_eq!(anchors(Some(24), Some(30), None, None).floor(), 30, "a caster's net beats the shop");
-    assert_eq!(anchors(Some(24), Some(-5), None, None).floor(), 24, "a losing cast is no option");
-    assert_eq!(Anchors::default().floor(), 0);
+fn anchors_are_known_or_not() {
     assert!(!Anchors::default().known());
     assert!(anchors(None, None, Some(30), None).known());
-    assert_eq!(seller_floor(20, &anchors(Some(24), None, None, None)), 24, "never under the shop's offer");
-    assert_eq!(seller_floor(40, &anchors(Some(24), None, None, None)), 40, "its own keep value when higher");
-    assert_eq!(seller_floor(0, &Anchors::default()), 1);
 }
 
 #[test]
@@ -44,32 +38,32 @@ fn a_seller_opens_over_the_published_cost_under_the_shop() {
 }
 
 #[test]
-fn a_buyer_opens_under_its_value_over_the_public_floor() {
+fn a_buyer_opens_under_its_value() {
     let cost = anchors(Some(24), None, Some(30), None);
     assert_eq!(bid_open(&cost, Some(90), 200, 0.10), Some(30), "never over the published cost");
     assert_eq!(bid_open(&cost, None, 200, 0.10), Some(27), "no own value: the published cost less the margin");
-    assert_eq!(bid_open(&cost, Some(25), 200, 0.10), Some(24), "never under the sellers' floor");
+    assert_eq!(bid_open(&cost, Some(25), 200, 0.10), Some(22), "no sellers' floor (user 2026-11-18)");
     assert_eq!(bid_open(&cost, Some(90), 28, 0.10), Some(28), "never over its ceiling");
-    assert_eq!(bid_open(&cost, Some(20), 20, 0.10), Some(20), "a ceiling under the floor rests at the ceiling");
+    assert_eq!(bid_open(&cost, Some(20), 20, 0.10), Some(18), "its value less the margin");
     let shop = anchors(None, None, None, Some(40));
     assert_eq!(bid_open(&shop, Some(90), 200, 0.10), Some(40), "the shop sells at 40");
     assert_eq!(bid_open(&shop, None, 200, 0.10), Some(36), "the shop's price as the value");
     let floor_only = anchors(Some(12), None, None, None);
     assert_eq!(bid_open(&floor_only, Some(90), 200, 0.10), Some(81), "its use value less the margin");
-    assert_eq!(bid_open(&floor_only, None, 200, 0.10), Some(12), "only the floor: bid it");
+    assert_eq!(bid_open(&floor_only, None, 200, 0.10), Some(1), "no value known: the lowest offer, the sellers decide");
     assert_eq!(bid_open(&Anchors::default(), Some(90), 200, 0.10), None, "no anchor: the buyer's own rule");
 }
 
 #[test]
 fn untraded_listings_open_on_the_anchors_traded_ones_on_the_price() {
     let cost = anchors(Some(24), None, Some(30), None);
-    assert_eq!(listing_open(UNTRADED, None, 20, None, &cost, 0.10), (33, 24), "over the cost, floor at the shop");
-    assert_eq!(listing_open(UNTRADED, Some(45), 20, None, &cost, 0.10), (45, 24), "a richer bid is taken");
+    assert_eq!(listing_open(UNTRADED, None, 20, None, &cost, 0.10), (33, 20), "over the cost, floor at its own keep value");
+    assert_eq!(listing_open(UNTRADED, Some(45), 20, None, &cost, 0.10), (45, 20), "a richer bid is taken");
     assert_eq!(listing_open(UNTRADED, None, 20, None, &Anchors::default(), 0.10), (40, 20), "no anchor: twice the keep value");
-    assert_eq!(listing_open(UNTRADED, None, 20, None, &anchors(Some(24), None, None, None), 0.10), (48, 24), "floor only: twice the floor");
+    assert_eq!(listing_open(UNTRADED, None, 20, None, &anchors(Some(24), None, None, None), 0.10), (40, 20), "the shop's offer is no floor");
     let traded = Reference { price: 60, traded: true };
-    assert_eq!(listing_open(traded, None, 20, None, &cost, 0.10), (60, 24), "traded: the current price rules");
-    assert_eq!(listing_open(Reference { price: 10, traded: true }, None, 20, None, &cost, 0.10), (24, 24), "never under the shop's offer");
+    assert_eq!(listing_open(traded, None, 20, None, &cost, 0.10), (60, 20), "traded: the current price rules");
+    assert_eq!(listing_open(Reference { price: 10, traded: true }, None, 20, None, &cost, 0.10).1, 20, "the floor is the own keep value, never the shop's offer");
 }
 
 #[test]
@@ -110,15 +104,15 @@ fn an_order_opens_with_room_to_concede() {
 
 /// Plan prix §1 (user 2026-11-18, Q1 10 %, Q2 under the making cost): a
 /// seller's floor drops 10 % per horizon that ended unsold (net of its
-/// sales), never under its outside bound nor over its keep value.
+/// sales), down to 1 coin: no alchemy or shop bound (user 2026-11-18:
+/// "retire les floor de prix").
 #[test]
 fn the_floor_learns_from_unsold_horizons() {
-    assert_eq!(learned_floor(858, 300, 0), 858);
-    assert_eq!(learned_floor(858, 300, 1), 772);
-    assert_eq!(learned_floor(858, 300, 3), 625);
-    assert_eq!(learned_floor(858, 300, 20), 300, "the outside bound holds");
-    assert_eq!(learned_floor(858, 1, 64), 1);
-    assert_eq!(learned_floor(858, 900, 2), 858, "a bound over the keep value never raises it");
+    assert_eq!(learned_floor(858, 0), 858);
+    assert_eq!(learned_floor(858, 1), 772);
+    assert_eq!(learned_floor(858, 3), 625);
+    assert_eq!(learned_floor(858, 20), 104, "no outside bound: it keeps falling");
+    assert_eq!(learned_floor(858, 64), 1);
     assert_eq!(unsold_horizons(3, 1), 2, "each sale takes one failure back");
     assert_eq!(unsold_horizons(1, 4), 0);
 }

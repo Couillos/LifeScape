@@ -45,12 +45,6 @@ impl Anchors {
     pub fn known(&self) -> bool {
         [self.shop_sale, self.alch_net, self.make_cost, self.shop_buy].into_iter().any(|anchor| positive(anchor).is_some())
     }
-
-    /// The sellers' public floor: the best outside option (shop sale,
-    /// alchemy net), 0 when none.
-    pub fn floor(&self) -> i64 {
-        positive(self.shop_sale).unwrap_or(0).max(positive(self.alch_net).unwrap_or(0))
-    }
 }
 
 /// Profile margin of a bot of price patience `patience` (the planner's
@@ -101,20 +95,14 @@ pub fn unsold_horizons(withdrawals: i64, sales: i64) -> i64 {
 }
 
 /// Plan prix §1, Q2 (user 2026-11-18: under the making cost when nothing
-/// sells): the floor after `unsold` horizons, `keep x 0.9^unsold`, never
-/// under `bound` (the outside option the stock can still reach: the
-/// alchemy outlet, 1 coin) nor over `keep`.
-pub fn learned_floor(keep: i64, bound: i64, unsold: i64) -> i64 {
+/// sells): the floor after `unsold` horizons, `keep x 0.9^unsold`, down
+/// to 1 coin (no alchemy nor shop bound, user 2026-11-18: "retire les
+/// floor de prix"), never over `keep`.
+pub fn learned_floor(keep: i64, unsold: i64) -> i64 {
     let keep = keep.max(1);
     let factor = (1.0 - FLOOR_DECAY_PCT as f64 / 100.0).powi(unsold.clamp(0, 64) as i32);
     let decayed = (keep as f64 * factor).floor() as i64;
-    decayed.max(bound.max(1)).min(keep)
-}
-
-/// A seller's floor: its own keep value, never under the public outside
-/// options, at least 1 coin.
-pub fn seller_floor(keep: i64, anchors: &Anchors) -> i64 {
-    keep.max(anchors.floor()).max(1)
+    decayed.max(1).min(keep)
 }
 
 /// Opening ask of a never-traded object: over the published production
@@ -134,8 +122,8 @@ pub fn ask_open(anchors: &Anchors, floor: i64, margin: f64, fallback: i64) -> i6
 /// buyer's own rule stands): under the use value (`value`, else the
 /// published cost, else the shop's selling price) by the margin and
 /// never over the published cost (a producer selling at its cost takes
-/// it: the concession pays more only if nobody does), at least the
-/// sellers' public floor, never over the shop's selling price nor the
+/// it: the concession pays more only if nobody does), at least 1 coin
+/// (no sellers' floor), never over the shop's selling price nor the
 /// `ceiling`.
 pub fn bid_open(anchors: &Anchors, value: Option<i64>, ceiling: i64, margin: f64) -> Option<i64> {
     if !anchors.known() {
@@ -144,8 +132,7 @@ pub fn bid_open(anchors: &Anchors, value: Option<i64>, ceiling: i64, margin: f64
     let worth = positive(value).or(positive(anchors.make_cost)).or(positive(anchors.shop_buy));
     let under = worth.map_or(0, |worth| (worth as f64 * (1.0 - margin.clamp(0.0, 1.0)) + 1e-9).floor() as i64);
     let under = positive(anchors.make_cost).map_or(under, |cost| under.min(cost));
-    let opened = under.max(anchors.floor());
-    let capped = positive(anchors.shop_buy).map_or(opened, |shop| opened.min(shop));
+    let capped = positive(anchors.shop_buy).map_or(under, |shop| under.min(shop));
     Some(capped.min(ceiling.max(1)).max(1))
 }
 
@@ -154,8 +141,7 @@ pub fn bid_open(anchors: &Anchors, value: Option<i64>, ceiling: i64, margin: f64
 /// anchored floor; a never-traded one opens at `ask_open` (its fallback:
 /// twice the floor), or into a richer bid.
 pub fn listing_open(reference: crate::price::Reference, best_bid: Option<i64>, keep: i64, last_sell: Option<crate::zip::OwnFill>, anchors: &Anchors, margin: f64) -> (i64, i64) {
-    let floor = seller_floor(keep, anchors);
-    let (open, floor) = crate::zip::seller_open(reference, best_bid, floor, last_sell);
+    let (open, floor) = crate::zip::seller_open(reference, best_bid, keep.max(1), last_sell);
     if reference.traded || !anchors.known() {
         return (open, floor);
     }

@@ -105,13 +105,6 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn 
         Some(reserve) => lifescape_planner::derived_demand::derived_bounds(reserve, wallet),
         None => (1, wallet),
     };
-    // Credibility (plan marché §3.6, C5): beside a production the bid is
-    // optional; one under the object's public floor is noise, never placed.
-    let floor = crate::market_lineage::live_floor(&service, id, item);
-    if !crate::market_lineage::credible(ceiling, floor) {
-        crate::logln!("brain {}: no standing bid on {item}: ceiling {ceiling} under its public floor {floor}, production alone", job.account);
-        return;
-    }
     let price = lifescape_market::remembered_bid(ctx.price.max(1), ctx.best_ask, ceiling, service.own_buy_price(&job.account, id)).max(open).min(ceiling.max(1));
     // Never traded, no covered ask (M7): on the public anchors, under the
     // derived value, over the sellers' public floor.

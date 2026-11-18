@@ -55,15 +55,6 @@ pub fn bid_ceiling(ctx: &ReadyCtx, count: i64) -> i64 {
     (ctx.coins / count.max(1)).max(1)
 }
 
-/// Public floor of a credible bid on `item` (plan marché §3.6, the
-/// orchestrator's `market_lineage::credible_floor`): its low alchemy
-/// value, a quarter of its current price, at least 1 coin. Public data
-/// only (D22).
-pub fn credible_floor(item: &str, ctx: &ReadyCtx) -> i64 {
-    let alch_low = lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.alch_low).unwrap_or(0);
-    alch_low.max(ctx.price / 4).max(1)
-}
-
 /// Coins the market legs may spend: the wallet, or its share when the
 /// brain caps the purchase (`coin_share_pct`).
 fn market_coins(ctx: &ReadyCtx) -> i64 {
@@ -214,10 +205,6 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         quest_gap = granted.clone();
     }
     let quest_first = quest_gap.as_deref().is_some_and(crate::quests::light_quest) && (granted.is_some() || !(ask_covered || ask_partial));
-    // A resting bid under the public credibility floor (§3.6, wave 2
-    // (c)): the coins of a credible one first, never the noise bid.
-    let credible_unit = unit.max(credible_floor(item, ctx));
-    let incredible = market_ok && !quest_first && bid_ceiling(ctx, need) < credible_floor(item, ctx);
     // The keepers' window (stock + restock) covers the need: a shop
     // short of it is never chosen while the market can sell (live
     // 2026-11-18: gem shops stocking 1 uncut sapphire, 31 bots sent).
@@ -256,10 +243,9 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         // 3b. A dialogue seller, same rule (the seller's site may add the
         // toll: `place_on_site` budgets it).
         Some("dialogue:buy".to_string())
-    } else if market_ok && budget >= unit && !quest_first && !incredible {
+    } else if market_ok && budget >= unit && !quest_first {
         // 4. Resting bid for what the wallet covers, the brain waits for
-        // the fill; a ceiling under the public credibility floor is no
-        // offer (§3.6): the coins first (step 5).
+        // the fill (no price floor, user 2026-11-18).
         Some("market:buy".to_string())
     } else {
         None
@@ -279,9 +265,6 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         // 5. Typed block: the cheapest thing that unlocks a way.
         let reason = if let (true, Some(quest)) = (quest_first, quest_gap.as_ref()) {
             Some(format!("missing:quest:{quest}"))
-        } else if incredible && budget >= unit {
-            // Only the credibility held the bid back: earn its coins.
-            Some(format!("missing:coins:{}", wallet_for(ctx, credible_unit * need)))
         } else if let Some((skill, level)) = level_gap {
             Some(format!("missing:level:{skill}:{level}"))
         } else if let Some(tool) = tool_gap {
@@ -289,8 +272,7 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         } else if let (Some(cover), false, false) = (dialogue_cover, market_ok, shop_listed) {
             Some(format!("missing:coins:{}", wallet_for(ctx, cover)))
         } else if market_ok || shop_listed {
-            // A market bid needs the coins of a CREDIBLE ceiling (§3.6).
-            let price = if shop_listed && !market_ok { ctx.shop_price.max(1) } else { credible_unit };
+            let price = if shop_listed && !market_ok { ctx.shop_price.max(1) } else { unit };
             Some(format!("missing:coins:{}", wallet_for(ctx, price * need)))
         } else if let Some(quest) = quest_gap {
             Some(format!("missing:quest:{quest}"))

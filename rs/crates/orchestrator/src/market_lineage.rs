@@ -60,26 +60,6 @@ pub fn horizon_ticks(motive: &str, sell: bool) -> u64 {
     }
 }
 
-/// Public floor of a credible bid on one object (§3.6): its low alchemy
-/// value, a quarter of its current traded price (`None`: never traded),
-/// at least 1 coin.
-pub fn credible_floor(alch_low: i64, traded_price: Option<i64>) -> i64 {
-    alch_low.max(traded_price.map_or(0, |price| price / 4)).max(1)
-}
-
-/// True when a bid of per-unit `ceiling` is credible against `floor`.
-pub fn credible(ceiling: i64, floor: i64) -> bool {
-    ceiling >= floor.max(1)
-}
-
-/// The public floor of `item` (debug name) on the live market: its low
-/// alchemy value and its current traded price (D22: public data only).
-pub fn live_floor(service: &crate::market_service::MarketService, item_id: i64, item: &str) -> i64 {
-    let alch_low = lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.alch_low).unwrap_or(0);
-    let reference = service.reference(item_id);
-    credible_floor(alch_low, reference.traded.then_some(reference.price))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,18 +81,5 @@ mod tests {
         assert!(check_motive(GEAR).is_ok());
         assert!(check_motive(TRADE).is_ok());
         assert!(check_motive("whim").is_err());
-    }
-
-    /// Live 2026-11-16: `wish rune_axe (axe) bid @ 1 ceiling 1`. A rune
-    /// axe (low alch in the thousands) is never bid at 1; a feather at 1
-    /// (alch 0, trades at 1) is.
-    #[test]
-    fn a_one_coin_ceiling_is_no_offer_for_a_rune_axe() {
-        let rune_axe = lifescape_gamedata::objs_by_name("rune_axe").into_iter().next().map(|obj| obj.alch_low).unwrap_or(0);
-        assert!(rune_axe > 1, "dump value {rune_axe}");
-        assert!(!credible(1, credible_floor(rune_axe, None)));
-        assert!(credible(1, credible_floor(0, Some(1))), "feathers at 1 stay credible");
-        assert!(!credible(20, credible_floor(0, Some(120))), "a quarter of the traded price");
-        assert!(credible(30, credible_floor(0, Some(120))));
     }
 }

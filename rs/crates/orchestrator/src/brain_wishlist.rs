@@ -149,14 +149,6 @@ pub fn wish_ceiling(wish: &Wish, coins: i64, gear_wishes: usize) -> i64 {
     }
 }
 
-/// Credibility of a wish bid (plan marché §3.6, C5): its ceiling when it
-/// reaches the object's public floor (`market_lineage::credible_floor`),
-/// else `None`: no offer, the bot saves first (live 2026-11-16: `wish
-/// rune_axe (axe) bid @ 1 ceiling 1`, noise in every demand signal).
-pub fn credible_wish(ceiling: i64, floor: i64) -> Option<i64> {
-    crate::market_lineage::credible(ceiling, floor).then_some(ceiling)
-}
-
 /// A wish the market may fill: tradeable, and not a tool an NPC shop
 /// sells (user 2026-11-14: 185 pickaxe bids, never filled; those are the
 /// kit's steps, `brain_tool_shop`).
@@ -202,11 +194,7 @@ pub fn maybe_bid_wishes(job: &Job, life: &Life) -> usize {
         // other resting buys (gear step, the other tool, graph buys)
         // already commit, never the whole wallet again.
         let coins = crate::brain_gear::free_coins(job, Some(id));
-        let floor = crate::market_lineage::live_floor(&service, id, &wish.item);
-        let Some(ceiling) = credible_wish(wish_ceiling(wish, coins, gear_wishes), floor) else {
-            withdraw_incredible(&service, &job.account, id, &wish.item, floor);
-            continue;
-        };
+        let ceiling = wish_ceiling(wish, coins, gear_wishes).max(1);
         match crate::market_reprice::keep_bid(&service, &job.account, id, 1, ceiling, crate::market_lineage::TOOL) {
             Ok(crate::market_reprice::StandingBid::Placed { price, .. }) => {
                 placed += 1;
@@ -219,37 +207,8 @@ pub fn maybe_bid_wishes(job: &Job, life: &Life) -> usize {
     placed
 }
 
-/// A resting wish bid whose wallet share fell under the public floor
-/// goes (reason `credibility`, §3.5); a need's bid on the same object
-/// stays (its node owns it).
-fn withdraw_incredible(service: &crate::market_service::MarketService, account: &str, id: i64, item: &str, floor: i64) {
-    let rows = service.resting_rows(account, id, lifescape_store::OrderSide::Buy);
-    for row in rows.iter().filter(|row| row.motive.is_empty() || row.motive == crate::market_lineage::TOOL) {
-        let reply = service.handle(&lifescape_json::object(vec![
-            ("op", lifescape_json::str_value("cancel")),
-            ("account", lifescape_json::str_value(account)),
-            ("order", Value::Int(row.order_id)),
-            ("reason", lifescape_json::str_value("credibility")),
-        ]));
-        crate::logln!("brain {account}: wish {item} bid {} @ {} withdrawn ({:?}): under the public floor {floor}, saving first", row.order_id, row.price, reply.get("ok").as_bool());
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    /// Plan marché C5: a 1-coin ceiling on a rune axe is no offer; a
-    /// wallet share over the public floor bids its ceiling.
-    #[test]
-    fn a_ceiling_under_the_public_floor_is_no_offer() {
-        use super::{credible_wish, wish_ceiling, Wish};
-        let axe = Wish { item: "rune_axe".to_string(), slot: "axe".to_string(), gain: 30 };
-        let alch_low = lifescape_gamedata::objs_by_name("rune_axe").into_iter().next().map(|obj| obj.alch_low).unwrap_or(0);
-        let floor = crate::market_lineage::credible_floor(alch_low, None);
-        assert_eq!(credible_wish(wish_ceiling(&axe, 4, 0), floor), None, "ceiling 1: no bid, the bot saves");
-        let rich = floor * 4;
-        assert_eq!(credible_wish(wish_ceiling(&axe, rich, 0), floor), Some(floor), "25 % of the wallet reaches the floor");
-    }
-
     use super::wishes;
     use lifescape_gamedata::gear::Style;
 

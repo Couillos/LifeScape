@@ -463,10 +463,6 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
             continue;
         }
         let (Some(service), Some(id)) = (service.as_ref(), id) else { continue };
-        let floor = crate::market_lineage::live_floor(service, id, &want.item);
-        if !crate::market_lineage::credible(want.ceiling, floor) {
-            continue;
-        }
         match crate::market_reprice::keep_bid_from(service, &job.account, id, 1, want.expected, want.ceiling, crate::market_lineage::GEAR) {
             Ok(crate::market_reprice::StandingBid::Placed { price, .. }) => {
                 crate::logln!(

@@ -80,23 +80,19 @@ Vendeur : plancher = sa réserve, son PROPRE coût (§ Réserve vendeur),
 ouverture à la référence échangée (ou au meilleur bid plus riche), à
 `max(meilleur bid, 2 × réserve)` pour un objet jamais échangé, jamais
 sous la réserve (`seller_open`). Une vente monte sans plafond propre
-(seule la demande l'arrête). Vague 2 (M5) : le plancher d'un vendeur
-est sa valeur de garde, `max(coût propre, ce qu'une boutique F2P paie
-(Q3), net d'alchimie d'un lanceur, 1)` ; un butin (`found_open`)
+(seule la demande l'arrête). AUCUN PLANCHER DE PRIX (décision
+utilisateur 2026-11-18, « retire les floor de prix ») : le plancher d'un
+vendeur est son seul coût propre, jamais ce qu'une boutique paie, le net
+d'une alchimie ni un prix de surstock ; un butin (`found_open`)
 REJOINT le meilleur ask d'un autre vendeur au lieu de le sous-coter
 d'une pièce (fin de la cascade à 1) ; seul un vendeur pressé (banque
 pleine) frappe un bid ≥ son plancher ou sous-cote d'un pas relatif de
-1 % (≥ 1 pièce). Surstock (règle universelle, 2026-11-18, point 4) :
-un stock libre au-delà des bids + 2 jours de volume (au moins un
-inventaire, `market_fit::overstocked`) a pour plancher le prix de
-l'exutoire alchimie (`discovery::alch_outlet_price` : net du meilleur
-sort lancé par un bot de la flotte, runes au prix courant, moins 10 %
-laissés au lanceur), coût propre et boutique écartés ; ce stock n'est ni
-détourné vers la boutique (Q3) ni retenu en banque après un retrait (Q4).
-Un objet sans alchimie rentable garde son plancher. Plancher appris
-(plan prix §1, 2026-11-18) : chaque horizon terminé sans vente (retrait
-`horizon` au carnet, 24 h glissantes, moins les ventes réglées) baisse le
-plancher de 10 %, jusqu'à l'exutoire alchimie ou 1 pièce, sous le coût de
+1 % (≥ 1 pièce). Surstock (2026-11-18) : un stock libre au-delà des bids
++ 2 jours de volume (au moins un inventaire, `market_fit::overstocked`)
+n'est pas détourné vers la boutique (Q3), sans plancher particulier.
+Plancher appris (plan prix §1, 2026-11-18) : chaque horizon terminé sans
+vente (retrait `horizon` au carnet, 24 h glissantes, moins les ventes
+réglées) baisse le plancher de 10 %, jusqu'à 1 pièce, sous le coût de
 fabrication s'il le faut (`discovery::learned_floor`, `Store::
 seller_learning`) ; un lot retiré est remis en vente aussitôt à ce
 plancher plus bas (l'ancienne attente Q4 est retirée). Ouverture (§2) :
@@ -197,7 +193,7 @@ le détenu libre + en vol tombe sous la moitié de la cible, pour le
 reste de la cible ; gardé au repos sinon (marche continue) ; retiré à
 la cible (`need_met`) ou quand l'objet quitte le plan (`need_gone`).
 Plafond unitaire : prix courant échangé, sinon meilleur ask, jamais
-au-dessus du marchand F2P le moins cher, au moins le plancher public ;
+au-dessus du marchand F2P le moins cher (aucun plancher public) ;
 budget 50 % du portefeuille libre, la tranche en cours d'abord. Un
 objet déjà enchéri par un autre motif reste à ce bid ; les objets du
 stock ne sont jamais listés ; les bids `stock` de l'alchimie
@@ -234,15 +230,16 @@ sort, haute ou basse, runes au prix courant ; acheteur et teneur : la
 basse alchimie) ; coût de production publié par les guides
 (`planner::guide_cost` : ligne cotée recette, chaîne ou 100 % market la
 moins chère, coût/6000 ÷ produit/6000, mis en cache par jeu publié) ;
-prix de vente d'une boutique F2P ouverte à tous. Règles : plancher
-vendeur = max(coût propre, offre boutique, net d'alchimie) (tout objet) ;
-ouverture vendeur = coût publié × (1 + marge du profil), à défaut 2 ×
-plancher (butin : sa valeur de haute alchimie), jamais au-dessus du prix
-boutique ni sous le plancher, un bid plus riche est pris ; ouverture
-acheteur = valeur d'usage × (1 − marge) (prix attendu du gear, réserve
-dérivée, sinon coût publié, sinon prix boutique), jamais au-dessus du
-coût publié, au moins le plancher public des vendeurs, jamais au-dessus
-du prix boutique ni du plafond ; un ask couvert reste pris. Marge =
+prix de vente d'une boutique F2P ouverte à tous. Ce sont des repères
+d'OUVERTURE, jamais des planchers (2026-11-18). Règles : plancher
+vendeur = son coût propre ; ouverture vendeur = coût publié × (1 + marge
+du profil), à défaut 2 × plancher (butin : sa valeur de haute alchimie),
+jamais au-dessus du prix boutique ni sous le plancher, un bid plus riche
+est pris ; ouverture acheteur = valeur d'usage × (1 − marge) (prix
+attendu du gear, réserve dérivée, sinon coût publié, sinon prix
+boutique), jamais au-dessus du coût publié ni du prix boutique ni du
+plafond, 1 pièce sans valeur connue ; aucune offre d'achat n'est
+refusée pour « manque de crédibilité » ; un ask couvert reste pris. Marge =
 `0,05 + 0,15 × price_patience` (`Profile::margin`). Sans ancrage :
 règles existantes, aucun prix inventé, ligne de guide « non cotée »
 inchangée. Premier fill fait : prix courant, concession et ZIP

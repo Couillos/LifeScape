@@ -22,7 +22,7 @@
 
 use crate::book::{Book, Fill, Side};
 use crate::concession::{concession_beta, step, window_offset, window_ticks, Concession, Step, Urgency, Window};
-use crate::discovery::{bid_open, listing_open, loot_anchor, margin_of, seller_floor, Anchors};
+use crate::discovery::{bid_open, listing_open, loot_anchor, margin_of, Anchors};
 use crate::price::{current_price, median_price, LastFill, Reference};
 use crate::sim::FixedRng;
 use crate::zip::{demand_step, found_open, opening_bid, seller_open, PATIENCE_TICKS};
@@ -112,13 +112,10 @@ struct Engine {
 }
 
 impl Engine {
-    /// A trader's limit: a seller's floor never under the public outside
-    /// options (M7 `seller_floor`) when the run has anchors.
+    /// A trader's limit: its own (no public price floor, user
+    /// 2026-11-18).
     fn limit_of(&self, trader: &Trader) -> i64 {
-        match self.anchors.as_ref() {
-            Some(anchors) if trader.sell => seller_floor(trader.limit, anchors),
-            _ => trader.limit,
-        }
+        trader.limit
     }
 
     /// Q3 (wave 2 rule): the shop beats what the market pays the seller

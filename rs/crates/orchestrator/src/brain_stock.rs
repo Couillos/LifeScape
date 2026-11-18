@@ -107,16 +107,15 @@ pub fn slice_consumption(book: &crate::rates_estimator::YieldBook, slices: &[Wor
 
 /// Unit ceiling of a stock bid: the current traded price, else the best
 /// ask, never over the cheapest F2P keeper's price (the shop alone when
-/// the book has none); `None` without any public price or under the
-/// public floor (credibility).
-pub fn stock_ceiling(current: Option<i64>, best_ask: Option<i64>, merchant: Option<i64>, floor: i64) -> Option<i64> {
+/// the book has none); `None` without any public price.
+pub fn stock_ceiling(current: Option<i64>, best_ask: Option<i64>, merchant: Option<i64>) -> Option<i64> {
     let book = current.or(best_ask).filter(|price| *price >= 1);
     let ceiling = match (book, merchant.filter(|price| *price >= 1)) {
         (Some(book), Some(shop)) => book.min(shop),
         (Some(book), None) => book,
         (None, shop) => shop?,
     };
-    crate::market_lineage::credible(ceiling, floor).then_some(ceiling)
+    Some(ceiling)
 }
 
 /// Resting `stock` bids to cancel under `plan`, with their reason: not
@@ -188,10 +187,9 @@ pub fn stock_pass(job: &Job, life: &Life, live: &Value) -> usize {
             .unwrap_or(0)
     };
     let ceiling_of = |item: &str| {
-        let id = id_of(item)?;
+        id_of(item)?;
         let view = reader.view(item);
-        let floor = crate::market_lineage::live_floor(&service, id, item);
-        stock_ceiling(view.as_ref().and_then(|view| view.current), view.as_ref().and_then(|view| view.best_ask()), lifescape_gamedata::obtain::merchant_price(item), floor)
+        stock_ceiling(view.as_ref().and_then(|view| view.current), view.as_ref().and_then(|view| view.best_ask()), lifescape_gamedata::obtain::merchant_price(item))
     };
     let budget = crate::brain_gear::free_coins(job, None).saturating_mul(stock_target::STOCK_BUDGET_PCT) / 100;
     let view = StockView { held: &held, resting: &resting, ceiling_of: &ceiling_of, market_affinity: life.profile.market_affinity, budget };

@@ -79,11 +79,11 @@ fn every_consuming_tranche_names_its_consumables() {
 /// the public floor, is no bid.
 #[test]
 fn stock_ceilings_read_public_prices() {
-    assert_eq!(stock_ceiling(Some(3), Some(1), None, 1), Some(3));
-    assert_eq!(stock_ceiling(None, Some(7), Some(5), 1), Some(5), "the shop beyond");
-    assert_eq!(stock_ceiling(None, None, Some(4), 1), Some(4));
-    assert_eq!(stock_ceiling(None, None, None, 1), None);
-    assert_eq!(stock_ceiling(Some(2), None, None, 10), None, "under the public floor");
+    assert_eq!(stock_ceiling(Some(3), Some(1), None), Some(3));
+    assert_eq!(stock_ceiling(None, Some(7), Some(5)), Some(5), "the shop beyond");
+    assert_eq!(stock_ceiling(None, None, Some(4)), Some(4));
+    assert_eq!(stock_ceiling(None, None, None), None);
+    assert_eq!(stock_ceiling(Some(2), None, None), Some(2), "no price floor");
 }
 
 fn order(order_id: i64, item: &str, motive: &str) -> lifescape_store::Order {

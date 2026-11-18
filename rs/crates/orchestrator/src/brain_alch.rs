@@ -11,8 +11,8 @@
 //!   bot's own coin rate (its D17), no margin, runes held) draws a
 //!   `MakeMoney` goal of origin `alch:<object>` (`alch_goal_for`);
 //! - sales: a caster never lists what alchs for more than it sells
-//!   (`alch_keep`), never sells under the cast's net (`alch_floor`: the
-//!   natural price floor of the market);
+//!   (`alch_keep`); the cast's net (`alch_floor`) is an opening anchor
+//!   of a never-traded object, never a price floor (user 2026-11-18);
 //! - market (`market_pass`, every `ALCH_EVERY_SECS`): nature runes for
 //!   the stock to alch (market only: a combat spot drops them, D-A), and
 //!   an ask under the cast's net less the bot's time is bought to alch.
@@ -247,8 +247,8 @@ pub(crate) fn caster_means() -> Vec<String> {
     vec![NATURE_RUNE.to_string(), lifescape_planner::alchemy::FIRE_RUNE.to_string(), FIRE_STAFF.to_string()]
 }
 
-/// The natural price floor of a caster's listing: the cast's net,
-/// rounded up (`None`: no caster, or the cast loses).
+/// A caster's net on one cast of `item`, rounded up (`None`: no caster,
+/// or the cast loses): an opening anchor, never a price floor.
 pub(crate) fn alch_floor(live: &Value, item: &str) -> Option<i64> {
     let net = caster_for(live)?.net(item)?;
     (net >= 1.0).then(|| net.ceil() as i64)

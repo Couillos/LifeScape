@@ -258,21 +258,17 @@ fn adopt_listings(
         let make_cost = make_costs.get(name).copied();
         // Today's opening for this stock (2026-11-14: an ask anchored on
         // an old reserve or an outlier comes down to it).
-        let stock = crate::brain_ambition::live_count(live, name).max(row.remaining);
         let unsold = learning.get(&row.item_id).copied().unwrap_or(0);
-        let (today, reserve) = service.sale_decision(account, name, row.item_id, row.remaining, stock, unsold, costs, Some(life), make_cost, false, crate::brain_alch::alch_floor(live, name));
-        // The adopted listing walks to today's floor (own cost and the Q3
-        // outside option, learned down per unsold horizon, plan prix §1,
-        // or the alchemy outlet of an overstock); held stock keeps the
-        // own cost and the outside option.
-        let outside = lifescape_gamedata::shop_sale::npc_sale_value(name).unwrap_or(0);
+        let (today, reserve) = service.sale_decision(account, name, row.item_id, row.remaining, unsold, costs, Some(life), make_cost, false, crate::brain_alch::alch_floor(live, name));
+        // The adopted listing walks to today's floor (own cost learned down
+        // per unsold horizon, plan prix §1, no price floor); held stock
+        // keeps the own cost.
         let reserve = match today {
             SaleDecision::List { floor, .. } => reserve.map(|_| floor),
-            SaleDecision::Hold(_) => reserve.map(|reserve| reserve.coins.max(outside)),
+            SaleDecision::Hold(_) => reserve.map(|reserve| reserve.coins),
         };
-        let alch = crate::brain_alch::alch_floor(live, name).unwrap_or(0);
         let opening = match today {
-            SaleDecision::List { price, .. } => Some(price.max(alch)),
+            SaleDecision::List { price, .. } => Some(price),
             SaleDecision::Hold(_) => None,
         };
         let lot = lifescape_planner::market_fit::sale_lot(row.remaining, Some(&service.public_view(account, row.item_id)));
@@ -520,7 +516,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         // price (the old Q4 wait relisted it unchanged 60 % of the time).
         // Overstock goes to the alchemy outlet on the market (the shop
         // takes a few units before its price sinks).
-        let overstock = service.overstock_floor(&job.account, &name, item, qty).is_some();
+        let overstock = service.overstocked(&job.account, item, qty);
         if let Some(shop_value) = lifescape_gamedata::shop_sale::npc_sale_value(&name).filter(|_| !overstock) {
             let reference = service.reference(item);
             let (bid, _) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
@@ -531,14 +527,9 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
             }
         }
         let unsold = learning.get(&item).copied().unwrap_or(0);
-        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, qty, unsold, &costs, Some(life), make_costs.get(&name).copied(), pressed, crate::brain_alch::alch_floor(&live, &name));
+        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, unsold, &costs, Some(life), make_costs.get(&name).copied(), pressed, crate::brain_alch::alch_floor(&live, &name));
         let (lot, price, floor) = match decision {
-            // The alch floor (2026-11-14): a caster never sells under what
-            // the cast nets it.
-            crate::market_seller::SaleDecision::List { qty: lot, price, floor } => match crate::brain_alch::alch_floor(&live, &name) {
-                Some(alch) if alch > floor => (lot, price.max(alch), alch),
-                _ => (lot, price, floor),
-            },
+            crate::market_seller::SaleDecision::List { qty: lot, price, floor } => (lot, price, floor),
             crate::market_seller::SaleDecision::Hold(why) => {
                 crate::logln!("brain {}: holding {qty} {name} ({why})", job.account);
                 continue;
