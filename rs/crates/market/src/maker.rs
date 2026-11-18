@@ -59,10 +59,10 @@ pub const FILL_MARGIN_PCT: usize = 80;
 /// looter's whole concession.
 pub const DEMAND_LOOKBACK_TICKS: u64 = 72_000;
 
-/// No demand: the resting bid walks down 5 % per pass (at least a coin)
-/// toward 1, the old ZIP step: from 100 coins to 1 in ~45 passes, inside
-/// one loot horizon at a pass every 1000 ticks.
-pub const NO_DEMAND_STEP: f64 = 0.05;
+/// No demand: the resting bid walks down 10 % per pass (at least a coin)
+/// toward 1, the sellers' rate (user Q1 2026-11-18): from 100 coins to 1
+/// in ~44 passes. An unsold ask walks down at the same rate.
+pub const NO_DEMAND_STEP: f64 = 0.10;
 
 /// Objects one maker covers: (60 + 28 - 20) * 80 % = 54.
 pub fn slice_capacity() -> usize {
@@ -255,6 +255,9 @@ pub struct MakerInput {
     pub capital: i64,
     /// The maker's resting bid, if any (the no-demand walk toward 1).
     pub own_bid: Option<i64>,
+    /// The maker's ask still resting unsold since the last pass, if any:
+    /// it walks down like any seller's (`NO_DEMAND_STEP`).
+    pub own_ask: Option<i64>,
 }
 
 /// How the fair value was found.
@@ -351,6 +354,13 @@ pub fn quote(caps: &MakerCaps, input: &MakerInput) -> MakerQuote {
     }
     let mut ask_price = (reservation * (1.0 + half) - 1e-9).ceil() as i64;
     ask_price = ask_price.max(fair + 1).max(bid_price + 1);
+    // Every order works the same (user 2026-11-18): an ask still unsold
+    // at this pass drops 10 % like any seller's, whatever the last trade,
+    // down to one coin over the bid; a lower fresh quote is taken.
+    if let Some(own) = input.own_ask {
+        let walked = (own as f64 * (1.0 - NO_DEMAND_STEP)).floor() as i64;
+        ask_price = ask_price.min(walked.max(bid_price + 1));
+    }
     // Risk caps: capital engaged per object, stock, book share.
     // Engaged = the stock at its current value or at what it cost, the
     // higher: a falling price never reopens room (no averaging down).

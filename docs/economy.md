@@ -84,8 +84,10 @@ sous la réserve (`seller_open`). Une vente monte sans plafond propre
 utilisateur 2026-11-18, « retire les floor de prix ») : le plancher d'un
 vendeur est son seul coût propre, jamais ce qu'une boutique paie, le net
 d'une alchimie ni un prix de surstock ; un butin (`found_open`)
-REJOINT le meilleur ask d'un autre vendeur au lieu de le sous-coter
-d'une pièce (fin de la cascade à 1) ; seul un vendeur pressé (banque
+REJOINT le meilleur ask d'un autre vendeur sur un objet jamais échangé
+au lieu de le sous-coter d'une pièce (fin de la cascade à 1) ; sur un
+objet échangé il s'ouvre au prix courant, jamais relevé par l'ask plus
+cher d'un autre (2026-11-18) ; seul un vendeur pressé (banque
 pleine) frappe un bid ≥ son plancher ou sous-cote d'un pas relatif de
 1 % (≥ 1 pièce). Surstock (2026-11-18) : un stock libre au-delà des bids
 + 2 jours de volume (au moins un inventaire, `market_fit::overstocked`)
@@ -983,7 +985,9 @@ triche (règle 13) : leur stock vient de leurs deals.
   lot, jamais relevé par un stock bas). Stock haut → bid ET ask baissent ;
   stock bas → les deux montent. Sans demande (échangé, aucun bid d'un
   autre, aucun achat d'un autre depuis 72 000 ticks) : le bid descend de
-  5 % par passe jusqu'à 1 (plus de bid plancher), le stock au-delà d'un lot part au magasin PNJ
+  10 % par passe jusqu'à 1, le rythme des vendeurs (plus de bid plancher) ;
+  un ask du teneur encore invendu au passage suivant baisse aussi de 10 %
+  (jusqu'à son bid + 1), quel que soit le dernier prix échangé, le stock au-delà d'un lot part au magasin PNJ
   (Q3, `take_dumps` → plan de vente de `brain_sales`). Plafonds :
   capital engagé par objet (stock à max(valeur, coût) + bid) ≤ 10 % des
   fonds propres, stock ≤ 500 unités, part d'un côté ≤ 25 % de la

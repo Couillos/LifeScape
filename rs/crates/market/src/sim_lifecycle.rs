@@ -378,6 +378,8 @@ fn requote_maker(engine: &mut Engine, tick: u64) {
         return;
     }
     let name = state.spec.name.clone();
+    // The ask still resting since the last pass (unsold) walks down.
+    let unsold_ask = state.ask_id.and_then(|ask| engine.book.orders().into_iter().find(|order| order.id == ask && order.remaining > 0).map(|order| order.price));
     for id in [state.bid_id, state.ask_id].into_iter().flatten() {
         let _ = engine.book.cancel(id);
     }
@@ -385,6 +387,7 @@ fn requote_maker(engine: &mut Engine, tick: u64) {
     let others = |side: Side| engine.book.orders().into_iter().filter(|order| order.side == side && order.remaining > 0 && order.account != name).collect::<Vec<_>>();
     let (bids, asks) = (others(Side::Buy), others(Side::Sell));
     let state = engine.maker.as_mut().expect("maker checked above");
+    state.own_ask = unsold_ask;
     let input = state.input(tick, reference, &bids, &asks);
     let quote = crate::maker::quote(&state.spec.caps, &input);
     state.own_bid = quote.bid.map(|leg| leg.price);

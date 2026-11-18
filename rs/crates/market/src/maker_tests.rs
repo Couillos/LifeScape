@@ -23,6 +23,7 @@ fn liquid(stock: i64) -> MakerInput {
         stock_cost: stock * 100,
         capital: 100_000,
         own_bid: None,
+        own_ask: None,
     }
 }
 
@@ -161,15 +162,16 @@ fn stock_moves_both_sides() {
 }
 
 /// No price floor for the makers (user 2026-11-18: "les market makers
-/// doivent s'adapter au marché"). Nobody buys: the bid walks down 5 % a
+/// doivent s'adapter au marché"). Nobody buys: the bid walks down 10 % a
 /// pass all the way to 1, never held at the shop's offer nor the alchemy
 /// outlet; past one lot the stock still goes to the shop (a real buyer).
+/// The step is 10 % a pass, the sellers' rate (user Q1 2026-11-18).
 #[test]
 fn an_object_nobody_buys_walks_its_bid_to_one_and_dumps_to_the_shop() {
     let idle = MakerInput { best_bid: None, recent_buys: 0, stock: 300, capital: 1_000_000, own_bid: Some(40), ..liquid(0) };
     let first = quote(&MAKER_CAPS, &idle);
     assert_eq!(first.regime, Regime::NoDemand);
-    assert_eq!(first.bid.map(|leg| leg.price), Some(38), "5 % down a pass");
+    assert_eq!(first.bid.map(|leg| leg.price), Some(36), "10 % down a pass, like a seller's floor (user Q1)");
     let mut own = Some(100);
     let mut passes = 0;
     while own != Some(1) && passes < 400 {
@@ -208,6 +210,7 @@ fn a_never_traded_object_is_discovered_prudently() {
         stock_cost: 0,
         capital: 100_000,
         own_bid: None,
+        own_ask: None,
     };
     let seen = quote(&MAKER_CAPS, &fresh);
     assert_eq!(seen.regime, Regime::Discovery);
@@ -273,6 +276,7 @@ fn discovery_centres_on_the_published_cost_inside_the_public_bounds() {
         stock_cost: 90,
         capital: 100_000,
         own_bid: None,
+        own_ask: None,
     };
     let seen = quote(&MAKER_CAPS, &fresh);
     assert_eq!((seen.regime, seen.fair), (Regime::Discovery, 30), "the published cost, not 200 / 1.1: {seen:?}");
@@ -284,4 +288,27 @@ fn discovery_centres_on_the_published_cost_inside_the_public_bounds() {
     // No cost published: the ceiling rule of wave 3.
     let unknown = quote(&MAKER_CAPS, &MakerInput { make_cost: None, ..fresh });
     assert_eq!(unknown.fair, (200.0_f64 / (1.0 + MAKER_CAPS.half_spread_discovery)).floor() as i64);
+}
+
+/// Every order works the same (user 2026-11-18: "tous les items doivent
+/// fonctionner pareil bid et ask"): a maker's ask still resting unsold at
+/// the next pass drops 10 % (the sellers' rate), whatever the last trade
+/// says (wooden shield: the maker held 55 over a last trade at 53 while
+/// nobody bought), down to one coin over its own bid; a fresh quote under
+/// it is taken at once.
+#[test]
+fn an_unsold_maker_ask_walks_down_like_any_seller() {
+    let held = MakerInput { stock: 50, ..liquid(50) };
+    let fresh = quote(&MAKER_CAPS, &held).ask.expect("ask").price;
+    let bid = quote(&MAKER_CAPS, &held).bid.expect("bid").price;
+    let walked = quote(&MAKER_CAPS, &MakerInput { own_ask: Some(fresh), ..held });
+    assert_eq!(walked.ask.expect("ask").price, ((fresh as f64 * 0.9).floor() as i64).max(bid + 1), "10 % down a pass: {walked:?}");
+    assert!(walked.ask.expect("ask").price < fresh);
+    let mut own = Some(fresh);
+    for _ in 0..200 {
+        own = quote(&MAKER_CAPS, &MakerInput { own_ask: own, ..held }).ask.map(|leg| leg.price);
+    }
+    assert_eq!(own, Some(bid + 1), "down to one coin over its bid");
+    let under = quote(&MAKER_CAPS, &MakerInput { own_ask: Some(fresh * 3), ..held });
+    assert_eq!(under.ask.expect("ask").price, fresh, "a lower fresh quote is taken at once");
 }

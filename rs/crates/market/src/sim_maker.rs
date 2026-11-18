@@ -84,6 +84,7 @@ pub(crate) struct MakerState {
     pub(crate) bid_id: Option<u64>,
     pub(crate) ask_id: Option<u64>,
     pub(crate) own_bid: Option<i64>,
+    pub(crate) own_ask: Option<i64>,
     max_stock: i64,
     dumped: i64,
     dump_coins: i64,
@@ -93,7 +94,7 @@ pub(crate) struct MakerState {
 
 impl MakerState {
     pub(crate) fn new(spec: SimMaker) -> MakerState {
-        MakerState { coins: spec.capital, spec, stock: 0, stock_cost: 0, bid_id: None, ask_id: None, own_bid: None, max_stock: 0, dumped: 0, dump_coins: 0, others_buys: Vec::new() }
+        MakerState { coins: spec.capital, spec, stock: 0, stock_cost: 0, bid_id: None, ask_id: None, own_bid: None, own_ask: None, max_stock: 0, dumped: 0, dump_coins: 0, others_buys: Vec::new() }
     }
 
     /// One fill on the book: the maker's own moves its coins and stock;
@@ -133,6 +134,7 @@ impl MakerState {
             stock_cost: self.stock_cost,
             capital: self.coins + self.stock * reference.price.max(1),
             own_bid: self.own_bid,
+            own_ask: self.own_ask,
         }
     }
 

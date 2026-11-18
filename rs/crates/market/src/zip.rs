@@ -159,9 +159,10 @@ pub fn seller_open(reference: crate::price::Reference, best_bid: Option<i64>, re
 /// value, public game data: the price buyers bid gear at, see
 /// `gear_plan`) else `2 x floor`.
 ///
-/// Wave 2 (M5, C8, end of the cascade to 1): a seller JOINS the queue,
-/// never under the cheapest ask of another seller (each new seller at
-/// ask - 1 walked the whole book down to 1). Only a `pressed` seller (a
+/// Wave 2 (M5, C8, end of the cascade to 1): on an untraded object a
+/// seller JOINS the queue at the cheapest ask of another seller (each new
+/// seller at ask - 1 walked the whole book down to 1); a traded one opens
+/// at the current price, never lifted by a dearer ask. Only a `pressed` seller (a
 /// full bank) undercuts, by one relative step (`UNDERCUT_PCT`, at least
 /// one coin), or hits a bid at or over its floor. Never under `floor`
 /// (the keep value: 1, a caster's alchemy net, an NPC shop's buy
@@ -183,10 +184,12 @@ pub fn found_open(reference: crate::price::Reference, best_bid: Option<i64>, bes
             None => anchor.filter(|value| *value >= 1).unwrap_or(floor.saturating_mul(UNTRADED_OPEN_RESERVES)),
         }
     };
+    // Untraded, `base` already joins the cheapest ask (no cascade); traded,
+    // the current price rules: a dearer ask of another seller never lifts
+    // the loot (user 2026-11-18, no price floor).
     let joined = match ask {
         Some(ask) if pressed => base.min(ask - undercut_step(ask)),
-        Some(ask) => base.max(ask),
-        None => base,
+        _ => base,
     };
     let remembered = if pressed { 0 } else { last_sell.filter(OwnFill::fast).map(|fill| ceil_pct(fill.price, FILL_MEMORY_PCT)).unwrap_or(0) };
     (joined.max(remembered).max(floor), floor)

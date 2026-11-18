@@ -391,6 +391,7 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
             stock_cost: held.get(id).map(|position| position.cost).unwrap_or(0),
             capital: equity,
             own_bid: bids.first().map(|(_, price, _)| *price),
+            own_ask: asks.first().map(|(_, price, _)| *price),
         };
         let quote = lifescape_market::maker_quote(&MAKER_CAPS, &input);
         let bid = quote.bid.filter(|_| may_bid(held_types, units));

@@ -36,17 +36,22 @@ fn untraded_loot_joins_the_cheapest_ask_or_opens_at_the_alch_value() {
     assert_eq!(found_open(reference, None, Some(18), 1, None, Some(fast), false), (32, 1));
 }
 
-/// M5 test: `found_open` is never under the best ask of another seller
-/// unless the seller is pressed (a full bank), and then by one relative
-/// step only, never under its floor.
+/// M5 test: on an untraded object, `found_open` joins the best ask of
+/// another seller (no cascade toward 1) unless the seller is pressed (a
+/// full bank), then one relative step under it, never under its floor.
+/// On a traded object the current price rules: another seller's dearer
+/// ask never lifts the loot over it (user 2026-11-18, no price floor:
+/// nathan_t's wooden shields relisted from 10 to the maker's 62).
 #[test]
-fn found_open_never_undercuts_the_best_ask() {
-    for (ask, reference) in [(2, UNTRADED_EMPTY), (18, Reference { price: 18, traded: false }), (40, Reference { price: 30, traded: true }), (500, Reference { price: 520, traded: true })] {
-        for floor in [1, 5] {
-            let (price, _) = found_open(reference, None, Some(ask), floor, Some(7), None, false);
-            assert!(price >= ask, "ask {ask} ref {reference:?}: opened {price}");
+fn found_open_joins_untraded_asks_and_keeps_the_traded_price() {
+    for floor in [1, 5] {
+        for ask in [2, 18, 40] {
+            let (price, _) = found_open(UNTRADED_EMPTY, None, Some(ask), floor, Some(7), None, false);
+            assert_eq!(price, ask.max(floor), "untraded, ask {ask}: joins it");
         }
     }
+    let traded = Reference { price: 30, traded: true };
+    assert_eq!(found_open(traded, None, Some(62), 1, Some(7), None, false), (30, 1), "a dearer ask never lifts the loot");
     assert_eq!(found_open(UNTRADED_EMPTY, None, Some(500), 1, None, None, true), (495, 1), "pressed: 1 % under");
     assert_eq!(found_open(UNTRADED_EMPTY, None, Some(9), 1, None, None, true), (8, 1), "at least one coin");
     assert_eq!(found_open(UNTRADED_EMPTY, None, Some(9), 9, None, None, true), (9, 9), "never under its floor");
