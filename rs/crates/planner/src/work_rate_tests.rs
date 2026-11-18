@@ -37,3 +37,25 @@ fn the_prior_rate_derives_its_xp_from_units() {
     assert!(ticks > 5.0 && ticks < 20.0, "a press plus its share of the bank walk: {ticks}");
     assert!(prior_rate("no_such:method", 1).is_none(), "no prior, no rate");
 }
+
+/// oscar_cole / ray_79 2026-11-17: a fight that buries the bones it
+/// loots (+100 loot, -100 input per window) read "missing bones" and its
+/// climb bid for 1000 bones; arrows fired then picked back read only
+/// their net loss. What the method itself takes in nets out of its burn.
+#[test]
+fn what_the_method_takes_in_nets_out_of_its_burn() {
+    let fight = WorkRate {
+        actions_6000: 100.0,
+        xp_6000: vec![("ranged".to_string(), 4000.0)],
+        flows_6000: vec![
+            ("bones".to_string(), "loot".to_string(), 100.0),
+            ("bones".to_string(), "input".to_string(), -100.0),
+            ("bronze_arrow".to_string(), "ammo".to_string(), -50.0),
+            ("bronze_arrow".to_string(), "ammo".to_string(), 20.0),
+        ],
+    };
+    let burn = fight.burned_per_xp("ranged");
+    assert!(burn.iter().all(|(item, _)| item != "bones"), "bones it buries come from its own loot: {burn:?}");
+    let arrows = burn.iter().find(|(item, _)| item == "bronze_arrow").map(|(_, per_xp)| *per_xp).expect("arrows burnt");
+    assert!((arrows - 30.0 / 4000.0).abs() < 1e-9, "net loss of arrows: {arrows}");
+}

@@ -70,16 +70,24 @@ impl WorkRate {
         if earned <= 0.0 {
             return Vec::new();
         }
+        // Net of what the method itself takes in (oscar_cole 2026-11-17:
+        // a fight burying the bones it loots read "missing bones"; arrows
+        // picked back count only their loss).
         let mut out: Vec<(String, f64)> = Vec::new();
         for (item, cause, qty) in &self.flows_6000 {
             if *qty >= 0.0 || !CONSUMED_CAUSES.contains(&cause.as_str()) {
                 continue;
             }
             match out.iter_mut().find(|(known, _)| known == item) {
-                Some(known) => known.1 += -qty / earned,
-                None => out.push((item.clone(), -qty / earned)),
+                Some(known) => known.1 += -qty,
+                None => out.push((item.clone(), -qty)),
             }
         }
+        for (item, burnt) in out.iter_mut() {
+            let taken: f64 = self.flows_6000.iter().filter(|(known, _, qty)| known == item && *qty > 0.0).map(|(_, _, qty)| *qty).sum();
+            *burnt = (*burnt - taken).max(0.0) / earned;
+        }
+        out.retain(|(_, per_xp)| *per_xp > 0.0);
         out
     }
 }
