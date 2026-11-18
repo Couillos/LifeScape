@@ -19,7 +19,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lifescape_json::{object, str_value, Value};
-use lifescape_market::{check_coverage, check_price, current_price, impact_size, LastFill, Order, PRICE_FILLS};
+use lifescape_market::{check_coverage, check_price, impact_size, LastFill, Order, PRICE_FILLS};
 use crate::market_seed::CatalogueItem;
 use lifescape_market::{Book, Deal, Side};
 use lifescape_store::{NewOrder, OrderSide, OrderStatus, Store, YieldCandleResolution};
@@ -155,6 +155,9 @@ pub(crate) struct Engine {
     /// once per item from one indexed read, then pushed on every settled
     /// fill (`settle_print`).
     pub(crate) last_fills: HashMap<i64, VecDeque<LastFill>>,
+    /// Store clock of each item's newest fill (plan prix §3: a stale
+    /// print yields to a two-sided book), loaded on first use.
+    pub(crate) newest_fill: HashMap<i64, i64>,
     /// Settled fills counted since start: a ring loaded from the store
     /// while a fill settled is not cached (it could miss that fill).
     pub(crate) fills_settled: u64,
@@ -198,6 +201,7 @@ impl Engine {
             own_sells: HashMap::new(),
             adopted: HashSet::new(),
             last_fills: HashMap::new(),
+            newest_fill: HashMap::new(),
             fills_settled: 0,
             quest_reserved: HashMap::new(),
             timeout_streak: HashMap::new(),
@@ -214,6 +218,7 @@ impl Engine {
     /// loaded yet is read from the store on first use).
     pub(crate) fn note_fill(&mut self, item: i64, price: i64, quantity: i64) {
         self.fills_settled += 1;
+        self.newest_fill.insert(item, MarketService::now_clock());
         if let Some(ring) = self.last_fills.get_mut(&item) {
             ring.push_back(LastFill { price, quantity });
             while ring.len() > PRICE_FILLS {
@@ -425,6 +430,7 @@ impl MarketService {
     /// orders of each side. The shop price never anchors it.
     pub(crate) fn reference(&self, item: i64) -> lifescape_market::Reference {
         let last = self.last_fills(item);
+        let newest = self.newest_fill_clock(item);
         let size = impact_size(&last);
         let (bids, asks) = self
             .lock_engine()
@@ -432,7 +438,18 @@ impl MarketService {
             .get(&item)
             .map(|book| (book.levels_covering(Side::Buy, size), book.levels_covering(Side::Sell, size)))
             .unwrap_or_default();
-        current_price(&last, &bids, &asks)
+        lifescape_market::current_price_at(&last, &bids, &asks, newest, Self::now_clock())
+    }
+
+    /// Store clock of the item's newest fill (plan prix §3), cached in the
+    /// engine and moved by every settled fill (`note_fill`).
+    fn newest_fill_clock(&self, item: i64) -> Option<i64> {
+        if let Some(clock) = self.lock_engine().newest_fill.get(&item).copied() {
+            return Some(clock);
+        }
+        let clock = self.lock_store().newest_fill_clock(item).ok().flatten()?;
+        self.lock_engine().newest_fill.insert(item, clock);
+        Some(clock)
     }
 
     /// One JSON-lines request in, one reply out. Pure dispatch: every

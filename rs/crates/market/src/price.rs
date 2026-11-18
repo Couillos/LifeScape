@@ -148,6 +148,31 @@ pub fn current_price(last_fills: &[LastFill], bids: &[(i64, i64)], asks: &[(i64,
     Reference { price: price.max(1), traded: false }
 }
 
+/// Plan prix §3 (user 2026-11-18): a fill older than this (wall seconds,
+/// one `surplus` horizon of 36 000 ticks at 60 ms) no longer sets the
+/// price alone against a two-sided book.
+pub const STALE_FILL_SECS: i64 = 2_160;
+
+/// `current_price` at store clock `now` (plan prix §3: the market makers
+/// quoted around a median of old prints that only their own quotes fed):
+/// when the newest fill (`newest_clock`) is older than `STALE_FILL_SECS`
+/// and both sides of the book hold their impact size, the price is the
+/// midpoint of the impact bid and ask (the object stays traded). A
+/// one-sided book keeps the clamp: asks alone never raise an old price,
+/// bids alone never lower it.
+pub fn current_price_at(last_fills: &[LastFill], bids: &[(i64, i64)], asks: &[(i64, i64)], newest_clock: Option<i64>, now: i64) -> Reference {
+    let reference = current_price(last_fills, bids, asks);
+    let stale = newest_clock.is_some_and(|clock| now - clock > STALE_FILL_SECS);
+    if !reference.traded || !stale {
+        return reference;
+    }
+    let size = impact_size(last_fills);
+    match (impact_price(bids, size), impact_price(asks, size)) {
+        (Some(bid), Some(ask)) if ask >= bid => Reference { price: ((bid + ask) / 2).max(1), traded: true },
+        _ => reference,
+    }
+}
+
 /// 24 h change of the last price (thousandths), as an exchange ticker
 /// reads it (user 2026-11-18: iron kiteshield showed +70 000 % beside a
 /// listed price of 1, a VWAP change next to a median price): the last
@@ -236,6 +261,22 @@ mod tests {
         assert_eq!(current_price(&lots(&[5, 5, 5], 1), &[(8, 1)], &[]), traded(8), "a richer bid is the price now");
         assert_eq!(current_price(&lots(&[5, 5, 5], 1), &[], &[(3, 1)]), traded(3), "a cheaper ask is the price now");
         assert_eq!(current_price(&lots(&[5, 5, 5], 1), &[(4, 1)], &[(6, 1)]), traded(5), "the book inside the fills: the fills");
+    }
+
+    /// Plan prix §3: helm prints at 858 two horizons old, the book now
+    /// 823 bid / 838 ask: the midpoint 830. Fresh prints keep the median;
+    /// asks alone over an old print never raise it.
+    #[test]
+    fn a_stale_print_yields_to_a_two_sided_book() {
+        let traded = |price| super::Reference { price, traded: true };
+        let helms = lots(&[858, 858, 858], 1);
+        let now = 100_000;
+        let old = Some(now - 2 * STALE_FILL_SECS);
+        assert_eq!(current_price_at(&helms, &[(823, 1)], &[(838, 28)], old, now), traded(830));
+        assert_eq!(current_price_at(&helms, &[(823, 1)], &[(838, 28)], Some(now - 60), now), traded(838), "fresh: the median clamped by the ask");
+        assert_eq!(current_price_at(&helms, &[], &[(900, 28)], old, now), traded(858), "asks alone never raise an old price");
+        assert_eq!(current_price_at(&helms, &[], &[(700, 28)], old, now), traded(700), "a cheaper ask still clamps");
+        assert_eq!(current_price_at(&[], &[(4, 1)], &[(6, 1)], None, now), super::Reference { price: 5, traded: false }, "never traded: unchanged");
     }
 
     #[test]

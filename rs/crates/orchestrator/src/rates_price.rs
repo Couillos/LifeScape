@@ -34,6 +34,8 @@ pub fn price_estimate(store: &Store, item: &str) -> (f64, bool) {
         .collect();
     let size = lifescape_market::impact_size(&last);
     let levels = |side| store.book_levels_covering(item_id, side, size).unwrap_or_default();
-    let current = lifescape_market::current_price(&last, &levels(lifescape_store::OrderSide::Buy), &levels(lifescape_store::OrderSide::Sell));
+    let newest = store.newest_fill_clock(item_id).ok().flatten();
+    let now = crate::market_service::MarketService::now_clock();
+    let current = lifescape_market::current_price_at(&last, &levels(lifescape_store::OrderSide::Buy), &levels(lifescape_store::OrderSide::Sell), newest, now);
     (current.price as f64, !current.traded)
 }

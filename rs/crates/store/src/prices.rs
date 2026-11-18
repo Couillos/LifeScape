@@ -18,6 +18,13 @@ pub const IMPACT_ROWS: i64 = 64;
 impl Store {
     /// (price, quantity) of the newest `limit` fills of one item, oldest
     /// first (any age).
+    /// Store clock of the newest fill of one item (`None`: never traded):
+    /// how old the current price's prints are (plan prix §3).
+    pub fn newest_fill_clock(&self, item_id: i64) -> Result<Option<i64>, Error> {
+        let mut statement = self.connection.prepare_cached("SELECT MAX(clock) FROM executions WHERE item_id = ?1")?;
+        Ok(statement.query_row(rusqlite::params![item_id], |row| row.get::<_, Option<i64>>(0))?)
+    }
+
     pub fn last_fills(&self, item_id: i64, limit: i64) -> Result<Vec<(i64, i64)>, Error> {
         let mut statement = self.connection.prepare_cached(
             "SELECT price, quantity FROM executions WHERE item_id = ?1 \
@@ -92,6 +99,8 @@ mod tests {
         }
         assert_eq!(store.last_fills(314, 5)?, vec![(3, 2), (4, 2), (5, 2), (6, 2), (7, 2)]);
         assert_eq!(store.last_fills(999, 5)?, Vec::<(i64, i64)>::new());
+        assert_eq!(store.newest_fill_clock(999)?, None, "never traded");
+        assert!(store.newest_fill_clock(314)?.is_some());
         assert_eq!(store.volume_between(314, 30, 61)?, 8);
         assert_eq!(store.volume_between(314, 100, 200)?, 0);
         Ok(())

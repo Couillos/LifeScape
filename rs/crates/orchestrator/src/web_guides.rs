@@ -123,7 +123,8 @@ pub fn quote_of(store: &Store, item: &str) -> Quote {
         .collect();
     let side = |side| store.book_levels_covering(item_id, side, i64::MAX).unwrap_or_default();
     let (bids, asks) = (side(lifescape_store::OrderSide::Buy), side(lifescape_store::OrderSide::Sell));
-    let current = lifescape_market::current_price(&last, &bids, &asks);
+    let newest = store.newest_fill_clock(item_id).ok().flatten();
+    let current = lifescape_market::current_price_at(&last, &bids, &asks, newest, crate::market_service::MarketService::now_clock());
     let prices: Vec<i64> = last.iter().map(|fill| fill.price).collect();
     let levels = |levels: Vec<(i64, i64)>| levels.into_iter().map(|(price, units)| (price as f64, units as f64)).collect();
     Quote {
