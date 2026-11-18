@@ -175,11 +175,13 @@ impl MarketService {
         let volume_24h: i64 = self.lock_store().volume_between(item, clock - 86_400, clock + 1).unwrap_or(0);
         let mut view = BookView { volume_24h, ..BookView::default() };
         if let Some(book) = self.lock_engine().books.get(&item) {
+            // Per unit (plan prix lot D: the brain's unit).
             for order in book.orders().into_iter().filter(|order| order.remaining > 0) {
+                let price = crate::market_units::to_unit(item, order.price);
                 if order.side == lifescape_market::Side::Sell {
-                    view.asks.push((order.price, order.remaining));
+                    view.asks.push((price, order.remaining));
                 } else if order.account != account {
-                    view.bids.push((order.price, order.remaining));
+                    view.bids.push((price, order.remaining));
                 }
             }
         }
@@ -204,15 +206,24 @@ impl MarketService {
     /// The account's own last sale of `item`: memory (with its speed),
     /// else its newest non-failed seller deal (speed unknown).
     pub(crate) fn own_sell_fill(&self, account: &str, item: i64) -> Option<OwnFill> {
+        // Per unit (plan prix lot D): the memory and the carnet hold the
+        // book's price per lot.
+        let unit = |fill: OwnFill| OwnFill { price: crate::market_units::to_unit(item, fill.price), ..fill };
         if let Some(fill) = self.lock_engine().own_sells.get(&(account.to_string(), item)).copied() {
-            return Some(fill);
+            return Some(unit(fill));
         }
         let stored = self.lock_store().last_own_fill(account, item, false).ok().flatten();
-        stored.map(|(price, _)| OwnFill { price, rested_ticks: None })
+        stored.map(|(price, _)| unit(OwnFill { price, rested_ticks: None }))
     }
 
-    /// The account's own last purchase price of `item` (non-failed deal).
+    /// The account's own last purchase price of `item` (non-failed deal),
+    /// per unit.
     pub(crate) fn own_buy_price(&self, account: &str, item: i64) -> Option<i64> {
+        self.own_buy_price_lot(account, item).map(|price| crate::market_units::to_unit(item, price))
+    }
+
+    /// `own_buy_price` in the book's unit (per lot).
+    pub(crate) fn own_buy_price_lot(&self, account: &str, item: i64) -> Option<i64> {
         self.lock_store().last_own_fill(account, item, true).ok().flatten().map(|(price, _)| price)
     }
 
@@ -232,10 +243,12 @@ impl MarketService {
         };
         let reference = self.reference(item);
         let (bid, _) = self.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
+        let bid = bid.map(|price| crate::market_units::to_unit(item, price));
         let last = self.own_sell_fill(account, item);
         let others_ask = self.lock_engine().books.get(&item).and_then(|book| {
             book.orders().into_iter().filter(|order| order.side == lifescape_market::Side::Sell && order.remaining > 0 && order.account != account && order.price >= 1).map(|order| order.price).min()
         });
+        let others_ask = others_ask.map(|price| crate::market_units::to_unit(item, price));
         let marks = FoundMarks {
             others_ask,
             anchor: lifescape_planner::alchemy::alch_value(name, true),

@@ -260,6 +260,30 @@ impl MarketService {
                 })
                 .map_err(|error| error.to_string())?;
         }
+        // Plan prix lot D (user Q3 2026-11-18): each book's lot, decided
+        // once. The first activation reads every book's observed unit
+        // price (median of its last fills, else its game value) and
+        // rescales its stored prices (`Store::set_item_lot`); later starts
+        // keep the stored lots.
+        if crate::market_units::lots_active() {
+            let decided = !store.item_lots().map_err(|error| error.to_string())?.is_empty();
+            let mut lots: Vec<(i64, i64)> = Vec::new();
+            for item in catalogue.iter().filter(|item| crate::market_audit::base_of(item.id) == item.id) {
+                let lot = if decided {
+                    store.item_lot(item.id).map_err(|error| error.to_string())?
+                } else {
+                    let fills: Vec<i64> = store.last_fills(item.id, PRICE_FILLS as i64).unwrap_or_default().into_iter().map(|(price, _)| price).collect();
+                    crate::market_units::first_lot(item.id, lifescape_market::median_price(&fills))
+                };
+                if store.set_item_lot(item.id, lot).map_err(|error| error.to_string())? {
+                    crate::logln!("market: {} now quoted per {lot} units", item.name);
+                }
+                if lot > 1 {
+                    lots.push((item.id, lot));
+                }
+            }
+            crate::market_units::load_lots(&lots);
+        }
         let service = MarketService { store: Mutex::new(store), engine: Mutex::new(Engine::new(catalogue)) };
         // The public record is settled handovers only (match-time rows
         // from before 2026-11-13 are replaced by the settled deals).
@@ -416,9 +440,10 @@ impl MarketService {
         loaded
     }
 
-    /// Last fill prices of one item, oldest first (`last_fills`).
+    /// Last fill prices of one item, oldest first (`last_fills`), per
+    /// unit (plan prix lot D: the brain's unit).
     pub(crate) fn last_fill_prices(&self, item: i64) -> Vec<i64> {
-        self.last_fills(item).iter().map(|fill| fill.price).collect()
+        self.last_fills(item).iter().map(|fill| crate::market_units::to_unit(item, fill.price)).collect()
     }
 
     /// Current price of one item (user 2026-11-14, replaces the 24 h
@@ -429,6 +454,13 @@ impl MarketService {
     /// (`lifescape_market::current_price`). One walk over the few best
     /// orders of each side. The shop price never anchors it.
     pub(crate) fn reference(&self, item: i64) -> lifescape_market::Reference {
+        let reference = self.reference_lot(item);
+        lifescape_market::Reference { price: crate::market_units::to_unit(item, reference.price), ..reference }
+    }
+
+    /// `reference` in the book's own unit (plan prix lot D: coins per lot):
+    /// the repricing and the market's internal walks.
+    pub(crate) fn reference_lot(&self, item: i64) -> lifescape_market::Reference {
         let last = self.last_fills(item);
         let newest = self.newest_fill_clock(item);
         let size = impact_size(&last);
@@ -494,6 +526,8 @@ impl MarketService {
             return Self::err(format!("unknown item {item}"));
         };
         let (bid, ask) = engine.books.get(&item).map(|book| book.best()).unwrap_or((None, None));
+        // Per unit: the scripts price their orders per unit (plan prix lot D).
+        let (bid, ask) = (bid.map(|price| crate::market_units::to_unit(item, price)), ask.map(|price| crate::market_units::to_unit(item, price)));
         let name = row.name.clone();
         let shop = row.shop_price;
         drop(engine);
@@ -528,9 +562,11 @@ impl MarketService {
         let rows = |levels: Vec<(i64, i64)>| {
             Value::Arr(levels.into_iter().map(|(price, qty)| Value::Arr(vec![Value::Int(price), Value::Int(qty)])).collect())
         };
+        // Coins per `lot` units (plan prix lot D): the page labels them.
         object(vec![
             ("ok", Value::Bool(true)),
             ("item", Value::Int(item)),
+            ("lot", Value::Int(crate::market_units::lot_of(item))),
             ("buys", rows(buys)),
             ("sells", rows(sells)),
         ])
@@ -600,6 +636,7 @@ impl MarketService {
             ("ok", Value::Bool(true)),
             ("item", Value::Int(item)),
             ("res", str_value(resolution.as_str())),
+            ("lot", Value::Int(crate::market_units::lot_of(item))),
             ("candles", Value::Arr(candle_values)),
             ("trades", Value::Arr(tail)),
             ("prev_close", previous_close.map(Value::Int).unwrap_or(Value::Null)),
@@ -715,7 +752,8 @@ impl MarketService {
                 // The form that traded; the current price bots read (last
                 // five fills clamped by its book) rides as `ref`.
                 let priced = forms.iter().copied().find(|form| !self.last_fill_prices(*form).is_empty()).unwrap_or(id);
-                let reference = self.reference(priced).price;
+                // Per lot like the book and the prints (plan prix lot D).
+                let reference = self.reference_lot(priced).price;
                 // Displayed like an exchange ticker (user 2026-11-18): the
                 // last trade, its change against the price 24 h ago.
                 let (last, day_ago) = {
@@ -730,6 +768,7 @@ impl MarketService {
                     ("name", str_value(&name)),
                     ("price", Value::Int(last.unwrap_or(reference))),
                     ("ref", Value::Int(reference)),
+                    ("lot", Value::Int(crate::market_units::lot_of(priced))),
                     ("change24h", Value::Int(change)),
                     ("volume24h", Value::Int(volume)),
                 ])
@@ -769,8 +808,19 @@ impl MarketService {
         };
         // A banknote rests in its base object's book (one book per object).
         let item = crate::market_audit::book_item(request.get("item").as_i64().unwrap_or(-1));
-        let qty = request.get("qty").as_i64().unwrap_or(0);
-        let price = request.get("price").as_i64().unwrap_or(0);
+        // Plan prix lot D: a caller prices per unit (the brain, the
+        // scripts) unless it says `per_lot` (the repricing, the market's
+        // own walks); the book holds coins per lot, whole lots only (a
+        // listing rounds down, a purchase up to the lot covering it).
+        let per_lot = request.get("per_lot").as_bool() == Some(true);
+        let lot = crate::market_units::lot_of(item);
+        let asked = request.get("qty").as_i64().unwrap_or(0);
+        let qty = if side == Side::Sell { lifescape_market::lots::whole_lots_down(asked, lot) } else { lifescape_market::lots::whole_lots_up(asked, lot) };
+        if asked > 0 && qty == 0 {
+            return Self::err(format!("{asked} units of {item} are under one lot of {lot}"));
+        }
+        let raw_price = request.get("price").as_i64().unwrap_or(0);
+        let price = if per_lot { raw_price } else { lifescape_market::lots::lot_price(raw_price, lot) };
         if self.lock_engine().find_item(item).is_none() {
             return Self::err(format!("unknown item {item}"));
         }
@@ -787,7 +837,7 @@ impl MarketService {
             // (`market_audit::uncommitted`): promised lots are never
             // offered twice (deals 1716/1721/1772, 2026-11-13).
             let (have_item, have_coins) = self.free_coverage(&account, Self::order_side(side), item);
-            if let Err(error) = check_coverage(side, qty, price, have_item, have_coins) {
+            if let Err(error) = check_coverage(side, qty, lifescape_market::lots::lot_coins(qty, price, lot), have_item, have_coins) {
                 return Self::err(error.to_string());
             }
         }
@@ -865,7 +915,7 @@ impl MarketService {
         let matched = crate::market_merge::merge_fills(matched);
         self.lock_engine().order_item.insert(order_key, item);
         if rests {
-            if let Some(bounds) = crate::market_reprice::bounds_from_request(request, &account, side == Side::Sell, price, store_id, clock) {
+            if let Some(bounds) = crate::market_reprice::bounds_from_request(request, &account, side == Side::Sell, price, store_id, clock, if per_lot { 1 } else { lot }) {
                 crate::market_reprice::register(self, store_id, bounds);
             }
         }
@@ -886,6 +936,8 @@ impl MarketService {
             ("ok", Value::Bool(true)),
             ("order", Value::Int(store_id)),
             ("status", str_value(status)),
+            ("lot", Value::Int(lot)),
+            ("qty", Value::Int(qty)),
             ("fills",
                 Value::Arr(
                     fills

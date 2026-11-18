@@ -1,7 +1,7 @@
 PLAN — PRIX : DES ORDRES QUI BOUGENT
 ====================================
-Date : 2026-11-18. Statut : plan validé (Q1-Q3 tranchées le 2026-11-18,
-Q4 en attente), lot A en cours.
+Date : 2026-11-18. Statut : plan validé (Q1-Q4 tranchées le 2026-11-18) ;
+lots A, B, C, E déployés ; lot D codé.
 Source : audit du 2026-11-18 (run/lifescape.db en lecture seule, 24 h ;
 run/orchestrator.log ; code market/src/{concession,zip,discovery,price,
 maker}.rs, orchestrator/src/{market_reprice,market_seller,brain_sales,
@@ -154,9 +154,13 @@ marché).
 
 5 bis. LOT D — COTATION PAR LOT (décision Q3, design 2026-11-18)
 -----------------------------------------------------------------
-Taille de lot FIXE par objet (un carnet ne change jamais d'unité), de sa
-valeur de jeu (`obj.price`, stable) : ≤ 5 pièces → 100 ; 6 à 15 → 10 ;
-au-delà → 1 (inchangé). `lifescape_market::quote_lot(item)`.
+Taille de lot FIXE par objet (un carnet ne change jamais d'unité),
+décidée une fois au premier démarrage sur le prix unitaire observé
+(médiane des derniers trades, sinon la valeur de jeu) : ≤ 5 → 100 ; ≤ 20
+→ 10 ; au-delà → 1. Seulement ce qui s'échange en vrac (empilable ou
+ingrédient de recette) ; jamais un équipement, un outil transporté, les
+pièces (une simulation sur la base live donnait des pioches par 100).
+`lots::lot_for_price`, `market_units::first_lot`.
   - Prix d'un ordre, d'un deal, d'une exécution, des chandelles et de
     la référence : en pièces POUR UN LOT ; quantités toujours en unités,
     multiples du lot (une annonce arrondit à son multiple inférieur, un

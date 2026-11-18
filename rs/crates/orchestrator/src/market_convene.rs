@@ -241,7 +241,7 @@ impl MarketService {
     pub(crate) fn record_fill(&self, fill: &lifescape_market::Fill, relist: Vec<Order>, clock: i64) -> Result<i64, String> {
         {
             let mut engine = self.lock_engine();
-            let cost = fill.quantity * fill.price;
+            let cost = crate::market_units::deal_coins(fill.item, fill.quantity, fill.price);
             engine.ledger.credit_coins(&fill.buyer, -cost);
             engine.ledger.credit_stock(&fill.buyer, fill.item, fill.quantity);
             engine.ledger.credit_stock(&fill.seller, fill.item, -fill.quantity);
@@ -335,6 +335,7 @@ impl MarketService {
                     ("item", Value::Int(row.item_id)),
                     ("qty", Value::Int(row.quantity)),
                     ("price", Value::Int(row.price)),
+                    ("coins", Value::Int(crate::market_units::deal_coins(row.item_id, row.quantity, row.price))),
                     ("x", Value::Int(row.meeting_x)),
                     ("y", Value::Int(row.meeting_y)),
                     ("status", str_value(match row.status {
@@ -578,7 +579,7 @@ impl MarketService {
         }
         {
             let mut engine = self.lock_engine();
-            let cost = qty * price;
+            let cost = crate::market_units::deal_coins(item, qty, price);
             engine.ledger.credit_coins(buyer, cost);
             engine.ledger.credit_stock(buyer, item, -qty);
             engine.ledger.credit_stock(seller, item, qty);

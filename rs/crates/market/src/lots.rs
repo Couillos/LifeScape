@@ -7,17 +7,20 @@
 //! coins per lot; quantities stay in units, whole lots only. The brain
 //! keeps per-unit prices: the market service converts at its boundary.
 
-/// Game value at or under which an object is quoted per 100 units.
-pub const HUNDRED_MAX_VALUE: i64 = 5;
-/// Game value at or under which an object is quoted per 10 units.
-pub const TEN_MAX_VALUE: i64 = 15;
+/// Unit price at or under which an object is quoted per 100 units.
+pub const HUNDRED_MAX_PRICE: i64 = 5;
+/// Unit price at or under which an object is quoted per 10 units.
+pub const TEN_MAX_PRICE: i64 = 20;
 
-/// Lot size of an object of game value `value` (`obj.price`): 100 at 5
-/// coins or less, 10 up to 15, else 1 (unit quotation).
-pub fn lot_for_value(value: i64) -> i64 {
-    if value <= HUNDRED_MAX_VALUE {
+/// Lot size of an object worth `price` coins a unit (its observed market
+/// price when it traded, else its game value: bones are worth 1 in the
+/// game and trade at 50): 100 at 5 coins or less, 10 up to 20, else 1.
+/// Decided once per book (`Store::set_item_lot`), never moved by a later
+/// price.
+pub fn lot_for_price(price: i64) -> i64 {
+    if price <= HUNDRED_MAX_PRICE {
         100
-    } else if value <= TEN_MAX_VALUE {
+    } else if price <= TEN_MAX_PRICE {
         10
     } else {
         1
@@ -69,16 +72,16 @@ pub fn unit_price_exact(price: i64, lot: i64) -> f64 {
 mod tests {
     use super::*;
 
-    /// Air rune (value 4): per 100; bronze bar (8): per 10; iron bar
-    /// (28): per unit.
+    /// Live 2026-11-18: water runes at 1-2 per 100; raw sardines at 2
+    /// per 100; logs at 12 per 10; bones at 67 per unit.
     #[test]
-    fn the_lot_follows_the_game_value() {
-        assert_eq!(lot_for_value(4), 100);
-        assert_eq!(lot_for_value(1), 100);
-        assert_eq!(lot_for_value(8), 10);
-        assert_eq!(lot_for_value(15), 10);
-        assert_eq!(lot_for_value(16), 1);
-        assert_eq!(lot_for_value(28), 1);
+    fn the_lot_follows_the_unit_price() {
+        assert_eq!(lot_for_price(2), 100);
+        assert_eq!(lot_for_price(5), 100);
+        assert_eq!(lot_for_price(12), 10);
+        assert_eq!(lot_for_price(20), 10);
+        assert_eq!(lot_for_price(21), 1);
+        assert_eq!(lot_for_price(67), 1);
     }
 
     /// 300 air runes at 140 per 100 cost 420; a stray unit rounds up.

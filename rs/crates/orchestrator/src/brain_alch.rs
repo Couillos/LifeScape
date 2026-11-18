@@ -52,7 +52,7 @@ fn current_price(item: &str) -> f64 {
 /// price of a traded object, else nothing (no buyer, no trade).
 pub(crate) fn sale_price(item: &str) -> f64 {
     let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return 0.0 };
-    let bid = service.lock_engine().books.get(&id).and_then(|book| book.best().0).unwrap_or(0);
+    let bid = service.lock_engine().books.get(&id).and_then(|book| book.best().0).map(|price| crate::market_units::to_unit(id, price)).unwrap_or(0);
     let reference = service.reference(id);
     let traded = if reference.traded { reference.price } else { 0 };
     bid.max(traded).max(0) as f64
@@ -288,7 +288,7 @@ fn alch_book(mage: &Caster, account: &str, own_rate: f64) -> Vec<(String, i64, i
                     .into_iter()
                     .filter(|order| order.side == lifescape_market::Side::Sell && order.remaining > 0 && !order.account.eq_ignore_ascii_case(account))
                     .min_by_key(|order| order.price)
-                    .map(|order| (*item_id, order.price, order.remaining))
+                    .map(|order| (*item_id, crate::market_units::to_unit(*item_id, order.price), order.remaining))
             })
             .collect()
     };

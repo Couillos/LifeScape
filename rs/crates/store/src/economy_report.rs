@@ -87,8 +87,9 @@ impl Store {
     /// Fills per item in `[since, until)`: quantity and mean price.
     pub fn fills_between(&self, since: i64, until: i64) -> Result<Vec<ItemFills>, Error> {
         let mut statement = self.connection.prepare(
-            "SELECT item_id, SUM(quantity), SUM(quantity * price) FROM executions WHERE clock >= ?1 AND (?2 <= 0 OR clock < ?2) \
-             GROUP BY item_id HAVING SUM(quantity) > 0 ORDER BY item_id",
+            // Coins per unit: a price is per the item's lot (plan prix lot D).
+            "SELECT e.item_id, SUM(e.quantity), SUM(e.quantity * e.price / COALESCE(i.lot, 1)) FROM executions e LEFT JOIN items i ON i.item_id = e.item_id \
+             WHERE e.clock >= ?1 AND (?2 <= 0 OR e.clock < ?2) GROUP BY e.item_id HAVING SUM(e.quantity) > 0 ORDER BY e.item_id",
         )?;
         let rows = statement.query_map(params![since, until], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)))?;
         let mut out = Vec::new();

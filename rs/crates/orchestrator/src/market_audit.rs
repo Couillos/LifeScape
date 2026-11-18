@@ -126,13 +126,15 @@ fn plan_coverage(orders: &[Order], coins: i64, stock: &BTreeMap<i64, i64>, promi
     for order in sorted {
         let remaining = order.remaining.max(0);
         if order.side == OrderSide::Buy {
-            let cost = remaining * order.price.max(0);
-            let affordable = if remaining > 0 { purse.max(0) / remaining } else { 0 };
+            // Coins and prices per lot (plan prix lot D).
+            let lot = crate::market_units::lot_of(order.item_id);
+            let cost = crate::market_units::deal_coins(order.item_id, remaining, order.price.max(0));
+            let affordable = if remaining > 0 { purse.max(0).saturating_mul(lot) / remaining } else { 0 };
             if purse >= cost {
                 purse -= cost;
             } else if lower_bids && affordable >= 1 {
                 plan.lower.push((order.order_id, affordable));
-                purse -= affordable * remaining;
+                purse -= crate::market_units::deal_coins(order.item_id, remaining, affordable);
             } else {
                 cancel.push(order.order_id);
             }
@@ -165,7 +167,7 @@ pub fn uncommitted(side: OrderSide, item: i64, coins: i64, stock: &[(i64, i64)],
         if side == OrderSide::Sell && base_of(order.item_id) == base {
             claimed_units += order.remaining;
         } else if side == OrderSide::Buy {
-            claimed_coins += order.remaining * order.price.max(0);
+            claimed_coins += crate::market_units::deal_coins(order.item_id, order.remaining, order.price.max(0));
         }
     }
     ((held - claimed_units).max(0), (coins - claimed_coins).max(0))
@@ -181,7 +183,7 @@ pub fn net_of_deals(account: &str, coins: i64, stock: &[(i64, i64)], deals: &[li
     let mut left: BTreeMap<i64, i64> = stock.iter().copied().collect();
     for deal in deals {
         if deal.buyer == account {
-            purse -= deal.quantity * deal.price.max(0);
+            purse -= crate::market_units::deal_coins(deal.item_id, deal.quantity, deal.price.max(0));
         } else if deal.seller == account {
             *left.entry(deal.item_id).or_insert(0) -= deal.quantity;
         }
@@ -257,7 +259,7 @@ impl MarketService {
             let mut promised: BTreeMap<i64, i64> = BTreeMap::new();
             for deal in &deals {
                 if deal.buyer == account {
-                    promised_coins += deal.quantity * deal.price;
+                    promised_coins += crate::market_units::deal_coins(deal.item_id, deal.quantity, deal.price);
                 } else {
                     *promised.entry(deal.item_id).or_insert(0) += deal.quantity;
                 }
@@ -295,14 +297,14 @@ impl MarketService {
             let mut items: BTreeMap<i64, i64> = BTreeMap::new();
             for order in &open {
                 if order.side == OrderSide::Buy {
-                    coins += order.remaining.max(0) * order.price.max(0);
+                    coins += crate::market_units::deal_coins(order.item_id, order.remaining.max(0), order.price.max(0));
                 } else {
                     *items.entry(base_of(order.item_id)).or_insert(0) += order.remaining.max(0);
                 }
             }
             for deal in self.lock_store().open_deals_for_account(account).unwrap_or_default() {
                 if &deal.buyer == account {
-                    coins += deal.quantity * deal.price;
+                    coins += crate::market_units::deal_coins(deal.item_id, deal.quantity, deal.price);
                 } else {
                     *items.entry(base_of(deal.item_id)).or_insert(0) += deal.quantity;
                 }
@@ -322,6 +324,7 @@ impl MarketService {
                 ("account", lifescape_json::str_value(account)),
                 ("order", Value::Int(*order)),
                 ("price", Value::Int(*price)),
+                ("per_lot", Value::Bool(true)),
             ]));
             let Some(replacement) = reply.get("order").as_i64().filter(|_| reply.get("ok").as_bool() == Some(true)) else {
                 crate::logln!("market-audit: {account}: bid {order} not lowered to {price}: {:?}", reply.get("error").as_str());

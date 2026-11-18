@@ -25,6 +25,7 @@ let candles = [];
 // trade-less slots carry (one flat candle per empty slot).
 let prevClose = null;
 let trades = [];
+let tradesLot = 1;
 // `to` of the loaded history: its candles already hold every print
 // before it, so only prints at or after it fold into the live tail.
 let historyTo = 0;
@@ -69,6 +70,7 @@ async function loadDetail() {
       candles = payload.candles;
       prevClose = payload.prev_close === undefined ? null : payload.prev_close;
       trades = payload.trades;
+      tradesLot = payload.lot;
       historyTo = to;
     }
   } catch (e) { /* keep the last frame */ }
@@ -97,7 +99,7 @@ function changeText(promille) {
 // first); a header click sorts the whole filtered list, then pages.
 const ITEM_COLUMNS = [
   { key: 'name', label: 'Item', kind: 'str' },
-  { key: 'price', label: 'Prix', kind: 'num' },
+  { key: 'price', label: 'Prix', kind: 'num', fmt: (value, row) => value + lotSuffix(row && row.lot) },
   { key: 'change', label: '24 h', kind: 'num', fmt: (value) => {
     const cls = value > 0 ? 'up' : (value < 0 ? 'down' : '');
     return '<span class="' + cls + '">' + changeText(value) + '</span>';
@@ -106,7 +108,7 @@ const ITEM_COLUMNS = [
 ];
 
 function itemRow(item) {
-  return { id: item.item, name: item.name, price: item.price, change: item.change24h, volume: item.volume24h };
+  return { id: item.item, name: item.name, price: item.price, lot: item.lot, change: item.change24h, volume: item.volume24h };
 }
 
 function renderList() {
@@ -174,7 +176,7 @@ function depthRows(rows, side) {
 function renderBook(book) {
   const bids = aggregateLevels(book.buys, true);
   const asks = aggregateLevels(book.sells, false);
-  const out = ['<tr><th>price</th><th>qty</th><th>cumul</th></tr>'];
+  const out = ['<tr><th>price' + lotSuffix(book.lot) + '</th><th>qty</th><th>cumul</th></tr>'];
   if (!bids.length && !asks.length) {
     out.push('<tr><td colspan="3" class="muted">empty book</td></tr>');
   } else {
@@ -203,7 +205,7 @@ function tickerHtml(item) {
   const tone = change > 0 ? 'tk-up' : (change < 0 ? 'tk-down' : 'tk-flat');
   const ref = item.ref === undefined ? item.price : item.ref;
   const stat = (label, value) => '<span class="tk-stat"><span class="tk-label">' + label + '</span>' + value + '</span>';
-  return '<span class="tk-last ' + tone + '">' + item.price + '</span>'
+  return '<span class="tk-last ' + tone + '">' + item.price + lotSuffix(item.lot) + '</span>'
     + '<span class="tk-change ' + tone + '">' + changeText(change) + ' <span class="tk-label" style="display:inline">24 h</span></span>'
     + stat('Réf. bots', ref)
     + stat('Volume 24 h', item.volume24h);
@@ -220,7 +222,7 @@ function tradeRowHtml(trade) {
 }
 
 function renderTrades() {
-  const rows = ['<tr><th>qty</th><th>price</th><th>time</th></tr>'];
+  const rows = ['<tr><th>qty</th><th>price' + lotSuffix(tradesLot) + '</th><th>time</th></tr>'];
   for (const trade of trades.slice(0, 12)) rows.push(tradeRowHtml(trade));
   document.getElementById('trades').innerHTML = rows.join('');
 }
@@ -238,13 +240,24 @@ function partyHtml(name, maker) {
   return maker ? '<span class="maker" title="market maker">' + text + '</span>' : text;
 }
 
+// Plan prix lot D (user 2026-11-18): a cheap object is quoted per lot of
+// 10 or 100 units; its prices carry the lot ("140 /100").
+function lotSuffix(lot) {
+  return lot > 1 ? ' <span class="lot">/' + lot + '</span>' : '';
+}
+
+function itemLot(id) {
+  const item = items.find(entry => entry.item === id);
+  return item ? item.lot : undefined;
+}
+
 function renderRecent() {
   const rows = ['<tr><th>item</th><th>qty</th><th>price</th><th>buyer</th><th>seller</th><th>status</th><th>time</th></tr>'];
   for (const trade of recent.slice(0, 15)) {
     const date = new Date(trade.t * 1000);
     const label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
     // The item opens its market (chart, book, last trades) on click.
-    rows.push('<tr><td class="item-link" data-id="' + Number(trade.item) + '" title="open this item">' + itemName(trade.item) + '</td><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + partyHtml(trade.buyer, trade.buyerMaker) + '</td><td>' + partyHtml(trade.seller, trade.sellerMaker) + '</td><td>' + statusLabel(trade.status) + '</td><td>' + label + '</td></tr>');
+    rows.push('<tr><td class="item-link" data-id="' + Number(trade.item) + '" title="open this item">' + itemName(trade.item) + '</td><td>' + trade.q + '</td><td>' + trade.p + lotSuffix(itemLot(trade.item)) + '</td><td>' + partyHtml(trade.buyer, trade.buyerMaker) + '</td><td>' + partyHtml(trade.seller, trade.sellerMaker) + '</td><td>' + statusLabel(trade.status) + '</td><td>' + label + '</td></tr>');
   }
   document.getElementById('recent').innerHTML = rows.join('');
 }
@@ -420,4 +433,4 @@ function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined' && module.exports) module.exports = { VIEWS, viewSlots, chartRows, partyHtml, tradeRowHtml, tickerHtml };
+if (typeof module !== 'undefined' && module.exports) module.exports = { VIEWS, viewSlots, chartRows, partyHtml, tradeRowHtml, tickerHtml, lotSuffix };

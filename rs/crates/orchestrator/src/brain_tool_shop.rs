@@ -94,7 +94,7 @@ fn cancel_merchant_tool_bids(job: &Job, life: &Life) {
 /// Best ask of one unit of `item` on the book (`None`: no seller).
 fn best_ask(service: &crate::market_service::MarketService, item: &str) -> Option<i64> {
     let id = crate::brain_gear::obj_id(item)?;
-    service.lock_engine().books.get(&id).and_then(|book| book.best().1)
+    service.lock_engine().books.get(&id).and_then(|book| book.best().1).map(|price| crate::market_units::to_unit(id, price))
 }
 
 /// Market price of an input the bot would make a tool from (`None`: a

@@ -38,7 +38,7 @@ pub fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, live: &Value) {
     ctx.levels = live_levels(live);
     if let NodeKind::ObtainItems { item, .. } = &node.kind {
         if let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) {
-            ctx.best_ask = service.lock_engine().books.get(&id).and_then(|book| book.best().1);
+            ctx.best_ask = service.lock_engine().books.get(&id).and_then(|book| book.best().1).map(|price| crate::market_units::to_unit(id, price));
             ctx.price = service.reference(id).price.max(1);
         }
     }

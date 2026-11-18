@@ -86,7 +86,7 @@ fn live_views(account: &str) -> (HashMap<String, BookView>, HashMap<String, i64>
             // price reads the base reference.
             ids.entry(name.clone()).or_insert_with(|| base_id(&name).unwrap_or(*item_id));
             for order in book.orders() {
-                rows.push((name.clone(), order.account.clone(), order.side == lifescape_market::Side::Buy, order.price, order.remaining));
+                rows.push((name.clone(), order.account.clone(), order.side == lifescape_market::Side::Buy, crate::market_units::to_unit(*item_id, order.price), order.remaining));
             }
         }
         rows

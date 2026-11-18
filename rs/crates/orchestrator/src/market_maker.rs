@@ -198,7 +198,7 @@ impl Position {
 pub fn positions(account: &str, deals: &[lifescape_store::Deal]) -> BTreeMap<i64, Position> {
     let mut out: BTreeMap<i64, Position> = BTreeMap::new();
     for deal in deals {
-        let value = deal.price.saturating_mul(deal.quantity);
+        let value = crate::market_units::deal_coins(deal.item_id, deal.quantity, deal.price);
         let position = out.entry(crate::market_audit::book_item(deal.item_id)).or_default();
         if deal.buyer == account {
             position.units += deal.quantity;
@@ -367,7 +367,7 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
             rows.iter()
                 .filter(|row| row.side == side && row.motive == crate::market_lineage::MARKET_MAKE && crate::market_audit::book_item(row.item_id) == *id)
                 .filter(|row| matches!(row.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched) && row.remaining > 0)
-                .map(|row| (row.order_id, row.price, row.remaining))
+                .map(|row| (row.order_id, crate::market_units::to_unit(row.item_id, row.price), row.remaining))
                 .collect()
         };
         let (bids, asks) = (resting(lifescape_store::OrderSide::Buy), resting(lifescape_store::OrderSide::Sell));
@@ -425,12 +425,14 @@ fn others_book(service: &crate::market_service::MarketService, item: i64, accoun
     let engine = service.lock_engine();
     let Some(book) = engine.books.get(&item) else { return (None, None, 0, 0) };
     let (mut bid, mut ask, mut bid_depth, mut ask_depth) = (None::<i64>, None::<i64>, 0, 0);
+    // Per unit (plan prix lot D: the maker quotes in the brain's unit).
     for order in book.orders().into_iter().filter(|order| order.account != account && order.remaining > 0) {
+        let price = crate::market_units::to_unit(item, order.price);
         if order.side == lifescape_market::Side::Buy {
-            bid = Some(bid.map_or(order.price, |best| best.max(order.price)));
+            bid = Some(bid.map_or(price, |best| best.max(price)));
             bid_depth += order.remaining;
         } else {
-            ask = Some(ask.map_or(order.price, |best| best.min(order.price)));
+            ask = Some(ask.map_or(price, |best| best.min(price)));
             ask_depth += order.remaining;
         }
     }

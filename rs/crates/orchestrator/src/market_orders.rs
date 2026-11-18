@@ -66,6 +66,8 @@ impl MarketService {
         }
         let item = row.item_id;
         let side = book_side(row.side);
+        // Plan prix lot D: per unit unless the caller says `per_lot`.
+        let price = if request.get("per_lot").as_bool() == Some(true) { price } else { crate::market_units::to_lot(item, price) };
         if let Err(error) = check_price(price) {
             return Self::err(error.to_string());
         }

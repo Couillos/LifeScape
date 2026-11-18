@@ -37,5 +37,6 @@ pub fn price_estimate(store: &Store, item: &str) -> (f64, bool) {
     let newest = store.newest_fill_clock(item_id).ok().flatten();
     let now = crate::market_service::MarketService::now_clock();
     let current = lifescape_market::current_price_at(&last, &levels(lifescape_store::OrderSide::Buy), &levels(lifescape_store::OrderSide::Sell), newest, now);
-    (current.price as f64, !current.traded)
+    // Per unit, exact (plan prix lot D).
+    (current.price as f64 / crate::market_units::lot_of(item_id) as f64, !current.traded)
 }

@@ -78,3 +78,10 @@ test('the ticker shows the last trade and its change in the candle colour, then 
   assert.match(Market.tickerHtml({ price: 142, change24h: 141000, ref: 1, volume24h: 2 }), /tk-last tk-up">142/);
   assert.equal(Market.tickerHtml(null), '');
 });
+
+test('a lot-quoted price carries its lot, a unit price nothing', () => {
+  assert.equal(Market.lotSuffix(100), ' <span class="lot">/100</span>');
+  assert.equal(Market.lotSuffix(1), '');
+  assert.equal(Market.lotSuffix(undefined), '');
+  assert.match(Market.tickerHtml({ price: 140, lot: 100, change24h: 0, ref: 140, volume24h: 3000 }), /tk-last tk-flat">140 <span class="lot">\/100<\/span>/);
+});

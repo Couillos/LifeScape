@@ -949,3 +949,48 @@ fn admin_never_trades() {
     assert_eq!(refused.get("ok").as_bool(), Some(false), "{refused:?}");
     cleanup(&path);
 }
+
+/// Plan prix lot D (user Q3 2026-11-18): feathers (value 2) quote per 100.
+/// The callers price per unit; the book, the deal and the prints hold
+/// coins per 100; a listing rounds down to whole lots, a deal moves
+/// quantity × price / lot coins; the quote answers per unit.
+#[test]
+fn a_cheap_object_quotes_per_lot_behind_a_per_unit_boundary() {
+    crate::market_units::lots_on_for_this_test();
+    let (service, path) = service("lots");
+    assert_eq!(crate::market_units::lot_of(314), 100, "never traded, game value 2: per 100");
+    funded(&service, "seller");
+    funded(&service, "buyer");
+    let place = |account: &str, side: &str, qty: i64, price: i64| {
+        service.handle(&request(vec![
+            ("op", str_value("place")),
+            ("account", str_value(account)),
+            ("side", str_value(side)),
+            ("item", Value::Int(314)),
+            ("qty", Value::Int(qty)),
+            ("price", Value::Int(price)),
+        ]))
+    };
+    let listed = place("seller", "sell", 350, 2);
+    assert_eq!(listed.get("ok").as_bool(), Some(true), "{listed:?}");
+    assert_eq!((listed.get("qty").as_i64(), listed.get("lot").as_i64()), (Some(300), Some(100)), "rounded down to whole lots");
+    let book = service.handle(&request(vec![("op", str_value("book")), ("item", Value::Int(314))]));
+    assert_eq!(book.get("sells").as_arr().and_then(|levels| levels.first()).map(|level| level.as_arr().map(|cells| (cells[0].as_i64(), cells[1].as_i64()))), Some(Some((Some(200), Some(300)))), "200 coins per 100: {book:?}");
+    let under = place("seller", "sell", 40, 2);
+    assert_eq!(under.get("ok").as_bool(), Some(false), "40 feathers are under one lot");
+    let bought = place("buyer", "buy", 100, 2);
+    assert_eq!(bought.get("status").as_str(), Some("filled"), "{bought:?}");
+    let deals = service.handle(&request(vec![("op", str_value("my_deals")), ("account", str_value("buyer"))]));
+    let deal = deals.get("deals").as_arr().and_then(|rows| rows.first().cloned()).expect("a deal");
+    assert_eq!((deal.get("qty").as_i64(), deal.get("price").as_i64(), deal.get("coins").as_i64()), (Some(100), Some(200), Some(200)), "100 feathers at 200 per 100 = 200 coins");
+    let quote = service.handle(&request(vec![("op", str_value("quote")), ("item", Value::Int(314))]));
+    assert_eq!(quote.get("ask").as_i64(), Some(2), "the quote answers per unit: {quote:?}");
+    let order = listed.get("order").as_i64().expect("order");
+    let amended = service.handle(&request(vec![("op", str_value("amend")), ("account", str_value("seller")), ("order", Value::Int(order)), ("price", Value::Int(3))]));
+    assert_eq!(amended.get("ok").as_bool(), Some(true), "{amended:?}");
+    let book = service.handle(&request(vec![("op", str_value("book")), ("item", Value::Int(314))]));
+    assert_eq!(book.get("sells").as_arr().and_then(|levels| levels.first()).and_then(|level| level.as_arr().and_then(|cells| cells[0].as_i64())), Some(300), "3 a feather = 300 per 100");
+    let view = service.public_view("buyer", 314);
+    assert_eq!(view.best_ask(), Some(3), "the brain's view per unit");
+    cleanup(&path);
+}

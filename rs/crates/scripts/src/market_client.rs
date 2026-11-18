@@ -23,6 +23,9 @@ pub struct DealRow {
     pub item: u16,
     pub qty: u32,
     pub price: i64,
+    /// Coins the deal moves (plan prix lot D: the service's own sum, a
+    /// cheap object's price being per lot).
+    pub coins: i64,
 }
 
 /// Open deals of one account (buyer, seller, item, qty, price).
@@ -43,6 +46,7 @@ pub fn my_deals(account: &str) -> Result<Vec<DealRow>, ScriptError> {
             item: entry.get("item").as_i64().unwrap_or(-1) as u16,
             qty: entry.get("qty").as_i64().unwrap_or(0).max(0) as u32,
             price: entry.get("price").as_i64().unwrap_or(0),
+            coins: entry.get("coins").as_i64().unwrap_or_else(|| entry.get("qty").as_i64().unwrap_or(0) * entry.get("price").as_i64().unwrap_or(0)),
         });
     }
     Ok(rows)
@@ -107,7 +111,7 @@ pub fn market_call(op: &str, params: Vec<(&str, Value)>) -> Result<Value, Script
 /// seller (one slot), coins for the buyer. True when carrying the lots.
 pub fn ensure_goods(bot: &mut Bot, row: &DealRow, trade: u16, coins: u16) -> Result<bool, ScriptError> {
     if row.buying {
-        let need_n = (i64::from(row.qty) * row.price) as u32;
+        let need_n = row.coins.max(0) as u32;
         if bot.inventory().get(&coins).copied().unwrap_or(0) >= need_n {
             return Ok(true);
         }
@@ -146,7 +150,7 @@ pub fn ensure_goods(bot: &mut Bot, row: &DealRow, trade: u16, coins: u16) -> Res
         bot.pump(2)?;
     }
     if row.buying {
-        let need_n = (i64::from(row.qty) * row.price) as u32;
+        let need_n = row.coins.max(0) as u32;
         bot.bank_withdraw(coins, need_n, 300)?;
     } else if trade != row.item {
         // Withdraw whichever form the bank holds (base preferred, notes
@@ -163,7 +167,7 @@ pub fn ensure_goods(bot: &mut Bot, row: &DealRow, trade: u16, coins: u16) -> Res
     let _ = bot.close_modal();
     bot.pump(3)?;
     let carried = if row.buying {
-        bot.inventory().get(&coins).copied().unwrap_or(0) >= (i64::from(row.qty) * row.price) as u32
+        bot.inventory().get(&coins).copied().unwrap_or(0) >= row.coins.max(0) as u32
     } else {
         bot.inventory().get(&row.item).copied().unwrap_or(0) >= row.qty || bot.inventory().get(&trade).copied().unwrap_or(0) >= row.qty
     };

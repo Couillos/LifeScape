@@ -19,7 +19,7 @@ pub fn check_price(price: i64) -> Result<(), Error> {
 pub fn check_coverage(
     side: Side,
     quantity: i64,
-    price: i64,
+    cost: i64,
     have_item: i64,
     have_coins: i64,
 ) -> Result<(), Error> {
@@ -35,8 +35,9 @@ pub fn check_coverage(
             }
         }
         Side::Buy => {
-            let cost = (quantity as i128) * (price as i128);
-            if (have_coins as i128) < cost {
+            // `cost`: the coins the quantity costs (plan prix lot D: a
+            // price per lot, `lots::lot_coins`).
+            if have_coins < cost {
                 return Err(Error::Rejected(format!(
                     "buyer holds {have_coins} coins, needs {cost}"
                 )));
@@ -60,9 +61,9 @@ mod tests {
 
     #[test]
     fn coverage_needs_the_goods_or_the_coins() {
-        assert!(check_coverage(Side::Sell, 10, 5, 10, 0).is_ok());
-        assert!(check_coverage(Side::Sell, 11, 5, 10, 0).is_err());
-        assert!(check_coverage(Side::Buy, 10, 5, 0, 50).is_ok());
-        assert!(check_coverage(Side::Buy, 10, 5, 0, 49).is_err());
+        assert!(check_coverage(Side::Sell, 10, 50, 10, 0).is_ok());
+        assert!(check_coverage(Side::Sell, 11, 55, 10, 0).is_err());
+        assert!(check_coverage(Side::Buy, 10, 50, 0, 50).is_ok());
+        assert!(check_coverage(Side::Buy, 10, 50, 0, 49).is_err());
     }
 }

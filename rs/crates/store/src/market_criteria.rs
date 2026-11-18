@@ -275,7 +275,8 @@ impl Store {
     /// Volume and the consumed objects that traded at 1 coin.
     fn trade_criteria(&self, since: i64, until: i64, criteria: &mut MarketCriteria) -> Result<(), Error> {
         let (units, coins): (i64, i64) = self.connection.query_row(
-            "SELECT COALESCE(SUM(quantity), 0), COALESCE(SUM(quantity * price), 0) FROM executions WHERE clock >= ?1 AND (?2 <= 0 OR clock < ?2)",
+            "SELECT COALESCE(SUM(e.quantity), 0), COALESCE(SUM(e.quantity * e.price / COALESCE(i.lot, 1)), 0) FROM executions e LEFT JOIN items i ON i.item_id = e.item_id \
+             WHERE e.clock >= ?1 AND (?2 <= 0 OR e.clock < ?2)",
             params![since, until],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -283,7 +284,7 @@ impl Store {
         criteria.volume_coins = coins;
         let mut at_one = self.connection.prepare(
             "SELECT DISTINCT i.name FROM executions e JOIN items i ON i.item_id = e.item_id \
-             WHERE e.price <= 1 AND e.clock >= ?1 AND (?2 <= 0 OR e.clock < ?2) ORDER BY i.name",
+             WHERE e.price <= i.lot AND e.clock >= ?1 AND (?2 <= 0 OR e.clock < ?2) ORDER BY i.name",
         )?;
         let names = at_one.query_map(params![since, until], |row| row.get::<_, String>(0))?.collect::<Result<Vec<String>, rusqlite::Error>>()?;
         let consumed = self.consumed_names(since, until)?;

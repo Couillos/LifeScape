@@ -62,7 +62,8 @@ pub fn signals_from(orders: &[Order], now_secs: i64, name_of: &dyn Fn(i64) -> Op
         bidders.sort_unstable();
         bidders.dedup();
         let unmet_qty: i64 = bids.iter().map(|order| order.remaining).sum();
-        let best_bid = bids.iter().map(|order| order.price).max().unwrap_or(0);
+        // Per unit (plan prix lot D: the carnet holds coins per lot).
+        let best_bid = bids.iter().map(|order| crate::market_units::to_unit(item_id, order.price)).max().unwrap_or(0);
         let oldest_age_secs = bids.iter().map(|order| (now_secs - order.lineage_clock()).max(0)).max().unwrap_or(0);
         let oldest_age_ticks = to_ticks(oldest_age_secs);
         let age_factor = 1.0 + (oldest_age_ticks as f64 / AGE_UNIT_TICKS as f64).min(5.0);

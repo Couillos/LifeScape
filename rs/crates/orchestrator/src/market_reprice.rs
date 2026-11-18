@@ -176,9 +176,11 @@ pub fn account_patience(service: &MarketService, account: &str) -> f64 {
 /// `patience` window ticks, `motive`, `urgent` (a full bank). `None` =
 /// fixed-price order. The new order `order` (placed at store clock
 /// `clock`) is its lineage's root and opens the curve.
-pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i64, order: i64, clock: i64) -> Option<QuoteBounds> {
-    let ceiling = request.get("ceiling").as_i64();
-    let floor = request.get("floor").as_i64();
+pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i64, order: i64, clock: i64, lot: i64) -> Option<QuoteBounds> {
+    // `price` is the book's (per lot); the request's floor and ceiling
+    // are the caller's (per unit unless it priced per lot: `lot` 1).
+    let ceiling = request.get("ceiling").as_i64().map(|unit| lifescape_market::lots::lot_price(unit, lot));
+    let floor = request.get("floor").as_i64().map(|unit| lifescape_market::lots::lot_price(unit, lot));
     if ceiling.is_none() && floor.is_none() {
         return None;
     }
@@ -281,7 +283,7 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
         };
         bounds.price_patience = Some(patience);
         let traded = *public.entry(row.item_id).or_insert_with(|| {
-            let reference = service.reference(row.item_id);
+            let reference = service.reference_lot(row.item_id);
             reference.traded.then_some(reference.price)
         });
         let (bid, ask) = service.lock_engine().books.get(&row.item_id).map(|book| book.best()).unwrap_or((None, None));
@@ -324,6 +326,7 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
             ("account", str_value(&window.account)),
             ("order", Value::Int(order)),
             ("price", Value::Int(next)),
+            ("per_lot", Value::Bool(true)),
         ]));
         let mut engine = service.lock_engine();
         let guard = &mut engine.quote_bounds;
@@ -403,7 +406,16 @@ pub fn keep_bid(service: &MarketService, account: &str, item: i64, qty: i64, cei
 /// bid per object, never a second beside it); its lineage, t0 and price
 /// go on, never a cancel and a lower repose.
 pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64, open_at: i64, ceiling: i64, motive: &str) -> Result<StandingBid, String> {
-    let ceiling = ceiling.max(1);
+    // Plan prix lot D: the caller prices per unit; the walk below runs in
+    // the book's unit (per lot) and answers per unit.
+    let lot = crate::market_units::lot_of(item);
+    let qty = lifescape_market::lots::whole_lots_up(qty, lot);
+    let ceiling = lifescape_market::lots::lot_price(ceiling.max(1), lot);
+    let open_at = lifescape_market::lots::lot_price(open_at, lot);
+    let answer = |bid: StandingBid| match bid {
+        StandingBid::Placed { order, price } => StandingBid::Placed { order, price: lifescape_market::lots::unit_price(price, lot) },
+        StandingBid::Kept { order, price } => StandingBid::Kept { order, price: lifescape_market::lots::unit_price(price, lot) },
+    };
     // Plan prix §2 (user 2026-11-18): a bid opens under its ceiling by the
     // buyer's margin (a course to concede); a blocking need bids what the
     // object is worth to it.
@@ -430,6 +442,7 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
                 ("account", str_value(account)),
                 ("order", Value::Int(order)),
                 ("price", Value::Int(target)),
+                ("per_lot", Value::Bool(true)),
             ]));
             if reply.get("ok").as_bool() != Some(true) {
                 return Err(reply.get("error").as_str().unwrap_or("amend refused").to_string());
@@ -442,17 +455,22 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
         let bounds = engine.quote_bounds.entry(order).or_insert_with(|| QuoteBounds::for_row(&row, price, ceiling));
         bounds.floor = bounds.floor.min(ceiling);
         bounds.ceiling = ceiling;
-        return Ok(StandingBid::Kept { order, price });
+        return Ok(answer(StandingBid::Kept { order, price }));
     }
-    let reference = service.reference(item);
+    let reference = service.reference_lot(item);
     let (_, ask) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
-    let remembered = lifescape_market::remembered_bid(reference.price, ask, ceiling, service.own_buy_price(account, item));
+    let remembered = lifescape_market::remembered_bid(reference.price, ask, ceiling, service.own_buy_price_lot(account, item));
     // A covered ask is taken at its price; otherwise the bid opens at
     // what the buyer knows the object is worth, at least. Never traded
     // (M7): on the public anchors, under that worth (`open_at`, its use
     // value when it knows one), over the sellers' public floor.
     let covered = ask.is_some_and(|ask| ask >= 1 && ask <= ceiling);
-    let discovered = if covered || reference.traded { None } else { discovery_bid(service, account, item, (open_at > 1).then_some(open_at), ceiling) };
+    // Discovery prices per unit (public anchors): into the book's unit.
+    let discovered = if covered || reference.traded {
+        None
+    } else {
+        discovery_bid(service, account, item, (open_at > lot).then_some(lifescape_market::lots::unit_price(open_at, lot)), lifescape_market::lots::unit_price(ceiling, lot)).map(|unit| lifescape_market::lots::lot_price(unit, lot))
+    };
     let price = match discovered {
         _ if covered => remembered,
         Some(open) => open.max(open_at.min(open_cap)).min(open_cap),
@@ -467,11 +485,12 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
         ("price", Value::Int(price)),
         ("ceiling", Value::Int(ceiling.max(price))),
         ("motive", str_value(motive)),
+        ("per_lot", Value::Bool(true)),
     ]));
     if reply.get("ok").as_bool() != Some(true) {
         return Err(reply.get("error").as_str().unwrap_or("place refused").to_string());
     }
-    Ok(StandingBid::Placed { order: reply.get("order").as_i64().unwrap_or(-1), price })
+    Ok(answer(StandingBid::Placed { order: reply.get("order").as_i64().unwrap_or(-1), price }))
 }
 
 /// Opening of a bid on the never-traded book `item` (M7,

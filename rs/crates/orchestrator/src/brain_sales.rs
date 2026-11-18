@@ -276,7 +276,8 @@ fn adopt_listings(
             SaleDecision::Hold(_) => None,
         };
         let lot = lifescape_planner::market_fit::sale_lot(row.remaining, Some(&service.public_view(account, row.item_id)));
-        let decision = crate::market_seller::adoption(row.price, row.remaining, reserve, lot, opening);
+        // Per unit like the reserve and the opening (plan prix lot D).
+        let decision = crate::market_seller::adoption(crate::market_units::to_unit(row.item_id, row.price), row.remaining, reserve, lot, opening);
         if !matches!(decision, Adoption::Walk { .. }) {
             // Decided once: never retried nor re-logged every pass.
             service.lock_engine().adopted.insert(row.order_id);
@@ -310,7 +311,8 @@ fn adopt_listings(
         };
         // Lineage, t0 and motive read back from the carnet (plan marché
         // M1): an adoption after a restart never restarts the age.
-        let bounds = crate::market_reprice::QuoteBounds::for_row(row, floor, crate::market_reprice::SELL_CAP);
+        // The walk runs in the book's unit (per lot).
+        let bounds = crate::market_reprice::QuoteBounds::for_row(row, crate::market_units::to_lot(row.item_id, floor), crate::market_reprice::SELL_CAP);
         if crate::market_reprice::adopt(service, order, bounds) {
             walked += 1;
         }
@@ -522,6 +524,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         if let Some(shop_value) = lifescape_gamedata::shop_sale::npc_sale_value(&name).filter(|_| !overstock) {
             let reference = service.reference(item);
             let (bid, _) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
+            let bid = bid.map(|price| crate::market_units::to_unit(item, price));
             if lifescape_market::npc_sale_beats_market(shop_value, bid, reference) {
                 shop_candidates.push((name.clone(), qty, lifescape_market::market_pays(bid, reference)));
                 continue;
@@ -552,7 +555,14 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         if escrow_free <= 0 {
             continue;
         }
-        let lot = lot.min(escrow_free);
+        // Plan prix lot D: whole lots only, up to one lot from the free
+        // stock when the demand lot is smaller; under one lot the stock
+        // stays banked (never a refused listing every pass).
+        let quote_lot = crate::market_units::lot_of(item);
+        let lot = lifescape_market::lots::whole_lots_down(lot.max(quote_lot).min(escrow_free).min(qty), quote_lot);
+        if lot <= 0 {
+            continue;
+        }
         let reply = service.handle(&object(vec![
             ("op", str_value("place")),
             ("account", str_value(&job.account)),

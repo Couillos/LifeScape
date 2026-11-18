@@ -85,6 +85,7 @@ pub mod market_claims;
 pub mod market_demand;
 pub mod market_reprice;
 pub mod market_seller;
+pub mod market_units;
 pub mod market_service;
 pub mod market_audit;
 pub mod market_merge;

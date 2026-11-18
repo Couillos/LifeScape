@@ -103,7 +103,18 @@ plancher plus bas (l'ancienne attente Q4 est retirée). Ouverture (§2) :
 jamais sur le plancher, au moins plancher × (1 + marge de profil), une
 pièce au-dessus au minimum (`discovery::open_over_floor`) ; un bid hors
 besoin bloquant s'ouvre sous son plafond (`bid_under_ceiling`). Le
-repricing saute un ordre sorti du carnet (deal en livraison). Les méthodes
+repricing saute un ordre sorti du carnet (deal en livraison). Cotation
+par lot (plan prix lot D, 2026-11-18) : un objet qui s'échange en vrac
+(empilable, ou ingrédient d'une recette ; jamais un équipement, un outil
+transporté ni les pièces) et vaut ≤ 5 pièces se cote pour 100 unités,
+≤ 20 pour 10 ; décidé une fois au premier démarrage sur le prix observé
+(`items.lot`, `Store::set_item_lot` remet l'historique à l'échelle,
+annule les ordres ouverts qui ne sont pas des lots entiers). Carnet,
+deals, exécutions et chandelles en pièces par lot ; quantités en lots
+entiers ; pièces d'un deal = quantité × prix / lot (`market_units::
+deal_coins`, envoyé aux scripts). Le cerveau, les guides et les scripts
+gardent des prix par unité : `market_units` convertit à la frontière du
+service (`reference` par unité, `reference_lot` interne). Les méthodes
 `alch:<objet>` du guide argent remontent d'elles-mêmes. Production
 (point 2) : un lot argent sur stock (`--use`) ne fait jamais plus
 d'actions que ce que le marché de son produit absorbe

@@ -355,7 +355,7 @@ pub fn item_weight(display: &str) -> f64 {
 /// The account's own last purchase price of a display name.
 fn last_bought(store: &Store, account: &str, display: &str) -> Option<f64> {
     let id = obj_of_display(display)?.obj_id as i64;
-    store.last_own_fill(account, id, true).ok().flatten().map(|(price, _)| price as f64)
+    store.last_own_fill(account, id, true).ok().flatten().map(|(price, _)| crate::market_units::to_unit_exact(id, price))
 }
 
 fn own_reports(rows: Vec<(TaskReport, Vec<TaskYield>)>) -> Vec<OwnReport> {
@@ -385,7 +385,7 @@ impl OwnCosts {
         let reports = own_reports(store.account_reports(account, OWN_REPORTS).unwrap_or_default());
         let own_sale = |display: &str| {
             let id = obj_of_display(display)?.obj_id as i64;
-            store.last_own_fill(account, id, false).ok().flatten().map(|(price, _)| price)
+            store.last_own_fill(account, id, false).ok().flatten().map(|(price, _)| crate::market_units::to_unit(id, price))
         };
         let coins_per_tick = coins_per_tick(&reports, &own_sale);
         OwnCosts { account: account.to_string(), reports, coins_per_tick }
@@ -395,7 +395,7 @@ impl OwnCosts {
     /// `make_cost` (`brain_bids::production_costs_for`) when known.
     pub fn reserve(&self, store: &Store, item: &str, item_id: i64, life: Option<&Life>, make_cost: Option<f64>) -> Option<Reserve> {
         let display = display_of(item);
-        let bought = store.last_own_fill(&self.account, item_id, true).ok().flatten().map(|(price, _)| price);
+        let bought = store.last_own_fill(&self.account, item_id, true).ok().flatten().map(|(price, _)| crate::market_units::to_unit(item_id, price));
         let (made, found) = own_origin(&self.reports, &display);
         if made <= 0 {
             // Found, or nothing measured: a planned or gathering prior

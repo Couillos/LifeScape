@@ -126,11 +126,13 @@ pub fn quote_of(store: &Store, item: &str) -> Quote {
     let newest = store.newest_fill_clock(item_id).ok().flatten();
     let current = lifescape_market::current_price_at(&last, &bids, &asks, newest, crate::market_service::MarketService::now_clock());
     let prices: Vec<i64> = last.iter().map(|fill| fill.price).collect();
-    let levels = |levels: Vec<(i64, i64)>| levels.into_iter().map(|(price, units)| (price as f64, units as f64)).collect();
+    // Per unit, exact (plan prix lot D: the book holds coins per lot).
+    let lot = crate::market_units::lot_of(item_id) as f64;
+    let levels = |levels: Vec<(i64, i64)>| levels.into_iter().map(|(price, units)| (price as f64 / lot, units as f64)).collect();
     Quote {
-        price: current.price as f64,
+        price: current.price as f64 / lot,
         traded: current.traded,
-        median: lifescape_market::median_price(&prices).map(|median| median as f64).unwrap_or(0.0),
+        median: lifescape_market::median_price(&prices).map(|median| median as f64 / lot).unwrap_or(0.0),
         fills: last.iter().filter(|fill| fill.price >= 1 && fill.quantity >= 1).count(),
         fill_units: last.iter().filter(|fill| fill.price >= 1 && fill.quantity >= 1).map(|fill| fill.quantity as f64).sum(),
         bids: levels(bids),

@@ -112,6 +112,9 @@ impl Store {
                 scale("close_price")
             ),
             format!("UPDATE items SET lot = {lot} WHERE item_id = {item_id}"),
+            // A resting order that is no whole number of lots leaves the
+            // book (its owner lists again in lots).
+            format!("UPDATE orders SET status = 'cancelled', cancel_reason = 'lot' WHERE item_id = {item_id} AND status = 'open' AND remaining % {lot} != 0"),
         ];
         for statement in &statements {
             if let Err(error) = self.connection.execute_batch(statement) {

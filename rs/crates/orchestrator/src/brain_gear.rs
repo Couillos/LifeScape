@@ -150,7 +150,7 @@ pub(crate) fn cancellable(row: &lifescape_store::Order) -> bool {
 pub(crate) fn committed_from(rows: &[lifescape_store::Order], except: Option<i64>) -> i64 {
     rows.iter()
         .filter(|row| cancellable(row) && Some(row.item_id) != except)
-        .map(|row| row.price.max(0).saturating_mul(row.remaining))
+        .map(|row| crate::market_units::deal_coins(row.item_id, row.remaining, row.price.max(0)))
         .sum()
 }
 
@@ -160,7 +160,7 @@ pub(crate) fn committed_from(rows: &[lifescape_store::Order], except: Option<i64
 /// same purse, the handover came `short`). Every item counts, `except`
 /// included: those coins are spent whatever the next bid.
 pub(crate) fn deal_coins_from(account: &str, deals: &[lifescape_store::Deal]) -> i64 {
-    deals.iter().filter(|deal| deal.buyer == account).map(|deal| deal.price.max(0).saturating_mul(deal.quantity.max(0))).sum()
+    deals.iter().filter(|deal| deal.buyer == account).map(|deal| crate::market_units::deal_coins(deal.item_id, deal.quantity.max(0), deal.price.max(0))).sum()
 }
 
 /// Coins this account's resting buys commit, except on `except`, plus
@@ -449,7 +449,7 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
             continue;
         }
         let id = obj_id(&want.item);
-        let best_ask = service.as_ref().zip(id).and_then(|(service, id)| service.lock_engine().books.get(&id).and_then(|book| book.best().1));
+        let best_ask = service.as_ref().zip(id).and_then(|(service, id)| service.lock_engine().books.get(&id).and_then(|book| book.best().1).map(|price| crate::market_units::to_unit(id, price)));
         let covered = best_ask.is_some_and(|ask| ask <= want.ceiling);
         // A shop the bot's quest points open (Champions' Guild at 32:
         // Scavvo, Valaine) sells it: the step walks there (wave 2 (a)).

@@ -52,7 +52,7 @@ pub fn group_deals(jobs: &[(i64, i32, i32)], rows: &[DealRow]) -> (Vec<DealGroup
             unknown.push(id);
             continue;
         };
-        let coins = (i64::from(row.qty) * row.price).max(0) as u32;
+        let coins = row.coins.max(0) as u32;
         let same = |group: &&mut DealGroup| group.partner == row.partner && group.item == row.item && group.buying == row.buying;
         if let Some(group) = groups.iter_mut().find(same) {
             group.ids.push(id);
@@ -355,7 +355,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn row(id: i64, partner: &str, buying: bool, item: u16, qty: u32, price: i64) -> DealRow {
-        DealRow { id, partner: partner.to_string(), buying, item, qty, price }
+        DealRow { id, partner: partner.to_string(), buying, item, qty, price, coins: i64::from(qty) * price }
     }
 
     /// Live 2026-11-13 (deals 740–746): seven deals between bcm9kxn4 and

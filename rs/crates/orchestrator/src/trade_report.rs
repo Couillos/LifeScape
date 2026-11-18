@@ -60,7 +60,7 @@ fn capped(deals: &[&Deal], cap: i64) -> (i64, i64) {
         }
         let taken = deal.quantity.min(room);
         units += taken;
-        coins += taken.saturating_mul(deal.price);
+        coins += crate::market_units::deal_coins(deal.item_id, taken, deal.price);
     }
     (units, coins)
 }
