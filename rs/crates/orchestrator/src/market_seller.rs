@@ -19,6 +19,10 @@ use lifescape_planner::Life;
 use crate::brain_reserve::{CostSource, OwnCosts, Reserve};
 use crate::market_service::MarketService;
 
+/// Plan prix §1: how far back a seller's unsold horizons and sales count
+/// (one day: an old failure fades).
+pub const LEARNING_WINDOW_SECS: i64 = 86_400;
+
 /// Outcome of one sale decision.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SaleDecision {
@@ -55,6 +59,13 @@ pub struct FoundMarks {
     /// is that price, the own cost and the shop's first unit aside (the
     /// shop takes a few units, the market none at those prices).
     pub overstock_floor: Option<i64>,
+    /// Plan prix §1 (user 2026-11-18): horizons this seller's listings of
+    /// the object ended unsold over the last day, net of its sales
+    /// (`discovery::unsold_horizons`): each drops its floor 10 %.
+    pub unsold: i64,
+    /// Lowest floor the learning reaches: the alchemy outlet's price
+    /// (`discovery::alch_outlet_price`), else 1 coin.
+    pub outlet_bound: Option<i64>,
 }
 
 /// One sale (pure): the opening ask from the seller's reserve and own
@@ -76,11 +87,12 @@ pub fn plan_sale(free: i64, reserve: Option<Reserve>, reference: Reference, best
     if qty <= 0 {
         return SaleDecision::Hold("nothing free".to_string());
     }
-    // The keep value: the own cost, never under the outside option; an
-    // overstock walks down to the alchemy outlet instead.
+    // The keep value: the own cost, never under the outside option,
+    // lowered 10 % per unsold horizon down to the alchemy outlet (plan
+    // prix §1); an overstock walks down to the alchemy outlet at once.
     let keep = match marks.overstock_floor {
         Some(outlet) => outlet.max(1),
-        None => discovery::seller_floor(reserve.coins.max(marks.outside), &marks.discovery),
+        None => discovery::learned_floor(discovery::seller_floor(reserve.coins.max(marks.outside), &marks.discovery), marks.outlet_bound.unwrap_or(1), marks.unsold),
     };
     let (price, floor) = if reserve.source == CostSource::Found {
         let anchor = discovery::loot_anchor(reference, marks.anchor, keep, &marks.discovery, marks.margin);
@@ -88,10 +100,13 @@ pub fn plan_sale(free: i64, reserve: Option<Reserve>, reference: Reference, best
     } else {
         match best_bid.filter(|bid| marks.pressed && *bid >= keep) {
             // M4: a full bank hits a bid at or over its floor.
-            Some(bid) => (bid, keep),
+            Some(bid) => return SaleDecision::List { qty, price: bid, floor: keep },
             None => discovery::listing_open(reference, best_bid, keep, last_sell, &marks.discovery, marks.margin),
         }
     };
+    // Plan prix §2: never opened on the floor (the concession needs a
+    // course), unless a pressed seller hits a bid at its floor.
+    let price = if marks.pressed && best_bid.is_some_and(|bid| bid == price) { price } else { price.max(discovery::open_over_floor(floor, marks.margin)) };
     SaleDecision::List { qty, price, floor }
 }
 
@@ -210,7 +225,7 @@ impl MarketService {
     /// the bot holds) past what the market absorbs walks down to the
     /// alchemy outlet (`overstock_floor`).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, stock: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>, pressed: bool, own_alch: Option<i64>) -> (SaleDecision, Option<Reserve>) {
+    pub(crate) fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, stock: i64, unsold: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>, pressed: bool, own_alch: Option<i64>) -> (SaleDecision, Option<Reserve>) {
         let reserve = {
             let store = self.lock_store();
             costs.reserve(&store, name, item, life, make_cost)
@@ -229,8 +244,23 @@ impl MarketService {
             discovery: crate::market_discovery::seller_anchors(name, own_alch),
             margin: crate::market_discovery::account_margin(self, account),
             overstock_floor: self.overstock_floor(account, name, item, stock),
+            unsold,
+            outlet_bound: crate::market_discovery::outlet_alch_net(name).and_then(lifescape_market::discovery::alch_outlet_price),
         };
         (plan_sale(free, reserve, reference, bid, last, marks, &self.public_view(account, item)), reserve)
+    }
+
+    /// Plan prix §1: the account's unsold horizons per object over the last
+    /// day, net of its sales (one carnet read per selling pass).
+    pub(crate) fn seller_learning(&self, account: &str) -> std::collections::HashMap<i64, i64> {
+        let since = Self::now_clock() - LEARNING_WINDOW_SECS;
+        let rows = self.lock_store().seller_learning(account, since).unwrap_or_default();
+        rows.into_iter().map(|(item, (withdrawn, sold))| (item, lifescape_market::discovery::unsold_horizons(withdrawn, sold))).collect()
+    }
+
+    /// One object's unsold horizons (`seller_learning`).
+    pub(crate) fn unsold_horizons(&self, account: &str, item: i64) -> i64 {
+        self.seller_learning(account).get(&item).copied().unwrap_or(0)
     }
 
     /// The alchemy outlet's price of `name` when `stock` free units are
@@ -258,7 +288,8 @@ impl MarketService {
         let live = crate::supervise::live_of(&account);
         let own_alch = live.as_ref().and_then(|live| crate::brain_alch::alch_floor(live, name));
         let stock = live.as_ref().map_or(qty, |live| crate::brain_ambition::live_count(live, name).max(qty));
-        let (decision, reserve) = self.sale_decision(&account, name, item, qty, stock, &costs, life.as_ref(), make_cost, pressed, own_alch);
+        let unsold = self.unsold_horizons(&account, item);
+        let (decision, reserve) = self.sale_decision(&account, name, item, qty, stock, unsold, &costs, life.as_ref(), make_cost, pressed, own_alch);
         let reserve_value = reserve.map(|known| Value::Int(known.coins)).unwrap_or(Value::Null);
         match decision {
             SaleDecision::List { qty, price, floor } => object(vec![

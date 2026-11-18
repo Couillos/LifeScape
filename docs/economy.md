@@ -93,7 +93,17 @@ l'exutoire alchimie (`discovery::alch_outlet_price` : net du meilleur
 sort lancé par un bot de la flotte, runes au prix courant, moins 10 %
 laissés au lanceur), coût propre et boutique écartés ; ce stock n'est ni
 détourné vers la boutique (Q3) ni retenu en banque après un retrait (Q4).
-Un objet sans alchimie rentable garde son plancher. Les méthodes
+Un objet sans alchimie rentable garde son plancher. Plancher appris
+(plan prix §1, 2026-11-18) : chaque horizon terminé sans vente (retrait
+`horizon` au carnet, 24 h glissantes, moins les ventes réglées) baisse le
+plancher de 10 %, jusqu'à l'exutoire alchimie ou 1 pièce, sous le coût de
+fabrication s'il le faut (`discovery::learned_floor`, `Store::
+seller_learning`) ; un lot retiré est remis en vente aussitôt à ce
+plancher plus bas (l'ancienne attente Q4 est retirée). Ouverture (§2) :
+jamais sur le plancher, au moins plancher × (1 + marge de profil), une
+pièce au-dessus au minimum (`discovery::open_over_floor`) ; un bid hors
+besoin bloquant s'ouvre sous son plafond (`bid_under_ceiling`). Le
+repricing saute un ordre sorti du carnet (deal en livraison). Les méthodes
 `alch:<objet>` du guide argent remontent d'elles-mêmes. Production
 (point 2) : un lot argent sur stock (`--use`) ne fait jamais plus
 d'actions que ce que le marché de son produit absorbe

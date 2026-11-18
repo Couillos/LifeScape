@@ -83,7 +83,9 @@ fn filled_asks_back_off_idle_asks_concede_then_withdraw() {
     assert_eq!(price_of(&service, "maker"), Some(4), "its reserve at its horizon");
     reprice_round(&service, restart + ticks(36_100.0), 600.0);
     assert_eq!(price_of(&service, "maker"), None, "Q4: no buyer at its reserve past H, withdrawn");
-    assert!(super::withdrawn_recently(&service, "maker", FEATHER, 72_000, restart + ticks(36_200.0)));
+    // Plan prix §1: the withdrawal is an unsold horizon in the carnet, the
+    // sale before it takes it back (the next listing keeps its floor).
+    assert_eq!(service.lock_store().seller_learning("maker", 0).expect("learning").get(&FEATHER), Some(&(1, 1)));
     cleanup(&path);
 }
 
@@ -263,4 +265,40 @@ fn a_need_bid_opens_and_rises_to_the_buyers_worth() {
     let StandingBid::Placed { price: 12, .. } = opened else { panic!("a new need bid opens at its worth: {opened:?}") };
     cleanup(&path);
     cleanup(&fresh_path);
+}
+
+/// Plan prix §2 (user 2026-11-18): a standing bid that knew the object's
+/// worth at or over its ceiling opened AT the ceiling (88 of 604 bids):
+/// no course to concede. A gear bid opens under its ceiling by the
+/// buyer's margin; a blocking need still opens at what it is worth.
+#[test]
+fn a_standing_bid_opens_under_its_ceiling_unless_needed() {
+    let (service, path) = service("bid-room");
+    funded(&service, "fighter");
+    funded(&service, "smith");
+    let margin = crate::market_discovery::account_margin(&service, "fighter");
+    let gear = super::keep_bid_from(&service, "fighter", FEATHER, 1, 100, 100, "gear").expect("placed");
+    let StandingBid::Placed { price, .. } = gear else { panic!("{gear:?}") };
+    assert_eq!(price, lifescape_market::discovery::bid_under_ceiling(100, margin), "worth 100, ceiling 100: opens under it");
+    let need = super::keep_bid_from(&service, "smith", FEATHER, 1, 100, 100, "need").expect("placed");
+    let StandingBid::Placed { price, .. } = need else { panic!("{need:?}") };
+    assert_eq!(price, 100, "a blocking need bids its worth");
+    cleanup(&path);
+}
+
+/// Plan prix §6 (audit 2026-11-18: 8 142 amends refused in a day): an
+/// order out of the book (matched, its deal in delivery) waits for the
+/// deal; the pass never tries to amend it.
+#[test]
+fn an_order_in_delivery_is_not_repriced() {
+    let (service, path) = service("in-flight");
+    funded(&service, "maker");
+    let listed = place(&service, vec![("account", str_value("maker")), ("side", str_value("sell")), ("qty", Value::Int(10)), ("price", Value::Int(9)), ("floor", Value::Int(1)), ("patience", Value::Int(1))]);
+    let order = listed.get("order").as_i64().expect("order");
+    let start = now_wall();
+    service.lock_engine().books.get_mut(&FEATHER).expect("book").cancel(order as u64).expect("out of the book");
+    assert_eq!(reprice_round(&service, start + ticks(18_000.0), 600.0), 0, "no amend tried");
+    assert_eq!(price_of(&service, "maker"), Some(9));
+    assert!(bounds_of(&service, order).is_some(), "still tracked for when its deal fails");
+    cleanup(&path);
 }

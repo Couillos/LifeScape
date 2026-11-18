@@ -267,6 +267,13 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
             service.lock_engine().quote_bounds.remove(&order);
             continue;
         };
+        // Plan prix §6: out of the book (matched, its deal in delivery),
+        // the order waits for its deal; an amend would only be refused.
+        if !service.lock_engine().books.get(&row.item_id).is_some_and(|book| book.remaining(order as u64).is_some()) {
+            service.lock_engine().quote_bounds.insert(order, QuoteBounds { last_change_wall: wall, ..bounds });
+            parked += 1;
+            continue;
+        }
         let filled = row.remaining < bounds.last_remaining;
         let patience = match bounds.price_patience {
             Some(known) => known,
@@ -298,8 +305,6 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
                     ("reason", str_value(HORIZON_REASON)),
                 ]));
                 if reply.get("ok").as_bool() == Some(true) {
-                    let key = (window.account.clone(), crate::market_audit::book_item(row.item_id));
-                    service.lock_engine().horizon_withdrawn.insert(key, wall);
                     withdrawn += 1;
                 } else {
                     service.lock_engine().quote_bounds.insert(order, window);
@@ -344,15 +349,6 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
         crate::logln!("market-reprice: {moved} moved, {parked} held, {withdrawn} withdrawn at their horizon, {refused} refused");
     }
     moved
-}
-
-/// True while a listing of `item` by `account` was withdrawn at its
-/// horizon with no buyer within the last `horizon_ticks` (Q4: the stock
-/// stays banked, never relisted at once).
-pub fn withdrawn_recently(service: &MarketService, account: &str, item: i64, horizon_ticks: u64, wall: f64) -> bool {
-    let tick_ms = crate::market_eta::live_tick_ms().max(1) as f64;
-    let key = (account.to_string(), crate::market_audit::book_item(item));
-    service.lock_engine().horizon_withdrawn.get(&key).is_some_and(|at| (wall - at) * 1000.0 / tick_ms < horizon_ticks as f64)
 }
 
 /// Re-adopts a resting order the engine has no bounds for (daemon
@@ -408,6 +404,10 @@ pub fn keep_bid(service: &MarketService, account: &str, item: i64, qty: i64, cei
 /// go on, never a cancel and a lower repose.
 pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64, open_at: i64, ceiling: i64, motive: &str) -> Result<StandingBid, String> {
     let ceiling = ceiling.max(1);
+    // Plan prix §2 (user 2026-11-18): a bid opens under its ceiling by the
+    // buyer's margin (a course to concede); a blocking need bids what the
+    // object is worth to it.
+    let open_cap = if motive == crate::market_lineage::NEED { ceiling } else { lifescape_market::discovery::bid_under_ceiling(ceiling, crate::market_discovery::account_margin(service, account)) };
     let rows: Vec<lifescape_store::Order> = service
         .lock_store()
         .account_orders(account)
@@ -423,7 +423,7 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
         // knows the object is worth (`open_at`, user 2026-11-18 levier
         // 2): up to that worth at once, never a slow walk from a noise
         // price while producers read no demand.
-        let target = if price > ceiling { Some(ceiling) } else { Some(open_at.min(ceiling)).filter(|worth| *worth > price) };
+        let target = if price > ceiling { Some(ceiling) } else { Some(open_at.min(open_cap)).filter(|worth| *worth > price) };
         if let Some(target) = target {
             let reply = service.handle(&object(vec![
                 ("op", str_value("amend")),
@@ -455,8 +455,8 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
     let discovered = if covered || reference.traded { None } else { discovery_bid(service, account, item, (open_at > 1).then_some(open_at), ceiling) };
     let price = match discovered {
         _ if covered => remembered,
-        Some(open) => open.max(open_at.min(ceiling)),
-        None => remembered.max(open_at.min(ceiling)),
+        Some(open) => open.max(open_at.min(open_cap)).min(open_cap),
+        None => remembered.max(open_at.min(open_cap)).min(open_cap),
     };
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),

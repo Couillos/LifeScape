@@ -46,7 +46,10 @@
   #book tr.spread td { color: #888; text-align: center; }
   /* Ticker strip (exchange-style): last trade and 24 h change in the
      candles' colours, then the bots' reference and the day's volume. */
-  #ticker { display: flex; gap: 22px; align-items: baseline; flex-wrap: wrap; margin: 2px 0 8px; }
+  /* The item name and its ticker on one line (user 2026-11-18). */
+  #headline { display: flex; gap: 24px; align-items: baseline; flex-wrap: wrap; margin: 4px 0 8px; }
+  #headline h2 { margin: 0; }
+  #ticker { display: flex; gap: 22px; align-items: baseline; flex-wrap: wrap; }
   #ticker .tk-last { font-size: 28px; font-weight: bold; }
   #ticker .tk-change { font-size: 20px; font-weight: bold; }
   #ticker .tk-up { color: #00e676; }
@@ -86,8 +89,10 @@
     </div>
   </div>
   <div id="detail">
-    <h2 id="title">Pick an item</h2>
-    <div id="ticker"></div>
+    <div id="headline">
+      <h2 id="title">Pick an item</h2>
+      <div id="ticker"></div>
+    </div>
     <div id="views">
       <button id="v-hour" class="cur" onclick="setView('hour')">24h / 15m</button>
       <button id="v-week" onclick="setView('week')">7d / 1h</button>

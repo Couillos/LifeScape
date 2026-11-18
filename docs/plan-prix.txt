@@ -162,6 +162,17 @@ marché).
 Tests. reprice : un ordre Matched n'est ni amendé ni compté refusé.
 
 
+6 bis. SURVOL DES CANDLES (page marché, user 2026-11-18)
+-------------------------------------------------------
+Au survol d'une candle, l'infobulle affiche en plus :
+  - la variation depuis l'ouverture de la candle : (close − open) / open,
+    en %, couleur des candles (vert hausse, rouge baisse) ;
+  - l'amplitude : (high − low) / low, en %.
+Code. orchestration/static/chart.js (infobulle de LifeChart) ; fonctions
+pures `candleChangePct(candle)` et `candleRangePct(candle)` testées dans
+chart.test.js (open 0 ou low 0 : pas de pourcentage).
+
+
 7. ORDRE DES LOTS ET VALIDATION
 -------------------------------
   Lot A : §2 + §1 (ouverture avec course + plancher appris + table),
@@ -169,7 +180,8 @@ Tests. reprice : un ordre Matched n'est ni amendé ni compté refusé.
           puis store), tests rouges d'abord ;
   Lot B : §3 (référence fraîche, teneurs) ;
   Lot C : §4 (bids teneurs, consommateurs, alcher) ;
-  Lot D : §5 a) cotation par lot.
+  Lot D : §5 a) cotation par lot ;
+  Lot E : §6 bis survol des candles (front seul, livrable à tout moment).
 Après chaque lot : déploiement (daemon), 1 h de mesure contre 2 heures
 de référence depuis run/lifescape.db : part des fenêtres sans
 mouvement, chaînes plates, ouvertures au plancher, remises au même

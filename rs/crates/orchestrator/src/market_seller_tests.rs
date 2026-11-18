@@ -15,12 +15,13 @@ fn demand(volume_24h: i64, bids: Vec<(i64, i64)>) -> BookView {
 
 /// Willow 2026-11-14: 33 364 open at 1 coin against 4 319 traded a day.
 /// A seller with 30 000 logs lists what buyers take (bids + a day of
-/// volume, `market_fit::sale_lot`) at its own cost, never the whole pile
+/// volume, `market_fit::sale_lot`) over its own cost (plan prix §2: one
+/// coin above at the least, a course to concede), never the whole pile
 /// at the 1-coin reference.
 #[test]
 fn a_sale_lists_a_demand_lot_at_the_sellers_own_cost() {
     let traded_at_one = Reference { price: 1, traded: true };
-    assert_eq!(plan_sale(30_000, reserve(4), traded_at_one, None, None, FoundMarks::default(), &demand(4319, vec![(2, 81)])), SaleDecision::List { qty: 4400, price: 4, floor: 4 });
+    assert_eq!(plan_sale(30_000, reserve(4), traded_at_one, None, None, FoundMarks::default(), &demand(4319, vec![(2, 81)])), SaleDecision::List { qty: 4400, price: 5, floor: 4 });
     assert_eq!(plan_sale(30_000, reserve(4), UNTRADED, None, None, FoundMarks::default(), &demand(0, Vec::new())), SaleDecision::List { qty: 28, price: 8, floor: 4 }, "untraded: 2 x reserve, one inventory");
     assert!(matches!(plan_sale(30_000, None, UNTRADED, None, None, FoundMarks::default(), &demand(0, Vec::new())), SaleDecision::Hold(_)), "no own cost: hold, never 1 coin");
     assert!(matches!(plan_sale(0, reserve(4), UNTRADED, None, None, FoundMarks::default(), &demand(99, Vec::new())), SaleDecision::Hold(_)));
@@ -149,9 +150,10 @@ fn never_traded_objects_list_on_their_public_anchors() {
     let view = demand(0, Vec::new());
     assert_eq!(plan_sale(28, reserve(20), UNTRADED, None, None, marks, &view), SaleDecision::List { qty: 28, price: 33, floor: 24 });
     assert_eq!(plan_sale(28, reserve(20), UNTRADED, None, None, FoundMarks::default(), &view), SaleDecision::List { qty: 28, price: 40, floor: 20 }, "no anchor: twice the own cost");
-    // A caster's own cast nets 35: never sold under it.
+    // A caster's own cast nets 35: never sold under it, opened over it by
+    // its margin (plan prix §2).
     let caster = FoundMarks { discovery: lifescape_market::Anchors { alch_net: Some(35), ..anchors }, ..marks };
-    assert_eq!(plan_sale(28, reserve(20), UNTRADED, None, None, caster, &view), SaleDecision::List { qty: 28, price: 35, floor: 35 });
+    assert_eq!(plan_sale(28, reserve(20), UNTRADED, None, None, caster, &view), SaleDecision::List { qty: 28, price: 39, floor: 35 });
     // Traded: the current price, floor at the shop's offer.
     let traded = Reference { price: 50, traded: true };
     assert!(matches!(plan_sale(28, reserve(20), traded, None, None, marks, &view), SaleDecision::List { price: 50, floor: 24, .. }));
@@ -178,4 +180,20 @@ fn an_overstocked_lot_walks_down_to_the_alch_outlet() {
         SaleDecision::List { floor, .. } => assert_eq!(floor, 900, "no overstock: the own cost"),
         other => panic!("{other:?}"),
     }
+}
+
+/// Plan prix §1-§2 (user 2026-11-18): a seller whose cost (858) sits over
+/// the market (700) listed AT its floor, 93 % of the listings, and came
+/// back at the same price after each unsold horizon. Two unsold horizons
+/// drop its floor 10 % each (694, the alchemy outlet 300 under it); the
+/// listing opens over that floor by its margin (764), never on it.
+#[test]
+fn an_unsold_seller_learns_its_floor_and_opens_over_it() {
+    let traded = Reference { price: 700, traded: true };
+    let marks = FoundMarks { margin: 0.10, unsold: 2, outlet_bound: Some(300), ..FoundMarks::default() };
+    assert_eq!(plan_sale(564, reserve(858), traded, None, None, marks, &demand(1, Vec::new())), SaleDecision::List { qty: 28, price: 764, floor: 694 });
+    let fresh = FoundMarks { margin: 0.10, outlet_bound: Some(300), ..FoundMarks::default() };
+    assert_eq!(plan_sale(564, reserve(858), traded, None, None, fresh, &demand(1, Vec::new())), SaleDecision::List { qty: 28, price: 944, floor: 858 }, "no failure yet: its cost, opened over it");
+    let rich = Reference { price: 1_200, traded: true };
+    assert_eq!(plan_sale(564, reserve(858), rich, None, None, fresh, &demand(1, Vec::new())), SaleDecision::List { qty: 28, price: 1_200, floor: 858 }, "a richer market keeps its price");
 }

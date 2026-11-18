@@ -206,6 +206,30 @@ impl Store {
         }
     }
 
+    /// Plan prix §1 (user 2026-11-18): per object, the account's listings
+    /// withdrawn unsold at their horizon (`cancel_reason = 'horizon'`)
+    /// and its settled sales since `since` (store clock): what its
+    /// learned floor reads, from the carnet (a daemon restart keeps it).
+    pub fn seller_learning(&self, account: &str, since: i64) -> Result<std::collections::HashMap<i64, (i64, i64)>, Error> {
+        let mut out: std::collections::HashMap<i64, (i64, i64)> = std::collections::HashMap::new();
+        let mut withdrawn = self.connection.prepare(
+            "SELECT item_id, COUNT(*) FROM orders WHERE account = ?1 AND status = 'cancelled' AND side = 'sell' \
+             AND cancel_reason = 'horizon' AND updated_clock >= ?2 GROUP BY item_id",
+        )?;
+        let mut rows = withdrawn.query(rusqlite::params![account, since])?;
+        while let Some(row) = rows.next()? {
+            out.entry(row.get(0)?).or_default().0 = row.get(1)?;
+        }
+        let mut sold = self.connection.prepare(
+            "SELECT item_id, COUNT(*) FROM deals WHERE seller = ?1 AND status = 'settled' AND updated_clock >= ?2 GROUP BY item_id",
+        )?;
+        let mut rows = sold.query(rusqlite::params![account, since])?;
+        while let Some(row) = rows.next()? {
+            out.entry(row.get(0)?).or_default().1 = row.get(1)?;
+        }
+        Ok(out)
+    }
+
     /// Item ids the account bought (non-failed buyer deals, distinct,
     /// by id).
     pub fn items_bought_by(&self, account: &str) -> Result<Vec<i64>, Error> {
@@ -359,6 +383,52 @@ impl Store {
 #[cfg(test)]
 mod deals_tests {
     use super::*;
+
+    /// Plan prix §1: listings withdrawn at their horizon and settled
+    /// sales per object since a clock; other reasons, other accounts and
+    /// older rows are out.
+    #[test]
+    fn seller_learning_counts_unsold_horizons_and_sales() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 1159)?;
+        let listing = |account: &str, clock: i64| crate::NewOrder {
+            account: account.to_string(),
+            side: crate::OrderSide::Sell,
+            item_id: 1159,
+            quantity: 28,
+            price: 858,
+            dormant: false,
+            clock,
+            ..crate::NewOrder::default()
+        };
+        for clock in [100, 200, 300] {
+            let order = store.place_order(&listing("nathan_t", clock))?;
+            store.cancel_order_because(order, clock + 50, "horizon")?;
+        }
+        let amended = store.place_order(&listing("nathan_t", 400))?;
+        store.cancel_order_because(amended, 450, "amended")?;
+        let other = store.place_order(&listing("kate_ellis", 400))?;
+        store.cancel_order_because(other, 450, "horizon")?;
+        let deal = NewDeal {
+            buyer: "felix_rook".to_string(),
+            seller: "nathan_t".to_string(),
+            item_id: 1159,
+            quantity: 1,
+            price: 800,
+            meeting_x: 0,
+            meeting_y: 0,
+            meeting_level: 0,
+            deadline_tick: 0,
+            clock: 500,
+            taker_side: crate::OrderSide::Buy,
+        };
+        let sold = store.create_deal(&deal)?;
+        store.set_deal_status(sold, DealStatus::Settled, "", 520)?;
+        let learning = store.seller_learning("nathan_t", 200)?;
+        assert_eq!(learning.get(&1159), Some(&(2, 1)), "the 250 and 350 withdrawals, one settled sale");
+        assert_eq!(store.seller_learning("nathan_t", 0)?.get(&1159), Some(&(3, 1)));
+        Ok(())
+    }
 
     /// Fill memory reads the account's own non-failed deals only.
     #[test]

@@ -73,6 +73,44 @@ pub fn alch_outlet_price(net: i64) -> Option<i64> {
     (price >= 1).then_some(price)
 }
 
+/// Plan prix §2 (user 2026-11-18): opening of a listing over its floor,
+/// `floor x (1 + margin)` rounded up, at least one coin above: the
+/// concession curve always has a course.
+pub fn open_over_floor(floor: i64, margin: f64) -> i64 {
+    let floor = floor.max(1);
+    let raised = (floor as f64 * (1.0 + margin.max(0.0)) - 1e-9).ceil() as i64;
+    raised.max(floor + 1)
+}
+
+/// Plan prix §2: opening of a standing bid under its ceiling, `ceiling x
+/// (1 - margin)` rounded down, at least one coin under, never under 1.
+pub fn bid_under_ceiling(ceiling: i64, margin: f64) -> i64 {
+    let ceiling = ceiling.max(1);
+    let lowered = (ceiling as f64 * (1.0 - margin.clamp(0.0, 1.0)) + 1e-9).floor() as i64;
+    lowered.min(ceiling - 1).max(1)
+}
+
+/// Plan prix §1, Q1 (user 2026-11-18): drop of a seller's floor per
+/// horizon that ended unsold.
+pub const FLOOR_DECAY_PCT: i64 = 10;
+
+/// Horizons that ended unsold, net of the sales since (each sale takes
+/// one back: the floor climbs a notch).
+pub fn unsold_horizons(withdrawals: i64, sales: i64) -> i64 {
+    (withdrawals - sales).max(0)
+}
+
+/// Plan prix §1, Q2 (user 2026-11-18: under the making cost when nothing
+/// sells): the floor after `unsold` horizons, `keep x 0.9^unsold`, never
+/// under `bound` (the outside option the stock can still reach: the
+/// alchemy outlet, 1 coin) nor over `keep`.
+pub fn learned_floor(keep: i64, bound: i64, unsold: i64) -> i64 {
+    let keep = keep.max(1);
+    let factor = (1.0 - FLOOR_DECAY_PCT as f64 / 100.0).powi(unsold.clamp(0, 64) as i32);
+    let decayed = (keep as f64 * factor).floor() as i64;
+    decayed.max(bound.max(1)).min(keep)
+}
+
 /// A seller's floor: its own keep value, never under the public outside
 /// options, at least 1 coin.
 pub fn seller_floor(keep: i64, anchors: &Anchors) -> i64 {

@@ -93,3 +93,32 @@ fn the_alch_outlet_leaves_the_caster_a_tenth() {
     assert_eq!(alch_outlet_price(1), None, "nothing left for the seller");
     assert_eq!(alch_outlet_price(-40), None, "a losing cast is no outlet");
 }
+
+/// Plan prix §2 (user 2026-11-18): 93 % of the listings opened AT their
+/// floor, a concession curve with no course. A listing opens at least
+/// its floor times the profile margin, one coin above at the least; a
+/// standing bid symmetric under its ceiling.
+#[test]
+fn an_order_opens_with_room_to_concede() {
+    assert_eq!(open_over_floor(858, 0.10), 944);
+    assert_eq!(open_over_floor(5, 0.05), 6, "at least one coin above");
+    assert_eq!(open_over_floor(1, 0.20), 2);
+    assert_eq!(bid_under_ceiling(1_000, 0.10), 900);
+    assert_eq!(bid_under_ceiling(5, 0.05), 4, "at least one coin under");
+    assert_eq!(bid_under_ceiling(1, 0.20), 1, "never under one coin");
+}
+
+/// Plan prix §1 (user 2026-11-18, Q1 10 %, Q2 under the making cost): a
+/// seller's floor drops 10 % per horizon that ended unsold (net of its
+/// sales), never under its outside bound nor over its keep value.
+#[test]
+fn the_floor_learns_from_unsold_horizons() {
+    assert_eq!(learned_floor(858, 300, 0), 858);
+    assert_eq!(learned_floor(858, 300, 1), 772);
+    assert_eq!(learned_floor(858, 300, 3), 625);
+    assert_eq!(learned_floor(858, 300, 20), 300, "the outside bound holds");
+    assert_eq!(learned_floor(858, 1, 64), 1);
+    assert_eq!(learned_floor(858, 900, 2), 858, "a bound over the keep value never raises it");
+    assert_eq!(unsold_horizons(3, 1), 2, "each sale takes one failure back");
+    assert_eq!(unsold_horizons(1, 4), 0);
+}
