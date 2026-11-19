@@ -1,4 +1,5 @@
-//! Concession curve (plan marché M3/M4, Q2/Q4).
+//! Concession curve (plan marché M3/M4, Q2/Q4) and the 10 % walk of
+//! every resting order (user 2026-11-19).
 
 use super::*;
 
@@ -49,16 +50,6 @@ fn without_a_fill_the_price_only_moves_toward_the_limit() {
             last = price;
         }
     }
-    // Stepping windows: same monotony, stays inside the bounds.
-    let shape = curve(100, 40, 1.0);
-    let mut current = 100;
-    for index in 0..30 {
-        if let Step::Amend(next) = step(&window(true, current, shape, index * 2000)) {
-            assert!(next <= current && next >= 40, "{current} -> {next}");
-            current = next;
-        }
-    }
-    assert_eq!(current, 40);
 }
 
 #[test]
@@ -69,9 +60,6 @@ fn the_limit_is_reached_at_the_horizon() {
         assert_eq!(curve(40, 100, beta).price_at(90_000), 100);
         assert_eq!(curve(40, 100, beta).price_at(0), 40, "opens at the opening");
     }
-    // One coin from the limit at the horizon: the last move lands even
-    // under the 1 % threshold.
-    assert_eq!(step(&window(false, 99, curve(40, 100, 1.0), 36_000)), Step::Amend(100));
 }
 
 #[test]
@@ -96,11 +84,41 @@ fn small_moves_wait_for_the_amend_threshold() {
     assert_eq!(amend_threshold(50), 1);
     assert_eq!(amend_threshold(1000), 10);
     assert_eq!(amend_threshold(1001), 11);
-    // A curve from 1000 to 900 over 36 000 ticks moves ~2.8 coins per
-    // 1000 ticks: under 1 % (10 coins) it holds.
-    let shape = curve(1000, 900, 1.0);
-    assert_eq!(step(&window(true, 1000, shape, 1000)), Step::Hold);
-    assert_eq!(step(&window(true, 1000, shape, 4000)), Step::Amend(989));
+}
+
+/// User 2026-11-19 (« la règle des 10 % vaut pour tout le monde en bid et
+/// ask, sinon les prix ne sont pas réels »): live yew logs, carl_miller
+/// listed at 68 over its own cost 34, walked down to 34 and sat there,
+/// withdrawn and relisted at 68 eight times in a row, nothing bought for
+/// 7 h. An unsold ask drops 10 % per window (at least a coin), under its
+/// own cost, down to one coin; it never withdraws.
+#[test]
+fn an_unsold_ask_drops_ten_percent_per_window_down_to_one() {
+    let own_cost = curve(68, 34, 1.0);
+    assert_eq!(step(&window(true, 68, own_cost, 2000)), Step::Amend(61));
+    assert_eq!(step(&window(true, 34, own_cost, 36_000)), Step::Amend(30), "under its own cost");
+    assert_eq!(step(&window(true, 5, own_cost, 90_000)), Step::Amend(4), "at least a coin");
+    assert_eq!(step(&window(true, 1, own_cost, 90_000)), Step::Hold, "one coin rests, never withdrawn");
+    let mut current = 68;
+    let mut windows = 0;
+    while let Step::Amend(next) = step(&window(true, current, own_cost, windows * 2000)) {
+        assert!(next < current, "{current} -> {next}");
+        current = next;
+        windows += 1;
+    }
+    assert_eq!(current, 1);
+    assert!(windows <= 40, "68 to 1 in {windows} windows");
+}
+
+/// The same rule for bids: an unfilled bid climbs 10 % per window (at
+/// least a coin), up to what the buyer can pay.
+#[test]
+fn an_unfilled_bid_climbs_ten_percent_per_window_up_to_its_ceiling() {
+    let ceiling = curve(50, 120, 1.0);
+    assert_eq!(step(&window(false, 50, ceiling, 500)), Step::Amend(55));
+    assert_eq!(step(&window(false, 5, ceiling, 500)), Step::Amend(6), "at least a coin");
+    assert_eq!(step(&window(false, 115, ceiling, 500)), Step::Amend(120), "never over its ceiling");
+    assert_eq!(step(&window(false, 120, ceiling, 90_000)), Step::Hold, "a buyer stays at its ceiling");
 }
 
 #[test]
@@ -118,42 +136,29 @@ fn an_own_fill_backs_off_and_restarts() {
 fn public_prints_pull_the_quote_halfway() {
     let mut seen = window(false, 50, curve(50, 120, 0.5), 2000);
     seen.public_price = Some(90);
-    assert_eq!(step(&seen), Step::Amend(70), "others paid 90: halfway");
+    assert_eq!(step(&seen), Step::Amend(70), "others paid 90: halfway, past the 10 % walk");
     seen.public_price = Some(200);
-    assert_ne!(step(&seen), Step::Amend(125), "never past the limit");
+    assert_eq!(step(&seen), Step::Amend(55), "a print over the ceiling never pulls: the walk goes on");
     seen.public_price = Some(30);
-    assert!(matches!(step(&seen), Step::Hold | Step::Amend(_)), "a cheaper print never lowers a bid");
-    if let Step::Amend(price) = step(&seen) {
-        assert!(price >= 50);
-    }
+    assert_eq!(step(&seen), Step::Amend(55), "a cheaper print never lowers a bid: the walk goes on");
 }
 
 #[test]
-fn pressed_orders_cross_inside_their_limit() {
+fn pressed_orders_cross_and_any_order_takes_what_its_next_walk_reaches() {
     let mut buyer = window(false, 60, curve(60, 120, 2.0), 500);
     buyer.best_opposite = Some(110);
-    assert!(matches!(step(&buyer), Step::Amend(price) if price < 110), "a normal buyer walks its curve: {:?}", step(&buyer));
+    assert_eq!(step(&buyer), Step::Amend(66), "a normal buyer walks 10 %");
     buyer.pressed = true;
     assert_eq!(step(&buyer), Step::Amend(110), "a pressed buyer takes the ask");
     buyer.best_opposite = Some(130);
-    assert_ne!(step(&buyer), Step::Amend(130), "never over its ceiling");
+    assert_eq!(step(&buyer), Step::Amend(66), "never over its ceiling");
     let mut seller = window(true, 100, curve(100, 50, 1.0), 500);
-    seller.best_opposite = Some(70);
-    seller.pressed = true;
-    assert_eq!(step(&seller), Step::Amend(70), "a full bank hits the bid");
     seller.best_opposite = Some(45);
-    assert_ne!(step(&seller), Step::Amend(45), "never under its floor");
-    // A patient order takes the opposite its curve reaches next window.
-    let mut close = window(true, 60, curve(100, 50, 1.0), 34_500);
-    close.best_opposite = Some(51);
-    assert_eq!(step(&close), Step::Amend(51));
-}
-
-#[test]
-fn q4_sellers_withdraw_at_the_horizon_buyers_stay() {
-    assert_eq!(step(&window(true, 40, curve(100, 40, 1.0), 36_000)), Step::Withdraw);
-    assert_eq!(step(&window(true, 40, curve(100, 40, 1.0), 20_000)), Step::Hold, "before H it rests");
-    assert_eq!(step(&window(false, 100, curve(40, 100, 1.0), 90_000)), Step::Hold, "a buyer stays at its limit");
+    seller.pressed = true;
+    assert_eq!(step(&seller), Step::Amend(45), "a full bank hits the bid, no floor");
+    let mut close = window(true, 60, curve(100, 50, 1.0), 500);
+    close.best_opposite = Some(55);
+    assert_eq!(step(&close), Step::Amend(55), "its next walk (54) passes the bid: it takes it");
 }
 
 #[test]

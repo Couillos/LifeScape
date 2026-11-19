@@ -53,9 +53,6 @@ fn a_new_object_is_discovered_on_its_public_anchors() {
                     if limit_of(&fill.buyer).is_some_and(|value| fill.price > value) {
                         failures.push(format!("seed {seed} maker {maker}: a buyer paid over its value: {fill:?}"));
                     }
-                    if limit_of(&fill.seller).is_some_and(|cost| fill.price < cost) {
-                        failures.push(format!("seed {seed} maker {maker}: a seller sold under its cost: {fill:?}"));
-                    }
                 }
             }
         }

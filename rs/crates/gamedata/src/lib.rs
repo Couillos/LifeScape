@@ -133,6 +133,43 @@ pub fn obj_display_name(obj_id: usize) -> Option<&'static str> {
     obj_by_id(obj_id).and_then(|entry| entry.display.or(entry.name))
 }
 
+/// The object a banknote stands for (`cert_<name>` -> `<name>`), else the
+/// object itself (user 2026-11-19: « les items et les banknote de ces
+/// items sont les mêmes items et doivent être mesurés, évalués, échangés
+/// de la même manière »). Every count, value and match by object id goes
+/// through it: one object, whatever form it is carried in. Never for USE
+/// (user, same day: « les banknotes ne peuvent pas être utilisés pour les
+/// craft »): a note carries many units to trade or sell, a recipe or a
+/// spell takes only the unnoted object (a bank trip unnotes them).
+pub fn base_obj_id(obj_id: usize) -> usize {
+    obj_by_id(obj_id)
+        .and_then(|entry| entry.name)
+        .and_then(|name| name.strip_prefix("cert_"))
+        .and_then(|base| objs_by_name(base).into_iter().next())
+        .map(|entry| entry.obj_id)
+        .unwrap_or(obj_id)
+}
+
+/// Every id an object is carried as: itself, then its banknote when it
+/// has one (`cert_<name>`). A count or a curve of the object sums them.
+pub fn obj_forms(obj_id: usize) -> Vec<usize> {
+    let base = base_obj_id(obj_id);
+    let mut forms = vec![base];
+    let note = obj_by_id(base).and_then(|entry| entry.name).and_then(|name| objs_by_name(&format!("cert_{name}")).into_iter().next());
+    if let Some(note) = note {
+        forms.push(note.obj_id);
+    }
+    forms
+}
+
+/// `base_obj_id` by debug name (`cert_yew_logs` -> `yew_logs`).
+pub fn base_obj_name(name: &str) -> &str {
+    match name.strip_prefix("cert_") {
+        Some(base) if !objs_by_name(base).is_empty() => base,
+        _ => name,
+    }
+}
+
 /// Exact (case-insensitive) name match.
 pub fn objs_by_name(name: &str) -> Vec<&'static Obj> {
     ids_by_exact_name(objs::BY_NAME, name)
@@ -254,6 +291,22 @@ pub fn com_id(name: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
+    /// A banknote is its object: yew_logs 1515 and cert_yew_logs 1516
+    /// are one object (two "Yew logs" rows on the holdings page,
+    /// 2026-11-19); a base object and an unknown id stay themselves.
+    #[test]
+    fn a_banknote_is_its_object() {
+        assert_eq!(super::base_obj_id(1516), 1515);
+        assert_eq!(super::base_obj_id(1515), 1515);
+        assert_eq!(super::base_obj_id(995), 995, "coins have no note");
+        assert_eq!(super::base_obj_id(usize::MAX), usize::MAX);
+        assert_eq!(super::base_obj_name("cert_yew_logs"), "yew_logs");
+        assert_eq!(super::base_obj_name("yew_logs"), "yew_logs");
+        assert_eq!(super::obj_forms(1515), vec![1515, 1516]);
+        assert_eq!(super::obj_forms(1516), vec![1515, 1516], "a note names the same object");
+        assert_eq!(super::obj_forms(995), vec![995], "coins: one form");
+    }
+
     #[test]
     fn hunter_flags_parsed() {
         let spider = super::npcs_by_name("giantspider1").into_iter().next().expect("spider in dumps");

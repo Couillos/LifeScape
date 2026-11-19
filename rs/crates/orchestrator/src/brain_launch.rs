@@ -739,6 +739,12 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         // A quoting maker's slice is its trade (Q6): never sold nor
         // dropped by the janitor (its NPC dumps ride `--shopsell`).
         keep.extend(crate::market_maker::slice_names(&life));
+        // Goods sold and not handed over yet: never relisted nor dropped
+        // (user 2026-11-19, point 2).
+        if let Some(service) = crate::market_service::shared() {
+            let deals = service.lock_store().open_deals_for_account(&job.account).unwrap_or_default();
+            keep.extend(crate::brain_locks::promised_names(&job.account, &deals));
+        }
         for kept in merge_keep(keep, worn_names(job)) {
             args.push("--keep".to_string());
             args.push(kept);

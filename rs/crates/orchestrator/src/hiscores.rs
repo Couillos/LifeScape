@@ -98,13 +98,16 @@ pub struct ItemValue {
 }
 
 /// Total value of `items` and the `TOP_ITEMS` most valuable stacks
-/// (same ids merged, worthless ones left out). `price_of` gives the
-/// unit price (0 = untradeable or unpriced); it is called once per id.
+/// (same objects merged, a banknote under its object: user 2026-11-19,
+/// one object valued the same whatever its id; worthless ones left out).
+/// `price_of` gives the unit price (0 = untradeable or unpriced); it is
+/// called once per object, with the object's base id.
 pub fn valuation(items: &[(i64, i64)], price_of: &mut dyn FnMut(i64) -> i64) -> (i64, Vec<ItemValue>) {
     let mut merged: BTreeMap<i64, i64> = BTreeMap::new();
     for (obj, count) in items {
         if *count > 0 {
-            let slot = merged.entry(*obj).or_insert(0);
+            let object = usize::try_from(*obj).map(|id| lifescape_gamedata::base_obj_id(id) as i64).unwrap_or(*obj);
+            let slot = merged.entry(object).or_insert(0);
             *slot = slot.saturating_add(*count);
         }
     }

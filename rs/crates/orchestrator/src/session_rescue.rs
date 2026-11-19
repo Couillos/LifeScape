@@ -301,9 +301,13 @@ pub(crate) fn gate_tick(shared: &Shared, bot: &mut Bot) -> bool {
 }
 
 /// Market branch of the pause gate: at the shared safe point only
-/// (alive, no modal), the posed script runs inline and the bot walks
-/// back to its work. The engagement clock is suspended across the whole
-/// pause, return trip included; the ticks land in the task report.
+/// (alive, no modal), the posed script runs inline and the paused task
+/// resumes where the delivery left the bot (user 2026-11-19: « une
+/// livraison doit mettre en pause la tâche en cours, pas l'arrêter… on
+/// repart de Varrock »): no walk back to the work tile, the pack banked
+/// near the square but the tools; the trip in flight replans from there
+/// (`travel_pause`). The engagement clock is suspended across the whole
+/// pause; the ticks land in the task report.
 fn gate_market(shared: &Shared, bot: &mut Bot, stopped: bool) -> bool {
     let market = shared.pending_market.lock().unwrap().take();
     let Some(market) = market else {
@@ -315,19 +319,12 @@ fn gate_market(shared: &Shared, bot: &mut Bot, stopped: bool) -> bool {
         shared.rescue_gate.store(false, Ordering::SeqCst);
         return !stopped;
     }
-    let return_to = bot.position();
     bot.intend(&format!("pausing for market {}", market.script));
     let pause_start = bot.world.ticks;
     // The pause is billed from its first tick: the budget hook never
     // aborts the delivery (or its walk back) as if it were work.
     bot.begin_pause();
     let outcome = lifescape_scripts::run(&market.script, bot, &market.args);
-    // Best effort walk back to the work tile: a failed return degrades
-    // to resuming wherever the delivery left us, never to a re-run.
-    let (level, pos_x, pos_z) = return_to;
-    if let Err(error) = bot.travel_to(lifescape_sdk::plan::Tile { x: pos_x, z: pos_z, level }) {
-        bot.log(&format!("market return walk failed at {:?}: {error}, resuming here", bot.position()));
-    }
     let paused = bot.world.ticks.saturating_sub(pause_start);
     bot.note_pause(paused);
     {
@@ -340,7 +337,7 @@ fn gate_market(shared: &Shared, bot: &mut Bot, stopped: bool) -> bool {
     }
     match outcome {
         Ok(_) => {
-            shared.log(&format!("market {} done, script resumes (pause {paused} ticks)", market.script));
+            shared.log(&format!("market {} done, script resumes from {:?} (pause {paused} ticks)", market.script, bot.position()));
         }
         Err(error) => {
             let (end_level, end_x, end_z) = bot.position();

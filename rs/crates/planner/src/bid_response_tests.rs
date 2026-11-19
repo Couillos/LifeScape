@@ -162,8 +162,8 @@ fn a_producer_never_flips_the_product() {
 /// Live 2026-11-14: the whole fleet had smithing 1 and nobody answered
 /// 18 bronze scimitar bids up to 2961. A level-1 bot trains to 5 (bronze
 /// bars smelted from ores on sale) for a bid worth it: the training is a
-/// one-off cost of the lot, and the quota still preempts. A gap past
-/// `MAX_TRAIN_LEVELS` never answers; a plain unit cost never trains.
+/// one-off cost of the lot, and the quota still preempts. A far gap is
+/// weighed with its training cost; a plain unit cost never trains.
 #[test]
 fn a_level_one_bot_trains_for_a_bid_worth_it() {
     let avoid: Vec<String> = Vec::new();
@@ -191,7 +191,11 @@ fn a_level_one_bot_trains_for_a_bid_worth_it() {
         "iron_bar" => Some(BookView { bids: Vec::new(), asks: vec![(20, 100)], volume_24h: 0, ..BookView::default() }),
         _ => with_ores(item),
     };
-    assert_eq!(opportunity("iron_platebody", &iron_bids, &iron_market, &bot), None, "smithing 33 is 32 levels away");
+    // No cap on the levels (user 2026-11-19): smithing 33, 32 levels
+    // away, is weighed with its training, which 2 platebodies never pay.
+    let far = opportunity("iron_platebody", &iron_bids, &iron_market, &bot).expect("weighed");
+    assert_eq!(far.unit.train, vec![("smithing".to_string(), 1, 33)], "{far:?}");
+    assert!(!preempts(&far, bot.coin_rate), "the training costs more than the lot brings: {far:?}");
 }
 
 /// The spread: half the windows answer, the other half wait; different

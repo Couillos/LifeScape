@@ -1,25 +1,19 @@
 #![forbid(unsafe_code)]
-//! Order repricing (plan marché M3/M4, wave 2): every order placed with
-//! bounds concedes in time toward its OWN limit (a buyer's ceiling, a
-//! seller's floor) over its motive's horizon, the curve shaped by the
-//! bot's drawn `price_patience` times the motive's urgency
-//! (`lifescape_market::concession`):
-//! `p(t) = opening + (limit - opening) * (t / H) ^ (1 / beta)`,
-//! t from the lineage's t0 (kept across amends and daemon restarts).
-//!
-//! Each window (its length from the horizon, its phase from the account
-//! and object: no walk in a block) one `concession::step`:
+//! Order repricing (plan marché M3/M4, wave 2; the 10 % walk, user
+//! 2026-11-19: « la règle des 10 % vaut pour tout le monde en bid et ask,
+//! sinon les prix ne sont pas réels »). Each window (its length from the
+//! motive's horizon, its phase from the account and object: no walk in a
+//! block) one `concession::step`:
+//! - an unfilled ask drops 10 % (at least a coin) down to one coin, under
+//!   its own cost (no seller floor, never withdrawn); an unfilled bid
+//!   climbs 10 % (at least a coin) up to its ceiling (what the buyer can
+//!   pay);
 //! - an own fill backs the price off one ZIP step (a seller up, a buyer
-//!   down) and restarts the curve there;
+//!   down);
 //! - a public traded price on the conceding side pulls the quote halfway
 //!   toward it (public data only);
 //! - a pressed order (blocking need, full bank) takes the opposite best
-//!   inside its limit; any order takes what its curve reaches within the
-//!   next window;
-//! - a move under 1 % (and one coin) waits; the limit itself always lands;
-//! - Q4: a seller at its floor past its horizon with no fill is
-//!   withdrawn (`horizon`), its stock back in the bank; a buyer stays at
-//!   its ceiling while its need lives.
+//!   inside its limit; any order takes what its next walk reaches.
 //!
 //! Bounds live in the market engine's memory: after a daemon restart the
 //! brain re-adopts its resting listings (`adopt`) and its standing bids
@@ -37,8 +31,6 @@ use crate::market_service::MarketService;
 pub const PATIENCE_TICKS: u64 = lifescape_market::zip::PATIENCE_TICKS;
 /// A sell's own cap: none (no reference band, user rule 2026-11-15).
 pub const SELL_CAP: i64 = i64::MAX / 4;
-/// Cancel reason of a Q4 withdrawal (seller at its floor past H).
-pub const HORIZON_REASON: &str = "horizon";
 
 /// Repricing bounds of one resting order.
 #[derive(Clone, Debug)]
@@ -261,7 +253,7 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
         return 0;
     }
     let batch = service.lock_store().begin_batch().unwrap_or(false);
-    let (mut moved, mut parked, mut refused, mut withdrawn) = (0usize, 0usize, 0usize, 0usize);
+    let (mut moved, mut parked, mut refused) = (0usize, 0usize, 0usize);
     let mut public: HashMap<i64, Option<i64>> = HashMap::new();
     for (order, mut bounds) in due {
         let row = service.lock_store().get_order(order).ok().flatten();
@@ -290,29 +282,24 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
         let opposite = if bounds.sell { bid } else { ask };
         let decision = concession::step(&window_of(&bounds, row.price, filled, wall, tick_ms, traded, opposite, patience));
         let mut window = QuoteBounds { last_change_wall: wall, last_remaining: row.remaining, ..bounds };
+        // A bid rises only as far as the free coins go (user 2026-11-19,
+        // point 1): the walk never promises more coins than the wallet.
+        let selling = window.sell;
+        let afford = |price: i64| {
+            if selling || price <= row.price {
+                return price;
+            }
+            let (_, free) = service.free_coverage(&row.account, lifescape_store::OrderSide::Buy, row.item_id);
+            crate::market_audit::affordable_raise(row.item_id, row.remaining, row.price, price, free)
+        };
         let next = match decision {
             Step::Hold => None,
-            Step::Amend(price) => Some(price),
+            Step::Amend(price) => Some(afford(price)),
             Step::Restart { opening } => {
                 window.opening = opening;
                 window.curve_start_wall = wall;
                 window.own_fill = Some(row.price);
                 Some(opening)
-            }
-            Step::Withdraw => {
-                let reply = service.handle(&object(vec![
-                    ("op", str_value("cancel")),
-                    ("account", str_value(&window.account)),
-                    ("order", Value::Int(order)),
-                    ("reason", str_value(HORIZON_REASON)),
-                ]));
-                if reply.get("ok").as_bool() == Some(true) {
-                    withdrawn += 1;
-                } else {
-                    service.lock_engine().quote_bounds.insert(order, window);
-                    refused += 1;
-                }
-                continue;
             }
         };
         let Some(next) = next.filter(|price| *price != row.price) else {
@@ -348,8 +335,8 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
             crate::logln!("market-reprice: batch commit failed: {error}");
         }
     }
-    if moved + refused + withdrawn > 0 {
-        crate::logln!("market-reprice: {moved} moved, {parked} held, {withdrawn} withdrawn at their horizon, {refused} refused");
+    if moved + refused > 0 {
+        crate::logln!("market-reprice: {moved} moved, {parked} held, {refused} refused");
     }
     moved
 }

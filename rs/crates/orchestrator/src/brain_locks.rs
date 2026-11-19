@@ -26,6 +26,25 @@ pub(crate) fn locked_in(locks: &BTreeMap<i64, i64>, item: &str) -> i64 {
         .unwrap_or(0)
 }
 
+/// Objects `account` sold and has not handed over yet (deals still open,
+/// neither settled nor failed), by base debug name, sorted: the bank
+/// janitor keeps them (user 2026-11-19, point 2: ida_reed's sold big
+/// bones were relisted, refused "seller holds 0", marked unsellable and
+/// droppable on a full bank, the handover then short).
+pub(crate) fn promised_names(account: &str, deals: &[lifescape_store::Deal]) -> Vec<String> {
+    use lifescape_store::DealStatus;
+    let mut names: Vec<String> = deals
+        .iter()
+        .filter(|deal| deal.seller == account && !matches!(deal.status, DealStatus::Settled | DealStatus::Failed))
+        .filter_map(|deal| usize::try_from(crate::market_audit::base_of(deal.item_id)).ok())
+        .filter_map(|id| lifescape_gamedata::obj_by_id(id).and_then(|obj| obj.name))
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// Held units the bot may use.
 pub fn free_count(held: i64, locked: i64) -> i64 {
     (held - locked.max(0)).max(0)

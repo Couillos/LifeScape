@@ -26,16 +26,19 @@ fn resolve_item(raw: Option<&str>) -> Result<(Option<i64>, String), String> {
     let Some(raw) = raw.map(str::trim).filter(|text| !text.is_empty()) else {
         return Ok((None, "total".to_string()));
     };
+    // A banknote names its object (user 2026-11-19): one curve.
+    let base = |obj_id: usize| lifescape_gamedata::base_obj_id(obj_id) as i64;
     if let Ok(obj_id) = raw.parse::<i64>() {
         if obj_id > 0 {
-            return Ok((Some(obj_id), crate::holdings::item_name(obj_id)));
+            let object = usize::try_from(obj_id).map(base).unwrap_or(obj_id);
+            return Ok((Some(object), crate::holdings::item_name(object)));
         }
         return Err(format!("bad item '{raw}'"));
     }
     let mut matches = lifescape_gamedata::objs_by_name(raw);
     matches.sort_by_key(|obj| obj.obj_id);
     match matches.as_slice() {
-        [obj] => Ok((Some(obj.obj_id as i64), crate::holdings::item_name(obj.obj_id as i64))),
+        [obj] => Ok((Some(base(obj.obj_id)), crate::holdings::item_name(base(obj.obj_id)))),
         [] => Err(format!("unknown item '{raw}'")),
         _ => Err(format!("ambiguous item '{raw}'")),
     }
@@ -50,12 +53,22 @@ enum Curve {
 
 fn history_points(store: &lifescape_store::Store, curve: &Curve, res: HoldingsRes) -> Result<Vec<(i64, i64)>, String> {
     let points = match (curve, res) {
-        (Curve::Item(item), HoldingsRes::Hour1) => store.hourly_points(*item),
-        (Curve::Item(item), HoldingsRes::Day1) => store.daily_points(*item),
+        // One object, all its forms: rows recorded before the notes were
+        // folded (2026-11-19) still sit under the note's own id.
+        (Curve::Item(Some(item)), HoldingsRes::Hour1) => store.hourly_points_sum(&item_forms(*item)),
+        (Curve::Item(Some(item)), HoldingsRes::Day1) => store.daily_points_sum(&item_forms(*item)),
+        // The item total leaves the coins out (user 2026-11-19).
+        (Curve::Item(None), HoldingsRes::Hour1) => store.hourly_points_without(&[crate::holdings::COINS]),
+        (Curve::Item(None), HoldingsRes::Day1) => store.daily_points_without(&[crate::holdings::COINS]),
         (Curve::Index(ids), HoldingsRes::Hour1) => store.hourly_points_sum(ids),
         (Curve::Index(ids), HoldingsRes::Day1) => store.daily_points_sum(ids),
     };
     points.map_err(|error| error.to_string())
+}
+
+/// Every id `item` is held as (the object, its banknote).
+fn item_forms(item: i64) -> Vec<i64> {
+    usize::try_from(item).map(|id| lifescape_gamedata::obj_forms(id).into_iter().map(|form| form as i64).collect()).unwrap_or_else(|_| vec![item])
 }
 
 /// The curve a query asks for: `index=<key>` (a supply index, alone) or
@@ -269,7 +282,7 @@ mod tests {
     fn history_defaults_rejects_and_names() {
         let run = scratch_run("res");
         let store = lifescape_store::Store::open(&run.join("lifescape.db")).unwrap();
-        store.record_holdings(1_762_675_200, &[(995, 7)]).unwrap();
+        store.record_holdings(1_762_675_200, &[(995, 7), (1515, 3)]).unwrap();
         // No res: the 24 h hourly view (D42).
         let plain = body(&items_history_api("item=995", &run));
         assert_eq!(plain.get("res").as_str(), Some("1h"));
@@ -277,9 +290,10 @@ mod tests {
         let named = body(&items_history_api("res=1h&item=Coins", &run));
         assert_eq!(named.get("item").as_str(), Some("Coins"));
         assert_eq!(named.get("points").as_arr().map(Vec::len), Some(1));
+        // The item total leaves the coins out (user 2026-11-19).
         let total = body(&items_history_api("res=1h", &run));
         assert_eq!(total.get("item").as_str(), Some("total"));
-        assert_eq!(total.get("points").as_arr().unwrap()[0].get("v").as_i64(), Some(7));
+        assert_eq!(total.get("points").as_arr().unwrap()[0].get("v").as_i64(), Some(3), "3 yew logs, never the 7 coins");
         assert_eq!(body(&items_history_api("res=30m&item=995", &run)).get("ok").as_bool(), Some(false));
         assert_eq!(body(&items_history_api("res=1h&item=nope-not-an-item", &run)).get("ok").as_bool(), Some(false));
         assert_eq!(body(&items_history_api("res=1h&item=0", &run)).get("ok").as_bool(), Some(false));
@@ -294,6 +308,21 @@ mod tests {
 
     /// A supply index sums its objects (and their notes) per slot and
     /// names itself; an unknown index or one mixed with an item reads loud.
+    /// A note is its object (user 2026-11-19): asked by note or by base,
+    /// the curve is the object's, its old note rows summed in.
+    #[test]
+    fn an_item_curve_sums_its_notes() {
+        let run = scratch_run("notes");
+        let store = super::store_for(&run).unwrap();
+        store.record_holdings(1_762_675_200, &[(1515, 100), (1516, 28)]).unwrap();
+        drop(store);
+        for item in ["1515", "1516", "yew_logs", "cert_yew_logs"] {
+            let reply = super::items_history_api(&format!("res=1h&item={item}"), &run);
+            let value = body(&reply);
+            assert_eq!(value.get("points").as_arr().unwrap()[0].get("v").as_i64(), Some(128), "{item}: {value:?}");
+        }
+    }
+
     #[test]
     fn history_serves_supply_indices() {
         let run = scratch_run("index");

@@ -469,17 +469,40 @@ pub fn buy_best_affordable(bot: &mut Bot, cands: &[String]) -> Result<Option<Str
     Ok(None)
 }
 
-/// Ticks one sale click gets to take the unit from the pack.
+/// Ticks one sale click gets to take its units from the pack.
 pub const SELL_UNIT_TICKS: u64 = 10;
 
+/// Sell button of the shop's side inventory for the biggest batch that
+/// fits `units`: (button, size). `shop.rs2`: `inv_button2` sells 1,
+/// `inv_button3` 5, `inv_button4` 10; a shop has no sell X in rev 274.
+pub fn sell_batch_for(units: u32) -> Option<(u8, u32)> {
+    [(4u8, 10u32), (3, 5), (2, 1)].into_iter().find(|(_, size)| *size <= units)
+}
+
+/// Units out of `count` the shop pays at least `min_unit` each for, from
+/// its live stock `shop_holds`: the server values unit i of a sale at the
+/// stock plus the i units before it (`shop.rs2` `sell_item`), bounded
+/// from below (`shop_sale::unit_value_floor`); the count stops at the
+/// first unit under. `None` when the shop buys no such object.
+pub fn units_paying(shop: &str, obj_name: &str, shop_holds: i64, count: u32, min_unit: i64) -> Option<u32> {
+    let mut paying = 0u32;
+    while paying < count {
+        if knowledge::shop_sale::unit_value_floor(shop, obj_name, shop_holds + i64::from(paying))? < min_unit {
+            break;
+        }
+        paying += 1;
+    }
+    Some(paying)
+}
+
 /// Sells up to `count` units of `obj_name` (carried as `form`: the object
-/// or its banknote) to the OPEN shop `shop` (`gamedata::shops` key), one
-/// unit per click (`[inv_button2,shop_template_side:inv]`, sell 1), while
-/// the server's value of the next unit, bounded from below
-/// (`shop_sale::unit_value_floor` with the shop's live stock of it), is
-/// at least `min_unit` coins: never a unit under what the market pays
-/// (plan marché Q3). Returns (units sold, coins received). A click the
-/// server refuses ends the sale, logged.
+/// or its banknote) to the OPEN shop `shop` (`gamedata::shops` key) with
+/// the sell buttons (user 2026-11-19: 10, 5, 1, never one click per unit
+/// when a batch pays), only the units whose server value is at least
+/// `min_unit` coins: never a unit under what the market pays (plan marché
+/// Q3). The shop's stock is read again before each batch (other sellers
+/// lower the price meanwhile). Returns (units sold, coins received). A
+/// click the server refuses ends the sale, logged.
 pub fn sell_units(bot: &mut Bot, form: u16, obj_name: &str, shop: &str, count: u32, min_unit: i64) -> Result<(u32, i64), ScriptError> {
     let side_com = (bot.tables.com_id)("shop_template_side:inv")
         .ok_or_else(|| ScriptError::Usage("shop_template_side:inv missing from component table".to_string()))?;
@@ -490,35 +513,40 @@ pub fn sell_units(bot: &mut Bot, form: u16, obj_name: &str, shop: &str, count: u
     let (mut sold, mut earned) = (0u32, 0i64);
     while sold < count {
         let shop_holds: i64 = bot.world.inv.get(&main_com).map(|slots| slots.values().filter(|(held, _)| *held == base).map(|(_, qty)| i64::from(*qty)).sum()).unwrap_or(0);
-        let Some(floor) = knowledge::shop_sale::unit_value_floor(shop, obj_name, shop_holds) else {
+        let Some(paying) = units_paying(shop, obj_name, shop_holds, count - sold, min_unit) else {
             return Err(ScriptError::Usage(format!("shop {shop} buys no {obj_name}")));
         };
-        if floor < min_unit {
-            bot.log(&format!("shopsell {obj_name}: the next unit pays at least {floor} < {min_unit} (the market): stop after {sold}"));
+        if paying == 0 {
+            bot.log(&format!("shopsell {obj_name}: the next unit pays under {min_unit} (the market): stop after {sold}"));
             break;
         }
+        let units_before = pack_total(bot, form);
+        let Some((button, size)) = sell_batch_for(paying.min(units_before)) else {
+            break;
+        };
         let Some(slot) = bot.world.inv.get(&side_com).and_then(|slots| slots.iter().find(|(_, (held, _))| *held == form).map(|(slot, _)| *slot)) else {
             break;
         };
-
-        let (coins_before, units_before) = (pack_total(bot, coins), pack_total(bot, form));
-        bot.inv_button(2, form, slot, side_com)?;
+        let coins_before = pack_total(bot, coins);
+        bot.inv_button(button, form, slot, side_com)?;
         let deadline = bot.world.ticks + SELL_UNIT_TICKS;
         while bot.world.ticks < deadline && pack_total(bot, form) >= units_before {
             bot.pump(1)?;
         }
-        if pack_total(bot, form) >= units_before {
-            bot.log(&format!("shopsell {obj_name}: the shop took nothing at {:?}", bot.position()));
+        let gone = units_before.saturating_sub(pack_total(bot, form));
+        if gone == 0 {
+            bot.log(&format!("shopsell {obj_name}: the shop took nothing of a {size} batch at {:?}", bot.position()));
             break;
         }
         bot.pump(1)?;
-        sold += 1;
+        sold += gone;
         earned += i64::from(pack_total(bot, coins)) - i64::from(coins_before);
     }
     Ok((sold, earned))
 }
 
-/// Sell-button batches for an amount: 10s, then 5s, then 1s.
+/// Buy-button batches for an amount on the shop's own inventory: 10s,
+/// then 5s, then 1s (`inv_button4/3/2,shop_template:inv`).
 pub fn sell_batches(mut amount: u32) -> Vec<(u8, u32)> {
     let mut batches = Vec::new();
     for (op, size) in [(4u8, 10u32), (3, 5), (2, 1)] {
@@ -545,6 +573,43 @@ mod tests {
                     .is_some_and(|name| name.eq_ignore_ascii_case("bob"))
             })
             .expect("bob in the npc dump") as u16
+    }
+
+    /// User 2026-11-19 (« on doit pas vendre clic par clic, mais en
+    /// utilisant les options »): the biggest sell button the paying units
+    /// allow, 10 then 5 then 1 (`shop.rs2`: no sell X on a shop in rev
+    /// 274). thorn_vera's 28 yew logs: six clicks instead of 28.
+    #[test]
+    fn a_sale_clicks_the_biggest_paying_batch() {
+        use super::sell_batch_for;
+        assert_eq!(sell_batch_for(28), Some((4, 10)));
+        assert_eq!(sell_batch_for(7), Some((3, 5)));
+        assert_eq!(sell_batch_for(4), Some((2, 1)));
+        assert_eq!(sell_batch_for(0), None);
+        let (mut left, mut clicks) = (28u32, 0);
+        while let Some((_, size)) = sell_batch_for(left) {
+            left -= size;
+            clicks += 1;
+        }
+        assert_eq!(clicks, 6);
+    }
+
+    /// The batch never passes the market's price: only the units whose
+    /// server value (`unit_value_floor` at the shop's stock plus the units
+    /// sold before them) pays at least `min_unit` are counted.
+    #[test]
+    fn only_the_units_paying_the_market_are_counted() {
+        use super::units_paying;
+        use lifescape_gamedata::shop_sale::unit_value_floor;
+        let floor = |held: i64| unit_value_floor("generalshop1", "yew_logs", held).expect("a general store buys yew");
+        let min_unit = floor(3);
+        let paying = units_paying("generalshop1", "yew_logs", 0, 28, min_unit).expect("buys");
+        assert!(paying >= 4, "{paying}");
+        assert!((0..i64::from(paying)).all(|held| floor(held) >= min_unit));
+        assert!(paying == 28 || floor(i64::from(paying)) < min_unit, "stops at the first unit under the market");
+        assert_eq!(units_paying("generalshop1", "yew_logs", 0, 2, 1), Some(2), "never past the lot");
+        assert_eq!(units_paying("generalshop1", "yew_logs", 0, 28, floor(0) + 1), Some(0), "the first unit already under");
+        assert_eq!(units_paying("scimitarshop", "yew_logs", 0, 28, 1), None, "a shop that buys none");
     }
 
     /// Nominal guards stay silent Ok(0): no target, no products, no order.

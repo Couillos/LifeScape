@@ -62,8 +62,7 @@ pub fn run_cut_gems(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let _ = obj_id(bot, &cut_name)?;
     let mut bank = nearest_bank(bot)?;
     bot.log(&format!("bank at ({},{})", bank.x, bank.z));
-    let mut keep_cut: Vec<u16> = vec![chisel, uncut];
-    keep_cut.extend(task_keep.iter().copied());
+    let keep_cut = cut_keep(chisel, uncut, &task_keep);
     bank_trip(bot, &bank, &keep_cut, 0)?;
     crate::kit::withdraw::ensure_tool(bot, &bank, chisel, CHISEL)?;
     fill_uncut(bot, &bank, uncut)?;
@@ -74,6 +73,8 @@ pub fn run_cut_gems(bot: &mut Bot, args: &[String]) -> ScriptResult {
         check_events(step_bot)?;
         if pack_total(step_bot, uncut) == 0 {
             bank_trip(step_bot, &bank, &keep_cut, 0)?;
+            // The chisel first: a full pack of stones takes no tool out.
+            crate::kit::withdraw::ensure_tool(step_bot, &bank, chisel, CHISEL)?;
             fill_uncut(step_bot, &bank, uncut)?;
             if pack_total(step_bot, uncut) == 0 {
                 return Err(ScriptError::Blocked { missing: vec![uncut_name.to_string()] });
@@ -94,10 +95,21 @@ pub fn run_cut_gems(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         let made = before.saturating_sub(pack_total(step_bot, uncut));
         bank = nearest_bank(step_bot)?;
-        bank_trip(step_bot, &bank, &task_keep, 0)?;
+        bank_trip(step_bot, &bank, &keep_cut, 0)?;
         Ok(state.load_done(step_bot, &format!("cut {made} {uncut_name} (crafting={level})")))
     });
     outcome
+}
+
+/// What a bank trip of the cutter keeps in the pack: its chisel, the
+/// uncut stones, the task's own keep (live 2026-11-19, will_field: the
+/// end-of-load deposit kept `task_keep` only, banked the chisel, the next
+/// load filled 28 stones and the chisel never came back out: 45 blocked
+/// runs on 9 accounts).
+fn cut_keep(chisel: u16, uncut: u16, task_keep: &[u16]) -> Vec<u16> {
+    let mut keep = vec![chisel, uncut];
+    keep.extend(task_keep.iter().copied().filter(|held| *held != chisel && *held != uncut));
+    keep
 }
 
 /// Top the pack up with banked uncuts (nothing when the bank holds none
@@ -144,6 +156,16 @@ fn cut_one(bot: &mut Bot, uncut: u16, chisel: u16, cut_name: &str, due: u32) -> 
 
 #[cfg(test)]
 mod tests {
+    /// will_field 2026-11-19: every bank trip of the cutter keeps its
+    /// chisel, whatever the task's own keep list holds.
+    #[test]
+    fn every_cutter_bank_trip_keeps_the_chisel() {
+        let (chisel, uncut, coins) = (1755u16, 1623u16, 995u16);
+        assert_eq!(super::cut_keep(chisel, uncut, &[coins]), vec![chisel, uncut, coins]);
+        assert_eq!(super::cut_keep(chisel, uncut, &[chisel, coins]), vec![chisel, uncut, coins], "never twice");
+        assert!(super::cut_keep(chisel, uncut, &[]).contains(&chisel));
+    }
+
     use super::{gem_recipe, uncut_for_level, CHISEL, CRAFTING_STAT, UNCUT};
     use crate::kit::pack::obj_id;
     use crate::kit::produce::match_option;
@@ -197,3 +219,4 @@ mod tests {
         assert_eq!(CRAFTING_STAT, 12, "provenance crafting id");
     }
 }
+

@@ -59,12 +59,12 @@ fn ticks(count: f64) -> f64 {
     count * 0.6
 }
 
-/// Plan marché M3 + Q4: an ask that sold backs off one ZIP step (the
-/// rest asks higher) and restarts its curve; idle, it concedes to its
-/// reserve by its horizon (36 000 ticks unsaid), never under it; at its
-/// reserve past the horizon with no buyer, it is withdrawn.
+/// Plan marché M3: an ask that sold backs off one ZIP step (the rest asks
+/// higher). The 10 % walk (user 2026-11-19): idle, it drops 10 % per
+/// window (at least a coin), under its own floor, down to one coin, and
+/// is never withdrawn.
 #[test]
-fn filled_asks_back_off_idle_asks_concede_then_withdraw() {
+fn filled_asks_back_off_idle_asks_walk_down_to_one() {
     let (service, path) = service("asks");
     funded(&service, "maker");
     funded(&service, "taker");
@@ -77,19 +77,18 @@ fn filled_asks_back_off_idle_asks_concede_then_withdraw() {
     let restart = start + 10.0;
     assert_eq!(reprice_round(&service, restart, 600.0), 1);
     assert_eq!(price_of(&service, "maker"), Some(6), "sold at 5: the rest asks 6");
-    reprice_round(&service, restart + 10.0, 600.0);
-    assert_eq!(price_of(&service, "maker"), Some(6), "16 ticks into 36 000: no move");
-    reprice_round(&service, restart + ticks(36_000.0), 600.0);
-    assert_eq!(price_of(&service, "maker"), Some(4), "its reserve at its horizon");
-    reprice_round(&service, restart + ticks(36_100.0), 600.0);
-    assert_eq!(price_of(&service, "maker"), None, "Q4: no buyer at its reserve past H, withdrawn");
-    // Plan prix §1: the withdrawal is an unsold horizon in the carnet, the
-    // sale before it takes it back (the next listing keeps its floor).
-    assert_eq!(service.lock_store().seller_learning("maker", 0).expect("learning").get(&FEATHER), Some(&(1, 1)));
+    let mut seen = Vec::new();
+    for window in 1..=6 {
+        reprice_round(&service, restart + 10.0 * f64::from(window), 600.0);
+        seen.push(price_of(&service, "maker"));
+    }
+    assert_eq!(seen, [Some(5), Some(4), Some(3), Some(2), Some(1), Some(1)], "a coin a window under 10, through its floor 4, resting at 1");
+    // No withdrawal any more: the sale alone is in the carnet.
+    assert_eq!(service.lock_store().seller_learning("maker", 0).expect("learning").get(&FEATHER), Some(&(0, 1)));
     cleanup(&path);
 }
 
-/// A standing bid keeps its curve across passes; only its ceiling
+/// A standing bid keeps its walk across passes; only its ceiling
 /// follows the wallet, and a shrunk ceiling pulls the price down to it.
 #[test]
 fn standing_bids_keep_their_walk() {
@@ -100,12 +99,12 @@ fn standing_bids_keep_their_walk() {
     let StandingBid::Placed { order, price } = first else { panic!("{first:?}") };
     assert_eq!(price, 1, "untraded: opens at the 1-coin reference");
     assert_eq!(bounds_of(&service, order).map(|bounds| bounds.ceiling), Some(10));
-    for window in 1..=9 {
+    for window in 1..=4 {
         // One gear window: 2000 ticks.
         reprice_round(&service, start + ticks(2000.0 * f64::from(window)) + 1.0, 600.0);
     }
-    // Patience 0.5 (no life), gear: linear, 1 -> 10 over 36 000 ticks.
-    assert_eq!(price_of(&service, "fighter"), Some(5), "half its horizon: 1 + 9 x 0.5");
+    // The 10 % walk (user 2026-11-19), at least a coin a window.
+    assert_eq!(price_of(&service, "fighter"), Some(5), "four windows: 1 -> 5");
     let kept = keep_bid(&service, "fighter", FEATHER, 1, 30, "gear").expect("kept");
     assert!(matches!(kept, StandingBid::Kept { price: 5, .. }), "no reset to the reference: {kept:?}");
     let resting = service.lock_store().account_orders("fighter").unwrap_or_default().into_iter().find(|row| row.remaining > 0).expect("rests");
@@ -135,26 +134,25 @@ fn adopted_listings_walk() {
     assert!(super::handled(&service, order));
     assert!(!adopt(&service, order, bounds.clone()), "never re-adopted");
     service.lock_engine().quote_bounds.insert(order, bounds.clone());
-    // Half its horizon from its lineage's t0: halfway from 9 to 1.
     reprice_round(&service, bounds.curve_start_wall + ticks(18_000.0), 600.0);
-    assert_eq!(price_of(&service, "old_seller"), Some(5), "idle: concedes from its t0");
+    assert_eq!(price_of(&service, "old_seller"), Some(8), "idle: walks down 10 %, at least a coin");
     cleanup(&path);
 }
 
 /// Daemon CPU (2026-11-14): a resting order inside its patience window
-/// (default 2000 ticks) is not touched; one parked at its reserve never
-/// amends (its id stays, no new row).
+/// (default 2000 ticks) is not touched; an ask resting at one coin (the
+/// end of its walk) never amends (its id stays, no new row).
 #[test]
 fn reprice_work_follows_change_not_order_count() {
     assert_eq!(super::PATIENCE_TICKS, 2000);
     assert_eq!(lifescape_market::zip::FAST_FILL_TICKS, super::PATIENCE_TICKS, "a fast fill is one inside the first window");
     let (service, path) = service("cadence");
     funded(&service, "parked");
-    let listed = place(&service, vec![("account", str_value("parked")), ("side", str_value("sell")), ("qty", Value::Int(10)), ("price", Value::Int(5)), ("floor", Value::Int(5))]);
+    let listed = place(&service, vec![("account", str_value("parked")), ("side", str_value("sell")), ("qty", Value::Int(10)), ("price", Value::Int(1)), ("floor", Value::Int(1))]);
     let order = listed.get("order").as_i64().expect("order");
     let start = bounds_of(&service, order).map(|bounds| bounds.last_change_wall).expect("walks");
     assert_eq!(reprice_round(&service, start + 1000.0 * 0.6, 600.0), 0, "1000 ticks: inside the window");
-    assert_eq!(reprice_round(&service, start + 2100.0 * 0.6, 600.0), 0, "at its reserve: parked");
+    assert_eq!(reprice_round(&service, start + 2100.0 * 0.6, 600.0), 0, "at one coin: parked");
     let rows = service.lock_store().account_orders("parked").unwrap_or_default();
     assert_eq!(rows.len(), 1, "no amend, no replacement row: {rows:?}");
     assert_eq!(rows[0].order_id, order);
@@ -172,12 +170,11 @@ fn a_need_bid_keeps_its_lineage_across_amends_and_obtains() {
     let first = super::keep_bid_from(&service, "fiona_park", FEATHER, 5, 1, 10, crate::market_lineage::NEED).expect("placed");
     let StandingBid::Placed { order: root, .. } = first else { panic!("{first:?}") };
     let root_row = service.lock_store().get_order(root).ok().flatten().expect("root row");
-    // A need: pressed (beta 2), 6000 ticks, 500-tick windows: one window
-    // in, 1 + 9 x sqrt(500 / 6000) = 3.
+    // A need: 500-tick windows, the 10 % walk (at least a coin).
     reprice_round(&service, now_wall() + ticks(500.0) + 1.0, 600.0);
-    assert_eq!(price_of(&service, "fiona_park"), Some(3), "one window: 1 -> 3");
+    assert_eq!(price_of(&service, "fiona_park"), Some(2), "one window: 1 -> 2");
     let kept = super::keep_bid_from(&service, "fiona_park", FEATHER, 5, 1, 10, crate::market_lineage::NEED).expect("kept");
-    let StandingBid::Kept { order, price: 3 } = kept else { panic!("taken over at its walked price: {kept:?}") };
+    let StandingBid::Kept { order, price: 2 } = kept else { panic!("taken over at its walked price: {kept:?}") };
     let row = service.lock_store().get_order(order).ok().flatten().expect("walked row");
     assert_eq!((row.root_id, row.root_clock, row.motive.as_str()), (root, root_row.created_clock, "need"));
     assert!(row.replaces.is_some(), "an amend links its predecessor");
@@ -297,5 +294,48 @@ fn an_order_in_delivery_is_not_repriced() {
     assert_eq!(reprice_round(&service, start + ticks(18_000.0), 600.0), 0, "no amend tried");
     assert_eq!(price_of(&service, "maker"), Some(9));
     assert!(bounds_of(&service, order).is_some(), "still tracked for when its deal fails");
+    cleanup(&path);
+}
+
+fn funded_with(service: &MarketService, account: &str, coins: i64) {
+    let reply = service.handle(&object(vec![("op", str_value("fund")), ("account", str_value(account)), ("coins", Value::Int(coins))]));
+    assert_eq!(reply.get("ok").as_bool(), Some(true));
+}
+
+/// User 2026-11-19 (point 1): an account never promises more coins than
+/// it holds. Live: hana_91 held 144 022 coins with 148 893 locked in 29
+/// bids, the 10 % walk had raised them past its wallet (amends were never
+/// checked). Every raise of a bid is covered by the free coins, or refused.
+#[test]
+fn a_bid_raise_needs_free_coins() {
+    assert_eq!(crate::market_audit::affordable_raise(FEATHER, 10, 5, 10, 30), 8, "+1 a unit costs 10: three steps");
+    assert_eq!(crate::market_audit::affordable_raise(FEATHER, 10, 5, 10, 0), 5, "no free coin: no raise");
+    assert_eq!(crate::market_audit::affordable_raise(FEATHER, 10, 5, 10, 1000), 10, "covered: the whole raise");
+    assert_eq!(crate::market_audit::affordable_raise(FEATHER, 10, 5, 3, 0), 3, "a cut always passes");
+    let (service, path) = service("raise");
+    funded_with(&service, "buyer", 100);
+    let bid = place(&service, vec![("account", str_value("buyer")), ("side", str_value("buy")), ("qty", Value::Int(10)), ("price", Value::Int(5))]);
+    let order = bid.get("order").as_i64().expect("placed");
+    let refused = service.handle(&object(vec![("op", str_value("amend")), ("account", str_value("buyer")), ("order", Value::Int(order)), ("price", Value::Int(20))]));
+    assert_eq!(refused.get("ok").as_bool(), Some(false), "+150 with 50 free: {refused:?}");
+    assert_eq!(price_of(&service, "buyer"), Some(5), "the bid rests untouched");
+    let raised = service.handle(&object(vec![("op", str_value("amend")), ("account", str_value("buyer")), ("order", Value::Int(order)), ("price", Value::Int(10))]));
+    assert_eq!(raised.get("ok").as_bool(), Some(true), "+50 with 50 free: {raised:?}");
+    cleanup(&path);
+}
+
+/// The 10 % walk stops where the free coins stop: 60 coins, a bid of
+/// 10 feathers at 5 (50 locked) walks to 6 (+10) and holds there.
+#[test]
+fn the_bid_walk_stops_at_the_wallet() {
+    let (service, path) = service("walkcap");
+    funded_with(&service, "buyer", 60);
+    let start = now_wall();
+    let bid = place(&service, vec![("account", str_value("buyer")), ("side", str_value("buy")), ("qty", Value::Int(10)), ("price", Value::Int(5)), ("ceiling", Value::Int(100)), ("patience", Value::Int(1))]);
+    assert_eq!(bid.get("ok").as_bool(), Some(true), "{bid:?}");
+    for window in 1..=4 {
+        reprice_round(&service, start + 10.0 * f64::from(window), 600.0);
+    }
+    assert_eq!(price_of(&service, "buyer"), Some(6), "never past its 60 coins");
     cleanup(&path);
 }

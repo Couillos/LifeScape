@@ -21,10 +21,17 @@
 //! An amend happens only past `AMEND_MIN_PCT` (1 %, at least one coin),
 //! or to land exactly on the limit. A pressed order (blocking need, full
 //! bank) crosses the spread when the opposite best is inside its limit
-//! (M4), and any order takes the opposite best its curve would reach
-//! within the next window. Q4: a seller at its limit after its horizon
-//! with no fill withdraws; a buyer stays at its limit while its need
-//! lives.
+//! (M4), and any order takes the opposite best its next step would reach.
+//!
+//! The 10 % walk (user 2026-11-19, « la règle des 10 % vaut pour tout le
+//! monde en bid et ask, sinon les prix ne sont pas réels »; live: yew
+//! logs listed at twice their own cost walked down to it, sat there,
+//! were withdrawn and relisted at twice again, 7 h without a trade):
+//! `step` no longer follows the curve. An unfilled ask drops `WALK_PCT`
+//! per window (at least a coin) down to one coin, under its own cost (no
+//! seller floor, no withdrawal); an unfilled bid climbs `WALK_PCT` per
+//! window up to its ceiling (what the buyer can pay). The curve's limit
+//! is the buyer's ceiling only.
 
 /// Smallest and largest shape: the bounds keep a curve from freezing
 /// (beta -> 0) or jumping to the limit at once (beta -> inf).
@@ -36,6 +43,9 @@ pub const AMEND_MIN_PCT: i64 = 1;
 /// ZIP back-off after an own fill, in percent of the price (at least one
 /// coin): the old `demand_step` size, now once per fill only.
 pub const ZIP_STEP_PCT: i64 = 5;
+/// Walk of an unfilled order per window, in percent (at least a coin):
+/// a seller down, a buyer up (user 2026-11-19, the market makers' rate).
+pub const WALK_PCT: i64 = 10;
 /// Share of the gap to a public traded price a quote closes per window
 /// (ZIP learning rate on public fills).
 pub const PUBLIC_PULL: f64 = 0.5;
@@ -158,8 +168,6 @@ pub enum Step {
     Amend(i64),
     /// Own fill: back off to `opening` and restart the curve there.
     Restart { opening: i64 },
-    /// Q4: a seller at its limit past its horizon with no buyer.
-    Withdraw,
 }
 
 /// Toward the limit: the further of two prices (buyer up, seller down).
@@ -198,25 +206,40 @@ pub fn zip_backoff(sell: bool, current: i64, limit: i64) -> i64 {
     }
 }
 
-/// One window of the order (pure).
+/// The 10 % walk of an unfilled order from `current`: a seller `WALK_PCT`
+/// down (at least a coin, never under 1), a buyer `WALK_PCT` up (at
+/// least a coin; its ceiling is the caller's bound).
+pub fn walk(sell: bool, current: i64) -> i64 {
+    let current = current.max(1);
+    // Rounded up: 68 -> 61 like a maker's ask (`maker::quote`).
+    let moved = ((current * WALK_PCT + 99) / 100).max(1);
+    if sell {
+        (current - moved).max(1)
+    } else {
+        current + moved
+    }
+}
+
+/// One window of the order (pure): the 10 % walk (module doc).
 pub fn step(window: &Window) -> Step {
     let sell = window.sell;
-    let limit = window.curve.limit.max(1);
+    // No seller floor (user 2026-11-19): an ask walks down to one coin.
+    let limit = if sell { 1 } else { window.curve.limit.max(1) };
     let current = window.current.max(1);
     if window.filled {
         let opening = zip_backoff(sell, current, limit);
         return if opening == current { Step::Hold } else { Step::Restart { opening } };
     }
+    let walked = if sell { walk(true, current) } else { walk(false, current).min(limit) };
     // M4: the opposite best inside the limit is taken when pressed, or
-    // when the curve reaches it within the next window anyway.
+    // when the next walk reaches it anyway.
     if let Some(opposite) = window.best_opposite.filter(|price| *price >= 1 && within_limit(sell, *price, limit)) {
-        let ahead = window.curve.price_at(window.elapsed_ticks.saturating_add(window.window_ticks.max(1)));
-        let reached = if sell { ahead <= opposite } else { ahead >= opposite };
+        let reached = if sell { walked <= opposite } else { walked >= opposite };
         if (window.pressed || reached) && opposite != current {
             return Step::Amend(opposite);
         }
     }
-    let mut target = window.curve.price_at(window.elapsed_ticks);
+    let mut target = walked;
     if let Some(public) = window.public_price.filter(|price| *price >= 1 && Some(*price) != window.own_fill) {
         // Others traded on the conceding side, inside the limit: pull
         // halfway toward that print (public data only, D22).
@@ -230,14 +253,9 @@ pub fn step(window: &Window) -> Step {
     target = further(sell, target, current);
     target = if sell { target.max(limit) } else { target.min(limit) };
     if target == current {
-        let expired = window.elapsed_ticks >= window.curve.horizon_ticks;
-        return if sell && current <= limit && expired { Step::Withdraw } else { Step::Hold };
+        return Step::Hold;
     }
-    if (target - current).abs() >= amend_threshold(current) || target == limit {
-        Step::Amend(target)
-    } else {
-        Step::Hold
-    }
+    Step::Amend(target)
 }
 
 #[cfg(test)]

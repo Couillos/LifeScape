@@ -42,12 +42,36 @@ pub fn follow_chain(bot: &mut Bot, chain: &Chain, starved: impl Fn(&Bot) -> bool
         let done = (start - left) / chain.per_item.max(1);
         if chain_over(done, chain.items, left, chain.per_item) || (done > 0 && starved(bot)) {
             bot.pump(chain.tail_ticks)?;
-            return Ok(done);
+            // The server may still be chaining (a count read short): no
+            // step leaves while it does, a step sent then is dropped (live
+            // 2026-11-19 wolfe_carl: plate bodies hammered on while the
+            // bank walk was refused twice, 125 refusals on 27 bots today).
+            let mut quiet_since = bot.world.ticks;
+            while still_producing(quiet_since, bot.world.ticks) {
+                bot.pump(1)?;
+                let now = pack_total(bot, chain.input);
+                if now < left {
+                    left = now;
+                    quiet_since = bot.world.ticks;
+                }
+            }
+            return Ok((start - left) / chain.per_item.max(1));
         }
         if bot.world.ticks.saturating_sub(last_progress) >= chain.stall_ticks {
             return Ok(done);
         }
     }
+}
+
+/// Ticks one chained item takes (`p_delay(1)` then `p_delay(2)`) plus a
+/// tick of margin: an input still leaving inside it means the server
+/// still chains.
+const SETTLE_TICKS: u64 = 6;
+
+/// True while the last input left within `SETTLE_TICKS` (`quiet_since`):
+/// the server may chain one more item. Pure.
+pub fn still_producing(quiet_since: u64, now: u64) -> bool {
+    now.saturating_sub(quiet_since) < SETTLE_TICKS
 }
 
 /// The server's chain for one press is over: the pressed items are made,
@@ -87,6 +111,17 @@ pub fn make_press(can_make: u32, wanted: u32) -> (u8, u32) {
 
 #[cfg(test)]
 mod tests {
+    /// wolfe_carl 2026-11-19: after the pressed count the server hammered
+    /// on; the bot waits out one item window after the last input left
+    /// before any step, never longer once quiet.
+    #[test]
+    fn the_bot_waits_out_the_servers_chain() {
+        use super::still_producing;
+        assert!(still_producing(100, 100), "an input just left");
+        assert!(still_producing(100, 105), "inside one item window");
+        assert!(!still_producing(100, 106), "a whole item window quiet: over");
+    }
+
     use super::{chain_over, make_press};
 
     /// The drain ends on the server's own stop (items pressed, input out),

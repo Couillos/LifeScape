@@ -1,0 +1,163 @@
+PLAN — UN MARCHÉ QUI S'ÉQUILIBRE DE LUI-MÊME
+============================================
+Date : 2026-11-19. Statut : plan validé (décisions D1-D3 tranchées le
+2026-11-19), rien de codé.
+Source : audit du 2026-11-19 (orchestrator economy 3 h, run/lifescape.db
+en lecture seule 12-24 h, run/orchestrator.log, run/lives, run/hiscores ;
+code planner/src/{guide_engine,money_pick,resolve_obtain,ambition_catalog,
+ambition_fleet,derived_demand,trade_craft,market_value,bid_response}.rs,
+orchestrator/src/{brain_d17,brain_money,brain_filler,brain_trade,
+brain_succession,market_claims,market_maker,brain_npc_sale}.rs).
+Règles utilisateur tenues : aucun plancher ni bande de prix, l'offre et
+la demande seules ; marche de 10 % pour tous ; création de pièces sans
+destruction acceptée (« je me fiche de l'inflation ») ; les bots jouent
+comme des joueurs ; aucun cheat.
+
+
+0. CONSTAT (2026-11-19)
+-----------------------
+  - objets cotés des deux côtés 25 % (cible >= 35 %) ; écart médian
+    demande/offre x2,0 ; 49 objets échangés à 1 pièce ; 1,47 M d'unités
+    en annonces à 1 pièce (72 objets) ; offres d'achat annulées / réglées
+    1,51 ;
+  - revenu des bots : 92 % ventes aux marchands PNJ ; échanges entre bots
+    104 k contre 11,4 M de pièces sur 12 h ;
+  - temps de la flotte (12 h) : bûcheronnage 28 % (if 21 %), combat 23 %,
+    teneurs 15 %, minage 14 % ; artisanat 0,6 %, magie 1,9 %, cuisine
+    0,35 %, runes 0,3 % ; tâches de remplissage 20 % (dont if 52 %) ;
+  - lots 100 % marché : prévu +208 k, réalisé +34 k (barre de mithril de
+    1 301 à 350, pots non cuits produits par plusieurs bots à la fois).
+
+Cause racine : les boucles de rappel prix -> décision sont coupées.
+Quand un prix baisse, l'offre ne baisse pas (remplissage sur liste fixe,
+guide qui ignore les autres producteurs, métiers choisis au niveau) et
+la demande ne monte pas (temps des bots surévalué, transformateurs sans
+ingrédients, ambitions de transformation qui changent sans cesse).
+
+
+1. LA VALEUR DU TEMPS EST LE GAIN RÉEL (D1)
+-------------------------------------------
+Constat. `brain_d17::bot_d17` = la MEILLEURE ligne théorique du guide à
+portée (`best_row_in`, chaînes jamais exécutées comprises) : 1,1 à 1,5
+pièce/tick affichés pour ~0,23 réellement créés par bot.
+Règle. La valeur du temps d'un bot = ce qu'il a réellement gagné par
+tick de travail sur une fenêtre glissante (mesures du store : flux
+valorisés au prix courant / ticks de travail), plancher
+`MIN_COIN_RATE` (un tick n'est jamais gratuit) ; sans mesure, le gain
+mesuré moyen de la flotte.
+Où. `brain_d17::coin_rate` / `bot_d17` (lecteurs : `brain_bids`,
+`derived_demand`, `brain_alch`, `brain_train`).
+Effet attendu. Les producteurs répondent aux offres d'achat modestes ;
+les plafonds d'achat d'ingrédients remontent.
+
+
+2. CHAQUE BOT TIENT COMPTE DES AUTRES PRODUCTEURS
+------------------------------------------------
+Constat. Le guide prête à chaque bot TOUTE la demande récente
+(`guide_engine::sale_steps`, profondeur `Quote::fill_units`) : ruées
+synchrones, effondrement, passage à l'activité suivante.
+Règle.
+  - toute production lancée (nœud d'argent, remplissage, lot 100 %
+    marché) publie « N unités de X en route » sur le tableau public des
+    commandes (`market_claims`, déjà utilisé par les réponses aux
+    offres ; public, D22 tenu) ;
+  - la demande qu'un bot lit = offres d'achat + volume absorbé, MOINS les
+    annonces déjà au repos et les unités réclamées par les autres ;
+  - lots 100 % marché estimés sur cette demande partagée, jamais sur un
+    prix récent mince.
+Où. `market_claims.rs`, `guide_engine::sale_steps`, `market_value`,
+`trade_craft` / `brain_trade.rs`.
+
+
+3. LE REMPLISSAGE SUIT LES PRIX
+-------------------------------
+Constat. `brain_filler::launch_filler` résout un nœud HaveCoins sans le
+guide (`brain_money::publish` jamais appelé) : liste fixe
+`resolve_obtain::money_methods` (récolte du palier, laine, vaches,
+poulets, pièces).
+Règle. Le remplissage choisit comme un nœud d'argent normal : guide
+d'argent (avec la demande partagée du point 2), tirage `money_pick`.
+Où. `brain_filler::launch_filler` -> `brain_money::publish`.
+
+
+4. LES INGRÉDIENTS BON MARCHÉ ATTIRENT LES TRANSFORMATEURS
+----------------------------------------------------------
+Constat. Ingrédients à 1 pièce par millions, transformateurs sans
+ingrédients : offres d'achat sous les annonces (charbon 17 contre 27,
+lingot d'or 1 contre 110), plafond borné par la réservation du produit
+(`derived_demand.rs`), producteurs qui refusent (temps surévalué).
+Règle. Avec les points 1 et 2, les lots 100 % marché et la demande
+dérivée recalculent plafonds et rentabilité ; un ingrédient sous sa
+valeur de transformation fait acheter et transformer : la demande de
+matières premières remonte, leur prix aussi.
+Où. `derived_demand.rs`, `brain_trade.rs`, `bid_response.rs`.
+
+
+5. L'ARBITRAGE AVEC LES MARCHANDS, OUVERT À TOUS (D2)
+-----------------------------------------------------
+Constat. Ifs en annonce à 1 pièce, le marchand en paie 16 sans limite à
+son plancher (10 % de la valeur, `shop.rs2` `calc_shop_value`).
+Règle. Tout bot, teneurs compris, peut acheter au marché sous ce qu'un
+marchand ou l'alchimie lui rapporte (net du trajet au taux du point 1)
+et revendre au marchand : le prix du marché remonte vers l'exutoire par
+le jeu des joueurs, aucune règle de plancher.
+Où. offres de valeur côté cerveau (`brain_bids` / `bid_response` : un
+lot « acheter puis vendre au marchand »), `brain_npc_sale`, valeur de
+référence des teneurs (`maker.rs`).
+
+
+6. LES MÉTIERS SUIVENT LE BESOIN (D3)
+-------------------------------------
+Constat. Poids d'une ambition = demande x racine(adéquation)
+(`ambition_fleet.rs:151`), adéquation = (1 + avance/5)²
+(`ambition_catalog::fit`) : la compétence en tête l'emporte (bûcheronnage
+en tête pour 43 bots sur 74) et la boucle s'entretient. Un achat non
+servi compte encore comme jalon bloqué (`brain_succession::close_goal` ->
+`after_close(stuck)`) : 49 changements d'ambition de transformation en
+24 h après « jalon bloqué 3 fois ».
+Règle.
+  - le poids d'une ambition = le BESOIN seul : rareté de ses produits
+    (prix, offres d'achat non servies, annonces absentes), pas le niveau ;
+  - exceptions : Zezima, N0valyfe, Yogosun et les teneurs gardent le
+    tirage actuel (le niveau domine) ;
+  - un manque au marché (achat non servi ou refusé) ne compte pas comme
+    jalon bloqué.
+Où. `ambition_fleet.rs`, `ambition_catalog::fit`, `brain_succession`.
+
+
+7. COMBLER LES TROUS DE PRODUCTION
+----------------------------------
+Constat. Flèches de fer, certains talismans : « no production leg »,
+le combat à distance et une partie des runes bloqués.
+Règle. Une voie d'obtention chez le marchand quand le jeu la permet (à
+vérifier sur `../lostcity/content` : boutique d'arcs de Varrock).
+Où. `gamedata::obtain`, `obtain_legs`.
+
+
+8. BUGS DE SCRIPTS RESTANTS
+---------------------------
+  - poterie « shaping consumed nothing » ;
+  - malédiction refusée sur les vaches ;
+  - vente au marchand reprise après une livraison sans revenir au
+    magasin (Noterazzo depuis Varrock) ;
+  - trajets au Bandit Camp qui ne vendent rien (prix du marchand déjà
+    bas à l'arrivée).
+
+
+9. MESURE ET ORDRE
+------------------
+Tableau horaire (étape 0, `orchestrator economy`) : objets cotés des deux
+côtés, écart médian, objets à 1 pièce, jours de stock invendu par objet,
+temps de la flotte par compétence, part du remplissage, lots 100 %
+marché prévus / réalisés.
+Ordre : 0 ; 1 et 2 (fondations) ; 3, 4, 5 ; 6, 7, 8. Après chaque
+étape, 1 h de mesure (retour arrière si un indicateur recule).
+
+
+DÉCISIONS
+---------
+D1 (2026-11-19) : la valeur du temps = le gain réel mesuré.
+D2 (2026-11-19) : l'arbitrage avec les marchands est ouvert à tous les
+bots, teneurs compris.
+D3 (2026-11-19) : les métiers suivent le besoin seul, sauf Zezima,
+N0valyfe, Yogosun et les teneurs (tirage actuel).

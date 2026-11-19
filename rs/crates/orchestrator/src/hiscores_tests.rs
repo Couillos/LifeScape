@@ -85,14 +85,33 @@ fn valuation_merges_stacks_and_prices_once() {
     assert!(top.iter().all(|item| item.value > 0), "worthless stacks are left out");
 }
 
+/// User 2026-11-19: a banknote is its object, valued at its price. 28
+/// noted yew logs (1516) and 100 base ones (1515) are one 128-log stack
+/// priced once under the base id (the books and fills are keyed by it;
+/// the note's own id has no price and read 0).
+#[test]
+fn valuation_counts_a_banknote_as_its_object() {
+    let mut calls = Vec::new();
+    let mut price_of = |obj: i64| {
+        calls.push(obj);
+        if obj == 1515 { 34 } else { 0 }
+    };
+    let (total, top) = valuation(&[(1516, 28), (1515, 100)], &mut price_of);
+    assert_eq!(total, 128 * 34);
+    assert_eq!(calls, vec![1515], "priced once, under the object");
+    assert_eq!(top.iter().map(|item| (item.obj, item.count)).collect::<Vec<_>>(), vec![(1515, 128)]);
+}
+
 #[test]
 fn valuation_keeps_the_ten_best() {
-    let items: Vec<(i64, i64)> = (1..=15).map(|obj| (obj, obj)).collect();
+    // Fifteen base objects (a banknote id would merge into its object).
+    let ids: Vec<i64> = (1usize..).filter(|id| lifescape_gamedata::base_obj_id(*id) == *id).take(15).map(|id| id as i64).collect();
+    let items: Vec<(i64, i64)> = ids.iter().enumerate().map(|(rank, obj)| (*obj, rank as i64 + 1)).collect();
     let (total, top) = valuation(&items, &mut |_| 2);
     assert_eq!(total, (1..=15).sum::<i64>() * 2);
     assert_eq!(top.len(), TOP_ITEMS);
-    assert_eq!(top[0].obj, 15);
-    assert_eq!(top[9].obj, 6);
+    assert_eq!(top[0].obj, ids[14]);
+    assert_eq!(top[9].obj, ids[5]);
 }
 
 #[test]

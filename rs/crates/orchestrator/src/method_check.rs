@@ -160,9 +160,10 @@ pub fn plan(method: &str, count: i64) -> Result<MethodPlan, String> {
     Ok(MethodPlan { method: method.to_string(), drop_farm, quest, script, args, product, skill, inputs, tools, coins, fare })
 }
 
-/// Units of `item` the state holds: pack, bank and worn.
+/// Units of `item` the state holds: pack, bank and worn, its banknotes
+/// counted (one object, user 2026-11-19).
 pub fn held(state: &Value, item: &str) -> i64 {
-    let ids: Vec<i64> = lifescape_gamedata::objs_by_name(item).into_iter().map(|obj| obj.obj_id as i64).collect();
+    let ids: Vec<i64> = lifescape_gamedata::objs_by_name(item).into_iter().flat_map(|obj| lifescape_gamedata::obj_forms(obj.obj_id)).map(|id| id as i64).collect();
     ["inv", "bank", "worn"]
         .iter()
         .flat_map(|key| state.get(key).as_arr().cloned().unwrap_or_default())

@@ -68,6 +68,12 @@ Registre : `src/registry.rs`, source unique `lifescape_scripts::names()`.
 statiques dans `orchestration/static/`, port via `LIFESCAPE_WEB_PORT`).
 Pages : `/` (bots), `/items`, `/market`, `/rates`, `/life`, `/economy`,
 `/hiscores`, `/errors`, `/guides-money`, `/guides-training`.
+Colonne tâche de `/` (`web_job_lives::summarize`) : la méthode du nœud
+actif, `done`, `stuck`, sinon `ready` ; depuis le 2026-11-19, quand le
+graphe attend (achat posé en attente de vendeur) et qu'une tâche de
+remplissage tourne hors graphe, `filler <méthode>` (bulle : le nœud en
+attente) au lieu de `ready` (`running_filler`, dernier lancement
+`filler:` de l'historique sans fin enregistrée).
 Page `/rates` (2026-11-17, `rates.js`, `src/rates_view.rs` pur,
 `src/web_rates_view.rs` HTTP) : la vue mesures publiait ~18 000 lignes de
 flux brutes (`/api/rates/table`, 11 Mo, ~1 s, gardé pour Top activities).
@@ -112,6 +118,13 @@ Périodes des graphiques `/items` et `/market` (2026-11-15) : 24 h et
 7 jours en pas d'1 h (`res=1h`, 24/168 créneaux), 30 jours et 6 mois en
 pas d'1 jour (`res=1d`, 30/183 créneaux) ; tables `PERIODS` (`items.js`)
 et `VIEWS` (`market.js`), l'historique plus court s'affiche tel quel.
+Total `/items` (2026-11-19, décision utilisateur : « retire les coins
+du total items ») : la ligne « Total », sa variation 24 h et la courbe
+`total` comptent tous les objets sauf les pièces (`holdings::items_total`,
+`Store::hourly_points_without` / `daily_points_without`) ; la ligne
+« Coins » reste dans la liste. Billets et objets ne font qu'une ligne
+(`gamedata::base_obj_id`).
+
 Traçabilité `/items` (2026-11-15) : `GET /api/items/flows?item=<obj id |
 nom affiché>&hours=24` (`src/web_items.rs`, `Store::item_flows_since`,
 staff et `run/economy-excluded.txt` exclus ; sans `item`, les 60 plus

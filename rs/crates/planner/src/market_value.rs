@@ -94,7 +94,16 @@ pub struct AbsorbedLot {
 /// `alch_net` the coins one cast of its own brings net of runes and
 /// casting time (`None`: not a caster). `None` when nothing pays.
 pub fn absorbed_lot(view: &BookView, cost: f64, held: i64, alch_net: Option<f64>, split: i64, max_lot: i64) -> Option<AbsorbedLot> {
+    absorbed_lot_within(view, cost, held, alch_net, split, max_lot, max_lot)
+}
+
+/// `absorbed_lot` for a bot that can make at most `supply` units (the
+/// inputs on sale or held, `bid_response::feasible_lot`): the demand is
+/// read whole (pending supply, claims, its own stock), the lot never
+/// exceeds what it can make.
+pub fn absorbed_lot_within(view: &BookView, cost: f64, held: i64, alch_net: Option<f64>, split: i64, max_lot: i64, supply: i64) -> Option<AbsorbedLot> {
     let cap = (max_lot * split.max(1)).max(1);
+    let max_lot = max_lot.min(supply.max(1));
     // Bids that pay more than the unit cost, best first.
     let mut bids = view.bids.clone();
     bids.sort_by(|left, right| right.0.cmp(&left.0));

@@ -98,6 +98,11 @@ fn close_goal_history(life: &mut Life, stuck: bool) {
     if lifescape_planner::gear_ladder::gear_subtree(life).contains(&cause.node) {
         skills.clear();
     }
+    // A buy the market did not fill or refused is the market's shortfall,
+    // never the bot's failure at a skill (user 2026-11-19).
+    if lifescape_planner::market_shortfall(&cause.last_error) {
+        skills.clear();
+    }
     if skills.is_empty() {
         crate::logln!("brain {}: goal {} stuck: {}", life.account, goal_label(&life.goal), cause.describe());
         push_history(life, "goal", &ban_entry("", 0, &cause));

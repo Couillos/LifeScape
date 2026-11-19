@@ -395,7 +395,8 @@ impl OwnCosts {
     /// `make_cost` (`brain_bids::production_costs_for`) when known.
     pub fn reserve(&self, store: &Store, item: &str, item_id: i64, life: Option<&Life>, make_cost: Option<f64>) -> Option<Reserve> {
         let display = display_of(item);
-        let bought = store.last_own_fill(&self.account, item_id, true).ok().flatten().map(|(price, _)| crate::market_units::to_unit(item_id, price));
+        // Deals sit on the object's book id: a banknote reads its object.
+        let bought = store.last_own_fill(&self.account, crate::market_audit::book_item(item_id), true).ok().flatten().map(|(price, _)| crate::market_units::to_unit(item_id, price));
         let (made, found) = own_origin(&self.reports, &display);
         if made <= 0 {
             // Found, or nothing measured: a planned or gathering prior

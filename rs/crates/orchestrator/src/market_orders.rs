@@ -71,6 +71,15 @@ impl MarketService {
         if let Err(error) = check_price(price) {
             return Self::err(error.to_string());
         }
+        // A raised bid is covered like a fresh one (user 2026-11-19, point
+        // 1): the extra coins come out of the free coins, else refused.
+        if row.side == lifescape_store::OrderSide::Buy && price > row.price {
+            let (_, free) = self.free_coverage(&account, lifescape_store::OrderSide::Buy, item);
+            if crate::market_audit::affordable_raise(item, row.remaining, row.price, price, free) < price {
+                let extra = crate::market_units::deal_coins(item, row.remaining, price) - crate::market_units::deal_coins(item, row.remaining, row.price);
+                return Self::err(format!("market rejected: buyer holds {free} free coins, the raise needs {extra}"));
+            }
+        }
         let clock = Self::now_clock();
         // 1. Book: the old order leaves; its true remainder rides along.
         let Some(old) = self.withdraw_from_book(item, order_id) else {

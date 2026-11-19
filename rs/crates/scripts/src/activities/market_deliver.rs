@@ -11,15 +11,17 @@ use lifescape_sdk::Bot;
 use crate::kit::pack::{obj_id, pack_total};
 use crate::market_client::{market_call, my_deals, trade_id};
 use crate::market_handover::{
-    meet_partner, parse_deliver_args, redeposit, seller_offer, wait_departure, DealWatch, DeliverReports, Meet, SellerOffer, Served,
+    bank_after_trades, meet_partner, parse_deliver_args, seller_offer, wait_departure, DealWatch, DeliverReports, Meet, SellerOffer, Served,
     MEET_RETRIES, WAIT_PAST_DEADLINE_TICKS,
 };
-use crate::market_lots::{carried_before, gift_purse, gift_received, group_deals, secure_lots, touched_ids, window_lots, DealGroup};
+use crate::market_lots::{gift_purse, gift_received, group_deals, secure_lots, window_lots, DealGroup};
 use crate::{ScriptError, ScriptResult};
 
 /// `market deliver <depart> <deadline> <deal>=<x>,<y> ...`: bank when
 /// short, wait for the staggered departure, walk to the tile, trade with
-/// a double-screen check, redeposit, walk back to the start tile. Every
+/// a double-screen check, then bank everything but the tools near the
+/// square and stay there (user 2026-11-19: the paused activity
+/// relaunches from the square, never walks its old pack back). Every
 /// posed deal gets a terminal report, error paths included: a run that
 /// died after `trading` left the deal stuck there forever (finding 2).
 pub fn run_deliver(bot: &mut Bot, args: &[String]) -> ScriptResult {
@@ -41,7 +43,6 @@ fn deliver_groups(
     jobs: &[(i64, i32, i32)],
     reports: &mut DeliverReports,
 ) -> ScriptResult {
-    let start = bot.position();
     let rows = my_deals(&bot.username)?;
     let coins = obj_id(bot, "coins")?;
     // One exchange per partner and object, in ascending deal order on both
@@ -57,17 +58,14 @@ fn deliver_groups(
         bot.log("deliver: no open deal left in this convocation, nothing to do");
         return Ok(0);
     }
-    let touched = touched_ids(&groups, coins);
     let mut ok = true;
-    // What the paused script carried comes back after the trades.
-    let restore = carried_before(bot);
     // Nearest bank in, Varrock west out: the lots of every group at once.
     let secured = secure_lots(bot, &groups, coins)?;
     let Some(flags) = secured else {
         for group in &groups {
             reports.report(bot, group, "failed", "timeout");
         }
-        redeposit(bot, &touched, &restore);
+        bank_after_trades(bot);
         // Typed (P16): the lots never reached the pack in time.
         return Err(ScriptError::Failed(format!("deliver: lots not secured in time for deals {:?}", groups.iter().map(|group| group.ids.clone()).collect::<Vec<_>>())));
     };
@@ -136,9 +134,7 @@ fn deliver_groups(
             }
         }
     }
-    redeposit(bot, &touched, &restore);
-    let (level, x, z) = start;
-    let _ = bot.travel_to(lifescape_sdk::plan::Tile { x, z, level });
+    bank_after_trades(bot);
     Ok(if ok { 0 } else { 1 })
 }
 

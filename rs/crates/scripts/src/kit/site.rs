@@ -51,6 +51,12 @@ pub fn contended_at(here: (i32, i32, i32), players: &[(i32, i32, i32)]) -> bool 
     players.iter().any(|(x, z, level)| *level == here.2 && (x - here.0).abs().max((z - here.1).abs()) <= SITE_RADIUS)
 }
 
+/// Other players within `SITE_RADIUS` of the bot (same level).
+pub fn players_near(bot: &Bot) -> usize {
+    let here = (bot.world.x, bot.world.z, bot.world.level);
+    bot.world.players.values().filter(|player| player.level == here.2 && (player.x - here.0).abs().max((player.z - here.1).abs()) <= SITE_RADIUS).count()
+}
+
 /// `Blocked { contended:<x>,<z>,<level> }` for the assigned site (else
 /// the bot's tile) when other players work within `SITE_RADIUS`; `None`
 /// when the bot was alone (a real failure, counted).

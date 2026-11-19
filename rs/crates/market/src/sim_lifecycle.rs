@@ -342,11 +342,6 @@ fn reprice(engine: &mut Engine, traders: &[Trader], model: Model, tick: u64) {
                         live.own_fill = Some(live.price);
                         Some(opening)
                     }
-                    Step::Withdraw => {
-                        let _ = engine.book.cancel(live.id);
-                        engine.run.withdrawn += 1;
-                        continue;
-                    }
                 }
             }
         };

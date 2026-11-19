@@ -681,3 +681,30 @@ le meilleur membre verrouillé ; intrant : l'objet). Le cerveau
 famille (raison `need_held`) et relance le nœud sans bloc compté
 (`locked_released`) ; aucune annonce retirée (verrou d'un échange en
 cours) : le besoin nu suit la voie usuelle.
+
+## Sites encombrés, enclumes, camps (2026-11-19)
+
+- Minage : tous les rochers du palier épuisés avec au moins autant
+  d'autres joueurs autour que de rochers (`kit::mine::crowded`,
+  `site::players_near`) : `Blocked{contended:…}` tout de suite, le
+  cerveau refroidit le site et en choisit un autre (décision
+  utilisateur : « si y'a trop de joueurs il faut changer de spot » ;
+  live : 17 mineurs sur les 4 rochers d'adamantite ouverts).
+- Enclume : les cases d'accès sont classées par vrai coût de marche
+  (`skill_walk::refine_walking`), celles que la navigation déclare
+  injoignables écartées dès qu'une autre l'est (`kit::anvil::
+  reachable_first` ; enclume de Thurgo, case nord murée par la cabane :
+  302 dossiers NoRoute).
+- Chasse : la case visée d'un groupe d'apparitions est son apparition
+  la plus proche du centre, jamais le centre (`kit::foes::group_anchor` ;
+  hommes du palais de Varrock, centre (3232,3392,1) dans un mur : 64
+  dossiers NoRoute).
+- Fin de chaîne de production (forge, bijoux, cuir) : après le compte
+  pressé, le bot reste tant qu'un intrant part encore dans la fenêtre
+  d'un objet (`kit::press::still_producing`, 6 ticks) : jamais un pas
+  envoyé pendant que le serveur forge encore (wolfe_carl, 125 pas
+  refusés aujourd'hui).
+- Achat au magasin partiel (`market shopbuy`) : des unités achetées,
+  même moins que voulu, ne sont plus un échec (`shop_bought_any` ; 197
+  « run returned 1 », 43 nœuds abandonnés) ; le nœud se relance pour le
+  reste. Rien acheté reste un échec typé.

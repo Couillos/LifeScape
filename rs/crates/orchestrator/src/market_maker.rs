@@ -443,7 +443,62 @@ fn others_book(service: &crate::market_service::MarketService, item: i64, accoun
     (bid, ask, bid_depth, ask_depth)
 }
 
+/// True when the free coins cover a buy move (`free`, beyond every resting
+/// bid; `resting`: the amended order's remaining units and per-lot price):
+/// a placed leg whole, a raise by its extra coins (`affordable_raise`); a
+/// cut, a sell or a cancel always (user 2026-11-19, point 1: a maker never
+/// asks for coins it does not hold, never retries a refused bid a pass).
+pub(crate) fn move_covered(item: i64, buying: bool, planned: &Move, free: i64, resting: Option<(i64, i64)>) -> bool {
+    if !buying {
+        return true;
+    }
+    match planned {
+        Move::Cancel(_) => true,
+        Move::Place(leg) => crate::market_units::deal_coins(item, leg.qty, crate::market_units::to_lot(item, leg.price)) <= free,
+        Move::Amend(_, price) => {
+            let wanted = crate::market_units::to_lot(item, *price);
+            resting.is_some_and(|(remaining, old)| crate::market_audit::affordable_raise(item, remaining, old, wanted, free) >= wanted)
+        }
+    }
+}
+
+/// A sell move cut to the maker's free stock (`free`: held, net of its
+/// resting asks and in-flight sales): a placed leg lists at most that,
+/// in whole lots, nothing when none is free; a reprice or a cancel moves
+/// no stock (user 2026-11-19: « un teneur ne doit mettre en vente que ce
+/// qu'il possède »; live rae_stone 370 buckets listed with 131 free).
+pub(crate) fn sell_leg_within(item: i64, planned: Move, free: i64) -> Option<Move> {
+    match planned {
+        Move::Place(leg) => {
+            let qty = lifescape_market::lots::whole_lots_down(leg.qty.min(free.max(0)), crate::market_units::lot_of(item));
+            (qty > 0).then_some(Move::Place(Leg { qty, ..leg }))
+        }
+        other => Some(other),
+    }
+}
+
 fn apply(service: &crate::market_service::MarketService, account: &str, item: i64, side: &str, planned: Move, name: &str) -> usize {
+    let planned = if side == "sell" {
+        let (free, _) = service.free_coverage(account, lifescape_store::OrderSide::Sell, item);
+        match sell_leg_within(item, planned, free) {
+            Some(fitted) => fitted,
+            // Nothing free to list: the leg waits for stock, silently.
+            None => return 0,
+        }
+    } else {
+        planned
+    };
+    if side == "buy" {
+        let (_, free) = service.free_coverage(account, lifescape_store::OrderSide::Buy, item);
+        let resting = match planned {
+            Move::Amend(order, _) => service.lock_store().get_order(order).ok().flatten().map(|row| (row.remaining, row.price)),
+            _ => None,
+        };
+        if !move_covered(item, true, &planned, free, resting) {
+            // The leg waits for coins, silently: no refused bid a pass.
+            return 0;
+        }
+    }
     let reply = match planned {
         Move::Cancel(order) => return usize::from(cancel(service, account, order, REQUOTE_REASON)),
         Move::Amend(order, price) => {

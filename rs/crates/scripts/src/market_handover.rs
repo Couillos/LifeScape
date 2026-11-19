@@ -1,7 +1,7 @@
 //! Handover mechanics for `market deliver` (split from the activity so it
 //! stays under its plafond): watching the deal against the daemon,
 //! meeting the partner, reading the seller's offer, one terminal report
-//! per posed deal (error paths included), redeposit.
+//! per posed deal (error paths included), banking after the trades.
 
 #![forbid(unsafe_code)]
 
@@ -9,9 +9,8 @@ use std::collections::{HashMap, HashSet};
 
 use lifescape_sdk::Bot;
 
-use crate::kit::bank::nearest_bank;
-use crate::market_client::{deal_report, my_deals, offer_state, trade_id, OfferState};
-use crate::market_lots::{Carried, DealGroup};
+use crate::market_client::{deal_report, my_deals, offer_state, OfferState};
+use crate::market_lots::DealGroup;
 use crate::ScriptError;
 
 /// How long the buyer watches a partial offer grow before refusing it.
@@ -447,52 +446,26 @@ pub fn seller_offer(bot: &mut Bot, group: &DealGroup, trade: u16, deadline: u64)
     Ok(verdict)
 }
 
-/// Pack ids to redeposit: everything carried except the untouched.
-/// The touched set must hold every dealt form (base AND note): the
-/// seller's window form may differ from the trade id, and a form kept
-/// by mistake never returns to the bank.
-pub fn redeposit_keep(carried: &[u16], touched: &[u16]) -> Vec<u16> {
-    carried.iter().copied().filter(|held| !touched.contains(held)).collect()
-}
-
-/// Best-effort redeposit of the traded stacks (notes land back as base
-/// stock), then the paused script's own pack comes back out (`restore`,
-/// `market_lots::carried_before`): coins a shop buy was carrying, the
-/// load a woodcutter was walking to the bank. Locked units stay banked
-/// (outside the trade procedure). Loud when it fails: a silent drop here
-/// loses the lots with no trace.
-pub fn redeposit(bot: &mut Bot, touched: &[u16], restore: &[Carried]) {
-    let Ok(bank) = nearest_bank(bot) else { return };
-    if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300).unwrap_or(false) {
-        bot.log("redeposit skipped: bank did not open");
+/// Best-effort banking once the trades are done (user 2026-11-19): at
+/// the nearest bank (Varrock west or east from the square) everything
+/// but the tools and the paused script's held objects goes in, the
+/// traded lots, the coins and the load carried before the pause alike.
+/// Nothing comes back out: the session ends the paused run and the brain
+/// relaunches the activity from the square, so a woodcutter never walks
+/// a full pack back to its trees. Locked units stay banked (outside the
+/// trade procedure). Loud when it fails: a silent drop loses the lots
+/// with no trace.
+pub fn bank_after_trades(bot: &mut Bot) {
+    if !crate::market_lots::open_bank_here(bot).unwrap_or(false) {
+        bot.log("banking after the trades skipped: bank did not open");
         return;
     }
     if let Some(side_com) = (bot.tables.com_id)("bank_side:inv") {
         let carried: Vec<u16> = bot.backpack().1.iter().map(|(_, (held, _))| *held).collect();
-        let keep: Vec<u16> = redeposit_keep(&carried, touched);
+        let keep = crate::market_lots::pack_kept_after_trades(&carried, &crate::market_lots::pack_stays(bot));
         match bot.bank_deposit_all(side_com, &keep, 300) {
             Ok(true) => {}
-            other => bot.log(&format!("redeposit outcome: {other:?}")),
-        }
-    }
-    for stack in restore {
-        let note = trade_id(stack.base);
-        let form = if stack.noted && note != stack.base { note } else { stack.base };
-        // Only the missing part: a trip that never banked (nearest bank
-        // shut) still carries its pack, never withdraw it twice.
-        let missing = stack.units.saturating_sub(crate::kit::pack::pack_total(bot, form));
-        if missing == 0 {
-            continue;
-        }
-        let outcome = if form != stack.base {
-            bot.bank_withdraw_noted(stack.base, note, missing, 300)
-        } else {
-            bot.bank_withdraw(stack.base, missing, 300)
-        };
-        let outcome = outcome.map(|_| crate::kit::pack::pack_total(bot, form));
-        match outcome {
-            Ok(held) if held >= stack.units => {}
-            other => bot.log(&format!("restore of the paused pack: obj {} x{} ({}) came back as {other:?}", stack.base, stack.units, if stack.noted { "noted" } else { "base" })),
+            other => bot.log(&format!("banking after the trades: {other:?}")),
         }
     }
     let _ = bot.close_modal();
@@ -500,7 +473,7 @@ pub fn redeposit(bot: &mut Bot, touched: &[u16], restore: &[Carried]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{anchor_deliver_args, error_verdict, offer_verdict, SellerOffer, redeposit_keep, watch_verdict, DealWatch, WAIT_PAST_DEADLINE_TICKS};
+    use super::{anchor_deliver_args, error_verdict, offer_verdict, SellerOffer, watch_verdict, DealWatch, WAIT_PAST_DEADLINE_TICKS};
 
     fn strings(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| item.to_string()).collect()
@@ -530,15 +503,6 @@ mod tests {
         let other = strings(&["make", "+30"]);
         assert_eq!(anchor_deliver_args(&other, 1), other, "only deliver convocations");
         assert!(super::parse_deliver_args(&posed).is_err(), "an unanchored offset never reads as a tick");
-    }
-
-    /// Deal 24 regression: the seller delivered base willow (1519) while
-    /// the trade id is the note (1520) — both forms must redeposit.
-    #[test]
-    fn redeposit_covers_both_dealt_forms() {
-        let carried = [995u16, 1519, 314];
-        let touched = [995u16, 1520, 1519];
-        assert_eq!(redeposit_keep(&carried, &touched), vec![314u16]);
     }
 
     /// Finding 5: the daemon verdict counts before the deadline too. A

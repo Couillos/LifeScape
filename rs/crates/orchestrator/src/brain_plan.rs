@@ -274,13 +274,23 @@ fn live_entries(job: &Job, key: &str) -> Vec<(String, i64)> {
     out
 }
 
-/// Live carried + banked stacks (debug name, summed quantity).
+/// Live carried + banked stacks (debug name, summed quantity), a
+/// banknote under its object's name (`stacks_of`).
 pub(crate) fn live_stacks(job: &Job) -> Vec<(String, i64)> {
     let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    stacks_of(&live)
+}
+
+/// Carried + banked stacks of a snapshot: one row per OBJECT, its notes
+/// summed in (user 2026-11-19: « les items et les banknote de ces items
+/// sont les mêmes items », measured, valued and traded the same). Counts
+/// what the bot owns; a recipe still takes only unnoted units (scripts).
+pub(crate) fn stacks_of(live: &Value) -> Vec<(String, i64)> {
     let mut totals: std::collections::HashMap<String, (String, i64)> = std::collections::HashMap::new();
     for key in ["inv", "bank"] {
         for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
             let Some(name) = live_debug_name(&entry) else { continue };
+            let name = lifescape_gamedata::base_obj_name(&name).to_string();
             let qty = entry.get("count").as_i64().unwrap_or(1);
             if qty <= 0 {
                 continue;
@@ -364,6 +374,18 @@ mod tests {
     use super::{choose_money, live_combat, merge_keep, rescue_replan_cause, sale_blocked};
     use lifescape_json::{object, str_value};
     use lifescape_planner::{Node, NodeKind, NodeStatus};
+
+    /// User 2026-11-19: an object and its banknote are one object. 28
+    /// noted yew logs in the pack and 100 banked read as 128 yew_logs,
+    /// never a separate `cert_yew_logs` stack (it escaped the keep list,
+    /// sold under its own id with no price, double-counted its locks).
+    #[test]
+    fn a_banknote_stack_reads_as_its_object() {
+        let live = lifescape_json::parse(r#"{"inv":[{"id":1516,"count":28},{"id":1351,"count":1}],"bank":[{"id":1515,"count":100}]}"#).expect("json");
+        let mut stacks = super::stacks_of(&live);
+        stacks.sort();
+        assert_eq!(stacks, vec![("bronze_axe".to_string(), 1), ("yew_logs".to_string(), 128)]);
+    }
 
     #[test]
     fn trend_bonus_flips_a_close_money_call() {

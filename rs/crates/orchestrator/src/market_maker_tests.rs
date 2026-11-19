@@ -245,3 +245,36 @@ fn no_merchant_flip_reference_remains() {
     }
     assert!(found.is_empty(), "{found:#?}");
 }
+
+/// User 2026-11-19 (point 1): hana_91 (144 022 coins, 148 893 locked)
+/// retried 129 bids a pass the market refused for want of coins. A buy
+/// leg goes out only when the free coins cover it: placed whole, a
+/// raise by its extra coins; a cut, a sell or a cancel always does.
+#[test]
+fn a_maker_bid_goes_out_only_when_covered() {
+    use super::{move_covered, Move};
+    use lifescape_market::Leg;
+    let feather = 314;
+    assert!(move_covered(feather, true, &Move::Place(Leg { price: 5, qty: 10 }), 50, None));
+    assert!(!move_covered(feather, true, &Move::Place(Leg { price: 5, qty: 10 }), 49, None));
+    assert!(move_covered(feather, true, &Move::Amend(7, 6), 10, Some((10, 5))), "+1 on 10 units with 10 free");
+    assert!(!move_covered(feather, true, &Move::Amend(7, 7), 10, Some((10, 5))), "+20 with 10 free");
+    assert!(move_covered(feather, true, &Move::Amend(7, 4), 0, Some((10, 5))), "a cut");
+    assert!(move_covered(feather, false, &Move::Place(Leg { price: 5, qty: 10 }), 0, None), "a sell is the stock's matter");
+    assert!(move_covered(feather, true, &Move::Cancel(7), 0, None));
+}
+
+/// User 2026-11-19: a maker sells only what it holds free. Live rae_stone
+/// listed 370 buckets of water with 131 free, refused every pass: the
+/// leg now lists the 131; nothing free, nothing listed. Never more.
+#[test]
+fn a_maker_ask_lists_only_its_free_stock() {
+    use super::{sell_leg_within, Move};
+    use lifescape_market::Leg;
+    let bucket = 1929;
+    assert_eq!(sell_leg_within(bucket, Move::Place(Leg { price: 3, qty: 370 }), 131), Some(Move::Place(Leg { price: 3, qty: 131 })));
+    assert_eq!(sell_leg_within(bucket, Move::Place(Leg { price: 3, qty: 50 }), 131), Some(Move::Place(Leg { price: 3, qty: 50 })), "covered: unchanged");
+    assert_eq!(sell_leg_within(bucket, Move::Place(Leg { price: 3, qty: 7 }), 0), None, "nothing free: no listing");
+    assert_eq!(sell_leg_within(bucket, Move::Amend(9, 2), 0), Some(Move::Amend(9, 2)), "a reprice moves no stock");
+    assert_eq!(sell_leg_within(bucket, Move::Cancel(9), 0), Some(Move::Cancel(9)));
+}

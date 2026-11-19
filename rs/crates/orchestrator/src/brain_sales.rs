@@ -526,7 +526,11 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
                 continue;
             }
         }
-        let unsold = learning.get(&item).copied().unwrap_or(0);
+        // The carnet keys orders by the base object: a noted stack
+        // (`cert_yew_logs`) reads its base's unsold horizons (live
+        // 2026-11-19: carl_miller relisted yew at twice its cost 8 times,
+        // its learned floor never read).
+        let unsold = learning.get(&crate::market_audit::book_item(item)).copied().unwrap_or(0);
         let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, unsold, &costs, Some(life), make_costs.get(&name).copied(), pressed, crate::brain_alch::alch_floor(&live, &name));
         let (lot, price, floor) = match decision {
             crate::market_seller::SaleDecision::List { qty: lot, price, floor } => (lot, price, floor),

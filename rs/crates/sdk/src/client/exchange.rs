@@ -153,6 +153,30 @@ impl Bot {
         Self::trade_accepted_in(&self.world.messages, &self.world.message_ticks, since)
     }
 
+    /// The confirm screen's inventories: ours (inv1, inv2), the partner's
+    /// (otherinv1, otherinv2) (rev-274 `trade.rs2`).
+    fn confirm_coms(&self) -> ([u16; 2], [u16; 2]) {
+        (
+            [(self.tables.com_id)("tradeconfirm:inv1").unwrap_or(3542), (self.tables.com_id)("tradeconfirm:inv2").unwrap_or(3538)],
+            [(self.tables.com_id)("tradeconfirm:otherinv1").unwrap_or(3532), (self.tables.com_id)("tradeconfirm:otherinv2").unwrap_or(3539)],
+        )
+    }
+
+    /// Forgets the trade screens' last contents (the client keeps a closed
+    /// window's inventories): always both confirm sides, the two offers
+    /// only when `offers` (no window open yet: an open window's offers are
+    /// the fresh ones its opening streamed).
+    pub(crate) fn forget_trade_screens(&mut self, offers: bool) {
+        let (confirm, other) = self.confirm_coms();
+        let mut screens = vec![confirm[0], confirm[1], other[0], other[1]];
+        if offers {
+            screens.extend([Self::TRADE_OFFER, Self::TRADE_PARTNER_OFFER]);
+        }
+        for com in screens {
+            self.world.inv.remove(&com);
+        }
+    }
+
     /// Physical exchange with a double-screen check: offer our give lots
     /// (plus the coin leg), require the partner's main-screen offer to
     /// equal the want lots exactly, accept, then require the confirm
@@ -178,6 +202,14 @@ impl Bot {
         }
         let deadline = self.world.ticks + timeout;
         let seen = self.world.messages.len();
+        // A previous trade's screens never judge this one (live 2026-11-19,
+        // deal 51993: bellarhodes and hill_eric traded twice in a row, the
+        // confirm check read the first trade's lots, "offer mismatch").
+        // An open window's offers are this trade's (the knock before this
+        // call opened it; the server sends them once, on open): only the
+        // confirm screens, sent later, are forgotten then (deal 52454: the
+        // fresh offers wiped, the partner's lots never seen).
+        self.forget_trade_screens(self.trade_modal().is_none());
         while self.world.ticks < deadline && self.trade_modal().is_none() {
             let left = deadline.saturating_sub(self.world.ticks).min(600).max(1);
             if self.trade_request(partner, left)? {
@@ -238,18 +270,11 @@ impl Bot {
         }
         // Confirm screen: our lots in inv1+inv2, theirs in otherinv1+2
         // (rev-274 `trade.rs2` transmits each side to its own pair).
-        let confirm_coms = [
-            (self.tables.com_id)("tradeconfirm:inv1").unwrap_or(3542),
-            (self.tables.com_id)("tradeconfirm:inv2").unwrap_or(3538),
-        ];
-        let other_coms = [
-            (self.tables.com_id)("tradeconfirm:otherinv1").unwrap_or(3532),
-            (self.tables.com_id)("tradeconfirm:otherinv2").unwrap_or(3539),
-        ];
-        let aggregate = |coms: &[u16; 2]| {
+        let (confirm_coms, other_coms) = self.confirm_coms();
+        let aggregate = |bot: &Self, coms: &[u16; 2]| {
             let mut acc = HashMap::new();
             for com in coms {
-                if let Some(slots) = self.world.inv.get(com) {
+                if let Some(slots) = bot.world.inv.get(com) {
                     for (held, n) in slots.values() {
                         *acc.entry(*held).or_insert(0) += *n;
                     }
@@ -257,9 +282,15 @@ impl Bot {
             }
             acc
         };
-        if !Self::lots_match(&aggregate(&confirm_coms), &full_give)
-            || !Self::lots_match(&aggregate(&other_coms), &full_want)
-        {
+        // The confirm lots stream a few ticks after the screen: judged once
+        // they agree or `CONFIRM_STREAM_TICKS` passed, never on the first
+        // frame (an empty or late screen read as a mismatch).
+        let streamed_by = self.world.ticks + CONFIRM_STREAM_TICKS;
+        let agree = |bot: &Self| Self::lots_match(&aggregate(bot, &confirm_coms), &full_give) && Self::lots_match(&aggregate(bot, &other_coms), &full_want);
+        while !agree(self) && self.world.ticks < streamed_by && self.trade_modal() == Some("confirm") {
+            self.pump(1)?;
+        }
+        if !agree(self) {
             let _ = self.trade_close();
             return Ok(ExchangeOutcome::ConfirmMismatch);
         }
@@ -290,9 +321,36 @@ impl Bot {
     }
 }
 
+/// Ticks the confirm screen's lots get to stream before a mismatch.
+const CONFIRM_STREAM_TICKS: u64 = 20;
+
 #[cfg(test)]
 mod tests {
     use crate::client::Bot;
+
+/// Deal 51993 (2026-11-19): the first trade of a pair left its screens in
+/// the client; the second trade's confirm check read them. A new trade
+/// starts with every trade screen forgotten, the pack and bank untouched.
+#[test]
+fn a_new_trade_forgets_the_last_trade_screens() {
+    let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+    let mut lots = std::collections::HashMap::new();
+    lots.insert(0u8, (995u16, 990u32));
+    for com in [Bot::TRADE_OFFER, Bot::TRADE_PARTNER_OFFER, 3542, 3538, 3532, 3539, 3322] {
+        bot.world.inv.insert(com, lots.clone());
+    }
+    // Deal 52454: a window already open keeps its fresh offers.
+    bot.forget_trade_screens(false);
+    for com in [3542, 3538, 3532, 3539] {
+        assert!(!bot.world.inv.contains_key(&com), "confirm screen {com} forgotten");
+    }
+    assert!(bot.world.inv.contains_key(&Bot::TRADE_OFFER) && bot.world.inv.contains_key(&Bot::TRADE_PARTNER_OFFER), "an open window's offers stay");
+    bot.forget_trade_screens(true);
+    for com in [Bot::TRADE_OFFER, Bot::TRADE_PARTNER_OFFER] {
+        assert!(!bot.world.inv.contains_key(&com), "no window yet: offer {com} forgotten");
+    }
+    assert!(bot.world.inv.contains_key(&3322), "the trade pack stays");
+}
 /// The double-screen gate is exact: same keys and counts pass, an
 /// overpay or a missing lot refuses, zero lots never count.
 #[test]

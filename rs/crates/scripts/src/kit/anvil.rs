@@ -41,16 +41,32 @@ pub fn anvil_post(site: Option<(i32, i32, i32)>, x: i32, z: i32, level: i32) -> 
         .min_by_key(|post| (distance(post, x, z), post.x, post.z))
 }
 
-/// Orthogonal stands of a 1x1 anvil, nearest the bot first (Doric's
-/// anvil forces the north side: `smithing.loc` `forceapproach=north`).
-fn anvil_stands(bot: &Bot, post: &knowledge::stations::Station) -> Vec<(i32, i32)> {
-    let (x, z) = (post.x as i32, post.z as i32);
+/// Orthogonal stands of a 1x1 anvil, by real walk from the bot, the ones
+/// the planner cannot reach left out when another is (Doric's anvil
+/// forces the north side: `smithing.loc` `forceapproach=north`). Live
+/// 2026-11-19: Thurgo's anvil (2999,3144) has its north stand walled in
+/// by the hut, nearest as the crow flies from the north: 302 NoRoute
+/// dossiers before each visit fell back to the east stand.
+fn anvil_stands(bot: &mut Bot, post: &knowledge::stations::Station) -> Vec<(i32, i32)> {
+    let (x, z, level) = (post.x as i32, post.z as i32, post.level as i32);
     if post.loc == "doric_anvil" {
         return vec![(x, z + 1)];
     }
     let mut stands = vec![(x - 1, z), (x + 1, z), (x, z - 1), (x, z + 1)];
     stands.sort_by_key(|(stand_x, stand_z)| ((stand_x - bot.world.x).abs() + (stand_z - bot.world.z).abs(), *stand_x, *stand_z));
-    stands
+    let ranked = crate::skill_walk::refine_walking(bot, stands, 4, "anvil stand", |(stand_x, stand_z)| lifescape_sdk::plan::Tile { x: *stand_x, z: *stand_z, level });
+    reachable_first(ranked)
+}
+
+/// Candidates in walk order, the ones without a walk cost (disconnected
+/// for the planner) dropped when any other has one; all kept otherwise
+/// (planner unwired: Manhattan order, nothing known).
+fn reachable_first<T: Copy>(ranked: Vec<(Option<u32>, T)>) -> Vec<T> {
+    if ranked.iter().any(|(cost, _)| cost.is_some()) {
+        ranked.into_iter().filter(|(cost, _)| cost.is_some()).map(|(_, cand)| cand).collect()
+    } else {
+        ranked.into_iter().map(|(_, cand)| cand).collect()
+    }
 }
 
 /// Server lines that end an anvil visit loud (quest gate, no hammer,
@@ -143,4 +159,18 @@ pub struct AnvilPress {
     pub bar: u16,
     pub bars_each: u32,
     pub product: u16,
+}
+
+#[cfg(test)]
+mod tests {
+    /// Thurgo's anvil: the walled-in north stand has no walk cost, the
+    /// east and south ones do; only the reachable stands are tried. With
+    /// no cost known at all (planner unwired) every stand stays.
+    #[test]
+    fn walled_in_anvil_stands_are_never_walked() {
+        let ranked = vec![(Some(12), (3000, 3144)), (Some(14), (2999, 3143)), (None, (2999, 3145))];
+        assert_eq!(super::reachable_first(ranked), vec![(3000, 3144), (2999, 3143)]);
+        let unknown = vec![(None, (2999, 3145)), (None, (3000, 3144))];
+        assert_eq!(super::reachable_first(unknown), vec![(2999, 3145), (3000, 3144)]);
+    }
 }

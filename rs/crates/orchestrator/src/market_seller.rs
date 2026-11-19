@@ -267,7 +267,8 @@ impl MarketService {
     /// `qty` free units (the `market sell` script's default price).
     pub(crate) fn op_seller_quote(&self, request: &Value) -> Value {
         let account = request.get("account").as_str().unwrap_or("").to_string();
-        let item = request.get("item").as_i64().unwrap_or(-1);
+        // One book per object: a banknote is quoted as its object.
+        let item = request.get("item").as_i64().map(crate::market_audit::book_item).unwrap_or(-1);
         let qty = request.get("qty").as_i64().unwrap_or(0);
         let Some(name) = usize::try_from(item).ok().and_then(lifescape_gamedata::obj_by_id).and_then(|obj| obj.name) else {
             return Self::err(format!("unknown item {item}"));

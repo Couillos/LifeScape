@@ -26,14 +26,20 @@
 //! - the cheaper of buy and make for the units needed, coins + ticks ×
 //!   the bot's coin rate, one-off costs spread over the units.
 //!
-//! Training (2026-11-14): a leg up to `MAX_TRAIN_LEVELS` above the bot's
-//! level of a production skill counts (`unit_cost_training`). Training is
+//! Training (2026-11-14; no cap on the levels and magic trainable, user
+//! 2026-11-19): a leg of a trainable skill above the bot's level counts
+//! however far (`unit_cost_training`): its training cost decides. Training is
 //! an investment, not a cost of one lot: its net cost (time and inputs
 //! minus what the products made while training sell for, saturation
 //! applied) is charged to the lot only for its share
 //! (`market_value::training_share`: nothing when the bot's ambition
 //! climbs that skill anyway, one lot in `TRAINING_AMORTIZE_LOTS`
 //! otherwise). The `Produce` goal blocks on the level and trains first.
+//!
+//! Lot size (user 2026-11-19): when the inputs on sale (or held) cannot
+//! cover the whole demand, the lot shrinks to the most units they cover
+//! (`feasible_lot`), never to nothing (6 uncut diamonds for 51 amulet of
+//! power bids: 6 amulets).
 //!
 //! Opportunity (`opportunity`): the lot the market absorbs at the unit
 //! cost (`market_value::absorbed_lot`: bids above cost, sales at the
@@ -52,7 +58,7 @@
 //! (`BID_WINDOW_TICKS`) its word selects (one in `PRODUCER_SPREAD`).
 
 use crate::market_fit::BookView;
-use crate::market_value::{absorbed_lot, leg_site, training_share, walk_ticks, HANDOVER_TICKS, VARROCK_FOUNTAIN};
+use crate::market_value::{absorbed_lot_within, leg_site, training_share, walk_ticks, HANDOVER_TICKS, VARROCK_FOUNTAIN};
 use crate::model::GoalKind;
 
 /// Prefix of a bid goal's origin (`life.goal_origin`, `bid:<item>`).
@@ -69,14 +75,12 @@ pub const BID_WINDOW_TICKS: u64 = 6000;
 pub const MAX_BID_LOT: i64 = 100;
 /// Recipe depth explored (strung amulet, amulet, bar, ore).
 const MAX_DEPTH: u8 = 4;
-/// Levels a bot trains to answer a bid (live 2026-11-14: 18 bronze
-/// scimitar bids up to 2961 and nobody answered: the whole fleet had
-/// smithing 1, the scimitar needs 5). A player trains a few levels for a
-/// bid worth it; the training time and inputs count in the opportunity.
-pub const MAX_TRAIN_LEVELS: u8 = 15;
-/// Skills trained for a bid: the production skills (combat, magic and
-/// prayer train through their own goals).
-const TRAINABLE: [&str; 8] = ["smithing", "crafting", "cooking", "mining", "fishing", "woodcutting", "firemaking", "runecraft"];
+/// Skills trained for a bid, as many levels as the leg needs (live
+/// 2026-11-14: smithing 1 fleet-wide under 18 bronze scimitar bids; live
+/// 2026-11-19: crafting 53 and magic 25 at best under 51 amulet of power
+/// bids): the training time and inputs count in the opportunity. Combat
+/// and prayer train through their own goals.
+const TRAINABLE: [&str; 9] = ["smithing", "crafting", "cooking", "mining", "fishing", "woodcutting", "firemaking", "runecraft", "magic"];
 
 /// What the scorer reads of the bot (its own state only).
 pub struct Producer<'a> {
@@ -251,7 +255,7 @@ pub fn unit_cost(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookVie
     cost_at(item, units.max(1), market, bot, Step { depth: 0, train: false, dest: VARROCK_FOUNTAIN })
 }
 
-/// `unit_cost` where a production leg up to `MAX_TRAIN_LEVELS` above the
+/// `unit_cost` where a production leg of a trainable skill above the
 /// bot's level counts, its training listed in `UnitCost::train`.
 pub fn unit_cost_training(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView>, bot: &Producer) -> Option<UnitCost> {
     cost_at(item, units.max(1), market, bot, Step { depth: 0, train: true, dest: VARROCK_FOUNTAIN })
@@ -296,8 +300,7 @@ fn make_cost(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView>, 
         let live = (bot.level_of)(&skill).max(1);
         let mut training = Vec::new();
         if i64::from(live) < level {
-            let gap_ok = level - i64::from(live) <= i64::from(MAX_TRAIN_LEVELS);
-            if !step.train || !gap_ok || !TRAINABLE.contains(&skill.as_str()) {
+            if !step.train || !TRAINABLE.contains(&skill.as_str()) {
                 continue;
             }
             training.push((skill.clone(), live, u8::try_from(level).unwrap_or(99)));
@@ -398,6 +401,8 @@ fn merge_training(mut training: Vec<(String, u8, u8)>) -> Vec<(String, u8, u8)> 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrainingRow {
     pub skill: String,
+    /// The method priced (the cheapest open at the live level).
+    pub method: String,
     pub to: u8,
     pub coins: f64,
     pub ticks: f64,
@@ -407,37 +412,80 @@ pub struct TrainingRow {
 }
 
 /// Gross cost of the levels a plan trains, per skill. Each skill trains
-/// with its reach tranche method from the live level
+/// with the cheapest method open at the live level (net of what its
+/// products sell for), as the brain picks it at resolve
+/// (`training::best_pick`): its reach tranche method
 /// (`tranches::reach_method`: the static anvil product for smithing, its
-/// bars at their unit cost), its actions sized by the server XP table
-/// (`sizing`), each action at the bot's rate for that method, the inputs
-/// it burns at their unit cost. `None` when the training cannot be priced
-/// (no XP data, inputs nobody sells or makes).
+/// bars at their unit cost) and every recipe of a consuming skill open at
+/// that level (`training_production::candidates`, every combat spell
+/// open for magic, `magic_climbs`; live 2026-11-19: the
+/// static crafting tranche at 53 cuts 7 071 diamond rings nobody can
+/// buy, gold and gem jewellery on sale train it). Its actions are sized
+/// by the server XP table (`sizing`), each action at the bot's rate for
+/// that method, the inputs it burns at their unit cost. `None` when no
+/// method can be priced (no XP data, inputs nobody sells or makes).
 pub fn training_rows(train: &[(String, u8, u8)], market: &dyn Fn(&str) -> Option<BookView>, bot: &Producer) -> Option<Vec<TrainingRow>> {
     let mut out = Vec::new();
     for (skill, from, to) in train {
-        let method = crate::tranches::reach_method(skill, *from);
-        let actions = crate::sizing::tranche_actions_with(bot.rate, &method, *from, *to)?;
-        let product = crate::method_way::method_way(&method).map(|(item, _)| item).unwrap_or_default();
-        let rate = (bot.units_per_6000)(&method, &product);
+        let mut methods = vec![crate::tranches::reach_method(skill, *from)];
+        let mut open: Vec<String> = crate::training_production::candidates(skill).into_iter().filter(|candidate| candidate.level <= *from).map(|candidate| candidate.method).collect();
+        open.extend(magic_climbs(skill, *from));
+        for method in open {
+            if !methods.contains(&method) {
+                methods.push(method);
+            }
+        }
+        let net = |row: &TrainingRow| row.coins.max(0.0) + row.ticks * bot.coin_rate - row.products_value;
+        let best = methods.iter().filter_map(|method| training_row(skill, method, *from, *to, market, bot)).min_by(|left, right| net(left).total_cmp(&net(right)))?;
+        out.push(best);
+    }
+    Some(out)
+}
+
+/// Every F2P combat spell open at `level` on the magic tranche's spot
+/// (live 2026-11-19: the tranche's water bolt wants 7 548 chaos runes,
+/// 343 on sale; the strikes burn air, earth, fire and mind runes the
+/// market holds by the ten thousand). Empty for another skill.
+fn magic_climbs(skill: &str, level: u8) -> Vec<String> {
+    if skill != "magic" {
+        return Vec::new();
+    }
+    let spot = crate::tranches::tranche_resource(skill, level);
+    lifescape_gamedata::spells::all_spells()
+        .into_iter()
+        .filter(|spell| !spell.members && spell.deals_damage() && spell.level <= i64::from(level) && crate::spell_methods::spell_fits_spot(&spell.spell, &spot))
+        .map(|spell| format!("fight:magic/{}/{spot}", spell.spell))
+        .collect()
+}
+
+/// One trained skill priced with one method (`training_rows`).
+fn training_row(skill: &str, method: &str, from: u8, to: u8, market: &dyn Fn(&str) -> Option<BookView>, bot: &Producer) -> Option<TrainingRow> {
+    let actions = crate::sizing::tranche_actions_with(bot.rate, method, from, to)?;
+    let product = crate::method_way::method_way(method).map(|(item, _)| item).unwrap_or_default();
+    // A method that makes an object climbs at its units per 6000 ticks;
+    // one that makes none (a fight trains magic) at its ticks per XP.
+    let ticks = if product.is_empty() {
+        crate::sizing::tranche_ticks_with(bot.rate, method, from, to)?
+    } else {
+        let rate = (bot.units_per_6000)(method, &product);
         if !rate.is_finite() || rate <= 0.0 {
             return None;
         }
-        let mut row = TrainingRow { skill: skill.clone(), to: *to, coins: 0.0, ticks: actions as f64 * 6000.0 / rate, products_value: 0.0 };
-        let shop = Step { depth: 1, train: false, dest: VARROCK_FOUNTAIN };
-        for (input, units) in crate::sizing::tranche_consumption_with(bot.rate, &method, *from, *to) {
-            let sub = cost_at(&input, units.max(1), market, bot, shop)?;
-            row.coins += units as f64 * sub.coins;
-            row.ticks += units as f64 * sub.ticks;
-        }
-        if !product.is_empty() && !bot.ironman {
-            let book = market(&product);
-            let price = book.as_ref().and_then(|view| view.current.or(view.best_bid())).unwrap_or(0).max(0) as f64;
-            row.products_value = price * actions as f64 * crate::market_fit::saturation_factor(book.as_ref(), actions as f64);
-        }
-        out.push(row);
+        actions as f64 * 6000.0 / rate
+    };
+    let mut row = TrainingRow { skill: skill.to_string(), method: method.to_string(), to, coins: 0.0, ticks, products_value: 0.0 };
+    let shop = Step { depth: 1, train: false, dest: VARROCK_FOUNTAIN };
+    for (input, units) in crate::sizing::tranche_consumption_with(bot.rate, method, from, to) {
+        let sub = cost_at(&input, units.max(1), market, bot, shop)?;
+        row.coins += units as f64 * sub.coins;
+        row.ticks += units as f64 * sub.ticks;
     }
-    Some(out)
+    if !product.is_empty() && !bot.ironman {
+        let book = market(&product);
+        let price = book.as_ref().and_then(|view| view.current.or(view.best_bid())).unwrap_or(0).max(0) as f64;
+        row.products_value = price * actions as f64 * crate::market_fit::saturation_factor(book.as_ref(), actions as f64);
+    }
+    Some(row)
 }
 
 /// Gross one-off cost of the levels a plan trains: (coins, ticks).
@@ -474,12 +522,12 @@ pub fn opportunity(item: &str, view: &BookView, market: &dyn Fn(&str) -> Option<
         return None;
     }
     let depth = (view.bid_depth() + sales).max(alch.map(|_| crate::market_value::ALCH_LOT).unwrap_or(0)).clamp(1, MAX_BID_LOT * PRODUCER_SPLIT);
-    let unit = cost_at(item, depth, market, bot, Step { depth: 0, train: true, dest: VARROCK_FOUNTAIN })?;
+    let (supply, unit) = feasible_lot(item, depth, market, bot)?;
     // Buying the object to resell is the merchants' trade, not a producer's.
     if !unit.plan.first().is_some_and(|step| step.starts_with("make ")) {
         return None;
     }
-    let lot = absorbed_lot(view, unit.total_for(depth, bot.coin_rate), (bot.held)(item), alch, PRODUCER_SPLIT, MAX_BID_LOT)?;
+    let lot = absorbed_lot_within(view, unit.total_for(supply, bot.coin_rate), (bot.held)(item), alch, PRODUCER_SPLIT, MAX_BID_LOT, supply)?;
     let (train_coins, train_ticks) = training_charge(&unit.train, market, bot)?;
     let reach = match (bot.position, unit.start) {
         (Some(from), Some(start)) => walk_ticks(from, start),
@@ -506,6 +554,29 @@ pub fn opportunity(item: &str, view: &BookView, market: &dyn Fn(&str) -> Option<
     })
 }
 
+/// The most units of `item`, up to `depth`, the bot can come by now
+/// (inputs on sale or held, legs it can work or train for), with their
+/// unit cost: the whole depth when it can, else the largest count the
+/// inputs cover (feasibility only shrinks as the units grow: bisection),
+/// `None` when not even one.
+pub fn feasible_lot(item: &str, depth: i64, market: &dyn Fn(&str) -> Option<BookView>, bot: &Producer) -> Option<(i64, UnitCost)> {
+    let step = Step { depth: 0, train: true, dest: VARROCK_FOUNTAIN };
+    let depth = depth.max(1);
+    if let Some(unit) = cost_at(item, depth, market, bot, step) {
+        return Some((depth, unit));
+    }
+    let mut found = (1, cost_at(item, 1, market, bot, step)?);
+    let mut short = depth;
+    while short - found.0 > 1 {
+        let middle = found.0 + (short - found.0) / 2;
+        match cost_at(item, middle, market, bot, step) {
+            Some(unit) => found = (middle, unit),
+            None => short = middle,
+        }
+    }
+    Some(found)
+}
+
 /// Why `item` is or is not a lot for this bot, stage by stage (the
 /// `orchestrator bid-why` diagnostic): the same steps as `opportunity`
 /// and `ranked_opportunities`, each one named with its numbers.
@@ -525,24 +596,38 @@ pub fn explain(item: &str, view: &BookView, market: &dyn Fn(&str) -> Option<Book
         return out;
     }
     let depth = (view.bid_depth() + sales).max(alch.map(|_| crate::market_value::ALCH_LOT).unwrap_or(0)).clamp(1, MAX_BID_LOT * PRODUCER_SPLIT);
-    let Some(unit) = cost_at(item, depth, market, bot, Step { depth: 0, train: true, dest: VARROCK_FOUNTAIN }) else {
-        out.push(format!("no unit cost for {depth} units: no leg this bot can work (levels, tools, quests, bans, sites)"));
+    let Some((supply, unit)) = feasible_lot(item, depth, market, bot) else {
+        out.push(format!("no unit cost for even 1 unit: no leg this bot can work (levels, tools, quests, bans, sites, inputs)"));
+        out.extend(explain_make(item, 1, market, bot));
         return out;
     };
+    if supply < depth {
+        out.push(format!("inputs cover {supply} of {depth} units: the lot shrinks to them"));
+    }
     out.push(format!("unit: {:.0} coins + {:.0} ticks, plan {}, train {:?}", unit.coins, unit.ticks, unit.plan.join(" < "), unit.train));
-    out.extend(explain_make(item, depth, market, bot));
+    out.extend(explain_make(item, supply, market, bot));
     if !unit.plan.first().is_some_and(|step| step.starts_with("make ")) {
         out.push("cheapest is buying it: a merchant's trade, not a producer's".to_string());
         return out;
     }
-    let Some(lot) = absorbed_lot(view, unit.total_for(depth, bot.coin_rate), (bot.held)(item), alch, PRODUCER_SPLIT, MAX_BID_LOT) else {
-        out.push(format!("no lot the book absorbs at a unit cost of {:.0} (bids under the cost)", unit.total_for(depth, bot.coin_rate)));
+    let Some(lot) = absorbed_lot_within(view, unit.total_for(supply, bot.coin_rate), (bot.held)(item), alch, PRODUCER_SPLIT, MAX_BID_LOT, supply) else {
+        out.push(format!("no lot the book absorbs at a unit cost of {:.0} (bids under the cost)", unit.total_for(supply, bot.coin_rate)));
         return out;
     };
     let Some((train_coins, train_ticks)) = training_charge(&unit.train, market, bot) else {
-        out.push("training charge unknown".to_string());
+        out.push("training charge unknown: no open method of a trained skill can be priced".to_string());
+        for (skill, from, to) in &unit.train {
+            let priced = training_rows(&[(skill.clone(), *from, *to)], market, bot).is_some();
+            let reach = crate::tranches::reach_method(skill, *from);
+            let actions = crate::sizing::tranche_actions_with(bot.rate, &reach, *from, *to);
+            let ticks = crate::sizing::tranche_ticks_with(bot.rate, &reach, *from, *to);
+            out.push(format!("  train {skill} {from} -> {to}: {} (reach {reach}: actions {actions:?}, ticks {ticks:?})", if priced { "priced" } else { "NO method priced" }));
+        }
         return out;
     };
+    for row in training_rows(&unit.train, market, bot).unwrap_or_default() {
+        out.push(format!("  train {} to {} by {}: {:.0} coins + {:.0} ticks, products {:.0}", row.skill, row.to, row.method, row.coins, row.ticks, row.products_value));
+    }
     match opportunity(item, view, market, bot) {
         Some(found) => {
             let floor = bot.coin_rate.max(crate::market_fit::MIN_COIN_RATE);
@@ -566,7 +651,7 @@ fn explain_make(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView
         let reason = match leg.skill.clone() {
             None => Some("no skill (drop or pickup)".to_string()),
             Some((skill, level)) if skill_banned(&skill, bot.avoid) => Some(format!("{skill} banned (level {level})")),
-            Some((skill, level)) if i64::from((bot.level_of)(&skill).max(1)) + i64::from(MAX_TRAIN_LEVELS) < level => Some(format!("{skill} {level} beyond training reach")),
+            Some((skill, level)) if i64::from((bot.level_of)(&skill).max(1)) < level && !TRAINABLE.contains(&skill.as_str()) => Some(format!("{skill} {level} not trained for a bid")),
             _ if leg.quest.as_ref().is_some_and(|quest| !bot.quests_done.contains(quest)) => Some(format!("quest {:?} missing", leg.quest)),
             _ if crate::skeleton_deps::guild_only(&leg.method).is_some() => Some("guild only".to_string()),
             _ if !(bot.units_per_6000)(&leg.method, item).is_finite() || (bot.units_per_6000)(&leg.method, item) <= 0.0 => Some("no rate".to_string()),
@@ -638,3 +723,7 @@ mod tests;
 #[cfg(test)]
 #[path = "bid_response_market_tests.rs"]
 mod market_tests;
+
+#[cfg(test)]
+#[path = "bid_response_reach_tests.rs"]
+mod reach_tests;

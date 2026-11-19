@@ -39,13 +39,28 @@ pub(crate) fn ledger_holdings(live: &Value, coins_id: i64) -> (i64, Vec<(i64, i6
             if id == coins_id {
                 coins += count;
             } else {
-                *stock.entry(id).or_insert(0) += count;
+                // Keyed by the object: a deal (`net_of_deals`) and the
+                // books sit on the base id, a banknote is its object.
+                *stock.entry(base_of(id)).or_insert(0) += count;
             }
         }
     }
     let mut stock: Vec<(i64, i64)> = stock.into_iter().collect();
     stock.sort();
     (coins, stock)
+}
+
+/// True when a pushed snapshot witnesses the account's holdings: fresh
+/// (under 30 s), its pack streamed and its bank seen since the session
+/// opened (`inv_streamed`, `bank_streamed`). A fresh worker knows no
+/// bank until its first bank open: mirroring it then set the ledger to
+/// 0 coins and 0 items and every order of the account failed coverage
+/// (live 2026-11-19, thorn_vera after a redeploy). The last known
+/// ledger stands until a witness comes.
+pub(crate) fn witnesses_holdings(live: &Value, now: f64) -> bool {
+    live.get("updated").as_f64().is_some_and(|at| now - at < 30.0)
+        && live.get("inv_streamed").as_bool() == Some(true)
+        && live.get("bank_streamed").as_bool() == Some(true)
 }
 
 /// Base object of a carried id: a banknote counts for the object it
@@ -171,6 +186,33 @@ pub fn uncommitted(side: OrderSide, item: i64, coins: i64, stock: &[(i64, i64)],
         }
     }
     ((held - claimed_units).max(0), (coins - claimed_coins).max(0))
+}
+
+/// Highest per-lot price in `[old, wanted]` a buy order of `remaining`
+/// units may move to when its account has `free` coins beyond every
+/// resting bid (this one at `old` included): an account never promises
+/// more coins than it holds (user 2026-11-19, point 1; live hana_91:
+/// 148 893 coins locked in 29 bids for 144 022 held, the 10 % walk had
+/// raised them past its wallet). A cut always passes.
+pub fn affordable_raise(item: i64, remaining: i64, old: i64, wanted: i64, free: i64) -> i64 {
+    if wanted <= old {
+        return wanted;
+    }
+    let extra = |price: i64| crate::market_units::deal_coins(item, remaining, price) - crate::market_units::deal_coins(item, remaining, old);
+    if extra(wanted) <= free {
+        return wanted;
+    }
+    // The cost only grows with the price: bisection on [old, wanted).
+    let (mut low, mut high) = (old, wanted);
+    while high - low > 1 {
+        let middle = low + (high - low) / 2;
+        if extra(middle) <= free {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    low
 }
 
 /// Ledger mirror of one live snapshot net of the account's in-flight
@@ -366,7 +408,9 @@ impl MarketService {
     /// convene round mirrors inv+bank+worn item counts (numeric ids from
     /// the snapshot) into the ledger; match-time settlement still moves
     /// it between rounds. Stale (>30 s) or missing snapshots skip: no
-    /// funding without a live witness. The mirror is net of the
+    /// funding without a live witness, and a snapshot whose pack or bank
+    /// has not streamed since its session opened is no witness either
+    /// (`witnesses_holdings`, live 2026-11-19 thorn_vera). The mirror is net of the
     /// account's in-flight deals (`net_of_deals`): the SET used to hand
     /// promised goods and coins back as free every round (deals 1716,
     /// 1721, 1772: relisted stock, re-spent coins, `short` at the bank).
@@ -382,7 +426,7 @@ impl MarketService {
                 Ok(Some(live)) => live,
                 _ => continue,
             };
-            if !live.get("updated").as_f64().is_some_and(|at| now - at < 30.0) {
+            if !witnesses_holdings(&live, now) {
                 continue;
             }
             let (coins, stock) = ledger_holdings(&live, coins_id);
@@ -456,6 +500,35 @@ impl crate::daemon::Orchestrator {
 #[cfg(test)]
 mod tests {
     use super::{uncovered, COINS_ID};
+
+    /// A banknote is its object (user 2026-11-19): the ledger keys noted
+    /// stock by the base id, so an in-flight sale (deals sit on the base
+    /// id) nets against it instead of a phantom negative row.
+    #[test]
+    fn the_ledger_keys_banknotes_by_their_object() {
+        let live = lifescape_json::parse(r#"{"inv":[{"id":1516,"count":28},{"id":995,"count":40}],"bank":[{"id":1515,"count":100}],"worn":[]}"#).expect("json");
+        let (coins, stock) = super::ledger_holdings(&live, COINS_ID);
+        assert_eq!((coins, stock), (40, vec![(1515, 128)]));
+    }
+
+    /// Live 2026-11-19 (thorn_vera, redeploy at 08:40:04): a fresh worker
+    /// had not seen its bank yet, the mirror set the ledger to 0 coins
+    /// and 0 items, its bids ("buyer holds 0 coins, needs 6516" with
+    /// 242 681 coins) and six surplus listings ("seller holds 0, needs
+    /// 392") were refused until its first bank open reached the daemon.
+    /// Only a fresh snapshot whose pack and bank both streamed witnesses
+    /// the holdings; anything else keeps the last known ledger.
+    #[test]
+    fn a_snapshot_without_its_bank_never_funds_the_ledger() {
+        use lifescape_json::{object, Value};
+        let snapshot = |inv: bool, bank: bool, updated: f64| object(vec![("inv_streamed", Value::Bool(inv)), ("bank_streamed", Value::Bool(bank)), ("updated", Value::Float(updated))]);
+        let now = 1000.0;
+        assert!(super::witnesses_holdings(&snapshot(true, true, 990.0), now));
+        assert!(!super::witnesses_holdings(&snapshot(true, false, 990.0), now), "bank not seen since the session opened");
+        assert!(!super::witnesses_holdings(&snapshot(false, true, 990.0), now), "pack not streamed yet");
+        assert!(!super::witnesses_holdings(&snapshot(true, true, 960.0), now), "stale (30 s)");
+        assert!(!super::witnesses_holdings(&object(vec![("updated", Value::Float(990.0))]), now), "no stream flags: no witness");
+    }
     use lifescape_store::{Order, OrderSide, OrderStatus};
     use std::collections::BTreeMap;
 

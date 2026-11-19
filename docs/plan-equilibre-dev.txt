@@ -1,0 +1,152 @@
+PLAN DE DÉVELOPPEMENT — MARCHÉ QUI S'ÉQUILIBRE (exécution de docs/plan-equilibre.txt)
+=====================================================================================
+Date : 2026-11-19. Statut : plan d'exécution, rien de lancé.
+Référence fonctionnelle : docs/plan-equilibre.txt (étapes 0-8, D1-D3).
+Règles : AGENTS.md (std only, pas d'unsafe, noms explicites, < 1000
+lignes par fichier, attentes en ticks, erreurs typées, aucun fallback non
+demandé, scripts minces, protocole debug §5, tout en --release).
+
+
+P. PRÉREQUIS (accord utilisateur)
+---------------------------------
+P1. Commit du travail du 2026-11-19 (marché 10 %, livraison en pause,
+    billets = objet, corrections du jour, docs). Raison : un sous-agent
+    isolé travaille dans un git worktree créé depuis HEAD ; sans commit il
+    partirait de l'ancien code.
+P2. Mesure de référence (lot 0) prise AVANT tout changement : la base de
+    comparaison de chaque vague.
+
+
+R. RÔLES
+--------
+  - Orchestrateur (session principale) : découpe, lance les sous-agents,
+    relit les rapports, fusionne, lance la suite complète, compile,
+    déploie (daemon puis workers, un compte à la fois, docs/orchestrator.md),
+    mesure. SEUL à toucher au daemon, aux bots et à git main.
+  - Développeur (sous-agent, worktree isolé, un par lot) : lit le code du
+    lot, écrit D'ABORD le test qui échoue (unitaire ou route en or),
+    implémente, fait passer `cargo test --release -p <crates du lot>`,
+    met à jour la doc du lot, rend un rapport (fichiers, tests, risques,
+    besoin daemon/workers). Jamais de déploiement, jamais de compte
+    vivant, jamais de commit sur main.
+  - Relecteur (sous-agent, lecture seule, un par lot, NE reçoit PAS le
+    raisonnement du développeur, seulement le diff et l'étape du plan) :
+    exactitude, effets de bord sur les autres lecteurs du code touché,
+    règles AGENTS.md, tests qui prouvent vraiment la règle. Verdict
+    OK / À CORRIGER avec file:line.
+  - Correcteur : le même développeur relancé (SendMessage) avec les
+    remarques du relecteur. Deux allers-retours ratés -> arrêt, rapport à
+    l'utilisateur (AGENTS.md §5.6).
+  - Mesureur (sous-agent, lecture seule) : 1 h après chaque déploiement,
+    compare les indicateurs du lot 0 à la référence, verdict chiffré.
+
+
+C. CYCLE D'UN LOT
+-----------------
+  1. Développeur (worktree) : test rouge -> code -> tests du crate verts.
+  2. Relecteur : verdict. À CORRIGER -> 3 ; OK -> 4.
+  3. Correcteur -> retour en 2 (au plus 2 fois).
+  4. Orchestrateur : fusion dans main, `cargo test --release --workspace
+     --no-fail-fast` (seuls échecs tolérés : tests de chronométrage nav /
+     concurrence store, crates intacts, relancés seuls), build release.
+  5. Déploiement : redémarrage du daemon ; redéploiement des workers si
+     sdk/scripts/session touchés ; d'abord UN bot témoin observé jusqu'au
+     comportement visé, puis la flotte.
+  6. Mesureur : 1 h après le déploiement (régression ? -> retour arrière
+     immédiat du lot par revert, rapport ; sinon vague suivante).
+
+
+V. VAGUES (lots parallèles = fichiers disjoints)
+------------------------------------------------
+VAGUE A — fondations et lots indépendants (en parallèle)
+  Lot 0  Mesure (étape 0). orchestrator : `economy` ajoute jours de stock
+         invendu par objet, temps de la flotte par compétence (task_reports
+         work_ticks par méthode -> compétence), part du remplissage (nœuds
+         fill-*), lots 100 % marché prévus/réalisés (existe). Test : rapport
+         reconstruit sur une base en mémoire. Daemon seul.
+  Lot 1  Valeur du temps réelle (étape 1, D1). store : requête « gain par
+         tick de travail » d'un compte sur une fenêtre (task_flows
+         valorisés au prix courant / work_ticks) ; orchestrator :
+         `brain_d17::coin_rate` la lit, plancher MIN_COIN_RATE, moyenne
+         flotte sans mesure. Tests : store (requête), unitaire coin_rate
+         (mesuré, absent, plancher). Daemon seul.
+  Lot 6  Métiers selon le besoin (étape 6, D3). planner : poids d'ambition
+         = besoin seul (`ambition_fleet`, `ambition_catalog`), exceptions
+         Zezima, N0valyfe, Yogosun, teneurs (tirage actuel) ; orchestrator :
+         un manque au marché n'est pas un jalon bloqué
+         (`brain_succession::close_goal`). Tests : tirage (bûcheron 70 /
+         artisanat 30 avec manque d'artisanat -> artisan), exceptions,
+         jalon. Daemon seul.
+  Lot 7  Trous de production (étape 7). gamedata : voie marchand pour les
+         objets sans production quand ../lostcity/content le permet
+         (vérifier boutiques d'abord ; aucune invention). Test : obtain
+         flèches de fer. Daemon (+ workers si scripts). Lecture du contenu
+         serveur obligatoire avant code.
+  Lot 8  Bugs de scripts (étape 8). scripts : poterie « consumed
+         nothing », malédiction sur vaches, vente marchand sans retour au
+         magasin après livraison ; orchestrator : pas de trajet au marchand
+         si la première unité ne paie pas le prix voulu (stock réel du
+         marchand estimé). Protocole debug §5 par bug (une hypothèse
+         vérifiée avant code). Workers + daemon.
+  Conflits : aucun fichier commun entre 0, 1, 6, 7, 8 (vérifié à la
+  découpe ; sinon séquencer).
+
+VAGUE B — demande partagée (après A déployée + 1 h de mesure)
+  Lot 2  Autres producteurs (étape 2). orchestrator `market_claims`
+         (publication de toute production lancée : nœud d'argent,
+         remplissage, lot 100 % marché ; expiration) ; planner
+         `guide_engine::sale_steps`, `market_value` : demande lue nette
+         des annonces au repos et des réclamations ; `trade_craft` estimé
+         sur cette demande. Tests : deux bots sur le même objet ne voient
+         que leur part ; lot 100 % marché sans demande = rejeté. Daemon.
+
+VAGUE C — boucles de rappel (après B + 1 h de mesure ; 3, 4, 5 en parallèle si
+fichiers disjoints, sinon 3 puis 4 puis 5)
+  Lot 3  Remplissage par le guide (étape 3). orchestrator `brain_filler`
+         -> `brain_money::publish`. Test : remplissage d'un bot dont la
+         meilleure ligne n'est pas la récolte -> cette ligne. Daemon.
+  Lot 4  Ingrédients bon marché (étape 4). planner `derived_demand`,
+         `bid_response` ; orchestrator `brain_trade`. Test : ingrédient à
+         1 pièce sous sa valeur de transformation -> offre d'achat et lot
+         de transformation. Daemon.
+  Lot 5  Arbitrage marchand ouvert à tous (étape 5, D2). planner : lot
+         « acheter au marché, vendre au marchand / alchimie » dans
+         `bid_response` (net du trajet au taux du lot 1) ; orchestrator
+         `brain_npc_sale`, `brain_bids` ; market `maker.rs` (valeur de
+         référence incluant l'exutoire). Test : if à 1 pièce, marchand à
+         16 -> achat puis vente marchand ; à 15 du marché -> rien. Daemon.
+
+
+M. CRITÈRES DE RÉUSSITE (mesureur, bilan après la vague C)
+--------------------------------------------------------
+  - objets cotés des deux côtés >= 35 % (25 % au 2026-11-19) ;
+  - écart médian demande/offre <= x1,25 (x2,0) ;
+  - objets échangés à 1 pièce en baisse nette (49) ; unités en annonce à
+    1 pièce en baisse (1,47 M) ;
+  - remplissage < 10 % du temps (20 %) ; if < 10 % (21 %) ;
+  - artisanat + magie + cuisine + runes > 10 % du temps (3,2 %) ;
+  - lots 100 % marché : réalisé >= 70 % du prévu (16 %).
+  Un critère qui recule après un lot -> retour arrière de ce lot.
+
+
+S. GABARITS DE SOUS-AGENTS
+--------------------------
+Développeur : « Lot N de docs/plan-equilibre-dev.txt (étape K de
+  docs/plan-equilibre.txt). Lis AGENTS.md. Worktree isolé. Écris d'abord
+  le test qui échoue, montre l'échec, puis code. Périmètre : <fichiers>.
+  Interdit : déploiement, comptes vivants, autres fichiers, fallback non
+  demandé. Rends : diff résumé, tests (avant/après), docs touchées,
+  daemon/workers à redémarrer, risques. »
+Relecteur : « Lecture seule. Voici le diff du lot N et l'étape du plan.
+  Vérifie exactitude, lecteurs du code touché, règles AGENTS.md, preuve
+  des tests. Verdict OK / À CORRIGER (file:line). »
+Mesureur : « Lecture seule. Indicateurs du lot 0, fenêtre <h>, comparés
+  à la référence <date>. Verdict chiffré par critère M. »
+
+
+T. COÛT ET CALENDRIER
+---------------------
+Vague A : 5 développeurs + 5 relecteurs en parallèle, ~1 cycle ; vague B :
+1 + 1 ; vague C : 3 + 3. Mesure 1 h entre vagues : les trois vagues dans
+la journée. Les sous-agents coûtent en jetons : l'orchestrateur ne relance un
+développeur que sur verdict À CORRIGER.

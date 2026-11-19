@@ -351,3 +351,17 @@ fn empty_stock_lines_are_no_merchant_route() {
         assert!(super::merchant_route(item), "{item} is stocked");
     }
 }
+
+/// User 2026-11-19: after a market delivery the pack is banked but its
+/// tools (the paused task resumes from the square): every object some
+/// F2P way carries as a tool, not only axes, pickaxes and nets (the gem
+/// cutters' chisel was banked and the task blocked on it).
+#[test]
+fn carried_tools_cover_every_recipe_tool() {
+    for tool in ["chisel", "hammer", "tinderbox", "needle", "ring_mould", "amulet_mould", "bronze_pickaxe", "bronze_axe", "net"] {
+        assert!(super::is_carried_tool(tool), "{tool}");
+    }
+    for product in ["yew_logs", "coins", "raw_shrimp", "iron_ore", "sapphire"] {
+        assert!(!super::is_carried_tool(product), "{product}");
+    }
+}

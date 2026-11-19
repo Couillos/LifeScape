@@ -136,15 +136,36 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let bought = crate::kit::shop::buy_stock_at(bot, &item, qty, shop.as_deref())?;
     let held = obj_id(bot, &item).map(|id| bot.inventory().get(&id).copied().unwrap_or(0)).unwrap_or(0);
     bot.log(&format!("shopbuy {item} x{qty}: bought {bought}, holding {held}"));
-    if bought == 0 && held < qty {
+    if !shop_bought_any(bought, held, qty) {
         let from = shop.as_deref().map_or_else(|| "no reachable shop".to_string(), |key| format!("shop {key}"));
         return Err(ScriptError::Failed(format!("shopbuy {item}: {from} sold none at {:?}", bot.position())));
     }
-    Ok(if held >= qty { 0 } else { 1 })
+    if held < qty {
+        bot.log(&format!("shopbuy {item}: the shop had {bought} of {qty}, the rest comes another way"));
+    }
+    Ok(0)
+}
+
+/// True when the trip did its part: some units bought, or the wanted
+/// count already held. A shop with less than wanted is no failure (user
+/// 2026-11-19; 197 "run returned 1" today, 43 nodes abandoned): the units
+/// bought stay, the node relaunches for the rest (market, another shop).
+fn shop_bought_any(bought: u32, held: u32, wanted: u32) -> bool {
+    bought > 0 || held >= wanted
 }
 
 #[cfg(test)]
 mod tests {
+    /// User 2026-11-19: a shop holding 30 of 58 sapphires sells the 30,
+    /// the trip succeeds and the node relaunches for the rest; a shop that
+    /// sold nothing (and nothing held) still fails.
+    #[test]
+    fn a_partial_shop_buy_is_no_failure() {
+        assert!(super::shop_bought_any(30, 30, 58), "partial: done");
+        assert!(super::shop_bought_any(0, 58, 58), "already held");
+        assert!(!super::shop_bought_any(0, 0, 58), "nothing sold: typed failure");
+    }
+
     use super::run_shopbuy;
 
     #[test]

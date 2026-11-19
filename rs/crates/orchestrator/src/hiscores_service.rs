@@ -209,6 +209,8 @@ fn gather(orch: &crate::daemon::Orchestrator, errors: &mut Vec<String>) -> Vec<H
 /// take the current price (`MarketService::reference`, the bots' price);
 /// anything else is worth 0.
 fn market_price(service: &crate::market_service::MarketService, obj: i64) -> i64 {
+    // One book per object: a banknote is priced as its object.
+    let obj = crate::market_audit::book_item(obj);
     let quoted = {
         let engine = service.lock_engine();
         if engine.find_item(obj).is_none() {

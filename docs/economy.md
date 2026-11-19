@@ -21,6 +21,25 @@ tranches, capital cible, cotation selon le stock), `discovery` (ancrages
 publics d'un objet jamais échangé, M7), `sim`, `sim_discovery`,
 `sim_lifecycle` et `sim_maker` (simulateurs à graines fixes).
 
+Billets = objet (2026-11-19, décision utilisateur : « les items et les
+banknote de ces items sont les mêmes items et doivent être mesurés,
+évalués, échangés de la même manière, c'est le même objet même si l'id
+diffère ») : `lifescape_gamedata::base_obj_id` / `base_obj_name` /
+`obj_forms` replient `cert_<nom>` sur `<nom>` partout où l'on compte,
+valorise ou échange. Stocks de la flotte (`holdings` : totaux, liste,
+variation 24 h, courbes qui additionnent aussi les anciennes lignes
+billet), classement (`hiscores::valuation`, prix sous l'id de base),
+stocks du cerveau (`brain_plan::stacks_of` : surplus, gardés, verrous,
+équipement, outils, nourriture, souhaits, ventes et leur réserve),
+registre de couverture du daemon (`market_audit::ledger_holdings`),
+opérations `quote`/`book`/`history`/`trades`/`seller_quote`,
+`check-method`. Jamais pour UTILISER (même jour : « les banknotes ne
+peuvent pas être utilisés pour les craft ») : un billet transporte un
+grand nombre d'unités pour échanger ou vendre ; une recette, un sort ou
+un repas ne prend que l'objet non noté (les scripts comptent le sac tel
+quel ; un dépôt en banque dénote). Restent sous l'id billet : 7
+exécutions antérieures au 2026-11-16 (avant `rebase_note_orders`).
+
 Tick réel (plan marché Q0, 2026-11-16) : le serveur tourne à 60 ms
 (`../lostcity/engine/data/config/world.json`, `tickRate` 60 ; la variable
 `NODE_TICK_RATE=600` du processus ne sert qu'à migrer un ancien `.env`).
@@ -48,6 +67,49 @@ l'annuler ; l'échéance de 6000 ticks termine la jambe marché du nœud,
 pas l'offre. `orchestrator economy [heures]` imprime les critères du
 plan (§ Section marché ci-dessous).
 
+Marche de 10 % (2026-11-19, décision utilisateur : « la règle des 10 %
+vaut pour tout le monde en bid et ask, sinon les prix ne sont pas
+réels ») : constat live, bûches d'if sans échange pendant 7 h, carl_miller
+mis en vente à 68 (2 × son coût de 34), descendu à 34, retiré à
+l'horizon, remis à 68, huit fois de suite ; tim_wolfe 5 h à 96, son coût.
+Désormais chaque fenêtre (`concession::step`, `WALK_PCT`) : un ask
+invendu baisse de 10 % (arrondi au-dessus, au moins une pièce) jusqu'à
+1 pièce, SOUS son coût propre (plus de plancher vendeur, plus de retrait
+à l'horizon : un ask à 1 reste au carnet) ; un bid non servi monte de
+10 % (au moins une pièce) jusqu'à son plafond (ce que l'acheteur peut
+payer). Restent : recul ZIP de 5 % après un fill propre, tirage à
+mi-chemin vers un prix public, prise du meilleur prix opposé quand
+pressé ou quand la marche suivante l'atteint. La courbe ci-dessous ne
+fixe plus que le plafond de l'acheteur (sa limite) ; ouverture, β et
+horizon ne pilotent plus le prix. Simulateurs (graines fixes) : plus
+d'échanges (1,4 à 2,2 × les paires compatibles), acheteurs servis plus
+tôt, prix final 17 à 27 % sous l'équilibre des limites tirées (les
+vendeurs vendent sous leur coût) ; un excès de butin descend sous toutes
+les valeurs de garde.
+
+Pénurie du marché, jamais une interdiction (2026-11-19) : un achat
+resté sans vendeur ou refusé par le marché n'interdit aucune compétence
+(`planner::market_shortfall`, `brain_succession::close_goal_history` ;
+122 interdictions du matin venaient d'achats non servis).
+
+Jamais plus promis que détenu (2026-11-19, décision utilisateur, point
+1) : constat hana_91 (teneur), 144 022 pièces et 148 893 engagées dans
+29 offres d'achat, la marche de 10 % les montait sans contrôle (`amend`
+ne vérifiait pas la couverture) et chaque passe retentait des offres
+refusées (129 refus « buyer holds 0 coins »). Désormais une hausse
+d'offre d'achat ne dépasse jamais les pièces libres : `op_amend` la
+refuse si elle n'est pas couverte, la marche s'arrête au prix que les
+pièces libres permettent (`market_audit::affordable_raise`), et un
+teneur ne pose ni ne monte une offre non couverte (`market_maker::
+move_covered`, sans ligne de refus) ; côté vente, il n'annonce que son
+stock libre (`market_maker::sell_leg_within`, lots entiers, rien si
+rien n'est libre ; live rae_stone : 370 seaux annoncés pour 131 libres,
+refusés à chaque passe). Biens promis (point 2) : les
+objets vendus pas encore livrés (deals ouverts côté vendeur,
+`brain_locks::promised_names`) entrent dans le `--keep` du concierge de
+banque : jamais remis en vente ni jetés (ida_reed, 84 big bones vendus
+à thorn_vera remis en vente pendant l'attente de la remise).
+
 Courbe de concession (vague 2, M3/M4, `lifescape_market::concession`,
 `market_reprice`, remplace le pas de 5 % par fenêtre) : un ordre posé
 avec un `ceiling` (acheteur) ou un `floor` (vendeur) concède dans le temps
@@ -67,7 +129,7 @@ que vers la limite (jamais hors [ouverture, limite]) ; amend seulement
 au-delà de 1 % (≥ 1 pièce) ou pour poser la limite. M4 : un ordre pressé
 (`need`, ou `urgent` : banque pleine) prend le meilleur prix opposé
 dans sa limite, tout ordre prend celui que sa courbe atteindrait à la
-fenêtre suivante. Q4 : un vendeur à son plancher après H sans fill est
+fenêtre suivante. Q4 (RETIRÉ le 2026-11-19 par la marche de 10 %) : un vendeur à son plancher après H sans fill est
 retiré (`cancel_reason = 'horizon'`) et son stock reste en banque un
 horizon (`withdrawn_recently`, sauf banque pleine) ; un acheteur reste
 à son plafond tant que son besoin existe. Simulateur
@@ -76,7 +138,8 @@ horizon (`withdrawn_recently`, sauf banque pleine) ; un acheteur reste
 Acheteur : ouvre à l'ask s'il le couvre, sinon à son propre dernier
 prix d'achat de l'objet, sinon au prix courant (`remembered_bid`),
 plafond = ce que son portefeuille paie (plus de plafond « juste »).
-Vendeur : plancher = sa réserve, son PROPRE coût (§ Réserve vendeur),
+Vendeur (ouverture ; la marche de 10 % descend ensuite sous le plancher
+jusqu'à 1) : plancher = sa réserve, son PROPRE coût (§ Réserve vendeur),
 ouverture à la référence échangée (ou au meilleur bid plus riche), à
 `max(meilleur bid, 2 × réserve)` pour un objet jamais échangé, jamais
 sous la réserve (`seller_open`). Une vente monte sans plafond propre
@@ -92,7 +155,9 @@ pleine) frappe un bid ≥ son plancher ou sous-cote d'un pas relatif de
 1 % (≥ 1 pièce). Surstock (2026-11-18) : un stock libre au-delà des bids
 + 2 jours de volume (au moins un inventaire, `market_fit::overstocked`)
 n'est pas détourné vers la boutique (Q3), sans plancher particulier.
-Plancher appris (plan prix §1, 2026-11-18) : chaque horizon terminé sans
+Plancher appris (plan prix §1, 2026-11-18 ; lu sous l'objet de base du
+carnet pour un lot noté depuis le 2026-11-19 : `cert_yew_logs` ne lisait
+jamais ses retraits) : chaque horizon terminé sans
 vente (retrait `horizon` au carnet, 24 h glissantes, moins les ventes
 réglées) baisse le plancher de 10 %, jusqu'à 1 pièce, sous le coût de
 fabrication s'il le faut (`discovery::learned_floor`, `Store::
@@ -129,9 +194,16 @@ et la demande et § Réserve vendeur. Vente aux PNJ (Q3, vague 2,
 sans bid) n'est pas listé ; quand le gain dépasse 1500 ticks au taux du
 bot, le nœud janitor (`SpaceCleanup`, `market cleanup --sale-shop
 --sale-site --shopsell ITEM:QTY:MIN`) va à la boutique qui paie le plus
-(gardien le plus proche) et vend unité par unité tant que la valeur
-serveur minorée (`shop_sale::unit_value_floor`, delta 30) reste ≥ MIN =
-ce que paie le marché + 1. Les pièces créées sont `shop_sold` dans le
+(gardien le plus proche) et vend tant que la valeur serveur minorée
+(`shop_sale::unit_value_floor`, delta 30) reste ≥ MIN = ce que paie le
+marché + 1. Par paquets depuis le 2026-11-19 (décision utilisateur : « on
+doit pas vendre clic par clic, mais en utilisant les options ») : avant
+chaque clic, le stock live de la boutique donne le nombre d'unités qui
+paient encore MIN (`kit::shop::units_paying`, la valeur de l'unité i se
+lit au stock + i comme dans `shop.rs2` `sell_item`) et le bot clique le
+plus gros bouton qui tient dedans (`sell_batch_for` : vendre 10, 5 puis
+1 ; une boutique n'a pas de « vendre X » en rev 274) ; 28 bûches d'if =
+6 clics au lieu de 28. Les pièces créées sont `shop_sold` dans le
 registre de pièces ; `orchestrator economy` imprime « npc shop sales ».
 Depuis le 2026-11-15 tout
 objet F2P qu'un marchand stocke peut lui être acheté (§ Achats aux
@@ -301,6 +373,22 @@ de chaque deal, le flux et le titre ne dépendent plus de la liste. Les
 ETA de convocation passent par le service de navigation (un plan par
 zone de départ, `market_eta`).
 
+Fin de remise (2026-11-19, décisions utilisateur : « relancer son
+activité depuis la place Varrock », puis « une livraison doit mettre en
+pause la tâche en cours, pas l'arrêter ») : après les échanges, la
+livraison dépose TOUT à la banque la plus proche de la place, sauf les
+outils (tout objet qu'une voie du jeu porte comme outil,
+`gamedata::obtain::is_carried_tool` : hache, pioche, filet, ciseau,
+marteau, briquet, moules, aiguille…) et les objets que le script en
+pause tient (`market_lots::pack_kept_after_trades`, `pack_stays`) ; plus
+de retrait de l'ancien sac ni de marche retour. La tâche en pause
+REPREND depuis la place (`session_rescue::gate_market`) : le trajet en
+cours se replanifie depuis là (`travel_pause`), les scripts retournent à
+leur site et à leur banque d'eux-mêmes. La banque de la livraison est
+atteinte par un vrai trajet puis ouverte, un second essai
+(`market_lots::open_bank_here`, live : 39 « lots not secured » quand le
+bot repartait vers son site).
+
 Échecs de remise (revue 2026-11-13, deals 1100–1285) :
 - `timeout` dominant : la pause market tourne DANS la tâche en cours
   (souvent une fenêtre d'argent de 1500 ticks) et le crochet de budget
@@ -330,7 +418,13 @@ déploiement de 21:19 CET) :
   fiona_park 1698 + 1721, 1692 + 1720) ; même chose côté pièces avec les
   offres permanentes reposées après un balayage complet (bd23dqpq « 98/98 »
   puis « 97/98 », 1643–1652 ; bct5rxpg 1772, 1789). Corrigé : le miroir
-  du registre est net des deals en vol (`market_audit::net_of_deals`),
+  du registre est net des deals en vol (`market_audit::net_of_deals`) ;
+  depuis le 2026-11-19 il ne recopie qu'un instantané qui voit le sac ET
+  la banque depuis l'ouverture de la session (`witnesses_holdings` :
+  `inv_streamed`, `bank_streamed`), sinon le registre connu reste
+  (thorn_vera après un redéploiement : banque pas encore vue, registre
+  mis à 0 pièce 0 objet, bids « buyer holds 0 coins » et six ventes
+  « seller holds 0 » refusés pendant ~20 s),
   `op_place` ne couvre que le non-engagé (registre moins les ordres au
   repos du même côté, `market_audit::uncommitted`) ; côté cerveau, le
   surplus est net des verrous (`brain_sales::free_stacks`), les pièces
@@ -1548,7 +1642,8 @@ bh99tw2f 7) et que `bid_response` n'ouvrait que les jambes praticables
 au niveau ACTUEL (cimeterre de bronze : forge 5). Les tirages, eux, sont
 fréquents (~120 par heure pour ~25 bots) : la fenêtre n'était pas le
 frein. Depuis : une jambe jusqu'à 15 niveaux au-dessus
-(`MAX_TRAIN_LEVELS`) d'une compétence de production (forge, artisanat,
+(`MAX_TRAIN_LEVELS`, RETIRÉ le 2026-11-19 : voir § Rentabilité de tout
+le marché) d'une compétence de production (forge, artisanat,
 cuisine, minage, pêche, bûcheronnage, allumage, runes) compte pour une
 offre (`unit_cost_training`) ; l'entraînement (méthode de tranche
 `reach_method`, actions par la table d'XP serveur, rythme du bot,
@@ -1655,7 +1750,23 @@ d'alchimie du bot lanceur) qu'une jambe de production fabrique :
   PART seulement : rien quand l'ambition du bot monte déjà cette
   compétence (échelle du catalogue ou jalon niveau ouvert,
   `brain_bids::planned_levels`), un lot sur `TRAINING_AMORTIZE_LOTS` (4)
-  sinon. `MAX_TRAIN_LEVELS` (15) inchangé.
+  sinon. Plus de plafond de niveaux (2026-11-19, décision utilisateur
+  « tout le temps ») : n'importe quel écart se chiffre, le coût de
+  l'entraînement décide ; la magie s'entraîne pour une offre (`TRAINABLE`
+  de `bid_response`). Constat live : 51 offres d'achat d'amulettes de
+  puissance (3 557 à 1 042 900), intrants à quelques pièces, personne ne
+  répondait (artisanat 53 au mieux, 70 requis ; magie jamais entraînée ;
+  lot de 26 pour 6 diamants bruts en vente). Le coût d'entraînement prend
+  la méthode la moins chère ouverte au niveau du bot (méthode de tranche
+  et toutes les recettes de `training_production::candidates`, net de
+  la valeur des produits ; jamais 7 071 bagues en diamant introuvables) ;
+  une méthode sans produit (combat magique) se chiffre au temps par XP
+  (`sizing::tranche_ticks_with`). `bid-why` affiche la méthode retenue.
+- Lot réduit aux intrants (2026-11-19, `bid_response::feasible_lot`) :
+  quand les intrants en vente ou détenus ne couvrent pas toute la
+  demande, le lot descend au plus grand nombre qu'ils couvrent (bissection,
+  la faisabilité ne fait que baisser avec la quantité), jamais à rien ;
+  la demande reste lue entière (`market_value::absorbed_lot_within`).
 - Règle de choix inchangée : taux ≥ 2 × taux du bot et net ≥ 50 ;
   meilleur taux incliné ±15 % ; étalement une fenêtre sur deux. Log :
   `brain <compte>: answers the market: produce N <objet> (k to bids, best

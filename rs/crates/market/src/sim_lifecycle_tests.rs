@@ -25,7 +25,9 @@ fn measure(seed: u64, model: Model) -> Measures {
     let run = run_lifecycle(&traders, model, SPREAD + HORIZON);
     let limit_of = |name: &str| traders.iter().find(|trader| trader.name == name).map(|trader| trader.limit).unwrap_or(0);
     for fill in &run.fills {
-        assert!(limit_of(&fill.buyer) >= fill.price && fill.price >= limit_of(&fill.seller), "{model:?} seed {seed}: {fill:?} buyer {} seller {}", limit_of(&fill.buyer), limit_of(&fill.seller));
+        // A buyer never pays over its ceiling; a seller may sell under
+        // its own cost (the 10 % walk, user 2026-11-19: no seller floor).
+        assert!(limit_of(&fill.buyer) >= fill.price, "{model:?} seed {seed}: {fill:?} buyer {}", limit_of(&fill.buyer));
     }
     for trader in &traders {
         assert!(units_of(&run, &trader.name) <= trader.units, "{model:?} seed {seed}: {} traded {}", trader.name, units_of(&run, &trader.name));
@@ -53,11 +55,13 @@ fn measure(seed: u64, model: Model) -> Measures {
 
 /// M3 simulator: 20 buyers and 20 sellers with drawn limits, varied
 /// patience, continuous arrivals. Fills >= 90 % of the compatible pairs
-/// within the horizon, final price within 10 % of the equilibrium,
-/// direction inversions of the current price <= 15 % of the fills over
+/// within the horizon, direction inversions of the current price <= 15 % of the fills over
 /// the five seeds (one seed alone may jitter a coin around a stationary
 /// equilibrium: <= 20 %), never a 1-coin price when every reserve is
 /// >= 5. The table compares the wave-1 5 % step on the same arrivals.
+/// The 10 % walk (user 2026-11-19) has no seller floor: sellers trade
+/// under their own cost, so the price settles under the equilibrium of
+/// the drawn limits (17-27 % on these seeds, printed, never asserted).
 #[test]
 fn concession_meets_the_m3_criteria() {
     let mut failures = Vec::new();
@@ -81,9 +85,6 @@ fn concession_meets_the_m3_criteria() {
             if model == Model::Concession {
                 if seen.ratio < 0.9 {
                     failures.push(format!("seed {seed}: fills {:.2} of the compatible pairs", seen.ratio));
-                }
-                if seen.error > 0.10 {
-                    failures.push(format!("seed {seed}: final price {:.3} off the equilibrium", seen.error));
                 }
                 if seen.inversions > 0.20 {
                     failures.push(format!("seed {seed}: inversions {:.3}", seen.inversions));
@@ -123,11 +124,13 @@ fn an_urgent_buyer_is_served_in_one_window() {
     let patient = run_lifecycle(&urgent_market(Urgency::Normal, 0.9, 36_000), Model::Concession, 80_000);
     let later = patient.fills.first().expect("the patient buyer is served too");
     assert!(later.tick > fill.tick + window_ticks(6000), "the patient waits: {} vs {}", later.tick, fill.tick);
-    assert_eq!(later.price, 90, "at the seller's price");
+    // The 10 % walk (user 2026-11-19): the ask walks down, the bid up,
+    // they meet under the seller's opening.
+    assert!(later.price < 90, "both sides walked: {}", later.price);
 }
 
-/// M4: a pressed seller (a full bank) hits a resting bid at or over its
-/// floor: the seller is the taker.
+/// M4: a pressed seller (a full bank) hits the resting bid (no seller
+/// floor since the 10 % walk, user 2026-11-19): the seller is the taker.
 #[test]
 fn a_pressed_seller_hits_the_bid() {
     let traders = vec![
@@ -135,7 +138,7 @@ fn a_pressed_seller_hits_the_bid() {
         Trader { name: "full_bank".to_string(), sell: true, limit: 60, units: 3, patience: 0.5, urgency: Urgency::Pressed, horizon_ticks: 72_000, arrives: 30_000, loot: true, anchor: Some(150) },
     ];
     let run = run_lifecycle(&traders, Model::Concession, 40_000);
-    assert!(run.fills.iter().any(|fill| fill.seller_took && fill.price >= 60), "{:?}", run.fills);
+    assert!(run.fills.iter().any(|fill| fill.seller_took), "{:?}", run.fills);
     assert_eq!(units_of(&run, "full_bank"), 3);
 }
 
@@ -161,11 +164,12 @@ fn loot_market() -> Vec<Trader> {
     traders
 }
 
-/// M5: 50 loot sellers, 3 buyers. Sellers join the best ask instead of
-/// undercutting it: no print and no quote under the lowest keep value
-/// (the old cascade fell to 1).
+/// M5: 50 loot sellers, 3 buyers. Since the 10 % walk (user
+/// 2026-11-19: no seller floor, "sinon les prix ne sont pas réels"), 500
+/// units against 60 wanted walk under every keep value: the price says
+/// the glut. Every buyer is served.
 #[test]
-fn loot_sellers_hold_their_keep_value() {
+fn loot_sellers_walk_under_their_keep_value_in_a_glut() {
     let traders = loot_market();
     let lowest_keep = traders.iter().filter(|trader| trader.sell).map(|trader| trader.limit).min().unwrap_or(0);
     let new = run_lifecycle(&traders, Model::Concession, 100_000);
@@ -176,10 +180,8 @@ fn loot_sellers_hold_their_keep_value() {
         let lowest_print = run.fills.iter().map(|fill| fill.price).min().unwrap_or(0);
         eprintln!("loot | {label:<10} | {:>12} | {:>12} | {:>12} | {:>6} | {:>6}", run.lowest_quote, lowest_print, final_price(&run.fills).unwrap_or(0), served(run), run.amends);
     }
-    assert!(new.lowest_quote >= lowest_keep, "lowest quote {} under the lowest keep value {lowest_keep}", new.lowest_quote);
-    assert!(new.fills.iter().all(|fill| fill.price >= lowest_keep));
+    assert!(new.lowest_quote < lowest_keep, "the glut walks under the keep values: {}", new.lowest_quote);
     assert_eq!(served(&new), 60, "every buyer served");
-    assert!(old.lowest_quote < lowest_keep, "the old cascade fell under the keep values: {}", old.lowest_quote);
 }
 
 #[test]
@@ -188,3 +190,4 @@ fn equilibrium_counts_compatible_pairs() {
     let traders = vec![trader("b1", false, 120), trader("b2", false, 90), trader("b3", false, 60), trader("s1", true, 50), trader("s2", true, 80), trader("s3", true, 100)];
     assert_eq!(equilibrium(&traders), (2, 85), "120>=50, 90>=80; clearing range [80, 90]");
 }
+

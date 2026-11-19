@@ -158,6 +158,14 @@ pub fn market_failed(node: &Node) -> bool {
     node.last_error.starts_with("market order for ") && node.last_error.contains(" unfilled after ")
 }
 
+/// True when a node's last error is the market's shortfall, not the
+/// bot's: its buy rested unfilled (no seller) or the market refused the
+/// order. It never bans a skill (user 2026-11-19: 122 of the morning's
+/// skill bans came from buys nobody sold).
+pub fn market_shortfall(last_error: &str) -> bool {
+    (last_error.starts_with("market order for ") && last_error.contains(" unfilled after ")) || last_error.contains("market rejected")
+}
+
 /// True when the history shows a rescue of `node_id` already (either
 /// kind): one rescue per node, the ban follows a second abandonment.
 pub fn rescued_before(life: &Life, node_id: &str) -> bool {

@@ -71,8 +71,7 @@ pub fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) ->
         .into_iter()
         .filter(|group| !group.is_empty())
         .map(|group| {
-            let center_x = (group.iter().map(|item| item.0).sum::<i64>() / group.len() as i64) as i32;
-            let center_z = (group.iter().map(|item| item.1).sum::<i64>() / group.len() as i64) as i32;
+            let (center_x, center_z) = group_anchor(&group);
             let score = match bot.assigned_site {
                 Some((site_x, site_z, _)) => -f64::from((center_x - site_x).abs().max((center_z - site_z).abs())),
                 None => {
@@ -85,6 +84,17 @@ pub fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) ->
         .collect();
     ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     ranked.into_iter().map(|(_, x, z, count)| (x, z, count)).collect()
+}
+
+/// The tile a hunt walks to for a spawn group: the group's own spawn
+/// nearest its centroid. The centroid itself may sit inside a wall (live
+/// 2026-11-19: the Varrock palace men's centroid (3232,3392,1) is a brick
+/// wall, 64 NoRoute dossiers in 3 h); an NPC spawns on the spawn tile.
+fn group_anchor(group: &[(i64, i64)]) -> (i32, i32) {
+    let count = group.len().max(1) as i64;
+    let center = (group.iter().map(|item| item.0).sum::<i64>() / count, group.iter().map(|item| item.1).sum::<i64>() / count);
+    let nearest = group.iter().min_by_key(|item| ((item.0 - center.0).abs().max((item.1 - center.1).abs()), item.0, item.1)).copied().unwrap_or(center);
+    (nearest.0 as i32, nearest.1 as i32)
 }
 
 /// Shop and bank staff are never targets: keepers, assistants, Bob and
@@ -194,6 +204,16 @@ pub fn attack_nearest(
 
 #[cfg(test)]
 mod tests {
+    /// Live 2026-11-19: the Varrock palace men's centroid (3232,3392,1)
+    /// is a brick wall, never reached. The hunt walks to the group's own
+    /// spawn nearest its centroid.
+    #[test]
+    fn a_hunt_walks_to_a_spawn_never_a_centroid() {
+        let group = [(3228, 3396), (3236, 3388), (3233, 3394)];
+        assert_eq!(super::group_anchor(&group), (3233, 3394), "a real spawn tile, the nearest the centroid");
+        assert_eq!(super::group_anchor(&[(3206, 3219)]), (3206, 3219));
+    }
+
     use super::{is_shop_staff, rank_foes, ranked_clusters};
     use crate::tables_live::attach_live_tables;
     use lifescape_gamedata as knowledge;

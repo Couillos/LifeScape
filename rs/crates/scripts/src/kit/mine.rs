@@ -211,6 +211,15 @@ impl crate::kit::load::LoopOps for MineOps<'_> {
                 return Ok(exit);
             }
             if let Some(RockPick::Wait(tier, rocks, respawn)) = pick_rock_spot(bot, self.tiers, self.bank, self.level, &state.banned, bot.world.ticks) {
+                // Too many players for the rocks (user 2026-11-19): the
+                // brain moves the bot to another site, never a long
+                // respawn wait in a crowd.
+                if crowded(crate::kit::site::players_near(bot), rocks.len()) {
+                    if let Some(contended) = crate::kit::site::contended_error(bot) {
+                        bot.log(&format!("{} {} rocks mined out among {} players: changing spot", rocks.len(), tier.product, crate::kit::site::players_near(bot)));
+                        return Err(contended);
+                    }
+                }
                 let spent = bot.world.ticks;
                 wait_rock_respawn(bot, &tier, &rocks, respawn)?;
                 state.idle_since += bot.world.ticks - spent;
@@ -281,6 +290,13 @@ fn wait_rock_respawn(bot: &mut Bot, tier: &knowledge::rocks::RockTier, rocks: &[
     Ok(false)
 }
 
+/// True when the other players around (`players`) are at least as many
+/// as the site's rocks of the tier (`rocks`): a crowd, the bot changes
+/// spot instead of waiting a respawn (user 2026-11-19).
+fn crowded(players: usize, rocks: usize) -> bool {
+    players >= rocks.max(1)
+}
+
 /// Slack past the table respawn (server tick jitter, player-count scale
 /// only shortens it).
 const RESPAWN_MARGIN_TICKS: u64 = 10;
@@ -324,6 +340,20 @@ pub fn mine_load(
 
 #[cfg(test)]
 mod tests {
+    /// User 2026-11-19 (« si y'a trop de joueurs il faut changer de
+    /// spot »): 17 miners on the 4 open adamantite rocks waited out the
+    /// long respawns. Rocks mined out with as many other players as rocks
+    /// around: the site is crowded, the bot moves on; fewer players than
+    /// rocks, the respawn is worth the wait.
+    #[test]
+    fn as_many_players_as_rocks_is_a_crowd() {
+        assert!(super::crowded(2, 2));
+        assert!(super::crowded(5, 2));
+        assert!(!super::crowded(1, 2));
+        assert!(!super::crowded(0, 1));
+        assert!(super::crowded(1, 0), "no rock left at all");
+    }
+
     use super::rock_stands;
     use crate::kit::harvest::operable_stand;
 

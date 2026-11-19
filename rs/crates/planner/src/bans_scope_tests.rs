@@ -180,3 +180,16 @@ fn a_money_root_bans_only_its_own_method_skill() {
     assert!(!scope.contains(&"crafting".to_string()), "no craft waits on coins: {scope:?}");
     assert!(!scope.is_empty(), "the melee method's own skill goes: {scope:?}");
 }
+
+/// User 2026-11-19: a buy the market did not fill (no seller) or refused
+/// is the market's shortfall, never the bot's failure at a skill (122 of
+/// the morning's skill bans: unfilled buys, ida_reed's mining and prayer
+/// banned on "market bid refused"). Other failures still ban.
+#[test]
+fn a_market_shortfall_bans_no_skill() {
+    use super::market_shortfall;
+    assert!(market_shortfall(&super::market_unfilled_error(52, "uncut_emerald", 6000, 0, 0)));
+    assert!(market_shortfall("market bid refused: market rejected: buyer holds 0 coins, needs 336"));
+    assert!(!market_shortfall("Failed: no ore currently available at (3298, 3317)"));
+    assert!(!market_shortfall(""));
+}

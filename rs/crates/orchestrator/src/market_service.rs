@@ -534,7 +534,8 @@ impl MarketService {
     }
 
     fn op_quote(&self, request: &Value) -> Value {
-        let item = request.get("item").as_i64().unwrap_or(-1);
+        // One book per object: a banknote asks about its object.
+        let item = request.get("item").as_i64().map(crate::market_audit::book_item).unwrap_or(-1);
         let engine = self.lock_engine();
         let Some(row) = engine.find_item(item) else {
             return Self::err(format!("unknown item {item}"));
@@ -563,7 +564,8 @@ impl MarketService {
     }
 
     fn op_book(&self, request: &Value) -> Value {
-        let item = request.get("item").as_i64().unwrap_or(-1);
+        // One book per object: a banknote asks about its object.
+        let item = request.get("item").as_i64().map(crate::market_audit::book_item).unwrap_or(-1);
         let depth = request.get("depth").as_i64().unwrap_or(10).clamp(1, 50) as usize;
         let engine = self.lock_engine();
         if engine.find_item(item).is_none() {
@@ -587,7 +589,8 @@ impl MarketService {
     }
 
     fn op_history(&self, request: &Value) -> Value {
-        let item = request.get("item").as_i64().unwrap_or(-1);
+        // One book per object: a banknote asks about its object.
+        let item = request.get("item").as_i64().map(crate::market_audit::book_item).unwrap_or(-1);
         if self.lock_engine().find_item(item).is_none() {
             return Self::err(format!("unknown item {item}"));
         }
@@ -663,7 +666,8 @@ impl MarketService {
     }
 
     fn op_trades(&self, request: &Value) -> Value {
-        let item = request.get("item").as_i64().unwrap_or(-1);
+        // One book per object: a banknote asks about its object.
+        let item = request.get("item").as_i64().map(crate::market_audit::book_item).unwrap_or(-1);
         let limit = request.get("limit").as_i64().unwrap_or(20).clamp(1, 100) as usize;
         let engine = self.lock_engine();
         let mut prints: Vec<&Print> = engine.recent.iter().filter(|print| item < 0 || print.item == item).collect();

@@ -81,7 +81,13 @@ pub(crate) fn summarize(life: &Life) -> LifeSummary {
                 .filter(|node| node.status == NodeStatus::Ready)
                 .map(|node| node.id.as_str())
                 .collect();
-            ("ready".to_string(), format!("next: {}", ready.join(", ")))
+            match running_filler(&graph) {
+                // The bot works a filler (outside the graph) while a buy
+                // awaits its seller: its real activity, never "ready"
+                // (user 2026-11-19).
+                Some((parked, method)) => (format!("filler {method}"), format!("filler while {parked} awaits its market fill · next: {}", ready.join(", "))),
+                None => ("ready".to_string(), format!("next: {}", ready.join(", "))),
+            }
         }
         GraphState::Stuck { abandoned } => {
             let lines: Vec<String> = graph
@@ -98,6 +104,17 @@ pub(crate) fn summarize(life: &Life) -> LifeSummary {
         }
     };
     LifeSummary { goal: goal_text(&graph.goal), task, task_title }
+}
+
+/// The filler running now, if any: the latest filler history entry is a
+/// launch (`filler:<method>@<site>`) its end (`filler_done`, failure)
+/// has not followed yet. `(parked node, method)`.
+fn running_filler(life: &Life) -> Option<(String, String)> {
+    let last = life.history.iter().rev().find(|entry| crate::brain_filler::is_filler_node(&entry.node))?;
+    let launched = last.outcome.strip_prefix(crate::brain_filler::FILLER_LAUNCH_TAG)?;
+    let method = launched.split('@').next().unwrap_or(launched).to_string();
+    let parked = last.node.strip_prefix("fill-").unwrap_or(&last.node).to_string();
+    Some((parked, method))
 }
 
 type Stamp = (SystemTime, u64);
@@ -187,6 +204,25 @@ mod tests {
         assert_eq!(summary.goal, "fishing 20");
         assert_eq!(summary.task, "gather:fishing/raw_shrimp");
         assert_eq!(summary.task_title, "reach_level fishing 20 · progress 3/20");
+    }
+
+    /// User 2026-11-19 (« afficher la vraie activité au tableau de
+    /// bord »): N0valyfe's graph read "ready / next: n1313" while it cut
+    /// yews: its buy n1315 awaited a seller and a filler worked meanwhile
+    /// (outside the graph). A running filler shows its method; a finished
+    /// one leaves "ready".
+    #[test]
+    fn a_running_filler_shows_its_activity() {
+        let goal = r#"{"kind": "max_skills", "skills": ["crafting"], "level": 45}"#;
+        let nodes = [node("n1315", "obtain_items", r#"{"item": "softclay", "count": 2650}"#, "ready", "market:buy", "")];
+        let mut running = life(goal, &nodes, None);
+        let entry = |node: &str, outcome: &str| lifescape_planner::HistoryEntry { node: node.to_string(), started: 0, ended: 0, outcome: outcome.to_string() };
+        running.history = vec![entry("fill-n1315", "filler:gather:woodcut/yew_logs@2934,3225,0"), entry("fill-n1315", "filler_done"), entry("fill-n1315", "filler:gather:woodcut/yew_logs@2933,3233,0")];
+        let summary = summarize(&running);
+        assert_eq!(summary.task, "filler gather:woodcut/yew_logs");
+        assert_eq!(summary.task_title, "filler while n1315 awaits its market fill · next: n1315");
+        running.history.push(entry("fill-n1315", "filler_done"));
+        assert_eq!(summarize(&running).task, "ready", "the filler ended");
     }
 
     #[test]

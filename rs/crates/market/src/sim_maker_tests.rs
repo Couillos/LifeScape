@@ -36,14 +36,12 @@ fn pooled(seed: u64, with_maker: bool) -> Pooled {
         if let Some(outcome) = run.maker {
             out.maker_pnl += outcome.value - CAPITAL;
         }
-        // Every trader stays inside its own limit, makers or not.
+        // Every buyer stays inside its ceiling, makers or not; a seller
+        // may sell under its own cost (10 % walk, user 2026-11-19).
         for fill in &run.run.fills {
             let limit = |name: &str| item.traders.iter().find(|trader| trader.name == name).map(|trader| trader.limit);
             if let Some(buyer) = limit(&fill.buyer) {
                 assert!(fill.price <= buyer, "seed {seed}: {fill:?}");
-            }
-            if let Some(seller) = limit(&fill.seller) {
-                assert!(fill.price >= seller, "seed {seed}: {fill:?}");
             }
         }
     }

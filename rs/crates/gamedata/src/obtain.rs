@@ -304,6 +304,15 @@ struct Index {
     obtainable: HashSet<String>,
 }
 
+/// True when some F2P way carries `name` as a tool (a chisel, a hammer,
+/// a mould, an axe, a net…): never consumed by the work. After a market
+/// delivery the pack is banked but its tools (user 2026-11-19: the paused
+/// task resumes from the square with them).
+pub fn is_carried_tool(name: &str) -> bool {
+    static TOOLS: OnceLock<HashSet<String>> = OnceLock::new();
+    TOOLS.get_or_init(|| index().ways.values().flatten().flat_map(|way| way.tools.iter().cloned()).collect()).contains(name)
+}
+
 fn index() -> &'static Index {
     static INDEX: OnceLock<Index> = OnceLock::new();
     INDEX.get_or_init(|| {

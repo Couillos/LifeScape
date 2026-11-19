@@ -155,6 +155,33 @@ impl Store {
         Ok(points)
     }
 
+    fn holdings_total_without(&self, table: &str, time_column: &str, excluded: &[i64]) -> Result<Vec<(i64, i64)>, Error> {
+        // Integers only: the id list is inlined, never user text.
+        let filter = if excluded.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE item_id NOT IN ({}) ", excluded.iter().map(|item| item.to_string()).collect::<Vec<_>>().join(","))
+        };
+        let sql = format!("SELECT {time_column}, SUM(count) FROM {table} {filter}GROUP BY {time_column} ORDER BY {time_column}");
+        let mut statement = self.connection.prepare(&sql)?;
+        let mut points = Vec::new();
+        for mapped_row in statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))? {
+            points.push(mapped_row?);
+        }
+        Ok(points)
+    }
+
+    /// Hourly total of every object but `excluded`, oldest first (the
+    /// item total without the coins, user 2026-11-19).
+    pub fn hourly_points_without(&self, excluded: &[i64]) -> Result<Vec<(i64, i64)>, Error> {
+        self.holdings_total_without("holdings_hourly", "taken_at", excluded)
+    }
+
+    /// Daily total of every object but `excluded`, oldest first.
+    pub fn daily_points_without(&self, excluded: &[i64]) -> Result<Vec<(i64, i64)>, Error> {
+        self.holdings_total_without("holdings_daily", "day_start", excluded)
+    }
+
     /// Hourly curve of a supply index, oldest first: the counts of
     /// `item_ids` summed per hour (a slot where none was held is absent).
     pub fn hourly_points_sum(&self, item_ids: &[i64]) -> Result<Vec<(i64, i64)>, Error> {
@@ -183,6 +210,20 @@ impl Store {
 #[cfg(test)]
 mod holdings_tests {
     use super::*;
+
+    /// User 2026-11-19: the item total leaves the coins out; an hour that
+    /// held coins only has no item total.
+    #[test]
+    fn the_item_total_can_leave_objects_out() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        let hour = 1_762_675_200;
+        store.record_holdings(hour, &[(995, 7), (1515, 3), (1511, 2)])?;
+        store.record_holdings(hour + 3600, &[(995, 9)])?;
+        assert_eq!(store.hourly_points_without(&[995])?, vec![(hour, 5)]);
+        assert_eq!(store.daily_points_without(&[995])?.len(), 1);
+        assert_eq!(store.hourly_points_without(&[])?, store.hourly_points(None)?);
+        Ok(())
+    }
 
     #[test]
     fn daily_keeps_the_last_measure_of_the_day() -> Result<(), Error> {

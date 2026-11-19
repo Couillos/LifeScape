@@ -73,20 +73,6 @@ pub fn group_deals(jobs: &[(i64, i32, i32)], rows: &[DealRow]) -> (Vec<DealGroup
     (groups, unknown)
 }
 
-/// Pack ids a delivery handles (coins, every dealt form, base and
-/// note): what the redeposit takes back to the bank.
-pub fn touched_ids(groups: &[DealGroup], coins: u16) -> Vec<u16> {
-    let mut touched = vec![coins];
-    for group in groups {
-        let trade = trade_id(group.item);
-        touched.push(trade);
-        if group.item != trade {
-            touched.push(group.item);
-        }
-    }
-    touched
-}
-
 /// Carried units of an object in either form (base or banknote) that a
 /// trade may take: base units the running script holds (a quest's air
 /// talisman, `Bot::hold_in_pack`) never count.
@@ -165,11 +151,41 @@ pub fn covered(groups: &[DealGroup], coins_id: u16, mut coins: u32, mut stock: B
         .collect()
 }
 
-fn open_bank_here(bot: &mut Bot) -> Result<bool, ScriptError> {
-    let bank = nearest_bank(bot)?;
-    if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
-        return Ok(false);
+/// Ticks a delivery's walk to its bank gets (a bot resumed from the square
+/// may already be well on its way back to work).
+const BANK_APPROACH_TICKS: u64 = 2000;
+
+/// True when the booth is out of `open_bank`'s short stand walk (more
+/// than 6 tiles, or another level): the delivery travels there first.
+pub(crate) fn bank_needs_approach(bot_at: (i32, i32, i32), bank: (i32, i32, i32)) -> bool {
+    bot_at.0 != bank.2 || (bot_at.1 - bank.0).abs() + (bot_at.2 - bank.1).abs() > 6
+}
+
+/// Nearest bank, travelled to then opened, one retry (live 2026-11-19:
+/// 39 deliveries "lots not secured in time", lucy_rhodes "refused from
+/// every stand": `open_bank` only walks the last few tiles, the bot was
+/// still on its way back to work).
+pub(crate) fn open_bank_here(bot: &mut Bot) -> Result<bool, ScriptError> {
+    for attempt in 1..=2 {
+        let bank = nearest_bank(bot)?;
+        let (bank_x, bank_z, bank_level) = (bank.x as i32, bank.z as i32, bank.level as i32);
+        if bank_needs_approach(bot.position(), (bank_x, bank_z, bank_level)) {
+            match bot.approach(bank_x, bank_z, bank_level, 6, BANK_APPROACH_TICKS) {
+                Ok(()) => {}
+                Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => return Err(ScriptError::Sdk(error)),
+                Err(error) => bot.log(&format!("handover: walk to the bank at ({bank_x},{bank_z}) failed ({error}), attempt {attempt}")),
+            }
+        }
+        if bot.open_bank(bank_x, bank_z, bank.loc_id as u16, 300)? {
+            return Ok(stream_bank(bot)?);
+        }
+        bot.log(&format!("handover: bank at ({bank_x},{bank_z}) did not open from {:?}, attempt {attempt}", bot.position()));
     }
+    Ok(false)
+}
+
+/// Waits for the bank pack, which streams a few ticks after the interface.
+fn stream_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
     // The bank pack streams a few ticks after the interface opens.
     let main_com = (bot.tables.com_id)("bank_main:inv");
     let streamed = bot.world.ticks + 60;
@@ -189,54 +205,42 @@ pub fn note_base(id: u16) -> Option<u16> {
     lifescape_gamedata::objs_by_name(base).into_iter().next().map(|entry| entry.obj_id as u16)
 }
 
-/// One stack the paused script carried: base object, units, and whether
-/// it rode as banknotes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Carried {
-    pub base: u16,
-    pub units: u32,
-    pub noted: bool,
+/// Pack ids that stay in the pack once the trades are done (user
+/// 2026-11-19: « ce serait plus intelligent qu'il relance son activité
+/// depuis la place Varrock »): only the tools and the objects the paused
+/// script holds (`stays`); everything else, the load it carried before
+/// the pause included, goes to the bank, and the activity relaunches from
+/// the square instead of walking the old pack back to its work.
+pub fn pack_kept_after_trades(carried: &[u16], stays: &[u16]) -> Vec<u16> {
+    let mut kept: Vec<u16> = carried.iter().copied().filter(|held| stays.contains(held)).collect();
+    kept.sort_unstable();
+    kept.dedup();
+    kept
 }
 
-/// What the delivery hands back to the paused script once the trades
-/// are done (live 2026-11-13, bdr53jee: a shop buy had withdrawn its
-/// coins and was walking to Gerrant when a delivery paused it; the trip
-/// banked everything but the tools and the shop answered "You don't
-/// have enough coins", `trade gave no harpoon` twice). Every carried
-/// stack but the tools (they never leave the pack), merged per form.
-pub fn pack_to_restore(carried: &[(u16, u32)], tools: &[u16], note_of: &dyn Fn(u16) -> Option<u16>) -> Vec<Carried> {
-    let mut out: Vec<Carried> = Vec::new();
-    for (id, units) in carried {
-        if tools.contains(id) || *units == 0 {
-            continue;
-        }
-        let (base, noted) = match note_of(*id) {
-            Some(base) => (base, true),
-            None => (*id, false),
-        };
-        match out.iter_mut().find(|stack| stack.base == base && stack.noted == noted) {
-            Some(stack) => stack.units += units,
-            None => out.push(Carried { base, units: *units, noted }),
-        }
-    }
-    out
-}
-
-/// Live form of `pack_to_restore` on the current pack: tools and the
-/// script's held objects never leave the pack, so never come back out.
-pub fn carried_before(bot: &Bot) -> Vec<Carried> {
-    let carried: Vec<(u16, u32)> = bot.backpack().1.into_iter().map(|(_, held)| held).collect();
+/// Pack ids that never leave the pack on a delivery: the tools and the
+/// paused script's held objects (a quest's air talisman, live
+/// 2026-11-14 bh99tw2f: banked, its listings then locked it).
+pub fn pack_stays(bot: &Bot) -> Vec<u16> {
     let mut stays = tool_ids(bot);
     stays.extend(bot.pack_holds());
-    pack_to_restore(&carried, &stays, &note_base)
+    stays
 }
 
-/// Tools stay in the pack across the trip: the paused activity resumes
-/// with its axe, pickaxe or net.
+/// Tools stay in the pack across the trip: the paused task resumes from
+/// the square with every tool it carried, its axe, pickaxe or net and any
+/// object a recipe carries as a tool (user 2026-11-19: a gem cutter's
+/// chisel was banked after a delivery, the task blocked on it).
 pub fn tool_ids(bot: &Bot) -> Vec<u16> {
     let mut keep: Vec<u16> = Vec::new();
     for spec in [&crate::kit::tools::AXE_SPEC, &crate::kit::tools::PICK_SPEC, &crate::kit::tools::FISH_SPEC] {
         keep.extend(spec.known_ids(bot));
+    }
+    for (_, (held, _)) in bot.backpack().1 {
+        let tool = lifescape_gamedata::obj_by_id(usize::from(held)).and_then(|entry| entry.name).is_some_and(lifescape_gamedata::obtain::is_carried_tool);
+        if tool && !keep.contains(&held) {
+            keep.push(held);
+        }
     }
     keep
 }
@@ -391,24 +395,27 @@ mod tests {
         assert_eq!(seller_groups[0].coins, groups[0].coins);
     }
 
-    /// bdr53jee 2026-11-13: the shop buy carried its coins (and a pot of
-    /// noted logs) into the pause; the delivery hands them back, tools
-    /// never left, notes keep their form, split stacks merge.
+    /// lucy_rhodes 2026-11-19: the booth 40 tiles away is no short stand
+    /// walk, the delivery travels there first; next to it, or on another
+    /// level, decides alike.
     #[test]
-    fn the_paused_pack_is_handed_back() {
-        use super::{pack_to_restore, Carried};
-        let (coins, harpoon_net, logs, logs_note) = (995u16, 303u16, 1511u16, 1512u16);
-        let carried = [(coins, 40), (harpoon_net, 1), (logs, 3), (logs_note, 50), (logs, 2)];
-        let note_of = |id: u16| (id == logs_note).then_some(logs);
-        let restore = pack_to_restore(&carried, &[harpoon_net], &note_of);
-        assert_eq!(
-            restore,
-            vec![
-                Carried { base: coins, units: 40, noted: false },
-                Carried { base: logs, units: 5, noted: false },
-                Carried { base: logs, units: 50, noted: true },
-            ]
-        );
+    fn a_far_booth_is_travelled_to_first() {
+        use super::bank_needs_approach;
+        assert!(!bank_needs_approach((0, 3185, 3436), (3186, 3436, 0)), "at the booth");
+        assert!(bank_needs_approach((0, 3150, 3436), (3186, 3436, 0)), "36 tiles away");
+        assert!(bank_needs_approach((1, 3186, 3436), (3186, 3436, 0)), "upstairs");
+    }
+
+    /// User 2026-11-19: once the trades are done, the load the paused
+    /// woodcutter carried (logs, their notes), the coins and the traded
+    /// lots all go to the bank; only the tools stay.
+    #[test]
+    fn only_the_tools_stay_after_the_trades() {
+        use super::pack_kept_after_trades;
+        let (coins, axe, logs, logs_note, feather) = (995u16, 1351u16, 1511u16, 1512u16, 314u16);
+        let carried = [coins, axe, logs, logs_note, logs, feather];
+        assert_eq!(pack_kept_after_trades(&carried, &[axe, 1265]), vec![axe]);
+        assert!(pack_kept_after_trades(&[coins, logs], &[axe]).is_empty(), "no tool carried: the pack empties");
     }
 
     #[test]
@@ -420,16 +427,13 @@ mod tests {
 
     /// Live 2026-11-14 (bh99tw2f): a delivery paused Rune Mysteries and
     /// banked the Duke's air talisman, which its listings then locked.
-    /// The quest holds it: it never leaves the pack, so the restore list
-    /// never names it (the bank would refuse the locked unit anyway).
+    /// The quest holds it: it stays in the pack with the tools.
     #[test]
     fn a_held_quest_object_never_leaves_the_pack() {
-        use super::pack_to_restore;
+        use super::pack_kept_after_trades;
         let (coins, talisman) = (995u16, 1438u16);
         let held = lifescape_sdk::client::locks::deposit_keep(&[], &[talisman]);
-        let restore = pack_to_restore(&[(coins, 12), (talisman, 1)], &held, &|_| None);
-        assert!(restore.iter().all(|stack| stack.base != talisman), "{restore:?}");
-        assert_eq!(restore.len(), 1, "the coins come back");
+        assert_eq!(pack_kept_after_trades(&[coins, talisman], &held), vec![talisman]);
     }
 
     /// Coverage walks the groups in order: a stack or a purse is never

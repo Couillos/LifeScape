@@ -85,9 +85,18 @@ fn add_snapshot(totals: &mut BTreeMap<i64, i64>, snapshot: &Value) {
             if count <= 0 {
                 continue;
             }
-            *totals.entry(obj_id).or_insert(0) = totals.get(&obj_id).unwrap_or(&0).saturating_add(count);
+            add_count(totals, obj_id, count);
         }
     }
+}
+
+/// Adds `count` units of `obj_id` to its OBJECT's total: a banknote counts
+/// as the object it notes (user 2026-11-19: one object, measured the same
+/// way whatever its id; the page listed "Yew logs" twice).
+fn add_count(totals: &mut BTreeMap<i64, i64>, obj_id: i64, count: i64) {
+    let object = usize::try_from(obj_id).map(|id| lifescape_gamedata::base_obj_id(id) as i64).unwrap_or(obj_id);
+    let total = totals.entry(object).or_insert(0);
+    *total = total.saturating_add(count);
 }
 
 fn snapshot_bank_empty(snapshot: &Value) -> bool {
@@ -139,16 +148,14 @@ pub fn current_holdings(described: &[Value], save_dir: &str) -> BTreeMap<i64, i6
             // Stale save: only its bank helps until the bot opens the bank.
             if snapshot_bank_empty(state) {
                 for (obj_id, count) in &saved.bank {
-                    *totals.entry(i64::from(*obj_id)).or_insert(0) =
-                        totals.get(&i64::from(*obj_id)).unwrap_or(&0).saturating_add(i64::from(*count));
+                    add_count(&mut totals, i64::from(*obj_id), i64::from(*count));
                 }
             }
             continue;
         }
         for bucket in [&saved.inv, &saved.worn, &saved.bank] {
             for (obj_id, count) in bucket {
-                *totals.entry(i64::from(*obj_id)).or_insert(0) =
-                    totals.get(&i64::from(*obj_id)).unwrap_or(&0).saturating_add(i64::from(*count));
+                add_count(&mut totals, i64::from(*obj_id), i64::from(*count));
             }
         }
     }
@@ -458,13 +465,30 @@ pub fn count_change_thousandths(now: i64, before: Option<i64>) -> Option<i64> {
 fn baseline_24h(items: &Path, now: i64) -> Option<(HashMap<i64, i64>, i64)> {
     let store = lifescape_store::Store::open(&store_path(items)).ok()?;
     let (_, counts) = store.holdings_at_or_before(now - 86_400).ok()??;
-    let total = counts.iter().map(|(_, count)| *count).sum();
-    Some((counts.into_iter().collect(), total))
+    let total = items_total(counts.iter().copied());
+    Some((fold_counts(counts), total))
+}
+
+/// The item total: every object's count but the coins (user 2026-11-19,
+/// « retire les coins du total items »).
+fn items_total(counts: impl Iterator<Item = (i64, i64)>) -> i64 {
+    counts.filter(|(obj_id, _)| *obj_id != COINS).map(|(_, count)| count).sum()
+}
+
+/// Recorded counts by object: rows taken before the notes were folded
+/// (2026-11-19) still carry the banknote's own id, summed into its object
+/// so the 24 h change compares like with like.
+fn fold_counts(counts: Vec<(i64, i64)>) -> HashMap<i64, i64> {
+    let mut folded = BTreeMap::new();
+    for (obj_id, count) in counts {
+        add_count(&mut folded, obj_id, count);
+    }
+    folded.into_iter().collect()
 }
 
 fn snapshot_in(described: &[Value], items: &Path, save_dir: &str) -> Value {
     let live = current_holdings(described, save_dir);
-    let live_total: i64 = live.values().sum();
+    let live_total: i64 = items_total(live.iter().map(|(obj_id, count)| (*obj_id, *count)));
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
     let baseline = baseline_24h(items, now);
     let change_of = |now_count: i64, before: Option<i64>| match count_change_thousandths(now_count, before) {
@@ -577,6 +601,38 @@ pub fn start_sampler(orch: Arc<crate::daemon::Orchestrator>) {
 
 #[cfg(test)]
 mod tests {
+
+    /// User 2026-11-19 (« retire les coins du total items »): the item
+    /// total counts every object but the coins.
+    #[test]
+    fn the_item_total_leaves_the_coins_out() {
+        let totals: std::collections::BTreeMap<i64, i64> = [(super::COINS, 1_000_000), (1515, 128), (1511, 2)].into_iter().collect();
+        assert_eq!(super::items_total(totals.iter().map(|(id, count)| (*id, *count))), 130);
+    }
+
+    /// The 24 h baseline recorded before the fold sums a note's rows into
+    /// its object: 100 logs then, 128 now (28 noted) is +28 %, never the
+    /// notes vanishing and the logs jumping.
+    #[test]
+    fn the_24h_baseline_folds_old_note_rows() {
+        let folded = super::fold_counts(vec![(1515, 80), (1516, 20), (995, 5)]);
+        assert_eq!(folded.get(&1515), Some(&100));
+        assert_eq!(folded.get(&1516), None);
+        assert_eq!(folded.get(&995), Some(&5));
+    }
+
+    /// User 2026-11-19 (« les items et les banknote de ces items sont les
+    /// mêmes items »): the holdings page listed "Yew logs" twice, 501 184
+    /// base logs (1515) and 4 147 notes (1516). A note counts as its
+    /// object: one row.
+    #[test]
+    fn a_banknote_counts_as_its_object() {
+        let snapshot = lifescape_json::parse(r#"{"inv":[{"id":1516,"count":28}],"bank":[{"id":1515,"count":100}],"worn":[]}"#).expect("json");
+        let mut totals = std::collections::BTreeMap::new();
+        super::add_snapshot(&mut totals, &snapshot);
+        assert_eq!(totals.get(&1515), Some(&128));
+        assert_eq!(totals.get(&1516), None, "never a separate row");
+    }
 
     /// User rule 2026-11-13: the list shows the 24 h change of each count
     /// (now vs the hourly point 24 h ago), none without a baseline.

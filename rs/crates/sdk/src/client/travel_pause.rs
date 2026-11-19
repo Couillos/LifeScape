@@ -2,9 +2,11 @@
 //!
 //! The session pause gate (`session_rescue::gate_market`) runs a market
 //! delivery inline, at the end of a pump: often the pump of a walk leg in
-//! flight. The delivery walks to the bank and the square, then walks back
-//! to the tile where the pause began and closes it (`Bot::note_pause`).
-//! The trip it interrupted then resumes on a stale state: its tick
+//! flight. Since 2026-11-19 the delivery stays at the Varrock square
+//! (no walk back, the pack banked but the tools) and closes the pause
+//! (`Bot::note_pause`); the trip it interrupted resumes from there.
+//! Before, the delivery walked back to the tile where the pause began,
+//! and the trip resumed on a stale state: its tick
 //! deadline counted the whole pause (400-900 ticks live), the server walk
 //! queue was replaced, and the door registry was cleared by the nested
 //! trip. Live 2026-11-13 (21:19-21:58 CET): 28 `walk timed out` / `door loc

@@ -33,7 +33,7 @@ pub const FILLER_TICKS: u64 = 1500;
 /// A failed or empty filler keeps its skill out of the fillers this long.
 pub const FILLER_RETRY_TICKS: u64 = 500;
 /// History prefix of a filler launch (`filler:<method>`).
-const FILLER_LAUNCH_TAG: &str = "filler:";
+pub(crate) const FILLER_LAUNCH_TAG: &str = "filler:";
 /// History prefix of a filler that failed (`filler_failed:<method>`).
 const FILLER_FAILED_TAG: &str = "filler_failed:";
 
