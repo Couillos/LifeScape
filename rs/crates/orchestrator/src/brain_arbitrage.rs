@@ -41,7 +41,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Mutex, OnceLock};
 
 use lifescape_json::{object, str_value, Value};
-use lifescape_planner::merchant_arbitrage::{best_lot, ArbitrageLot, Outlet, OutletKind, MAX_ARBITRAGE_LOT, SHOP_SELL_TICKS_PER_UNIT};
+use lifescape_planner::merchant_arbitrage::{best_lot, ArbitrageLot, Outlet, OutletKind, SHOP_SELL_TICKS_PER_UNIT};
 use lifescape_planner::Life;
 
 use crate::jobs::Job;
@@ -99,6 +99,9 @@ pub fn best_arbitrage(books: &PublicAsks, sales: &crate::brain_npc_sale::ShopSal
         // A shop whose next unit pays no more than the cheapest ask is
         // out at once (one game-data read): most objects stop here.
         let cheapest = asks.first().map(|(price, _)| *price).unwrap_or(i64::MAX);
+        // The ladder goes as deep as the units on sale (no lot cap,
+        // user 2026-11-19); it stops earlier at the shop's floor.
+        let on_sale: i64 = asks.iter().map(|(_, units)| (*units).max(0)).sum();
         let ladders: Vec<(String, Vec<i64>)> = shops
             .iter()
             .filter_map(|shop| {
@@ -107,7 +110,7 @@ pub fn best_arbitrage(books: &PublicAsks, sales: &crate::brain_npc_sale::ShopSal
                 if first <= cheapest {
                     return None;
                 }
-                Some((shop.shop.clone(), crate::brain_npc_sale::shop_ladder(&shop.shop, item, sales, before, MAX_ARBITRAGE_LOT)?))
+                Some((shop.shop.clone(), crate::brain_npc_sale::shop_ladder(&shop.shop, item, sales, before, on_sale)?))
             })
             .collect();
         if ladders.is_empty() {

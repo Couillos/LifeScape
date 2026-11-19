@@ -2400,7 +2400,8 @@ Lot (`planner::merchant_arbitrage::best_lot`, pur) :
 - unité par unité depuis l'ask le moins cher : une unité entre tant que
   l'exutoire la paie plus que son ask plus sa manutention au taux du
   bot ; les asks montent, l'exutoire baisse : la première qui ne paie
-  pas clôt le lot ; au plus `MAX_ARBITRAGE_LOT` (1000) unités ; la
+  pas clôt le lot ; aucun plafond d'unités (utilisateur 2026-11-19 :
+  les asks, la bourse et ce que paie l'exutoire bornent le lot) ; la
   bourse libre couvre chaque unité à l'ask le plus cher pris
   (l'engagement de l'offre à son ouverture) ;
 - prix de l'offre : elle OUVRE à l'ask le plus cher pris ; son PLAFOND

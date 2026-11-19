@@ -38,9 +38,6 @@
 use crate::bid_response::BID_MIN_PROFIT;
 use crate::market_value::HANDOVER_TICKS;
 
-/// Most units one arbitrage lot buys (one trip; the shop takes ten
-/// units a click, a thousand units sell in a few hundred ticks).
-pub const MAX_ARBITRAGE_LOT: i64 = 1000;
 /// Ticks one unit takes to sell to a keeper: a batch of ten per click,
 /// about two ticks and a half (`kit::shop::sell_units`).
 pub const SHOP_SELL_TICKS_PER_UNIT: f64 = 0.25;
@@ -117,8 +114,9 @@ pub fn best_lot(item: &str, asks: &[(i64, i64)], outlets: &[Outlet], coin_rate: 
 
 /// The lot through one outlet (asks cheapest first): every unit whose
 /// outlet value beats its ask and handling, within the wallet (every
-/// unit at the dearest ask taken: the bid's commitment) and
-/// `MAX_ARBITRAGE_LOT`; `None` when not even one unit pays.
+/// unit at the dearest ask taken: the bid's commitment); no cap on the
+/// count (user 2026-11-19): asks, wallet and outlet bound it. `None`
+/// when not even one unit pays.
 fn lot_through(item: &str, asks: &[(i64, i64)], outlet: &Outlet, coin_rate: f64, wallet: i64) -> Option<ArbitrageLot> {
     let rate = coin_rate.max(0.0);
     let handling = outlet.unit_ticks.max(0.0) * rate;
@@ -127,7 +125,7 @@ fn lot_through(item: &str, asks: &[(i64, i64)], outlet: &Outlet, coin_rate: f64,
         for _ in 0..*units {
             // The bid rests at the dearest ask taken: the wallet covers
             // every unit at that price (the market's own coverage check).
-            if count >= MAX_ARBITRAGE_LOT || (count + 1).saturating_mul(*price) > wallet {
+            if (count + 1).saturating_mul(*price) > wallet {
                 break 'asks;
             }
             let value = (outlet.unit_value)(count);

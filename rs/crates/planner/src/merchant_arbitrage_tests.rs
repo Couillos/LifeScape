@@ -75,7 +75,7 @@ fn the_lot_stops_where_the_shop_pays_no_more_than_the_ask() {
     let (shop, held) = yew_shop(0);
     let value = ladder(&shop, held);
     assert!(value(0) > value(1) && value(1) > value(2), "the price falls with the stock: {} {} {}", value(0), value(1), value(2));
-    let paying = (0..MAX_ARBITRAGE_LOT).take_while(|rank| value(*rank) > 20.0 + SHOP_SELL_TICKS_PER_UNIT * 0.01).count() as i64;
+    let paying = (0..100_000_i64).take_while(|rank| value(*rank) > 20.0 + SHOP_SELL_TICKS_PER_UNIT * 0.01).count() as i64;
     assert!(paying > 0 && paying < 100, "{paying}");
     let lot = best_lot("yew_logs", &[(20, 100)], &[shop_outlet(&shop, &value)], 0.01, 10_000).expect("the first units pay the trip");
     assert_eq!(lot.count, paying, "{lot:?}");
@@ -91,7 +91,9 @@ fn the_wallet_bounds_the_lot() {
     let lot = best_lot("yew_logs", &[(1, 100)], &[shop_outlet(&shop, &value)], FLEET_RATE, 70).expect("70 coins buy 70 logs");
     assert_eq!(lot.count, 70);
     assert_eq!(best_lot("yew_logs", &[(1, 100)], &[shop_outlet(&shop, &value)], FLEET_RATE, 0), None);
-    assert_eq!(best_lot("yew_logs", &[(1, 5000)], &[shop_outlet(&shop, &value)], FLEET_RATE, 1_000_000).map(|lot| lot.count), Some(MAX_ARBITRAGE_LOT), "one trip at most");
+    // No cap on the units (user 2026-11-19): the asks, the wallet and
+    // what the shop still pays bound the lot, never a fixed count.
+    assert_eq!(best_lot("yew_logs", &[(1, 5000)], &[shop_outlet(&shop, &value)], FLEET_RATE, 1_000_000).map(|lot| lot.count), Some(5000), "every log on sale the shop still pays for");
 }
 
 /// High alchemy is an outlet too (a caster's own cast, no trip): the
