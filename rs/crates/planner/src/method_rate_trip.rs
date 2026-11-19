@@ -136,6 +136,34 @@ fn work_sites(key: &str, sites: &[(i64, i64, i64)]) -> std::sync::Arc<Vec<((i64,
     table
 }
 
+/// Miners a field of `rocks` rocks yielding `product` feeds (lot 3, live
+/// 2026-11-19: four coal rocks read as four seats, "contended" 38 times
+/// in two hours). A mined rock yields again after `rock_respawn` ticks
+/// (`mine.dbrow` `rock_respawnrate`: coal 100); a miner at the rock's
+/// level with the best pickaxe that level wields (`guide_methods::
+/// tool_at`, `pickaxe_checker.rs2`: rune from 41) takes a roll every
+/// `rate + 1` ticks at `stat_odds` (`mining.rs2`), plus the success
+/// delay of a normal rock, per ore. The field seats `rocks × ore ticks / respawn` of them,
+/// rounded, at least one, never more than its rocks. `None`: a rock
+/// that never depletes (essence) or a product without odds.
+pub fn miners_fed(product: &str, rocks: i64) -> Option<i64> {
+    use lifescape_gamedata::action_odds::{pickaxe_rate, rock_chance, rock_respawn, stat_odds};
+    let respawn = rock_respawn(product)? as f64;
+    let (low, high) = rock_chance(product)?;
+    let method = format!("gather:mining/{product}");
+    let gate = crate::guide_methods::gate_level(&method);
+    let level = i64::from(gate);
+    let odds = stat_odds(level, low, high);
+    if odds <= 0.0 || respawn <= 0.0 {
+        return None;
+    }
+    let roll = (pickaxe_rate(&crate::guide_methods::tool_at(&method, "", gate))? + 1) as f64;
+    let settle = if crate::method_rate::FAST_ROCKS.contains(&product) { 0.0 } else { crate::method_rate::ROCK_SUCCESS_DELAY_TICKS };
+    let rocks = rocks.max(1);
+    let fed = (rocks as f64 * (roll / odds + settle) / respawn).round() as i64;
+    Some(fed.clamp(1, rocks))
+}
+
 /// Round trip of an essence load: bank to Aubury and back, teleport in,
 /// walk the mine from its centre to a rock and back, portal out.
 pub fn essence_trip(rocks: &[(i64, i64, i64)]) -> Option<f64> {

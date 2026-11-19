@@ -374,20 +374,30 @@ pub fn crowd_penalty(site: (i64, i64, i64), crowd: &[((i64, i64, i64), u32)]) ->
 }
 
 /// Workers a gathering site holds (plan P7a): its resource nodes (trees,
-/// rocks, fishing spots of the method) within `CROWD_RADIUS`. `None` for
-/// a fight camp or a station (no node count: the crowd penalty alone).
+/// rocks, fishing spots of the method) within `CROWD_RADIUS`; a rock
+/// field the miners its respawns feed (`method_rate_trip::miners_fed`,
+/// lot 3: four 100-tick coal rocks feed one miner, never four). `None`
+/// for a fight camp or a station (no node count: the crowd penalty
+/// alone).
 pub fn site_capacity(method: &str, site: (i64, i64, i64)) -> Option<i64> {
-    let (kind, _) = method_sites(method)?;
+    let (kind, resource) = method_sites(method)?;
     if kind == "fight" {
         return None;
     }
     let table = method_site_table(method)?;
     let nodes = table.iter().filter(|row| row.site.2 == site.2 && (row.site.0 - site.0).abs().max((row.site.1 - site.1).abs()) <= CROWD_RADIUS).count();
-    Some(nodes.max(1) as i64)
+    let nodes = nodes.max(1) as i64;
+    if kind == "mining" {
+        if let Some(fed) = crate::method_rate_trip::miners_fed(&resource, nodes) {
+            return Some(fed);
+        }
+    }
+    Some(nodes)
 }
 
 /// True when the fleet already works every node of the site (P7a, D2:
 /// the Mining Guild's 5 mithril rocks held 23 miners, 2026-11-17).
+/// `crowd`: the bots on the method's resource only (`same_resource_seats`).
 pub fn site_full(method: &str, site: (i64, i64, i64), crowd: &[((i64, i64, i64), u32)]) -> bool {
     site_capacity(method, site).is_some_and(|capacity| crowd_bots(site, crowd) >= capacity)
 }
@@ -406,11 +416,28 @@ pub fn pick_site_crowded(method: &str, combat: u8, position: Option<(i64, i64, i
 /// (`cooldown`, plan P1/D4).
 pub fn pick_site_for(method: &str, ctx: &crate::expand::ReadyCtx) -> SitePick {
     let avoid = crate::cooldown::cooled_sites(&ctx.cooled, method);
-    pick_site_avoiding(method, ctx.combat, ctx.position, Fare::of(ctx), &Pass::of(ctx), &ctx.crowd, &avoid)
+    let seats = same_resource_seats(method, &ctx.seats);
+    pick_site_seated(method, ctx.combat, ctx.position, Fare::of(ctx), &Pass::of(ctx), &ctx.crowd, &seats, &avoid)
+}
+
+/// True when `left` and `right` work the same resource (`method_sites`:
+/// kind and resource, `farm:coal` as `gather:mining/coal`).
+pub fn same_resource(left: &str, right: &str) -> bool {
+    match (method_sites(left), method_sites(right)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// The bots of `seats` (site, method, count) working `method`'s
+/// resource: the crowd a site's capacity is compared to.
+pub fn same_resource_seats(method: &str, seats: &[((i64, i64, i64), String, u32)]) -> Vec<((i64, i64, i64), u32)> {
+    seats.iter().filter(|(_, other, _)| same_resource(method, other)).map(|(site, _, count)| (*site, *count)).collect()
 }
 
 /// `pick_site_crowded` without the `avoid` sites: when they cover every
-/// site this combat level works, `Cooled` (never a combat need).
+/// site this combat level works, `Cooled` (never a combat need). Every
+/// bot of `crowd` counts as working `method` (`pick_site_seated`).
 pub fn pick_site_avoiding(
     method: &str,
     combat: u8,
@@ -418,6 +445,24 @@ pub fn pick_site_avoiding(
     fare: Fare,
     pass: &Pass,
     crowd: &[((i64, i64, i64), u32)],
+    avoid: &[(i64, i64, i64)],
+) -> SitePick {
+    pick_site_seated(method, combat, position, fare, pass, crowd, crowd, avoid)
+}
+
+/// The site pick: `crowd` (every fleet bot) lengthens a site's distance,
+/// `seats` (the bots on `method`'s resource) fill its capacity
+/// (`site_full`; review lot 3: a fighter beside the coal rocks never
+/// fills them).
+#[allow(clippy::too_many_arguments)]
+pub fn pick_site_seated(
+    method: &str,
+    combat: u8,
+    position: Option<(i64, i64, i64)>,
+    fare: Fare,
+    pass: &Pass,
+    crowd: &[((i64, i64, i64), u32)],
+    seats: &[((i64, i64, i64), u32)],
     avoid: &[(i64, i64, i64)],
 ) -> SitePick {
     let Some(table) = method_site_table(method) else {
@@ -442,7 +487,7 @@ pub fn pick_site_avoiding(
         };
         walk + crowd_penalty(*site, crowd)
     };
-    let full = |site: &(i64, i64, i64)| site_full(method, *site, crowd);
+    let full = |site: &(i64, i64, i64)| site_full(method, *site, seats);
     let across = |site: &(i64, i64, i64)| position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, *site));
     let safe: Vec<&SiteRow> = rows.iter().copied().filter(|row| row.required <= combat).collect();
     // The Karamja boat opens with its fare (budgeted below, like the toll).

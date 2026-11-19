@@ -71,6 +71,11 @@ pub struct ReadyCtx {
     /// Sites the rest of the fleet works right now, with how many bots
     /// each (`combat::pick_site_crowded`): a crowded site reads farther.
     pub crowd: Vec<((i64, i64, i64), u32)>,
+    /// The same fleet sites with the method each bot works there
+    /// (`combat::pick_site_for`): only the bots on the same resource
+    /// take a site's seats (`site_capacity`); a fighter beside the coal
+    /// rocks never fills them.
+    pub seats: Vec<((i64, i64, i64), String, u32)>,
     /// Methods the method health registry quarantined (brain,
     /// `method_health`: under 10 % success over 20+ launches, until a
     /// live `check-method` proves them again): never resolved, the
@@ -131,6 +136,7 @@ impl ReadyCtx {
             quests_done: Vec::new(),
             training: None,
             crowd: Vec::new(),
+            seats: Vec::new(),
             quarantined: Vec::new(),
             cooled: Vec::new(),
             maker_post: None,

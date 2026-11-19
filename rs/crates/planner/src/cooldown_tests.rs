@@ -119,6 +119,7 @@ fn a_full_method_hands_over_to_the_next_one() {
     let next = "gather:mining/coal";
     let table = crate::combat::method_site_table(full).expect("mithril sites");
     ctx.crowd = table.iter().map(|row| (row.site, 50u32)).collect();
+    ctx.seats = table.iter().map(|row| (row.site, full.to_string(), 50u32)).collect();
     let mut node = Node::new("n6", NodeKind::ReachLevel { skill: "mining".to_string(), level: 70 }, Vec::new(), 70);
     node.status = NodeStatus::Ready;
     node.method = Some(full.to_string());

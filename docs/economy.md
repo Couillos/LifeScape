@@ -1353,6 +1353,23 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
   l'interruption pour une livraison, la lecture du rapport
   (`fold_filler_report`). Un refus est typé (`FillerRefusal` : rien de
   travaillable hors bans, nœud bloqué, aucune méthode) et loggé.
+  Affluence (2026-11-19, après le lot 3 : 39 % du remplissage au
+  charbon, demande réelle de ~3 100 charbons à 88-101 pièces, rocs de
+  Barbarian Village « contended » 38 fois et Wilderness 19 fois en 2 h) :
+  le remplissage lit bien la foule de la flotte (`site_crowd`) et publie
+  sa réclamation avant le choix suivant ; la cause était la capacité d'un
+  champ de rocs comptée en rocs (4 sièges pour 4 rocs de charbon qui
+  repoussent en 100 ticks). Elle compte désormais les mineurs que les
+  repousses nourrissent (docs/planner.md, Contention) : un deuxième
+  remplissage ne tire plus des rocs qu'un premier vide déjà, il mine
+  ailleurs. Coût (`filler.launch` 27 → 212 ms CPU par appel après le lot
+  3) : la publication du guide relisait les avoirs du bot ~270 fois (copie
+  de l'instantané live et deux requêtes des verrous à chaque fois) ;
+  lecture unique par publication (`brain_plan::Holdings`), ce que le bot
+  garde lu une fois pour l'alchimie et l'argent (`publish_window`),
+  `money_launchable` mémorisé : mêmes lignes, mêmes choix (banc
+  `cpu_bench_tests::filler_bench` sur une copie : 260 → 54 ms CPU par
+  choix).
 - Équipement : échelle par paliers (§ Équipement par paliers) ; les
   envies (`brain_wishlist`) ne portent plus que les outils pour les buts
   mêlée/non combattants (plafond 25 % du portefeuille par outil), et

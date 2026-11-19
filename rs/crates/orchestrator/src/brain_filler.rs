@@ -274,6 +274,42 @@ pub(crate) fn pick_window(node: &mut Node, ctx: &mut ReadyCtx, publish: &mut dyn
     }
 }
 
+/// The coin node of the window filling `first`'s wait and its resolve
+/// context, like a money node's (levels, tools, wallet, position, the
+/// fleet's sites, market, quests, its own draw seed).
+pub(crate) fn window_ctx(job: &Job, life: &Life, live: &Value, first: &str) -> (Node, ReadyCtx) {
+    let coins = crate::brain_plan::holdings_count(job, "coins");
+    let node = Node::new(&format!("fill-{first}"), NodeKind::HaveCoins { amount: coins.saturating_add(1) }, Vec::new(), 0);
+    let mut ctx = crate::brain_plan::ready_ctx(life, &node, live);
+    ctx.coins = coins;
+    ctx.tools = crate::brain_plan::carried_tools(job);
+    ctx.bank_known = live.get("bank_streamed").as_bool() == Some(true);
+    ctx.combat = crate::brain_plan::live_combat(live);
+    ctx.position = live.get("position").as_arr().and_then(|cells| {
+        let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
+        Some((part(1)?, part(2)?, part(0)?))
+    });
+    ctx.crowd = crate::site_crowd::others(&job.account);
+    ctx.seats = crate::site_crowd::seats(&job.account);
+    crate::brain_market::fill_ctx(&mut ctx, &node, live);
+    // Like a money node (plan équilibre step 3): the quests it finished
+    // gate the guide's lines, its draw has its own seed.
+    ctx.quests_done = crate::brain_rescue::quests_done(life);
+    ctx.draw_seed = lifescape_planner::guide_pick::seed_for(life.profile.seed, &node.id, life.memory.draws);
+    (node, ctx)
+}
+
+/// The money guide's lines of a window (alchemy of its stock priced for
+/// the static ranking too), never the 100 % market lots (`window_works`).
+/// What the bot keeps is read once for both (lot 3 review, CPU: twice
+/// before): the window's node is never in the graph, so its
+/// `kept_except` is the alchemy's `kept`.
+pub(crate) fn publish_window(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job) {
+    let keep = crate::brain_alch::kept_except(life, live, Some(&node.id));
+    crate::brain_alch::publish_keeping(ctx, node, life, live, &keep);
+    crate::brain_money::publish_keeping(ctx, node, life, live, job, &keep);
+}
+
 /// One filler window while `waiting` rests on the book and the graph has
 /// nothing else ready. Returns true when a run was queued (the caller
 /// saved the life first). Never through a ban; nothing workable is
@@ -289,36 +325,15 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
     if refused_recently(&job.account, now_secs()) {
         return false;
     }
-    let coins = crate::brain_plan::holdings_count(job, "coins");
-    let mut node = Node::new(&format!("fill-{first}"), NodeKind::HaveCoins { amount: coins.saturating_add(1) }, Vec::new(), 0);
-    let mut ctx = crate::brain_plan::ready_ctx(life, &node, live);
-    ctx.coins = coins;
-    ctx.tools = crate::brain_plan::carried_tools(job);
-    ctx.bank_known = live.get("bank_streamed").as_bool() == Some(true);
-    ctx.combat = crate::brain_plan::live_combat(live);
-    ctx.position = live.get("position").as_arr().and_then(|cells| {
-        let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
-        Some((part(1)?, part(2)?, part(0)?))
-    });
-    ctx.crowd = crate::site_crowd::others(&job.account);
-    crate::brain_market::fill_ctx(&mut ctx, &node, live);
-    // Like a money node (plan équilibre step 3): the quests it finished
-    // gate the guide's lines, its draw has its own seed.
-    ctx.quests_done = crate::brain_rescue::quests_done(life);
-    ctx.draw_seed = lifescape_planner::guide_pick::seed_for(life.profile.seed, &node.id, life.memory.draws);
+    let (mut node, mut ctx) = window_ctx(job, life, live, first);
     let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now_secs() - stamp);
     let banned = lifescape_planner::banned_skills(&life.history, &ticks_since);
     // A filler that just failed (or ended without working) sits out,
     // strictly; a goal ban is avoided when anything else works, never a
     // reason to idle (2026-11-14, george_97: "no filler" for a whole ban).
     let failed = failed_filler_skills(life, &ticks_since);
-    // The money guide's lines (alchemy of its stock priced for the static
-    // ranking too), never the 100 % market lots (`window_works`).
     let reader: &Life = life;
-    let mut publish = |ctx: &mut ReadyCtx, node: &Node| {
-        crate::brain_alch::publish(ctx, node, reader, live);
-        crate::brain_money::publish(ctx, node, reader, live, job);
-    };
+    let mut publish = |ctx: &mut ReadyCtx, node: &Node| publish_window(ctx, node, reader, live, job);
     let picked = pick_window(&mut node, &mut ctx, &mut publish, &banned, &failed);
     let pick = match picked {
         Ok(pick) => pick,
@@ -343,7 +358,7 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
         return false;
     }
     clear_refusal(&job.account);
-    crate::site_crowd::note(&job.account, node.site);
+    crate::site_crowd::note(&job.account, node.site, &method);
     // The guide's choice, logged and kept under the kind `filler` (its
     // own pool; the draw counter moves on: the next window draws again).
     crate::brain_picks::record_filler(life, &node, &ctx, now_secs());

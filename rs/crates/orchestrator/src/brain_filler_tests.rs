@@ -286,6 +286,70 @@ fn a_foodless_fighter_never_fills_on_a_biting_spot() {
     assert!(!pick.from_guide && pick.method != "fight:melee/men", "{pick:?}");
 }
 
+/// Lot 3, live 2026-11-19 (lara_lane, owen_wood, ...): coal drawn by
+/// every filler, the second window sent to the four Barbarian Village
+/// coal rocks a first one already worked, "contended" 38 times in two
+/// hours. A filler reads the fleet's sites like a money node: rocks the
+/// crowd already empties (100-tick respawn: one miner) are never drawn
+/// by a second filler; it works the coal elsewhere.
+#[test]
+fn a_crowded_site_is_never_drawn_by_a_second_filler() {
+    let barbarian = (3089, 3434, 0);
+    let miner_ctx = |crowd: Vec<((i64, i64, i64), u32)>| {
+        let mut ctx = ReadyCtx::blind(0.5);
+        ctx.levels = vec![("mining".to_string(), 60)];
+        ctx.tools = vec!["rune_pickaxe".to_string()];
+        ctx.combat = 40;
+        ctx.position = Some((3185, 3436, 0));
+        ctx.seats = crowd.iter().map(|(site, count)| (*site, "gather:mining/coal".to_string(), *count)).collect();
+        ctx.crowd = crowd;
+        ctx
+    };
+    let coal = line("gather:mining/coal", "farm", 20000.0);
+    let pick = |crowd: Vec<((i64, i64, i64), u32)>| {
+        let mut node = filler_node();
+        let mut ctx = miner_ctx(crowd);
+        let mut publish = |ctx: &mut ReadyCtx, _: &Node| ctx.money_guide = vec![coal.clone()];
+        let pick = super::pick_window(&mut node, &mut ctx, &mut publish, &[], &[]).expect("coal is workable");
+        (pick, node.site)
+    };
+    let (first, first_site) = pick(Vec::new());
+    assert_eq!((first.method.as_str(), first_site), ("gather:mining/coal", Some(barbarian)), "the first filler mines the nearest coal");
+    let (second, second_site) = pick(vec![(barbarian, 1)]);
+    let site = second_site.expect("a site");
+    assert!(lifescape_planner::combat::crowd_bots(site, &[(barbarian, 1)]) == 0, "second filler on the crowded rocks: {second:?} at {site:?}");
+}
+
+/// Lot 3 review, CPU (filler.launch 27 → 212 ms CPU a call): the money
+/// guide publication read the bot's holdings ~270 times, each a copy of
+/// the live snapshot and the locks' store queries. The cached read
+/// (`brain_plan::Holdings`, once per publication) counts exactly what
+/// `holdings_count` counts, every object, asked once or twice; and a
+/// window reads what the bot keeps once, the alchemy's `kept` (its node
+/// is never in the graph).
+#[test]
+fn a_filler_pick_reads_the_same_holdings_from_the_cache() {
+    let stack = |name: &str, count: i64| {
+        let obj = lifescape_gamedata::objs_by_name(name).into_iter().next().expect("in the dump");
+        lifescape_json::object(vec![("id", lifescape_json::Value::Int(obj.obj_id as i64)), ("name", lifescape_json::str_value(obj.display.unwrap_or(name))), ("count", lifescape_json::Value::Int(count))])
+    };
+    let live = lifescape_json::object(vec![
+        ("inv", lifescape_json::Value::Arr(vec![stack("coins", 1234), stack("iron_ore", 5), stack("rune_pickaxe", 1)])),
+        ("bank", lifescape_json::Value::Arr(vec![stack("iron_ore", 20), stack("cert_coal", 300), stack("raw_trout", 28)])),
+        ("worn", lifescape_json::Value::Arr(vec![stack("bronze_platebody", 1)])),
+    ]);
+    let job = crate::jobs::Job::new("filler_holdings_probe");
+    job.inner.lock().expect("job").live = Some(live.clone());
+    let cached = crate::brain_plan::Holdings::of(&job);
+    for item in ["coins", "iron_ore", "coal", "raw_trout", "rune_pickaxe", "bronze_platebody", "yew_logs", "iron_ore", "coal"] {
+        assert_eq!(cached.count(item), crate::brain_plan::holdings_count(&job, item), "{item}");
+    }
+    assert_eq!(cached.count("iron_ore"), 25);
+    assert_eq!(cached.count("coal"), 300, "the banknotes count as the object");
+    let life = life_of(vec![obtain("n1", Some("market:buy"), NodeStatus::Ready)], Vec::new());
+    assert_eq!(crate::brain_alch::kept_except(&life, &live, Some("fill-n1")), crate::brain_alch::kept(&life, &live), "the window's keep is the alchemy's");
+}
+
 /// Review lot 3, point 6: a refused filler attempt (two guide reads)
 /// is not tried again every pass: the account waits
 /// `FILLER_REFUSAL_TICKS`, a launch ends the wait.

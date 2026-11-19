@@ -126,8 +126,17 @@ fn money_launchable(method: &str) -> bool {
     if method == lifescape_planner::guide_methods::LADDER {
         return false;
     }
+    // Static per method (the mapping tables): read once per process, a
+    // publication asks it for every row (~1 500).
+    static KNOWN: std::sync::OnceLock<std::sync::Mutex<HashMap<String, bool>>> = std::sync::OnceLock::new();
+    let known = KNOWN.get_or_init(Default::default);
+    if let Some(launchable) = known.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(method) {
+        return *launchable;
+    }
     let probe = Node::new("probe", NodeKind::MakeMoney, Vec::new(), 0);
-    lifescape_planner::map_method(method, &probe, None).is_some()
+    let launchable = lifescape_planner::map_method(method, &probe, None).is_some();
+    known.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(method.to_string(), launchable);
+    launchable
 }
 
 /// The planner method a row launches for this bot (module doc), `None`
@@ -214,21 +223,35 @@ pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value
     if !draws_money(node) {
         return;
     }
+    // Its own candidates (the alternatives a previous resolve left) never
+    // reserve the stock from it.
+    let keep = crate::brain_alch::kept_except(life, live, Some(&node.id));
+    publish_keeping(ctx, node, life, live, job, &keep);
+}
+
+/// `publish` with what the bot keeps already read (`keep`: its
+/// `brain_alch::kept_except` for `node`; a filler window reads it once
+/// for its alchemy and its money lines, lot 3 review, CPU).
+pub(crate) fn publish_keeping(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job, keep: &[String]) {
+    if !draws_money(node) {
+        return;
+    }
     let Some(set) = crate::guides_store::current() else {
         crate::logln!("brain {}: {} money: no guide published yet, static money methods", job.account, node.id);
         return;
     };
     let levels = ctx.levels.clone();
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
-    // Its own candidates (the alternatives a previous resolve left) never
-    // reserve the stock from it.
-    let stock = crate::brain_alch::own_stock(live, &life.account, &crate::brain_alch::kept_except(life, live, Some(&node.id)));
+    let stock = crate::brain_alch::own_stock(live, &life.account, keep);
     let read = bot_rows(&set, &level_of, &stock);
     let rows = read.all();
     for error in &read.errors {
         crate::logln!("brain {}: {} money guide on its stock: {error} (recipes read without its stock)", job.account, node.id);
     }
-    let held = |item: &str| crate::brain_plan::holdings_count(job, item) as f64;
+    // The job's holdings read once (`brain_plan::Holdings`), each object
+    // counted once: the same figures as `holdings_count`.
+    let holdings = crate::brain_plan::Holdings::of(job);
+    let held = |item: &str| holdings.count(item) as f64;
     let asks = |item: &str| crate::brain_trade::cycle_asks(&set, item);
     let wallet = crate::brain_gear::free_coins(job, None);
     let quests = ctx.quests_done.clone();
@@ -244,7 +267,7 @@ pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value
         let view = service.as_ref()?.public_view(&job.account, id);
         let per_action = way.qty.map_or(1, |(least, most)| (least + most + 1) / 2).max(1);
         // The others' claimed units fill the room before this lot.
-        let ahead = crate::brain_plan::holdings_count(job, &product) + claimed(&product);
+        let ahead = holdings.count(&product) + claimed(&product);
         Some(lifescape_planner::market_fit::absorbable_actions(&view, ahead, per_action))
     };
     let quote = |item: &str| set.quotes.get(item).cloned().map(|quote| Quote { claimed: claimed(item) as f64, ..quote });

@@ -1591,6 +1591,26 @@ d'une récolte planifiée (plumes, appât de pêche :
   (`cooldown::same_area` : même niveau, `CROWD_RADIUS` = 15 cases, le rayon
   de la capacité et de la foule) : refroidir un roc du marais écarte tout le
   marais, et un second roc de la même zone ne refroidit pas la méthode.
+- Capacité d'un site (`combat::site_capacity`) : ses nœuds de ressource
+  dans `CROWD_RADIUS` ; pour un champ de rocs, les mineurs que ses
+  repousses nourrissent (`method_rate_trip::miners_fed`, 2026-11-19, lot
+  3 : 39 % du remplissage au charbon, Barbarian Village « contended » 38
+  fois en 2 h, le deuxième mineur envoyé par une foule de 1 à 3 bots) :
+  rocs × ticks par minerai d'un mineur au niveau du roc avec la meilleure
+  pioche que ce niveau manie (`guide_methods::tool_at`,
+  `pickaxe_checker.rs2` : rune dès 41 ; `stat_odds`, roll `rate + 1`,
+  délai de succès) / `rock_respawn` (`mine.dbrow` : charbon 100, or et
+  argent 200, mithril 400), arrondi, au moins 1, au plus le nombre de
+  rocs. Charbon : Barbarian Village, Wilderness, Al Kharid 1, marais 2,
+  Dwarven Mine 7, guilde 8 et 11 ; fer 1 à 4 ; étain 1 à 8 ; mithril et
+  or 1. Arbres et pêche : leurs nœuds, inchangé.
+- Places prises (revue lot 3) : seuls les bots sur la MÊME ressource
+  (`combat::same_resource` : même genre et même ressource, `farm:coal`
+  comme `gather:mining/coal`) remplissent la capacité d'un site
+  (`ReadyCtx::seats`, registre `site_crowd` : site ET méthode du dernier
+  lancement de chaque bot ; `pick_site_seated`) ; un combattant des
+  barbares à côté des rocs de charbon allonge la marche (pénalité de
+  foule, tous les bots) mais ne remplit jamais le charbon.
 - `pick_site_avoiding` rend `SitePick::Full` quand TOUS les sites ouverts
   sont pleins (`site_full`) : jamais un site plein forcé ; un site gratuit
   plein ne bat plus un site payant libre. `place_on_site` passe alors à la

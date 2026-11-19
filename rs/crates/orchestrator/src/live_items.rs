@@ -49,11 +49,11 @@ fn display(item_debug: &str) -> String {
 pub(crate) fn live_units(live: &Value, item_debug: &str) -> i64 {
     let mut total = 0i64;
     for key in ["inv", "bank", "worn"] {
-        for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
-            if !entry_is(&entry, item_debug) {
+        for entry in live.get(key).as_arr().map(Vec::as_slice).unwrap_or_default() {
+            if !entry_is(entry, item_debug) {
                 continue;
             }
-            total += match &entry {
+            total += match entry {
                 Value::Obj(_) => entry.get("count").as_i64().unwrap_or(1).max(0),
                 _ => 1,
             };

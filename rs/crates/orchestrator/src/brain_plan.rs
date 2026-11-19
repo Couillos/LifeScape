@@ -149,6 +149,35 @@ pub(crate) fn holdings_count(job: &Job, item_debug: &str) -> i64 {
     crate::brain_locks::free_count(total, crate::brain_locks::locked_in(&locks, item_debug))
 }
 
+/// `holdings_count` for many objects in one read (lot 3 review, CPU: a
+/// money guide publication asked it ~270 times, each a copy of the live
+/// snapshot and two store queries for the locks, ~160 ms): the job's
+/// live snapshot and its locks read once, each object counted once.
+pub(crate) struct Holdings {
+    live: Value,
+    locks: std::collections::BTreeMap<i64, i64>,
+    counted: std::cell::RefCell<std::collections::HashMap<String, i64>>,
+}
+
+impl Holdings {
+    /// The job's holdings as they stand now.
+    pub(crate) fn of(job: &Job) -> Self {
+        let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+        Holdings { live, locks: crate::brain_locks::locked_items(&job.account), counted: Default::default() }
+    }
+
+    /// What `holdings_count` reads for `item_debug`.
+    pub(crate) fn count(&self, item_debug: &str) -> i64 {
+        if let Some(known) = self.counted.borrow().get(item_debug) {
+            return *known;
+        }
+        let total = crate::live_items::live_units(&self.live, item_debug);
+        let units = if item_debug.eq_ignore_ascii_case("coins") { total } else { crate::brain_locks::free_count(total, crate::brain_locks::locked_in(&self.locks, item_debug)) };
+        self.counted.borrow_mut().insert(item_debug.to_string(), units);
+        units
+    }
+}
+
 /// Every unit held, listed or not (pack, bank, worn).
 pub(crate) fn raw_holdings_count(job: &Job, item_debug: &str) -> i64 {
     let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);

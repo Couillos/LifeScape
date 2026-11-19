@@ -164,6 +164,19 @@ pub(crate) fn publish(ctx: &mut lifescape_planner::expand::ReadyCtx, node: &life
     }
 }
 
+/// `publish` with what the bot keeps already read (`keep`: its `kept`;
+/// a filler window reads it once for its alchemy and its money lines,
+/// lot 3 review, CPU).
+pub(crate) fn publish_keeping(ctx: &mut lifescape_planner::expand::ReadyCtx, node: &lifescape_planner::Node, life: &Life, live: &Value, keep: &[String]) {
+    if !matches!(node.kind, lifescape_planner::NodeKind::MakeMoney | lifescape_planner::NodeKind::HaveCoins { .. }) {
+        return;
+    }
+    let Some(mage) = caster_for(live) else { return };
+    if let Some(pick) = best_alch(&mage, &alch_stock(live, &life.account, keep)) {
+        ctx.method_profit.push((format!("{ALCH_PREFIX}{}", pick.item), pick.profit_per_6000));
+    }
+}
+
 /// Highest price a caster bids for a nature rune: its current price plus
 /// half the margin of the cast it enables (never a loss on the cast).
 pub(crate) fn nature_ceiling(current: f64, margin: f64) -> i64 {

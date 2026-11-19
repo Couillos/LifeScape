@@ -434,6 +434,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     });
     // The fleet's sites: a crowded rock field reads farther.
     ctx.crowd = crate::site_crowd::others(&job.account);
+    ctx.seats = crate::site_crowd::seats(&job.account);
     crate::cpu_profile::timed("market.fill_ctx", || crate::brain_market::fill_ctx(&mut ctx, &life.nodes[position], &live));
     // Alchemy of its own stock is a money method too (2026-11-14).
     crate::cpu_profile::timed("alch.publish", || crate::brain_alch::publish(&mut ctx, &life.nodes[position], &life, &live));
@@ -707,7 +708,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         return;
     };
     let mut args = args;
-    crate::site_crowd::note(&job.account, node_snapshot.site);
+    crate::site_crowd::note(&job.account, node_snapshot.site, &method);
     if matches!(node_snapshot.kind, NodeKind::ObtainItems { .. }) && !method.starts_with("shop:") {
         let derived = || crate::brain_market::derived_reserve(&life, launch, &live);
         crate::cpu_profile::timed("market.standing_bid", || crate::brain_market::place_standing_bid(job, &node_snapshot, &ctx, &derived));

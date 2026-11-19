@@ -95,3 +95,56 @@ fn cpu_bench() {
         }
     }
 }
+
+/// Offline CPU bench of one filler attempt (lot 3 review: filler.launch
+/// 27 → 212 ms CPU per call): its context, the alchemy and money guide
+/// publications, the whole pick. Same environment as `cpu_bench`; prints
+/// each account's pick (method and site) so two builds compare picks.
+#[test]
+#[ignore]
+fn filler_bench() {
+    let Ok(root) = std::env::var("LIFESCAPE_BENCH_ROOT") else { return };
+    assert!(!root.contains("/home/josh/dev/LifeScape/run"), "bench on a copy only");
+    std::env::set_var("LIFESCAPE_ROOT", &root);
+    let _service = crate::market_service::start().expect("market starts on the copy");
+    {
+        let store = lifescape_store::Store::open(&crate::market_service::db_path()).expect("store copy");
+        let snapshot = crate::rates_service::live_snapshot();
+        let set = timed("guides_store::build_set (one cycle)", 1, || crate::guides_store::build_set(&store, &snapshot, &crate::web_guides::StoreWaits::default()));
+        crate::guides_store::publish(set);
+    }
+    let mut accounts: Vec<String> = std::fs::read_dir(crate::brain::lives_dir())
+        .expect("lives")
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.strip_suffix(".json").map(str::to_string))
+        .filter(|name| !["admin", "admin2", "bite"].contains(&name.as_str()) && crate::paths::user_paths(name).0.exists())
+        .collect();
+    accounts.sort();
+    accounts.truncate(12);
+    for account in &accounts {
+        println!("--- {account}");
+        let life = crate::brain::load_life(account).expect("life");
+        let live = crate::paths::read_json(&crate::paths::user_paths(account).0).unwrap_or(Value::Null);
+        let job = crate::jobs::Job::new(account);
+        job.inner.lock().expect("job").live = Some(live.clone());
+        let (node, ctx) = timed("filler window_ctx", 3, || crate::brain_filler::window_ctx(&job, &life, &live, "n1"));
+        timed("brain_alch::kept_except", 3, || crate::brain_alch::kept_except(&life, &live, Some(&node.id)).len());
+        timed("brain_alch::publish", 3, || {
+            let mut copy = ctx.clone();
+            crate::brain_alch::publish(&mut copy, &node, &life, &live);
+            copy.method_profit.len()
+        });
+        timed("brain_money::publish", 3, || {
+            let mut copy = ctx.clone();
+            crate::brain_money::publish(&mut copy, &node, &life, &live, &job);
+            copy.money_guide.len()
+        });
+        let pick = timed("pick_window (publish included)", 3, || {
+            let mut window = node.clone();
+            let mut copy = ctx.clone();
+            let mut publish = |ctx: &mut lifescape_planner::expand::ReadyCtx, node: &lifescape_planner::Node| crate::brain_filler::publish_window(ctx, node, &life, &live, &job);
+            let picked = crate::brain_filler::pick_window(&mut window, &mut copy, &mut publish, &[], &[]);
+            (picked.map(|pick| pick.method), window.site, copy.money_guide.len())
+        });
+        println!("  pick: {pick:?}");
+    }
+}

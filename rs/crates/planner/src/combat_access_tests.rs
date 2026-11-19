@@ -170,8 +170,69 @@ fn a_crowded_coal_site_sends_the_next_miner_elsewhere() {
         SitePick::At(other) => assert!(super::crowd_penalty(other, &crowd) == 0, "crowded {nearest:?}, picked {other:?}"),
         other => panic!("another coal site exists: {other:?}"),
     }
-    let lone = [(nearest, 1u32)];
-    assert_eq!(super::pick_site_crowded(method, 40, Some(EDGEVILLE), broke(), &miner(30), &lone), SitePick::At(nearest), "one miner is no crowd");
+    // A rock field whose respawns feed several miners: one is no crowd.
+    let tin = "gather:mining/tin_ore";
+    let SitePick::At(field) = pick_site_gated(tin, 40, Some(EDGEVILLE), broke(), &miner(30)) else { panic!("tin is workable at 30") };
+    assert!(super::site_capacity(tin, field).is_some_and(|capacity| capacity >= 2), "tin respawns in 10 ticks: {:?}", super::site_capacity(tin, field));
+    let lone = [(field, 1u32)];
+    assert_eq!(super::pick_site_crowded(tin, 40, Some(EDGEVILLE), broke(), &miner(30), &lone), SitePick::At(field), "one miner is no crowd");
+}
+
+/// Lot 3, live 2026-11-19: 39 % of the filler time mined coal and two
+/// coal fields jammed (`contended`) 38 and 19 times, the second miner
+/// drawn there by a crowd of one to three fleet bots (the rock count
+/// read the four Barbarian Village rocks as four seats). A coal rock
+/// respawns in 100 ticks (`mine.dbrow` `rock_respawnrate`): those four
+/// rocks feed ONE miner, the next one goes elsewhere; a big field (the
+/// Dwarven Mine) feeds several.
+#[test]
+fn a_slow_rock_field_holds_the_miners_its_respawns_feed() {
+    const VARROCK_WEST: (i64, i64, i64) = (3185, 3436, 0);
+    let method = "gather:mining/coal";
+    let barbarian = (3089, 3434, 0);
+    assert_eq!(super::site_capacity(method, barbarian), Some(1), "four coal rocks, 100-tick respawn");
+    assert_eq!(super::pick_site_crowded(method, 40, Some(VARROCK_WEST), broke(), &miner(60), &[]), SitePick::At(barbarian), "the nearest coal");
+    let crowd = [(barbarian, 1u32)];
+    assert!(super::site_full(method, barbarian, &crowd), "one miner fills it");
+    match super::pick_site_crowded(method, 40, Some(VARROCK_WEST), broke(), &miner(60), &crowd) {
+        SitePick::At(other) | SitePick::Tolled(other) => assert!(super::crowd_bots(other, &crowd) == 0, "the second miner goes elsewhere: {other:?}"),
+        other => panic!("other coal is open: {other:?}"),
+    }
+    let dwarven = (3028, 9737, 0);
+    let big = super::site_capacity(method, dwarven).expect("a rock field");
+    assert!(big >= 2 && big < 21, "21 coal rocks feed a few miners: {big}");
+}
+
+/// Review lot 3: the seats are counted for the pickaxe a miner at the
+/// rock's level wields (`pickaxe_checker.rs2`: rune from 41, never at
+/// iron's 15 or tin's 1): a slower swing leaves the rocks time to
+/// respawn, a fast-respawn field seats several miners.
+#[test]
+fn a_rock_field_seats_miners_with_the_pickaxe_of_its_level() {
+    assert_eq!(crate::guide_methods::tool_at("gather:mining/iron_ore", "", 15), "steel_pickaxe");
+    let rimmington_iron = super::site_capacity("gather:mining/iron_ore", (2968, 3239, 0)).expect("iron field");
+    assert!(rimmington_iron >= 3, "six iron rocks, 20-tick respawn, a steel pickaxe at 15: {rimmington_iron}");
+    let varrock_tin = super::site_capacity("gather:mining/tin_ore", (3172, 3366, 0)).expect("tin field");
+    assert!(varrock_tin >= 6, "tin respawns in 10 ticks: {varrock_tin}");
+}
+
+/// Review lot 3: only the bots on the same resource fill a site. A
+/// fighter on the Barbarian Village barbarians, beside the coal rocks,
+/// lengthens the walk like any crowd but never fills the coal seats:
+/// the next miner still mines there; a coal miner there fills them.
+#[test]
+fn a_crowd_of_another_method_never_fills_the_coal_seats() {
+    let method = "gather:mining/coal";
+    let barbarian = (3089, 3434, 0);
+    let mut ctx = crate::expand::ReadyCtx::blind(0.5);
+    ctx.combat = 40;
+    ctx.position = Some((3185, 3436, 0));
+    ctx.levels = vec![("mining".to_string(), 60)];
+    ctx.crowd = vec![(barbarian, 1)];
+    ctx.seats = vec![(barbarian, "fight:melee/barbarians".to_string(), 1)];
+    assert_eq!(super::pick_site_for(method, &ctx), SitePick::At(barbarian), "a fighter is no miner");
+    ctx.seats = vec![(barbarian, "farm:coal".to_string(), 1)];
+    assert!(super::pick_site_for(method, &ctx) != SitePick::At(barbarian), "a coal miner takes the seat");
 }
 
 /// Tour 2 P2-3a red test: cooling one rock cools its site. lily_brook
