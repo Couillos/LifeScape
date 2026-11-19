@@ -272,6 +272,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         // Alchemy (2026-11-14): nature runes for the stock a caster alchs,
         // asks under the alch floor bought to alch.
         crate::cpu_profile::timed("alch.market_pass", || crate::brain_alch::market_pass(job, &life, &live));
+        // Merchant arbitrage (plan équilibre D2): asks under what a shop
+        // pays, net of the trip at the bot's time value, bought for it.
+        crate::cpu_profile::timed("arbitrage.pass", || crate::brain_arbitrage::arbitrage_pass(job, &life, &live));
         // Future stock (plan marché M6, Q5): patient bids for what the
         // current work slice and the next will burn, after the alchemy
         // pass (its own `stock` bids are claimed first).
@@ -713,7 +716,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // at its own coin rate (public values: traded price or shop value).
     if let (Some(spot), Some(service)) = (crate::brain_loot::fight_spot(&method), crate::market_service::shared()) {
         if !life.profile.ironman {
-            let rate = crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account).coins_per_tick;
+            // The bot's time value (D1): what its work really earns.
+            let rate = crate::brain_d17::coin_rate(&job.account);
             let value_of = |name: &str| {
                 let traded = lifescape_gamedata::objs_by_name(name).into_iter().next().map(|obj| service.reference(obj.obj_id as i64)).filter(|reference| reference.traded).map(|reference| reference.price).unwrap_or(0);
                 traded.max(lifescape_gamedata::shop_sale::npc_sale_value(name).unwrap_or(0))

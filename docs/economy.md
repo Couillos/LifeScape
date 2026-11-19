@@ -1198,7 +1198,8 @@ triche (règle 13) : leur stock vient de leurs deals.
   1000 / v (1..500) ;
   biais de stock r = clamp((stock − lot)/lot, −1, 1), prix de réserve
   p = v (1 − h r) ; bid = ⌊p (1 − h)⌋ ≤ v − 1 ; ask = ⌈p (1 + h)⌉ ≥ v + 1,
-  > bid (peut passer sous ce que paie une boutique). h = 4 % (liquide : achats d'autres
+  > bid (peut passer sous ce que paie une boutique, exutoire net compris :
+  aucun plancher, D2 ci-dessous). h = 4 % (liquide : achats d'autres
   ≥ un lot sur 72 000 ticks), 8 % (mince), 10 % (découverte, quart de
   lot, jamais relevé par un stock bas). Stock haut → bid ET ask baissent ;
   stock bas → les deux montent. Sans demande (échangé, aucun bid d'un
@@ -1307,8 +1308,51 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
 - Achats : `market:buy` posé par le cerveau (offre avec plafond) puis
   PARQUÉ (`park_for_fill`, D-SIDE) : l'offre attend au carnet pendant que
   le worker lance le nœud prêt suivant, sinon une fenêtre d'argent de
-  1500 ticks (`brain_filler`) ; jamais un worker inactif ; à côté d'une production, offre permanente (D-B)
-  annulée quand le nœud aboutit.
+  1500 ticks (`brain_filler`, voir Remplissage ci-dessous) ; jamais un worker inactif ;
+  à côté d'une production, offre permanente (D-B) annulée quand le nœud
+  aboutit.
+- Remplissage (plan équilibre étape 3, 2026-11-19 ; constat : 20 % du
+  temps de la flotte, dont 52 % de bûches d'if restées à 1 pièce par
+  millions, choisies sur une liste fixe sans le guide) : la fenêtre
+  d'argent d'une attente choisit comme un nœud d'argent normal
+  (`brain_filler::pick_window`). Le cerveau publie les lignes du guide
+  d'argent du bot (`brain_money::publish` : profit de chaque ligne relu
+  AU CHOIX sur la demande partagée, réclamations des autres comprises,
+  § Tableau des commandes), puis `money_pick` tire avec sa graine propre
+  (`seed_for`, nœud `fill-<id>`, compteur de tirages). Nouveau pour le
+  remplissage : il peut aussi ALCHIMER son stock libre (lignes `alch:`
+  du guide, et `brain_alch::publish` pour le classement statique), ou
+  transformer son stock libre (cuire, fondre… : recette sur stock),
+  jamais ce que le bot garde (équipement, outils, intrants de son plan,
+  objet de l'achat en attente). Le choix est loggé et gardé en mémoire
+  sous le type `filler` (`brain_picks::record_filler`), dans une
+  réserve à part de 20 (`FILLER_PICKS_CAP`) : il ne pousse jamais dehors
+  les choix des vrais nœuds (40, `PICKS_CAP`) ; section « choix des
+  bots » d'`orchestrator economy`, ligne `filler`. Une récolte dont la
+  demande restante est nulle ne gagne plus rien : elle n'est pas une
+  ligne, donc jamais tirée. Seules les lignes qu'une fenêtre travaille
+  seule ET tout de suite restent (`window_works`) : classe 0 de
+  `money_pick` seulement (outils en main, nourriture en main là où le
+  spot mord : un combat sans nourriture s'arrêterait `food_blocked`
+  après la banque ; une ligne dont l'outil reste à obtenir bloquerait le
+  worker toute l'attente) ; jamais un lot 100 % marché (ses achats sont
+  des nœuds du graphe qu'une fenêtre ne pose pas) ; jamais une
+  compétence d'un remplissage qui vient d'échouer (sinon un guide de
+  cette seule compétence ne laisserait aucun travail, « no filler » pendant
+  500 ticks). Aucun guide publié ou aucune ligne tirable : classement
+  statique comme pour tout nœud d'argent (docs/planner.md, R7), loggé
+  (« no money guide line a window works now (N kept): static money
+  method … »). Une réclamation de remplissage sur une recette sur stock
+  est bornée par ce que la fenêtre fabrique à son rendement mesuré
+  (`run_units`), jamais tout le lot. Une tentative refusée n'est pas
+  relue à chaque passe : le compte attend `FILLER_REFUSAL_TICKS` (50
+  ticks) avant la suivante, un lancement efface l'attente. Inchangé : la
+  fenêtre de 1500 ticks, l'étiquette `filler:`, les bans (`steer_for_work`,
+  hors compétences des remplissages qui viennent d'échouer), la
+  réclamation au tableau des commandes et sa libération au rapport,
+  l'interruption pour une livraison, la lecture du rapport
+  (`fold_filler_report`). Un refus est typé (`FillerRefusal` : rien de
+  travaillable hors bans, nœud bloqué, aucune méthode) et loggé.
 - Équipement : échelle par paliers (§ Équipement par paliers) ; les
   envies (`brain_wishlist`) ne portent plus que les outils pour les buts
   mêlée/non combattants (plafond 25 % du portefeuille par outil), et
@@ -1456,12 +1500,13 @@ fills) ou publiques (carnet, prints) ; jamais l'état privé d'un autre.
   mesuré : l'estimation du planificateur (`est_ticks` / quantité d'une
   alternative de farm d'un nœud d'obtention du graphe du bot), sinon le
   taux de démarrage à froid du script (`rates_service::prior_for`).
-  Pièces par tick : la meilleure méthode du bot, (pièces ramassées ou
-  vendues au magasin + unités farmées, nettes de la vente magasin, × son
-  propre dernier prix de vente) / ticks, jamais sous
-  `market_fit::MIN_COIN_RATE` (0,1, le plancher du coût unitaire de
-  `bid_response` : le temps n'est jamais gratuit ; saule à 43,6 ticks →
-  5 pièces). Un objet ACHETÉ coûte au moins son propre dernier prix
+  Pièces par tick : la valeur du temps du bot (D1, la seule du
+  cerveau depuis le lot 5 du plan équilibre, 2026-11-19 :
+  `brain_d17::coin_rate`, lue AVANT de verrouiller le store et passée à
+  `OwnCosts::load`), jamais sous `market_fit::MIN_COIN_RATE` (0,1, le
+  plancher du coût unitaire de `bid_response` : le temps n'est jamais
+  gratuit ; saule à 43,6 ticks → 5 pièces). L'ancien second taux
+  (meilleure méthode propre au dernier prix de vente) est supprimé. Un objet ACHETÉ coûte au moins son propre dernier prix
   d'achat. Plafond partagé avec la réponse aux offres : la réserve ne
   dépasse jamais le coût de FABRICATION que `bid_response` donne au bot
   (`bid_response::production_cost` = chemin « make » de `unit_cost`,
@@ -1976,10 +2021,9 @@ réclamations) et la demande (bids, volume récent) bougent la valeur.
 Demande dérivée (`planner/src/derived_demand.rs`,
 `brain_market::derived_reserve`) : quand un nœud d'obtention nourrit un
 produit du graphe (barres d'un heaume, minerai d'une barre), son prix de
-réserve = (valeur du produit × 0,8 − temps de l'étape au taux du bot −
+réserve = (ce que le produit se vend − temps de l'étape au taux du bot −
 autres intrants au meilleur ask / prix courant) / unités par produit,
-récursif (le minerai vaut la valeur DÉRIVÉE de la barre). Valeur du
-produit = meilleur bid d'un autre compte, sinon prix courant. L'offre
+récursif (le minerai vaut la valeur DÉRIVÉE de la barre). L'offre
 permanente posée à côté de la production (D-B) a pour plafond
 `min(portefeuille, réserve)` et ouvre à au moins la moitié de la réserve
 (`derived_bounds`) : une barre à 2 pièces que personne ne remplit ne
@@ -1989,6 +2033,76 @@ production). Une réserve ≤ 0 (produit qui vaut moins que ses intrants)
 plafonne l'offre à 1. Log `standing bid … (ceiling C, derived reserve R)`.
 Toutes les recettes F2P passent par ces chemins (forge, fonte, cuisine,
 artisanat, poterie, cuir, bijoux, filage, runes, récoltes).
+
+Ingrédients bon marché (plan équilibre étape 4, 2026-11-19 ; constat :
+ingrédients à 1 pièce par millions, offres d'achat sous les annonces,
+charbon offert à 1 avec une réserve dérivée de −67, barres d'or à 1 avec
+−27 à −46 : le temps du fondeur valait 4,69 pièces/tick au lieu de ~0,3
+mesurées, et la réserve gardait 20 % du produit pour elle) : un
+ingrédient sous sa valeur de transformation fait acheter et transformer.
+- Ce que le produit se vend (`derived_demand::product_value`) = la
+  demande PARTAGÉE du lot du graphe (`product_lot` : le compte du nœud
+  qui le fabrique), sur le livre public (ordres des autres) : offres
+  d'achat des autres, puis la moitié du volume du jour au prix courant
+  derrière les annonces déjà à ce prix ou dessous ; l'offre qui passe
+  devant est retirée des MEILLEURS prix (comme `guide_engine::net_ahead`) :
+  d'abord l'offre en route (annonces à 125 % ou moins de la meilleure
+  offre) sur les offres d'achat, puis les unités réclamées par les autres
+  producteurs ; le total du lot est réparti sur toutes ses unités (une
+  unité que le marché ne prend plus ne vaut rien pour les intrants
+  achetés pour elle). Les débouchés boutique PNJ et alchimie n'y comptent
+  pas (lecture prudente : ils ne relèvent jamais le plafond). Plus de
+  prix courant périmé (sans volume du jour, il ne vaut rien) ni de
+  meilleure offre déjà servie par d'autres ; aucun prix connu (jamais
+  échangé, aucune offre) : pas de réserve, comme avant.
+- Seulement pour un produit FAIT POUR ÊTRE VENDU (relecture lot 4,
+  point 3 ; `derived_demand::sale_reserve`, `made_for_sale`) : l'intrant
+  aboutit, par chacun de ses consommateurs et toujours comme intrant de
+  leur recette, au quota `Produce` de la vie (jalon d'ambition ou réponse
+  à une offre, vendu par la vente par défaut). Un produit que le bot
+  UTILISE (équipement porté, outil de son kit, objet de quête, objet
+  obtenu pour lui, ou un produit qu'une chaîne vendue emploie comme
+  outil) n'est pas évalué à sa vente : ses intrants gardent le plafond du
+  portefeuille (sinon un prix connu sans volume donnerait 0, plafond 1,
+  barres d'acier offertes à 1 sous des annonces à 34-37, jamais
+  servies).
+- Temps = taux RÉEL du bot (étape 1, `brain_d17::coin_rate`).
+- Plus aucune marge privée (l'ancien × 0,8) : le temps payé au taux réel
+  est déjà la rémunération du bot.
+- L'offre permanente d'un intrant suit la réserve et le besoin
+  d'AUJOURD'HUI : à chaque lancement de la production, son offre `need`
+  au repos est reprise (`brain_market::refresh_standing_bid` →
+  `market_reprice::refresh_resting_bid`, un seul amend) avec le plafond
+  et l'ouverture du moment (montée à l'ouverture si dessous, descendue au
+  plafond si dessus, lignée et marche conservées) et son reste coupé au
+  besoin du moment (compte du nœud moins le détenu, jamais la quantité
+  bornée par le portefeuille : une offre réduite par la bourse ne
+  regrandirait pas), jamais relevé (amend `max_remaining` ; constat :
+  l'offre de 2 758 charbons de nathan_t gardait son reste pendant qu'il
+  en minait 588, elle pouvait en acheter 3 346 pour un besoin de 2 760).
+  Une hausse avec coupe est couverte sur le NOUVEAU reste ; une coupe
+  n'est pas un remplissage pour la marche (son dernier reste baisse des
+  unités coupées : pas de recul ni de faux « remplissage propre »).
+  Log `standing bid <objet> kept @ P (was …), ceiling C (was …),
+  remainder R (was …)` seulement quand quelque chose bouge ; un refus
+  (hausse non couverte par les pièces libres) loggé seulement s'il est
+  nouveau. Une offre servie entre-temps n'est jamais reposée par la
+  reprise : la pose normale repasse par le contrôle des livraisons en
+  cours (`buying_in_flight`). Avant, l'offre gardait le plafond de sa
+  pose (1 pour une réserve négative) pendant des heures. Les offres d'un
+  autre motif ne sont pas touchées.
+- Les lots qui transforment (réponse aux offres `bid_response::
+  opportunity`, lot 100 % marché `trade_craft::offer_from_row`) lisent
+  déjà la demande partagée et le taux réel : un ingrédient à 1 sous la
+  valeur de son produit y donne un lot ; plus de demande pour le produit,
+  aucun lot (tests `derived_demand_tests`, `brain_trade`,
+  `brain_market_refresh_tests`).
+Exemple (test) : heaume de fer vendu 8 (200 offres), forgeron à 0,25
+pièce/tick (10 ticks par heaume), barres à 1 : réserve d'une barre =
+(8 − 2,5) / 2 = 2,75 → plafond 2, au-dessus de l'annonce à 1 (avec
+l'ancienne marge : 1,95 → plafond 1) ; et le forgeron prend le lot. Les
+mêmes offres de heaume toutes réclamées, ou un prix courant de 200 sans
+volume : plafond 1, aucun lot. Toujours aucun plancher ni bande de prix.
 
 Ambitions (`ambition_catalog::kind_weights`, `serves`) : une offre
 compte pour un type quand son échelle liste l'objet OU que sa
@@ -2249,9 +2363,120 @@ du guide garde ses profits (`method_profit_in`
 des nœuds argent, `kind_profits` des ambitions, le D17 interne du guide
 pour sourcer une chaîne et convertir les pièces de ses lignes
 d'entraînement, `brain_train::guide_covers`) : rien de ce classement ne
-change. La réserve vendeur (`brain_reserve::coins_per_tick`, meilleure
-méthode propre au dernier prix de vente) reste un autre taux mesuré, hors
-de cette étape.
+change. La réserve vendeur, le seuil du trajet marchand (`brain_sales`),
+le butin laissé au sol, la trousse d'outils et `seller_quote` lisent
+aussi ce taux depuis le lot 5 (D2) : `brain_reserve::coins_per_tick`,
+second taux (meilleure méthode propre au dernier prix de vente), est
+supprimé ; `OwnCosts::load(store, compte, taux)` reçoit le taux lu avant
+le verrou du store (sa mise à jour verrouille le store : jamais lu
+dessous).
+
+## Arbitrage marchand ouvert à tous (D2, 2026-11-19)
+
+Constat (plan équilibre, étape 5) : ifs en annonce à 1 pièce alors qu'un
+magasin général en paie 16 sans limite à son plancher (`shop.rs2`
+`calc_shop_value` : `max(100, multiplicateur − écart × delta)` pour mille
+de la valeur, 10 % de 160 une fois dix ifs au-dessus de son stock de
+base). Le 2026-11-19 (base en lecture seule) : 74 objets, ~138 000 unités
+en annonce sous le plancher d'un magasin général, ~1,26 M de pièces
+d'écart (ifs 31 226 unités, 9 vendeurs ; saule 84 390 à 1 pour 4 ;
+casques de mithril, jupes et jambières d'acier, barres d'argent, thon
+cru…).
+
+Règle (décision utilisateur D2) : tout bot, teneurs compris, peut acheter
+au marché sous ce qu'un marchand (ou la haute alchimie, s'il la lance)
+lui rapporte, net du trajet à SA valeur du temps (D1), et revendre au
+marchand : le prix du marché remonte vers l'exutoire par le jeu des
+joueurs. Aucun plancher : le marchand est un acheteur réel.
+
+Lot (`planner::merchant_arbitrage::best_lot`, pur) :
+- exutoires : chaque magasin F2P ouvert à tous qui achète l'objet, valué
+  UNITÉ PAR UNITÉ à son stock probable (`brain_npc_sale::shop_ladder` :
+  ventes récentes de la flotte, trajets en vol, lots d'arbitrage des
+  AUTRES bots, le lot précédent du bot encore détenu passant devant),
+  manutention `SHOP_SELL_TICKS_PER_UNIT` (0,25 tick, dix unités par
+  clic), trajet `SHOP_TRIP_TICKS` (1500) ; la haute alchimie d'un
+  lanceur (net des runes, `CAST_TICKS` par unité, sans trajet) ;
+- unité par unité depuis l'ask le moins cher : une unité entre tant que
+  l'exutoire la paie plus que son ask plus sa manutention au taux du
+  bot ; les asks montent, l'exutoire baisse : la première qui ne paie
+  pas clôt le lot ; au plus `MAX_ARBITRAGE_LOT` (1000) unités ; la
+  bourse libre couvre chaque unité à l'ask le plus cher pris
+  (l'engagement de l'offre à son ouverture) ;
+- prix de l'offre : elle OUVRE à l'ask le plus cher pris ; son PLAFOND
+  est ce que l'exutoire paie pour la dernière unité du lot, nette de sa
+  manutention et de sa part du trajet (`net_outlet`), jamais sous
+  l'ouverture : non servie, elle monte de 10 % par fenêtre jusqu'à lui
+  (la marche du marché, `market_reprice`), le prix du marché remonte
+  vers l'exutoire ;
+- le lot paie une fois la remise à la fontaine (`HANDOVER_TICKS`) et le
+  trajet au taux du bot ; proposé s'il rapporte encore `BID_MIN_PROFIT`
+  (50 pièces) : son taux bat alors celui du bot (règle des producteurs,
+  aucune marge en plus) ; le meilleur exutoire, puis le meilleur objet,
+  au profit ;
+- exemple (tests) : 100 ifs à 1, magasin à 16, taux 0,28 : lot de 100,
+  ouverture 1, plafond 11 (16 − 0,07 − 1 600 × 0,28 / 100), profit
+  1 600 − 100 − 1 625 × 0,28 = 1 045 ; à 15 : rien
+  (93 pièces de marge, 448 de trajet) ; des asks à 1 puis 15 : les
+  unités à 15 entrent une fois le trajet payé par les autres ; magasin
+  à son stock de base : le lot s'arrête à la première unité qu'il paie
+  ≤ l'ask.
+
+Exécution (`orchestrator::brain_arbitrage::arbitrage_pass`, toutes les
+600 s par bot inactif, hors Iron et hors teneur en cotation) :
+1. valeur du temps lue d'abord (sa mise à jour verrouille le store) ;
+2. (une lecture du store, ordres et deals ; en erreur la passe est
+   sautée, jamais une seconde offre à côté d'une offre non vue) chaque lot
+   compte ce que son offre a VRAIMENT acheté (ses deals depuis l'offre,
+   `bought_since`), jamais la quantité demandée ; une seule offre
+   `arbitrage` à la fois, qui monte jusqu'à son plafond et est retirée
+   (`arbitrage_resized`) passé l'horizon de son motif ou pour un lot
+   d'un autre objet ; retirée sans rien acheter, son lot disparaît (aucune
+   unité fantôme au magasin) ;
+3. asks publics des AUTRES (billets pliés dans leur objet), objets
+   qu'un magasin ouvert achète, hors objets qu'un autre motif du bot
+   achète déjà (une offre par objet) ; un magasin dont la prochaine
+   unité ne paie pas plus que l'ask le moins cher est écarté en une
+   lecture des données de jeu (aucune lecture du store par unité ni par
+   objet : l'échelle d'un magasin se calcule en quelques appels à
+   `gamedata::shop_sale`, jusqu'à son plancher) ;
+4. le meilleur lot vendu à un MAGASIN : un objet dont l'alchimie paie
+   mieux est laissé à la passe d'alchimie (`brain_alch::market_pass`,
+   qui achète déjà sous le net du sort) et le meilleur lot magasin d'un
+   autre objet est pris ; l'offre (motif `arbitrage`, horizon 6000
+   ticks, lots entiers vers le bas) ouvre à l'ask le plus cher du lot,
+   croise chaque ask, chacun payé à son prix, et monte vers son plafond ;
+5. le lot est déclaré (`brain_npc_sale::note_arbitrage`) avec les seules
+   unités achetées (lues aussitôt, puis à chaque passe), plus celles du
+   lot précédent encore portées ; oublié au départ de son trajet ou après
+   `ARBITRAGE_MEMORY_SECS` (2 h) ;
+6. une fois livré, la passe de vente (`brain_sales`) envoie au magasin
+   les SEULES unités achetées par l'arbitrage (`shop_split`), même en
+   surstock, et le trajet les juge sur le PRODUIT ENTIER du magasin (le
+   lot a été acheté pour lui), pas sur leur gain sur le marché ; le reste
+   du tas suit la règle normale (surstock : le marché ; trajet jugé sur
+   son gain sur le marché ; un bûcheron qui détient 5 000 ifs coupés et
+   en a acheté 50 n'en exempte que 50) : un teneur qui offre 14, un magasin à 16, 200 ifs font 3 200
+   pièces contre 420 de trajet, le lot ne reste jamais en banque ;
+   jamais une unité sous ce que paie le marché + 1 ; le concierge porte
+   le trajet.
+
+Teneurs (`lifescape_market::maker`, champ `outlet` de `MakerInput`) :
+l'exutoire net (`brain_npc_sale::net_shop_outlet` : valeur de la dernière
+unité d'un lot au magasin probable, trajet partagé sur ce lot, au taux D1
+du teneur ; le lot = ce que ses plafonds de risque laissent détenir,
+`market_maker::outlet_units`, 10 % des fonds propres à la valeur
+magasin, ≤ 500 unités) est un acheteur à ce prix :
+- personne d'autre n'achète : il EST la juste valeur (régime mince, plus
+  de descente du bid vers 1) ; sinon la juste valeur n'est jamais
+  dessous ;
+- bid ≤ exutoire − 1 : le teneur achète tout ask sous l'exutoire (ifs :
+  juste valeur 15, bid 14, il croise les asks à 1) ;
+- aucun plancher (utilisateur : ni magasin, ni alchimie) : un ask
+  invendu baisse de 10 % par passe comme celui de tout le monde, sous
+  l'exutoire aussi ;
+- mené par l'exutoire, le stock au-delà d'un lot part au magasin
+  (`npc_dump`). La valeur brute du magasin (`outside`) n'est pas un prix.
 
 ## Registre d'objets : d'où vient et où part chaque objet (2026-11-15)
 

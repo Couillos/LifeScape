@@ -18,6 +18,7 @@ fn liquid(stock: i64) -> MakerInput {
         recent_buys: 50,
         anchor: 80,
         outside: Some(30),
+        outlet: None,
         make_cost: None,
         stock,
         stock_cost: stock * 100,
@@ -186,12 +187,61 @@ fn an_object_nobody_buys_walks_its_bid_to_one_and_dumps_to_the_shop() {
     assert_eq!(no_shop.npc_dump, 0, "no shop pays: nothing dumped");
 }
 
-/// No price floor: the maker's ask follows its fair value, even under
-/// what an NPC shop pays for the object.
+/// No price floor: the raw shop value (`outside`, first unit at base
+/// stock, no trip netted) is no price; without a net outlet (D2: the
+/// trip costs the maker more than the shop pays over a lot) the ask
+/// follows its fair value, even under it.
 #[test]
 fn the_ask_may_go_under_the_shop_offer() {
     let cheap = quote(&MAKER_CAPS, &MakerInput { reference: traded(10), outside: Some(30), stock: 50, ..liquid(0) });
     assert!(cheap.ask.expect("ask").price < 30, "{cheap:?}");
+}
+
+/// Plan équilibre D2 (user 2026-11-19): yew logs traded at 1 coin, asks
+/// at 1, a general store paying 16 at its floor without limit, 15 net of
+/// the trip over a lot. The outlet is a real buyer: it enters the
+/// maker's reference value for BUYING. The maker buys the asks under it
+/// (its bid crosses the 1-coin asks), keeps bidding with no other bidder
+/// (the shop IS demand: no walk to 1) and sends the stock past one lot to
+/// the shop; its unsold ask walks down 10 % a pass like everyone's (no
+/// floor).
+#[test]
+fn a_shop_outlet_enters_the_reference_value() {
+    let yew = MakerInput {
+        reference: traded(1),
+        best_bid: None,
+        best_ask: Some(1),
+        bid_depth: 0,
+        ask_depth: 5000,
+        recent_buys: 0,
+        anchor: 160,
+        outside: Some(64),
+        outlet: Some(15),
+        make_cost: None,
+        stock: 0,
+        stock_cost: 0,
+        capital: 103_000,
+        own_bid: Some(1),
+        own_ask: None,
+    };
+    let seen = quote(&MAKER_CAPS, &yew);
+    assert_eq!(seen.fair, 15, "the outlet, not the 1-coin trade: {seen:?}");
+    assert_ne!(seen.regime, Regime::NoDemand, "the shop buys: {seen:?}");
+    let bid = seen.bid.expect("a bid under the outlet");
+    assert_eq!(bid.price, 14, "one coin under the outlet: it takes every ask under it: {seen:?}");
+    assert!(bid.qty >= lot_units(&MAKER_CAPS, 15) / 2, "{seen:?}");
+    let lot = lot_units(&MAKER_CAPS, 15);
+    let full = quote(&MAKER_CAPS, &MakerInput { stock: 400, stock_cost: 400, ..yew });
+    assert!(full.ask.expect("an ask").price > 15, "a fresh ask quotes over its fair value: {full:?}");
+    assert_eq!(full.npc_dump, 400 - lot, "past one lot, the shop: {full:?}");
+    // Review lot 5 (user: no floor of any kind, shop and alchemy
+    // included; the 10 % walk is everyone's): an ask still unsold drops
+    // 10 % a pass, under the outlet too.
+    let walked = quote(&MAKER_CAPS, &MakerInput { stock: 400, stock_cost: 400, own_ask: Some(16), ..yew });
+    assert_eq!(walked.ask.expect("ask").price, 14, "16 unsold: 10 % down, under the outlet's 15: {walked:?}");
+    // The same object without the outlet: the 1-coin trade rules.
+    let plain = quote(&MAKER_CAPS, &MakerInput { outlet: None, ..yew });
+    assert_eq!((plain.fair, plain.regime), (1, Regime::NoDemand), "{plain:?}");
 }
 
 #[test]
@@ -205,6 +255,7 @@ fn a_never_traded_object_is_discovered_prudently() {
         recent_buys: 0,
         anchor: 200,
         outside: Some(60),
+        outlet: None,
         make_cost: None,
         stock: 0,
         stock_cost: 0,
@@ -271,6 +322,7 @@ fn discovery_centres_on_the_published_cost_inside_the_public_bounds() {
         recent_buys: 0,
         anchor: 200,
         outside: Some(24),
+        outlet: None,
         make_cost: Some(30),
         stock: 3,
         stock_cost: 90,

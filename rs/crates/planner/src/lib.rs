@@ -47,6 +47,7 @@ pub mod life_memory;
 pub mod market_fit;
 pub mod market_maker;
 pub mod market_value;
+pub mod merchant_arbitrage;
 pub mod derived_demand;
 pub mod mapping;
 pub mod method_way;

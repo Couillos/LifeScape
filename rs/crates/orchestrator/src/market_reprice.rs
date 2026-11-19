@@ -416,32 +416,7 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
         .collect();
     let open = rows.iter().find(|row| row.motive == motive).or_else(|| rows.first()).cloned();
     if let Some(row) = open {
-        let mut order = row.order_id;
-        let mut price = row.price;
-        // Over the wallet: down to the ceiling. Under what the buyer
-        // knows the object is worth (`open_at`, user 2026-11-18 levier
-        // 2): up to that worth at once, never a slow walk from a noise
-        // price while producers read no demand.
-        let target = if price > ceiling { Some(ceiling) } else { Some(open_at.min(open_cap)).filter(|worth| *worth > price) };
-        if let Some(target) = target {
-            let reply = service.handle(&object(vec![
-                ("op", str_value("amend")),
-                ("account", str_value(account)),
-                ("order", Value::Int(order)),
-                ("price", Value::Int(target)),
-                ("per_lot", Value::Bool(true)),
-            ]));
-            if reply.get("ok").as_bool() != Some(true) {
-                return Err(reply.get("error").as_str().unwrap_or("amend refused").to_string());
-            }
-            service.lock_engine().quote_bounds.remove(&order);
-            order = reply.get("order").as_i64().unwrap_or(order);
-            price = target;
-        }
-        let mut engine = service.lock_engine();
-        let bounds = engine.quote_bounds.entry(order).or_insert_with(|| QuoteBounds::for_row(&row, price, ceiling));
-        bounds.floor = bounds.floor.min(ceiling);
-        bounds.ceiling = ceiling;
+        let (order, price) = amend_resting(service, account, &row, resting_target(row.price, open_at, open_cap, ceiling), None, ceiling)?;
         return Ok(answer(StandingBid::Kept { order, price }));
     }
     let reference = service.reference_lot(item);
@@ -478,6 +453,102 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
         return Err(reply.get("error").as_str().unwrap_or("place refused").to_string());
     }
     Ok(answer(StandingBid::Placed { order: reply.get("order").as_i64().unwrap_or(-1), price }))
+}
+
+/// Price a resting bid at `price` moves to (book unit), `None` to stay:
+/// over the ceiling, down to it; under what the buyer knows the object
+/// is worth (`open_at`, user 2026-11-18 levier 2), up to that worth at
+/// once (never past `open_cap`), never a slow walk from a noise price
+/// while producers read no demand.
+fn resting_target(price: i64, open_at: i64, open_cap: i64, ceiling: i64) -> Option<i64> {
+    if price > ceiling {
+        Some(ceiling)
+    } else {
+        Some(open_at.min(open_cap)).filter(|worth| *worth > price)
+    }
+}
+
+/// Amends the resting bid `row` to `target` (book unit) and its remainder
+/// down to `max_remaining` units when it holds more (never up), in ONE
+/// amend (its lineage goes on); then its walk's ceiling becomes
+/// `ceiling`. Returns its (order, price) in the book's unit.
+fn amend_resting(service: &MarketService, account: &str, row: &lifescape_store::Order, target: Option<i64>, max_remaining: Option<i64>, ceiling: i64) -> Result<(i64, i64), String> {
+    let mut order = row.order_id;
+    let mut price = row.price;
+    let trim = max_remaining.filter(|cap| *cap >= 1 && *cap < row.remaining);
+    if target.is_some() || trim.is_some() {
+        let next = target.unwrap_or(row.price);
+        let mut request = vec![("op", str_value("amend")), ("account", str_value(account)), ("order", Value::Int(order)), ("price", Value::Int(next)), ("per_lot", Value::Bool(true))];
+        if let Some(cap) = trim {
+            request.push(("max_remaining", Value::Int(cap)));
+        }
+        let reply = service.handle(&object(request));
+        if reply.get("ok").as_bool() != Some(true) {
+            return Err(reply.get("error").as_str().unwrap_or("amend refused").to_string());
+        }
+        service.lock_engine().quote_bounds.remove(&order);
+        order = reply.get("order").as_i64().unwrap_or(order);
+        price = next;
+    }
+    let mut engine = service.lock_engine();
+    let bounds = engine.quote_bounds.entry(order).or_insert_with(|| QuoteBounds::for_row(row, price, ceiling));
+    bounds.floor = bounds.floor.min(ceiling);
+    bounds.ceiling = ceiling;
+    // A cut is no fill (re-review lot 4): the walk's last remainder drops
+    // by the units cut, so the next window never reads them as filled
+    // (backoff, false own fill); a fill seen before the cut still shows.
+    if let Some(cap) = trim {
+        bounds.last_remaining = (bounds.last_remaining - (row.remaining - cap)).max(0);
+    }
+    Ok((order, price))
+}
+
+/// What `refresh_resting_bid` did to a resting bid: prices per unit, its
+/// walk's ceiling before (`None`: the engine had no bounds, a restart)
+/// and after, its remainder before and after.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RestingRefresh {
+    pub order: i64,
+    pub price: i64,
+    pub old_price: i64,
+    pub ceiling: i64,
+    pub old_ceiling: Option<i64>,
+    pub remaining: i64,
+    pub old_remaining: i64,
+}
+
+impl RestingRefresh {
+    /// True when the price, the ceiling or the remainder moved.
+    pub fn changed(&self) -> bool {
+        self.price != self.old_price || self.old_ceiling != Some(self.ceiling) || self.remaining != self.old_remaining
+    }
+}
+
+/// The resting bid of `account` on `item` with `motive` brought to the
+/// bounds of now (plan équilibre step 4, review lot 4): its price as
+/// `keep_bid_from` moves a kept bid (up to `open_at` when under it, down
+/// to `ceiling` when over it), its remainder cut to `quantity` (the need
+/// of now, rounded up to whole lots; never raised), its walk's ceiling
+/// replaced; lineage and walk go on. `Ok(None)` when no such bid rests
+/// (filled or gone meanwhile): the caller never places one from here.
+pub fn refresh_resting_bid(service: &MarketService, account: &str, item: i64, quantity: i64, open_at: i64, ceiling: i64, motive: &str) -> Result<Option<RestingRefresh>, String> {
+    let lot = crate::market_units::lot_of(item);
+    let quantity = lifescape_market::lots::whole_lots_up(quantity.max(1), lot);
+    let ceiling = lifescape_market::lots::lot_price(ceiling.max(1), lot);
+    let open_at = lifescape_market::lots::lot_price(open_at, lot);
+    let open_cap = if motive == crate::market_lineage::NEED { ceiling } else { lifescape_market::discovery::bid_under_ceiling(ceiling, crate::market_discovery::account_margin(service, account)) };
+    let row = service
+        .lock_store()
+        .account_orders(account)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|row| row.item_id == item && row.side == lifescape_store::OrderSide::Buy && resting(row) && row.motive == motive);
+    let Some(row) = row else { return Ok(None) };
+    let old_ceiling = service.lock_engine().quote_bounds.get(&row.order_id).map(|bounds| bounds.ceiling);
+    let (order, price) = amend_resting(service, account, &row, resting_target(row.price, open_at, open_cap, ceiling), Some(quantity), ceiling)?;
+    let remaining = service.lock_store().get_order(order).ok().flatten().map(|stored| stored.remaining).unwrap_or(row.remaining);
+    let unit = |price: i64| lifescape_market::lots::unit_price(price, lot);
+    Ok(Some(RestingRefresh { order, price: unit(price), old_price: unit(row.price), ceiling: unit(ceiling), old_ceiling: old_ceiling.map(unit), remaining, old_remaining: row.remaining }))
 }
 
 /// Opening of a bid on the never-traded book `item` (M7,

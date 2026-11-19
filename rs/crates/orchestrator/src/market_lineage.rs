@@ -33,9 +33,14 @@ pub const MARKET_MAKE: &str = "market_make";
 /// R5, `trade_craft`): inputs bought, crafted, sold; the horizon of a
 /// producer's surplus (its reserve is the lot's own cost).
 pub const TRADE: &str = "trade";
+/// A merchant arbitrage purchase (plan équilibre D2, `brain_arbitrage`):
+/// units bought under what an NPC shop pays, net of the trip, for that
+/// shop; fixed at the dearest ask its lot was priced on, resized by its
+/// own pass.
+pub const ARBITRAGE: &str = "arbitrage";
 
 /// Every motive an order may carry (empty = not said, a worker's order).
-pub const MOTIVES: [&str; 8] = [NEED, GEAR, TOOL, STOCK, SURPLUS, LOOT, MARKET_MAKE, TRADE];
+pub const MOTIVES: [&str; 9] = [NEED, GEAR, TOOL, STOCK, SURPLUS, LOOT, MARKET_MAKE, TRADE, ARBITRAGE];
 
 /// Rejects an unknown motive (typed refusal, never a silent default).
 pub fn check_motive(motive: &str) -> Result<(), String> {
@@ -52,7 +57,7 @@ pub fn check_motive(motive: &str) -> Result<(), String> {
 /// withdraws, wave 2).
 pub fn horizon_ticks(motive: &str, sell: bool) -> u64 {
     match motive {
-        NEED => 6_000,
+        NEED | ARBITRAGE => 6_000,
         GEAR | TOOL | SURPLUS | MARKET_MAKE | TRADE => 36_000,
         STOCK | LOOT => 72_000,
         _ if sell => 36_000,
@@ -80,6 +85,7 @@ mod tests {
         assert!(check_motive("").is_ok());
         assert!(check_motive(GEAR).is_ok());
         assert!(check_motive(TRADE).is_ok());
+        assert!(check_motive(ARBITRAGE).is_ok());
         assert!(check_motive("whim").is_err());
     }
 }

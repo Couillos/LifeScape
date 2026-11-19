@@ -324,6 +324,14 @@ pub(crate) fn maybe_switch(job: &Job, life: &mut Life) -> bool {
     true
 }
 
+/// Units one shop trip of a maker carries for one object worth `value`
+/// at the shop (plan équilibre D2, the outlet's lot): what its risk caps
+/// let it hold, the capital share at that value and the stock cap.
+pub fn outlet_units(equity: i64, value: i64) -> i64 {
+    let by_capital = (MAKER_CAPS.max_item_capital_share * equity.max(0) as f64 / value.max(1) as f64).floor() as i64;
+    by_capital.min(MAKER_CAPS.max_stock).max(1)
+}
+
 /// One quote pass of a quoting maker (rate-limited): returns the moves
 /// made (placed, amended, cancelled).
 pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
@@ -338,6 +346,9 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
     }
     let Some(service) = crate::market_service::shared() else { return 0 };
     let account = job.account.as_str();
+    // The maker's time value (D1) prices its shop trips (the outlet, D2);
+    // read before any store lock (its refresh locks the store).
+    let rate = crate::brain_d17::coin_rate(account);
     let coins = crate::brain_plan::holdings_count(job, "coins");
     let stock = live_stock(job);
     let lookback = ticks_as_secs(lifescape_market::maker::DEMAND_LOOKBACK_TICKS) as i64;
@@ -360,6 +371,9 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
     for order in stale_quotes(&rows, &items) {
         moves += usize::from(cancel(&service, account, order, REQUOTE_REASON));
     }
+    // The shops' likely stock: the fleet's sales and trips, the other
+    // bots' arbitrage lots in flight (`brain_npc_sale`).
+    let shop_sales = crate::brain_npc_sale::fleet_sales_for(&service, account);
     let mut npc = Vec::new();
     for id in &items {
         let Some(item) = item_of(*id) else { continue };
@@ -386,6 +400,7 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
             recent_buys: demand.get(id).copied().unwrap_or(0),
             anchor: item.anchor,
             outside: item.outside,
+            outlet: item.outside.and_then(|value| crate::brain_npc_sale::net_shop_outlet(item.name, &shop_sales, outlet_units(equity, value), rate)),
             make_cost,
             stock: units,
             stock_cost: held.get(id).map(|position| position.cost).unwrap_or(0),

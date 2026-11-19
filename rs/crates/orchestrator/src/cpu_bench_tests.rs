@@ -71,7 +71,7 @@ fn cpu_bench() {
         let life = crate::brain::load_life(account).expect("life");
         let live = crate::paths::read_json(&crate::paths::user_paths(account).0).unwrap_or(Value::Null);
         timed("MarketReader::live", 5, || crate::brain_bids::MarketReader::live(account));
-        timed("OwnCosts::load", 5, || crate::brain_reserve::OwnCosts::load(&service.lock_store(), account));
+        timed("OwnCosts::load", 5, || crate::brain_reserve::OwnCosts::load(&service.lock_store(), account, crate::brain_d17::coin_rate(account)));
         timed("brain_locks::locked_items", 5, || crate::brain_locks::locked_items(account));
         let all: Vec<(String, i64)> = ITEMS.iter().map(|item| (item.to_string(), 28)).collect();
         let costs = timed("production_costs_for(15 items)", 10, || crate::brain_bids::production_costs_for(&life, &live, &all));

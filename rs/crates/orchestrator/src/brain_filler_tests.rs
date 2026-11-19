@@ -1,6 +1,10 @@
 //! Market waits never idle the worker (user rule 2026-11-13).
 
 use super::parked_waits;
+use lifescape_planner::expand::ReadyCtx;
+use lifescape_planner::guide_feasible::BotState;
+use lifescape_planner::guide_model::{Confidence, Family, FlowLine, MoneyRow, Outlet, PriceBasis, Prereqs, Quote};
+use lifescape_planner::guide_pick::GuideLine;
 use lifescape_planner::{Archetype, GoalKind, HistoryEntry, Life, Node, NodeKind, NodeStatus, Profile};
 
 fn entry(node: &str, outcome: &str, at: i64) -> HistoryEntry {
@@ -127,4 +131,172 @@ fn a_filler_report_releases_its_claim() {
     assert_eq!(crate::market_claims::claimed_total().get("filler_claims_coal"), Some(&25));
     super::fold_filler_report(&mut life, "fill-n9", &report("budget_exhausted", 1500, None));
     assert_eq!(crate::market_claims::claimed_total().get("filler_claims_coal"), None, "released at its report");
+}
+
+fn guide_row(family: Family, method: &str, profit: f64) -> MoneyRow {
+    MoneyRow {
+        family,
+        method: method.to_string(),
+        style: String::new(),
+        site: None,
+        tool: String::new(),
+        band: 60,
+        prereqs: Prereqs::default(),
+        flows: Vec::new(),
+        other_drops: Default::default(),
+        revenue_6000: profit,
+        cost_6000: 0.0,
+        profit_6000: profit,
+        xp_6000: Vec::new(),
+        extra_ticks_per_6000: 0.0,
+        stages: Vec::new(),
+        routes: Vec::new(),
+        confidence: Confidence { runs: 4, ..Confidence::default() },
+        price_confidence: "traded",
+        priced: true,
+    }
+}
+
+/// Yew logs cut 250 a window, sold at 20 on the market: the guide's
+/// best row (5000 per 6000 ticks).
+fn yew_row() -> MoneyRow {
+    let flow = FlowLine { item: "yew_logs".to_string(), cause: "product".to_string(), per_6000: 250.0, unit_price: 20.0, value_6000: 5000.0, outlet: Outlet::Market, traded: true, basis: PriceBasis::Traded };
+    MoneyRow { flows: vec![flow], ..guide_row(Family::Farm, "gather:woodcut/yew_logs", 5000.0) }
+}
+
+/// Cooking its own raw trout (3000 per 6000 ticks).
+fn trout_row() -> MoneyRow {
+    let mut trout = guide_row(Family::Recipe, "cook:trout", 3000.0);
+    trout.prereqs.stock = vec![("raw_trout".to_string(), 28.0)];
+    trout
+}
+
+/// A woodcutter-cook (woodcutting 60, cooking 40) with a rune axe.
+fn cook_ctx() -> ReadyCtx {
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.levels = vec![("woodcutting".to_string(), 60), ("cooking".to_string(), 40)];
+    ctx.tools = vec!["rune_axe".to_string()];
+    ctx
+}
+
+/// The money lines of `rows` for that bot holding 200 raw trout, the
+/// other producers having claimed `claimed` yew logs on the order board
+/// (the brain's `brain_money::publish`, shared demand of step 2).
+fn cook_lines(rows: &[MoneyRow], claimed: f64) -> Vec<GuideLine> {
+    let rows: Vec<&MoneyRow> = rows.iter().collect();
+    let ctx = cook_ctx();
+    let level_of = |skill: &str| if skill == "woodcutting" { 60 } else { 40 };
+    let none = |_: &str| 0.0;
+    let asks = |_: &str| None;
+    let bot = BotState { level_of: &level_of, combat: 40, quests_done: &[], held: &none, coins: Some(500.0), ironman: false, asks: &asks };
+    let stock = vec![("raw_trout".to_string(), 200.0)];
+    let quote = |item: &str| (item == "yew_logs").then(|| Quote { price: 20.0, traded: true, median: 20.0, fills: 5, fill_units: 250.0, claimed, ..Default::default() });
+    let no_shop = |_: &str| None;
+    let demand = lifescape_planner::guide_share::SharedDemand::new(&quote, &no_shop);
+    let shared = |row: &MoneyRow| demand.profit(row);
+    crate::brain_money::lines_for(&rows, &ctx, &bot, &stock, 0.5, &|_| None, &shared)
+}
+
+/// The coin node of a filler window (`launch_filler`).
+fn filler_node() -> Node {
+    Node::new("fill-n7", NodeKind::HaveCoins { amount: 1 }, Vec::new(), 0)
+}
+
+/// Plan équilibre step 3 (live 2026-11-19: fillers were 20 % of the
+/// fleet's time, 52 % of it yew logs resting at 1 coin): a filler picks
+/// like a money node, from the money guide on the shared demand. A bot
+/// whose best line left is cooking its own raw trout cooks them; its
+/// yew logs, whose demand the other producers' claims already took, are
+/// no line, never the filler.
+#[test]
+fn a_filler_draws_the_money_guide_on_the_shared_demand() {
+    let rows = [yew_row(), trout_row()];
+    let open = cook_lines(&rows, 0.0);
+    assert_eq!(open.first().map(|line| line.method.as_str()), Some("gather:woodcut/yew_logs"), "open demand: the yews lead");
+    let taken = cook_lines(&rows, 250.0);
+    assert_eq!(taken.iter().map(|line| line.method.as_str()).collect::<Vec<_>>(), vec!["cook:trout"], "the yews' demand is claimed");
+    let mut node = filler_node();
+    let mut ctx = cook_ctx();
+    let mut publish = |ctx: &mut ReadyCtx, _: &Node| ctx.money_guide = taken.clone();
+    let pick = super::pick_window(&mut node, &mut ctx, &mut publish, &[], &[]).expect("a filler works");
+    assert_eq!(pick.method, "cook:trout", "{pick:?}");
+    assert!(pick.from_guide, "drawn from the guide: {pick:?}");
+    assert_eq!(node.batch, 200, "its lot: the trout it holds");
+}
+
+fn line(method: &str, family: &str, profit: f64) -> GuideLine {
+    GuideLine { method: method.to_string(), family: family.to_string(), profit_6000: profit, weight: profit, runs: 4, feasible: true, lot: 0 }
+}
+
+/// A filler window obtains nothing: a line whose tool is still to buy
+/// (the net of the shrimps: class 2) or a 100 % market lot (its
+/// purchases are graph nodes) is never its draw. With nothing else in
+/// the guide the static money methods rank, as for every money node
+/// without a drawable line: never a window blocked on the net for the
+/// whole wait.
+#[test]
+fn a_filler_never_draws_a_line_it_must_equip_or_buy_for() {
+    let shrimps = line("gather:fishing/raw_shrimp", "farm", 5000.0);
+    let bars = line("trade:craft/smelt:bronze_bar", "market", 4000.0);
+    let ctx = cook_ctx();
+    assert!(!super::window_works(&shrimps, &ctx, &[]), "the net is still to buy");
+    assert!(!super::window_works(&bars, &ctx, &[]), "a market lot buys its inputs");
+    assert!(super::window_works(&line("gather:woodcut/yew_logs", "farm", 100.0), &ctx, &[]), "the axe is held");
+    let mut node = filler_node();
+    let mut ctx = cook_ctx();
+    let mut publish = |ctx: &mut ReadyCtx, _: &Node| ctx.money_guide = vec![shrimps.clone(), bars.clone()];
+    let pick = super::pick_window(&mut node, &mut ctx, &mut publish, &[], &[]).expect("a static window works");
+    assert!(!pick.from_guide && ctx.money_guide.is_empty(), "{pick:?}");
+    assert!(pick.method != "gather:fishing/raw_shrimp" && !pick.method.starts_with("trade:"), "{pick:?}");
+    assert!(!matches!(node.status, NodeStatus::Blocked { .. }), "never blocked on the net: {:?}", node.status);
+}
+
+/// Review lot 3, point 1: a woodcutter whose guide lines are all logs
+/// and whose yew filler just failed (route error) never idles on "no
+/// filler: every workable money method trains a banned skill" for 500
+/// ticks: the lines of a skill that just failed are no window's draw,
+/// the static money methods rank (R7) and the window works off it.
+#[test]
+fn a_filler_skips_the_guide_lines_of_a_skill_that_just_failed() {
+    let failed = vec!["woodcutting".to_string()];
+    let yews = line("gather:woodcut/yew_logs", "farm", 5000.0);
+    let willows = line("gather:woodcut/willow_logs", "farm", 2000.0);
+    let mut node = filler_node();
+    let mut ctx = cook_ctx();
+    let mut publish = |ctx: &mut ReadyCtx, _: &Node| ctx.money_guide = vec![yews.clone(), willows.clone()];
+    let pick = super::pick_window(&mut node, &mut ctx, &mut publish, &[], &failed).expect("a window works off woodcutting");
+    assert!(!pick.from_guide && !pick.method.starts_with("gather:woodcut/"), "{pick:?}");
+}
+
+/// Review lot 3, point 2: a 10-hitpoint fighter without food never
+/// fills on a spot that bites it (class 1 of `money_pick`: feasible,
+/// food to obtain first; the hunt would stop `food_blocked` after the
+/// bank and cool its skill): only what a window works at once (class 0).
+#[test]
+fn a_foodless_fighter_never_fills_on_a_biting_spot() {
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.levels = vec![("hitpoints".to_string(), 10), ("attack".to_string(), 10), ("strength".to_string(), 10), ("defence".to_string(), 10)];
+    ctx.combat = 13;
+    let men = line("fight:melee/men", "farm", 900.0);
+    assert_eq!(lifescape_planner::money_pick::class_of(&men, &ctx), Some(1), "feasible, food first");
+    assert!(!super::window_works(&men, &ctx, &[]), "no food in hand");
+    let mut node = filler_node();
+    let mut publish = |ctx: &mut ReadyCtx, _: &Node| ctx.money_guide = vec![men.clone()];
+    let pick = super::pick_window(&mut node, &mut ctx, &mut publish, &[], &[]).expect("a window works");
+    assert!(!pick.from_guide && pick.method != "fight:melee/men", "{pick:?}");
+}
+
+/// Review lot 3, point 6: a refused filler attempt (two guide reads)
+/// is not tried again every pass: the account waits
+/// `FILLER_REFUSAL_TICKS`, a launch ends the wait.
+#[test]
+fn a_refused_filler_waits_before_reading_the_guide_again() {
+    let account = "filler_refusal_probe";
+    assert!(!super::refused_recently(account, 1000));
+    super::note_refusal(account, 1000);
+    assert!(super::refused_recently(account, 1000), "right after its refusal");
+    assert!(!super::refused_recently(account, 1000 + 3600), "an hour later");
+    super::note_refusal(account, 2000);
+    super::clear_refusal(account);
+    assert!(!super::refused_recently(account, 2000), "a launch ends the wait");
 }

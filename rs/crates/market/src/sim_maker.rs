@@ -129,6 +129,7 @@ impl MakerState {
             recent_buys: self.others_buys.iter().filter(|(at, _)| *at >= since).map(|(_, units)| *units).sum(),
             anchor: self.spec.anchor,
             outside: self.spec.outside,
+            outlet: None,
             make_cost: self.spec.make_cost,
             stock: self.stock,
             stock_cost: self.stock_cost,

@@ -484,7 +484,10 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     // Withdrawn lots stay out this pass (still in `selling`): their stock
     // is banked again and the next pass lists a demand lot.
     let listed: HashSet<i64> = selling.iter().map(|row| crate::market_audit::book_item(row.item_id)).collect();
-    let costs = crate::cpu_profile::timed("sales.own_costs", || crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account));
+    // The bot's time value (D1, the brain's one rate), read BEFORE the
+    // store is locked: its refresh locks the store itself.
+    let rate = crate::brain_d17::coin_rate(&job.account);
+    let costs = crate::cpu_profile::timed("sales.own_costs", || crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account, rate));
     // The `bid_response` make cost caps every reserve (one book and rates
     // read for the pass): what a bid quota was priced at always sells.
     let mut priced: Vec<(String, i64)> = free.clone();
@@ -507,9 +510,15 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     // Q3: what an F2P shop pays more for than the market goes to the shop.
     let mut shop_candidates: Vec<crate::brain_npc_sale::Candidate> = Vec::new();
     // The shops' likely stock (lot 8): the fleet's own recent sales
-    // there, decayed by the server's restock, never the base stock alone.
+    // there, decayed by the server's restock, never the base stock alone;
+    // the other bots' merchant arbitrage lots in flight (D2) too.
     let shop_sales: std::cell::OnceCell<crate::brain_npc_sale::ShopSales> = std::cell::OnceCell::new();
-    let fleet_sales = || shop_sales.get_or_init(|| crate::brain_npc_sale::load_fleet_sales(&service));
+    let fleet_sales = || shop_sales.get_or_init(|| crate::brain_npc_sale::fleet_sales_for(&service, &job.account));
+    // Bought for a merchant (D2): the units its arbitrage bought go there
+    // whatever the overstock rule, the rest of the pile follows the normal
+    // rule (`shop_split`).
+    let arbitrage = crate::brain_npc_sale::arbitrage_units(&job.account);
+    let mut whole_units: Vec<(String, i64)> = Vec::new();
     let learning = service.seller_learning(&job.account);
     for (name, item, qty) in offers {
         if quoted.contains(&crate::market_audit::book_item(item)) {
@@ -520,15 +529,24 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         // price (the old Q4 wait relisted it unchanged 60 % of the time).
         // Overstock goes to the alchemy outlet on the market (the shop
         // takes a few units before its price sinks).
-        let overstock = service.overstocked(&job.account, item, qty);
-        if let Some(shop_value) = lifescape_gamedata::shop_sale::npc_sale_value(&name).filter(|_| !overstock).and_then(|_| crate::brain_npc_sale::likely_sale_value(&name, fleet_sales())) {
+        let bought = arbitrage.iter().filter(|(known, _)| *known == name).map(|(_, units)| *units).sum::<i64>().clamp(0, qty);
+        let overstock = service.overstocked(&job.account, item, qty - bought);
+        let mut qty = qty;
+        if let Some(shop_value) = lifescape_gamedata::shop_sale::npc_sale_value(&name).filter(|_| !overstock || bought > 0).and_then(|_| crate::brain_npc_sale::likely_sale_value(&name, fleet_sales())) {
             let reference = service.reference(item);
             let (bid, _) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
             let bid = bid.map(|price| crate::market_units::to_unit(item, price));
-            if lifescape_market::npc_sale_beats_market(shop_value, bid, reference) {
-                shop_candidates.push((name.clone(), qty, lifescape_market::market_pays(bid, reference)));
+            let split = crate::brain_npc_sale::shop_split(qty, bought, overstock, lifescape_market::npc_sale_beats_market(shop_value, bid, reference));
+            if split.to_shop > 0 {
+                shop_candidates.push((name.clone(), split.to_shop, lifescape_market::market_pays(bid, reference)));
+                if split.whole > 0 {
+                    whole_units.push((name.clone(), split.whole));
+                }
+            }
+            if split.to_market <= 0 {
                 continue;
             }
+            qty = split.to_market;
         }
         // The carnet keys orders by the base object: a noted stack
         // (`cert_yew_logs`) reads its base's unsold horizons (live
@@ -584,9 +602,9 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     // A maker's slice stock nobody buys goes to the shop too (Q6).
     shop_candidates.extend(crate::market_maker::take_dumps(&job.account));
     // Q3: one shop trip when it pays more than its ticks at the bot's
-    // own rate; the janitor node carries it (`brain_npc_sale`).
+    // time value (D1); the janitor node carries it (`brain_npc_sale`).
     let min_gain = (crate::brain_npc_sale::SHOP_TRIP_TICKS * costs.coins_per_tick).ceil() as i64;
-    match crate::brain_npc_sale::plan_shop_sale(&shop_candidates, crate::brain_npc_sale::live_position(&live), min_gain, &|item: &str| crate::brain_npc_sale::shops_at_likely_stock(item, fleet_sales())) {
+    match crate::brain_npc_sale::plan_shop_sale(&shop_candidates, crate::brain_npc_sale::live_position(&live), min_gain, &whole_units, &|item: &str| crate::brain_npc_sale::shops_at_likely_stock(item, fleet_sales())) {
         Some(plan) => {
             crate::logln!("brain {}: npc shop sale planned at {} ({} lots, gain {} over the market, trip worth {min_gain})", job.account, plan.shop, plan.lines.len(), plan.gain());
             crate::brain_npc_sale::note(&job.account, plan);

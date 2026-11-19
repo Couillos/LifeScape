@@ -247,6 +247,28 @@ mod tests {
         assert!(late.is_empty(), "no demand left: no lot offered: {late:?}");
     }
 
+    /// Plan équilibre step 4: ores resting at 1 coin under what a bronze
+    /// bar sells for, demand left for bars: the 100 % market lot is
+    /// offered, sized on the bars the market takes and bought along the
+    /// asks at 1; the same ores once other producers claimed every bar:
+    /// no lot.
+    #[test]
+    fn inputs_at_one_coin_under_their_transformation_value_make_a_trade_lot() {
+        let mut guides = set();
+        guides.quotes.insert("copper_ore".to_string(), Quote { price: 1.0, traded: true, asks: vec![(1.0, 5000.0)], ..Quote::default() });
+        guides.quotes.insert("tin_ore".to_string(), Quote { price: 1.0, traded: true, asks: vec![(1.0, 5000.0)], ..Quote::default() });
+        let node = Node::new("n1", NodeKind::MakeMoney, Vec::new(), 0);
+        let smith = |skill: &str| if skill == "smithing" { 28 } else { 1 };
+        let none = |_: &str| 0.0;
+        let offers = offers_claimed(&guides, &node, &smith, &none, &|_| 0.0);
+        assert_eq!(offers.len(), 1, "{offers:?}");
+        let plan = lifescape_planner::trade_craft::lot_size(&offers[0], 10_000);
+        assert!(plan.lot > 0, "{plan:?}");
+        assert_eq!(plan.cost, 2 * plan.lot, "bought along the asks at 1: {plan:?}");
+        let served = offers_claimed(&guides, &node, &smith, &none, &|item| if item == "bronze_bar" { 150.0 } else { 0.0 });
+        assert!(served.is_empty(), "no demand left for bars: no lot: {served:?}");
+    }
+
     #[test]
     fn the_brain_reads_its_offers_from_the_precomputed_guide() {
         let guides = set();

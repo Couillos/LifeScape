@@ -273,7 +273,9 @@ impl MarketService {
         let Some(name) = usize::try_from(item).ok().and_then(lifescape_gamedata::obj_by_id).and_then(|obj| obj.name) else {
             return Self::err(format!("unknown item {item}"));
         };
-        let costs = OwnCosts::load(&self.lock_store(), &account);
+        // The time value first (D1): its refresh locks the store.
+        let rate = crate::brain_d17::coin_rate(&account);
+        let costs = OwnCosts::load(&self.lock_store(), &account, rate);
         let life = crate::brain::load_life(&account);
         let make_cost = make_cost_of(life.as_ref(), &account, name, qty);
         let pressed = request.get("urgent").as_bool() == Some(true);

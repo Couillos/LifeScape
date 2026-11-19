@@ -78,37 +78,16 @@ fn found_stock_has_a_one_coin_reserve() {
     assert!(prior_ticks_per_unit("Feather").is_none(), "a combat prior is loot, never a time cost");
 }
 
-/// Coins per tick: the best own method, coins looted plus its farmed
-/// units at its own last sale price (net of what it shop-sold).
+/// One tick is never free: the rate handed in (the D1 time value) never
+/// falls under the shared floor `bid_response` prices with (0.1); never
+/// a 1-coin default. One rate for the whole brain (lot 5, 2026-11-19):
+/// `OwnCosts` keeps the time value it is given, it measures no second one.
 #[test]
-fn coins_per_tick_is_the_best_own_method() {
-    let reports = vec![
-        report("melee", 1500, vec![line("Coins", "loot", 45)]),
-        report("woodcut", 6000, vec![line("Willow logs", "produced", 150)]),
-        report("ranged", 6000, vec![line("Feather", "ground_spawn", 1000), line("Feather", "shop_sold", -1000), line("Coins", "shop_sold", 120)]),
-    ];
-    let sale = |item: &str| match item {
-        "Willow logs" => Some(8),
-        "Feather" => Some(3),
-        _ => None,
-    };
-    // melee 0.03, woodcut 150 x 8 / 6000 = 0.2, ranged 120 / 6000 = 0.02
-    // (the shop-sold feathers are not valued twice).
-    let rate = measured_coins_per_tick(&reports, &sale).unwrap_or(0.0);
-    assert!((rate - 0.2).abs() < 1e-9, "{rate}");
-    assert!((coins_per_tick(&reports, &sale) - 0.2).abs() < 1e-9, "its own best method");
-    let unsold = |_: &str| None;
-    assert!((measured_coins_per_tick(&reports, &unsold).unwrap_or(0.0) - 0.03).abs() < 1e-9, "unsold logs earn nothing yet");
-}
-
-/// One tick is never free: under the shared floor `bid_response`
-/// prices with (0.1), the floor holds; never a 1-coin default.
-#[test]
-fn coins_per_tick_never_falls_under_the_shared_floor() {
+fn coins_per_tick_is_the_time_value_never_under_the_shared_floor() {
     let floor = lifescape_planner::market_fit::MIN_COIN_RATE;
-    let reports = vec![report("melee", 1500, vec![line("Coins", "loot", 45)])];
-    assert!((coins_per_tick(&reports, &|_: &str| None) - floor).abs() < 1e-9, "0.03 measured, 0.1 floor");
-    assert!((coins_per_tick(&[], &|_: &str| None) - floor).abs() < 1e-9, "nothing measured: the floor");
+    let store = lifescape_store::Store::open_in_memory().expect("store");
+    assert!((OwnCosts::load(&store, "lara_lane", 0.03).coins_per_tick - floor).abs() < 1e-9, "0.03 measured, 0.1 floor");
+    assert!((OwnCosts::load(&store, "lara_lane", 0.28).coins_per_tick - 0.28).abs() < 1e-9, "the D1 time value as given");
     // lara_lane's willow: 43.6 ticks a log at the floor = 5 coins.
     assert_eq!(reserve_coins(6142.0 / 141.0, floor), 5);
 }

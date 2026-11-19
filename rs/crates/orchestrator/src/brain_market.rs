@@ -82,7 +82,21 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn 
     let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return };
     // A partly filled bid (`matched`, remainder resting) still stands:
     // only open rows used to count, so bids piled up beside it.
-    if !service.resting_rows(&job.account, id, lifescape_store::OrderSide::Buy).is_empty() {
+    let resting = service.resting_rows(&job.account, id, lifescape_store::OrderSide::Buy);
+    // Plan équilibre step 4: its own `need` bid follows the derived
+    // reserve of NOW (real time value, shared demand) and the need of now,
+    // never those of its placement (live 2026-11-19: coal bids at ceiling
+    // 1 from a reserve of -67, kept for hours). Any other bid is left as
+    // is. A need bid filled meanwhile falls through to the checks below:
+    // never a new bid beside one in delivery.
+    if resting.iter().any(|row| row.motive == crate::market_lineage::NEED) {
+        if refresh_standing_bid(job, &service, id, item, *count, ctx, derived) {
+            return;
+        }
+        if !service.resting_rows(&job.account, id, lifescape_store::OrderSide::Buy).is_empty() {
+            return;
+        }
+    } else if !resting.is_empty() {
         return;
     }
     // A bid swept whole into deals leaves no resting row, its lots still
@@ -125,9 +139,82 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn 
     );
 }
 
+/// The account's resting `need` bid on `item` (object id `item_id`)
+/// brought to the bounds a new standing bid would get now
+/// (`refresh_need_bid`). Logs only what moved (price, ceiling,
+/// remainder) and a refusal only when it is new (`refusal_is_new`).
+/// False when no need bid rests any more (filled meanwhile): the caller
+/// goes through its in-flight check before any new bid.
+fn refresh_standing_bid(job: &Job, service: &crate::market_service::MarketService, item_id: i64, item: &str, count: i64, ctx: &ReadyCtx, derived: &dyn Fn() -> Option<f64>) -> bool {
+    let wallet = lifescape_planner::resolve_obtain::bid_ceiling(ctx, lifescape_planner::resolve_obtain::buy_quantity(ctx, count));
+    // The remainder is cut to the NEED of now (re-review lot 4, point 3),
+    // never to what the wallet buys at the best ask: a wallet-shrunk bid
+    // would never grow back; an uncovered raise is refused by the market.
+    let quantity = (count.max(1) - ctx.held).max(1);
+    let reserve = derived();
+    let (open, ceiling) = match reserve {
+        Some(reserve) => lifescape_planner::derived_demand::derived_bounds(reserve, wallet),
+        None => (1, wallet),
+    };
+    let derived_note = reserve.map(|value| format!(", derived reserve {value:.0}")).unwrap_or_default();
+    match refresh_need_bid(service, &job.account, item_id, quantity, open, ceiling) {
+        Ok(Some(refreshed)) => {
+            forget_refusal(&job.account, item_id);
+            if refreshed.changed() {
+                let old_ceiling = refreshed.old_ceiling.map(|value| value.to_string()).unwrap_or_else(|| "none".to_string());
+                crate::logln!(
+                    "brain {}: standing bid {item} kept @ {} (was {}), ceiling {} (was {old_ceiling}), remainder {} (was {}) for a need of {quantity}{derived_note}",
+                    job.account,
+                    refreshed.price,
+                    refreshed.old_price,
+                    refreshed.ceiling,
+                    refreshed.remaining,
+                    refreshed.old_remaining
+                );
+            }
+            true
+        }
+        Ok(None) => false,
+        Err(error) => {
+            if refusal_is_new(&job.account, item_id, &error) {
+                crate::logln!("brain {}: standing bid {item} not refreshed (ceiling {ceiling}{derived_note}): {error}", job.account);
+            }
+            true
+        }
+    }
+}
+
+/// The `need` bid of `account` on `item_id` brought to `open`/`ceiling`
+/// and its remainder cut to `quantity` (`market_reprice::
+/// refresh_resting_bid`); `Ok(None)` when none rests.
+pub(crate) fn refresh_need_bid(service: &crate::market_service::MarketService, account: &str, item_id: i64, quantity: i64, open: i64, ceiling: i64) -> Result<Option<crate::market_reprice::RestingRefresh>, String> {
+    crate::market_reprice::refresh_resting_bid(service, account, item_id, quantity, open, ceiling, crate::market_lineage::NEED)
+}
+
+type RefusalTable = std::sync::Mutex<std::collections::HashMap<(String, i64), String>>;
+
+fn refusals() -> &'static RefusalTable {
+    static TABLE: std::sync::OnceLock<RefusalTable> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// True when `error` is not the last refusal logged for this account's
+/// standing bid on `item_id` (it is remembered).
+pub(crate) fn refusal_is_new(account: &str, item_id: i64, error: &str) -> bool {
+    let mut table = refusals().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    table.insert((account.to_string(), item_id), error.to_string()).as_deref() != Some(error)
+}
+
+fn forget_refusal(account: &str, item_id: i64) {
+    refusals().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&(account.to_string(), item_id));
+}
+
 /// Reservation price of what the obtain node at `index` gets, when it
-/// feeds a product the bot's graph makes (derived demand, public values:
-/// others' best bid or the current price; other inputs at the best ask or
+/// feeds a product the bot's graph makes (derived demand, plan équilibre
+/// step 4: the product at what it sells for on the shared demand of the
+/// graph's lot, `derived_demand::product_value` — others' bids and a
+/// day's sales at the current price, less the supply on its way and the
+/// units other producers claimed —; other inputs at the best ask or
 /// current price; the bot's own rates and its measured coin rate, D1).
 /// `None` otherwise.
 pub(crate) fn derived_reserve(life: &lifescape_planner::Life, index: usize, live: &Value) -> Option<f64> {
@@ -140,10 +227,10 @@ pub(crate) fn derived_reserve(life: &lifescape_planner::Life, index: usize, live
     let reader = crate::brain_bids::MarketReader::live(&life.account);
     crate::brain_bids::with_bot_state(life, live, |state| {
         let rate = crate::brain_bids::bot_rate(life);
-        let value_of = |item: &str| reader.view(item).and_then(|view| view.best_bid().max(view.current)).map(|price| price as f64);
+        let value_of = |item: &str| lifescape_planner::derived_demand::product_value(reader.view(item).as_ref(), lifescape_planner::derived_demand::product_lot(&life.nodes, item));
         let input_price = |item: &str| reader.view(item).and_then(|view| view.best_ask().or(view.current)).unwrap_or(1) as f64;
         let prices = lifescape_planner::derived_demand::DerivedPrices { value_of: &value_of, input_price: &input_price, units_per_6000: state.units, coin_rate: rate };
-        lifescape_planner::derived_demand::input_reserve(&life.nodes, index, &prices)
+        lifescape_planner::derived_demand::sale_reserve(&life.nodes, index, &life.goal, &prices)
     })
 }
 
@@ -333,3 +420,7 @@ mod tests {
         assert!(levels.contains(&("crafting".to_string(), 1)), "{levels:?}");
     }
 }
+
+#[cfg(test)]
+#[path = "brain_market_refresh_tests.rs"]
+mod refresh_tests;

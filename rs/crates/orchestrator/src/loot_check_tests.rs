@@ -105,6 +105,9 @@ fn loot_check() {
     let store = lifescape_store::Store::open(std::path::Path::new(&db)).expect("db copy opens");
     let root = lifescape_json::parse(&std::fs::read_to_string(&status).expect("status json")).expect("status parses");
     let resting = store.resting_orders().expect("orders");
+    // The D1 time values of the copy (window ended at its newest report).
+    let copy_end = store.newest_report_clock().expect("newest report").unwrap_or(0);
+    let time_values = crate::time_value::measure_in(&store, copy_end).expect("time values of the copy");
     let only = std::env::var("LIFESCAPE_CHECK_ACCOUNT").ok();
     for job in root.get("jobs").as_arr().cloned().unwrap_or_default() {
         let account = job.get("account").as_str().unwrap_or("?").to_string();
@@ -140,7 +143,7 @@ fn loot_check() {
             crate::brain_sales::free_stacks(&stacks, &|name| obj_id(name).and_then(|id| locked.get(&id).copied()).unwrap_or(0))
         };
         let mut free = free_of(&locked);
-        let costs = OwnCosts::load(&store, &account);
+        let costs = OwnCosts::load(&store, &account, time_values.rate(&account));
         let combat = costs.reports.iter().any(|report| ["melee", "ranged", "magic"].contains(&report.method.as_str()));
         eprintln!("== {account} ({}, {bank_types} bank types, {} resting sells, {:.2} coins/tick)", if combat { "combat" } else { "other" }, selling.len(), costs.coins_per_tick);
         // Resting listings: regrouped slivers, then today's adoption.

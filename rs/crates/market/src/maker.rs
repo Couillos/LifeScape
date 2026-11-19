@@ -9,6 +9,14 @@
 //!   object (prudent discovery), one spread under the public ceiling a
 //!   buyer faces (its shop value, or the cheapest listing when lower):
 //!   a quarter lot, never raised by a low stock;
+//! - outlet (plan équilibre D2, user 2026-11-19): what one unit nets
+//!   through an NPC shop at its likely stock, the trip shared over a lot
+//!   at the maker's time value, is a buyer at that price: with no other
+//!   demand it IS the fair value, otherwise the fair value never sits
+//!   under it (the maker buys every ask under it) and, led by the
+//!   outlet, the stock past one lot goes to the shop (`npc_dump`). No
+//!   floor of any kind (user): an unsold ask walks down 10 % a pass, under
+//!   the outlet too. The raw shop value (`outside`) stays no price;
 //! - stock skew (inventory risk): `r = clamp((stock - lot) / lot, -1, 1)`,
 //!   reservation price `p = v * (1 - h * r)`: a high stock lowers BOTH
 //!   sides (sell faster, buy less), a low stock raises both;
@@ -242,8 +250,14 @@ pub struct MakerInput {
     pub recent_buys: i64,
     /// Public anchor of a never-traded object: its shop value.
     pub anchor: i64,
-    /// What an F2P shop pays for one unit (Q3 outside option).
+    /// What an F2P shop pays for one unit (Q3 outside option): the
+    /// first unit at base stock, the dump's gate only (never a price).
     pub outside: Option<i64>,
+    /// What one unit NETS through the maker's best outlet (plan équilibre
+    /// D2: an NPC shop at its likely stock, the trip shared over a lot at
+    /// the maker's time value, `planner::merchant_arbitrage::net_outlet`):
+    /// a real buyer at that price, part of the reference value.
+    pub outlet: Option<i64>,
     /// Discovery anchor (M7, public): the production cost the guides
     /// publish.
     pub make_cost: Option<i64>,
@@ -330,6 +344,16 @@ pub fn quote(caps: &MakerCaps, input: &MakerInput) -> MakerQuote {
         };
         (fair.max(1), Regime::Discovery)
     };
+    // Plan équilibre D2: the net outlet is a buyer at its price. Nobody
+    // else buys: it is the only demand (fair = the outlet, no walk to 1);
+    // otherwise the reference never sits under it. Led by the outlet,
+    // the stock past one lot goes there.
+    let outlet = input.outlet.filter(|net| *net >= 1);
+    let (fair, regime, outlet_led) = match outlet {
+        Some(net) if regime == Regime::NoDemand => (net, Regime::Thin, true),
+        Some(net) => (fair.max(net), regime, net > fair),
+        None => (fair, regime, false),
+    };
     let half = match regime {
         Regime::Liquid => caps.half_spread_liquid,
         Regime::Thin | Regime::NoDemand => caps.half_spread_thin,
@@ -373,7 +397,7 @@ pub fn quote(caps: &MakerCaps, input: &MakerInput) -> MakerQuote {
     let ask_qty = input.stock.max(0).min(lot).min(book_cap(caps, input.ask_depth, lot));
     let ask = (ask_qty > 0).then_some(Leg { price: ask_price, qty: ask_qty });
     let over_cap = (input.stock - caps.max_stock).max(0);
-    let unsold = if regime == Regime::NoDemand { (input.stock - lot).max(0) } else { 0 };
+    let unsold = if regime == Regime::NoDemand || outlet_led { (input.stock - lot).max(0) } else { 0 };
     let npc_dump = if input.outside.is_some_and(|paid| paid >= 1) { over_cap.max(unsold) } else { 0 };
     MakerQuote { bid, ask, npc_dump, fair, regime }
 }

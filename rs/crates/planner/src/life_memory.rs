@@ -20,6 +20,11 @@ pub const RECORD_ERROR_MAX_CHARS: usize = 200;
 /// Choices from the guides kept (`orchestrator economy`, section « choix
 /// des bots »). The oldest go first.
 pub const PICKS_CAP: usize = 40;
+/// Kind of a filler window's pick (plan équilibre step 3: a money draw
+/// outside the graph, `orchestrator::brain_filler`).
+pub const FILLER_PICK_KIND: &str = "filler";
+/// Filler picks kept, in their own pool (review lot 3, point 5).
+pub const FILLER_PICKS_CAP: usize = 20;
 
 /// One choice a bot made from a guide (plan rendements R7): the line,
 /// its score, how many lines it was drawn among, whether the exploration
@@ -29,7 +34,7 @@ pub struct PickRecord {
     /// Unix seconds.
     pub at: i64,
     pub node: String,
-    /// `money` or `training`.
+    /// `money`, `training` or `filler` (a filler window's money draw).
     pub kind: String,
     /// The trained skill (training), empty for money.
     pub skill: String,
@@ -87,13 +92,23 @@ pub struct LifeMemory {
 impl LifeMemory {
     /// Record one choice from a guide (R7), keeping the last `PICKS_CAP`;
     /// the draw counter moves on.
+    /// A filler window's pick (`FILLER_PICK_KIND`) keeps a pool of its
+    /// own, `FILLER_PICKS_CAP`: it never pushes a node's pick out.
     pub fn note_pick(&mut self, record: PickRecord) {
         self.draws = self.draws.saturating_add(1);
+        let filler = record.kind == FILLER_PICK_KIND;
+        let cap = if filler { FILLER_PICKS_CAP } else { PICKS_CAP };
         self.picks.push(record);
-        let excess = self.picks.len().saturating_sub(PICKS_CAP);
-        if excess > 0 {
-            self.picks.drain(..excess);
-        }
+        let in_pool = |pick: &PickRecord| (pick.kind == FILLER_PICK_KIND) == filler;
+        let mut excess = self.picks.iter().filter(|pick| in_pool(pick)).count().saturating_sub(cap);
+        // The oldest of the same pool go first.
+        self.picks.retain(|pick| {
+            if excess > 0 && in_pool(pick) {
+                excess -= 1;
+                return false;
+            }
+            true
+        });
     }
 
     /// Record retired nodes, keeping only the last `RECENT_CAP`.
@@ -223,6 +238,30 @@ mod tests {
         assert_eq!(memory.draws, 1);
         assert_eq!(memory_from_value(&memory_to_value(&memory)), memory, "exact round trip");
         assert_eq!(memory_from_value(&lifescape_json::Value::Null), LifeMemory::default(), "no memory key: default");
+    }
+
+    fn pick(kind: &str, at: i64) -> super::PickRecord {
+        super::PickRecord { at, node: format!("n{at}"), kind: kind.to_string(), skill: String::new(), method: "fight:melee/cows".to_string(), score: 1.0, class: 0, band: 1, candidates: 1, explored: false, sticky: false }
+    }
+
+    /// Plan équilibre step 3 (review lot 3, point 5): a filler window
+    /// draws every 1500 ticks; its picks (kind `filler`) keep a pool of
+    /// their own and never push the real nodes' picks out of the cap.
+    #[test]
+    fn filler_picks_never_push_node_picks_out() {
+        let mut memory = LifeMemory::default();
+        for at in 0..super::PICKS_CAP as i64 {
+            memory.note_pick(pick("money", at));
+        }
+        for at in 100..130 {
+            memory.note_pick(pick("filler", at));
+        }
+        let nodes = memory.picks.iter().filter(|record| record.kind != "filler").count();
+        let fillers = memory.picks.iter().filter(|record| record.kind == "filler").count();
+        assert_eq!(nodes, super::PICKS_CAP, "every node pick kept");
+        assert!(fillers > 0 && fillers <= super::PICKS_CAP, "{fillers}");
+        assert_eq!(memory.picks.iter().filter(|record| record.kind == "filler").map(|record| record.at).max(), Some(129), "the newest filler kept");
+        assert_eq!(memory.draws, super::PICKS_CAP as u64 + 30, "every draw counted");
     }
 
     #[test]

@@ -16,8 +16,23 @@ use lifescape_planner::{Life, NodeKind};
 /// the node kept it (a ban steering may move a money node off it: logged,
 /// not recorded). `now`: Unix seconds.
 pub(crate) fn record(life: &mut Life, position: usize, ctx: &ReadyCtx, now: i64) {
-    let Some(choice) = ctx.drawn.borrow_mut().take() else { return };
-    let node = &life.nodes[position];
+    let node = life.nodes[position].clone();
+    record_choice(life, &node, ctx, now, false);
+}
+
+/// `record` for a filler window's coin node (outside the graph, plan
+/// équilibre step 3): the same log and draw counter, kept under the kind
+/// `filler` in its own pool (`LifeMemory::note_pick`): never a node's
+/// pick pushed out.
+pub(crate) fn record_filler(life: &mut Life, node: &lifescape_planner::Node, ctx: &ReadyCtx, now: i64) {
+    record_choice(life, node, ctx, now, true);
+}
+
+fn record_choice(life: &mut Life, node: &lifescape_planner::Node, ctx: &ReadyCtx, now: i64, filler: bool) {
+    let Some(mut choice) = ctx.drawn.borrow_mut().take() else { return };
+    if filler {
+        choice.kind = lifescape_planner::life_memory::FILLER_PICK_KIND;
+    }
     let skill = match &node.kind {
         NodeKind::ReachLevel { skill, .. } => skill.clone(),
         _ => String::new(),
@@ -116,7 +131,7 @@ pub fn fleet_picks(lives_dir: &std::path::Path) -> Vec<PickRecord> {
 /// methods most chosen with their share.
 pub fn print_section(picks: &[PickRecord], since: i64, hours: i64) {
     println!("bot choices (plan rendements R7, last {hours} h, staff out; recorded picks, the last {} per life):", lifescape_planner::life_memory::PICKS_CAP);
-    for kind in ["money", "training"] {
+    for kind in ["money", "training", lifescape_planner::life_memory::FILLER_PICK_KIND] {
         let found = tally(picks, kind, since);
         if found.picks == 0 {
             println!("  {kind:<8} no pick recorded");

@@ -337,7 +337,9 @@ Décision (application de la règle utilisateur « aucun bot inactif ») :
   settle_parked` : rempli, partiel, échéance — mêmes règles qu'avant) ;
   le worker lance le nœud prêt suivant hors attentes
   (`next_ready_except`), sinon un REMPLISSAGE : une fenêtre d'argent de
-  1500 ticks (spots à pièces d'abord, hors compétences bannies), nœud
+  1500 ticks (hors compétences bannies ; depuis le plan équilibre étape 3,
+  2026-11-19, tirée du guide d'argent comme un nœud d'argent, voir
+  docs/economy.md, Remplissage ; avant : spots à pièces d'abord), nœud
   `fill-<id>` hors graphe (rien compté sur le graphe). Son rapport est lu
   (`brain_filler::fold_filler_report`, 2026-11-14) : un remplissage en
   échec ou fini sans travailler (0 tick, erreur) écarte sa compétence des
@@ -1820,7 +1822,66 @@ Index `idx_task_reports_clock` assuré à chaque ouverture (sans changer la
 version du schéma : un binaire plus ancien ouvre toujours le fichier, un
 retour arrière du lot reste possible). Détails : `docs/economy.md`
 § « Valeur du temps : le gain réel mesuré ». La réserve vendeur
-(`brain_reserve::coins_per_tick`) reste hors de cette décision (lot 5).
+(`brain_reserve::coins_per_tick`) restait hors de cette décision ; le
+lot 5 (D2, ci-dessous) l'a unifiée sur ce taux.
+
+## 2026-11-19 — D2 : l'arbitrage avec les marchands, ouvert à tous (plan équilibre, étape 5)
+
+Constat : ifs en annonce à 1 pièce (31 226 unités, 9 vendeurs au
+2026-11-19 ; 74 objets, ~138 000 unités sous le plancher d'un magasin
+général) alors qu'un magasin général en paie 16 sans limite à son
+plancher (`shop.rs2` `calc_shop_value` : 10 % de la valeur une fois dix
+unités au-dessus de son stock de base).
+Décision utilisateur (D2) : tout bot, teneurs compris, peut acheter au
+marché sous ce qu'un marchand (ou la haute alchimie, s'il la lance) lui
+rapporte, net du trajet compté à SA valeur du temps (D1), et revendre au
+marchand : le prix du marché remonte vers l'exutoire par le jeu des
+joueurs ; aucune règle de plancher (le marchand est un acheteur réel, pas
+un prix imposé).
+Mise en œuvre :
+- planner `merchant_arbitrage` (pur) : lot unité par unité depuis l'ask
+  le moins cher, tant que le marchand (prix au stock probable, baisse par
+  unité détenue) paie plus que l'ask plus la manutention ; trajet (remise
+  à la fontaine + `SHOP_TRIP_TICKS`) payé une fois au taux D1 ; proposé
+  s'il rapporte encore `BID_MIN_PROFIT` (50) ; l'offre ouvre à l'ask le
+  plus cher pris et monte de 10 % par fenêtre (la marche du marché)
+  jusqu'à ce que l'exutoire paie pour la dernière unité, net du trajet ;
+  au plus 1000 unités, la bourse couvrant chaque unité à l'ouverture. `net_outlet` : ce qu'une unité rapporte net d'un lot entier
+  (valeur de la dernière unité, trajet partagé) pour les teneurs ;
+- orchestrator `brain_arbitrage` : une passe toutes les 600 s par bot
+  (hors Iron, hors teneur en cotation), une offre d'achat à la fois
+  (motif `arbitrage`, nouveau, horizon 6000 ticks), retirée à son horizon
+  ou pour un lot d'un autre objet ; un objet dont l'alchimie paie mieux
+  est laissé à la passe d'alchimie (`brain_alch`, qui achetait déjà pour
+  alcher), le meilleur lot magasin d'un autre objet est pris ; le lot
+  déclaré (`brain_npc_sale::note_arbitrage`) ne compte que les unités
+  vraiment achetées (deals de l'offre) : les AUTRES bots les lisent comme
+  déjà vendues à ce magasin (jamais deux bots sur le stock de base d'un
+  même magasin) ; la passe de vente envoie au magasin les seules unités
+  achetées par l'arbitrage quel que soit le surstock et les juge sur le
+  produit entier du magasin, le reste du tas suit la règle normale
+  (`brain_sales`, `shop_split`) ;
+- teneurs (`lifescape_market::maker`, champ `outlet`) : l'exutoire net
+  (magasin au stock probable, trajet partagé sur ce que leurs plafonds de
+  risque laissent détenir, à leur valeur du temps) est un acheteur à ce
+  prix : sans autre demande il EST la juste valeur (plus de descente du
+  bid vers 1), sinon la juste valeur n'est jamais dessous (pour
+  ACHETER) ; aucun plancher sur l'ask (utilisateur : aucun plancher, ni
+  magasin ni alchimie ; la baisse de 10 % vaut pour tous) ; mené par
+  l'exutoire, le stock au-delà d'un lot part au magasin. La valeur brute
+  du magasin (`outside`) n'est toujours pas un prix.
+Une seule valeur du temps : `brain_reserve::coins_per_tick` (meilleure
+méthode propre au dernier prix de vente, un second taux) est supprimé ;
+`OwnCosts::load` reçoit le taux D1, lu AVANT de verrouiller le store
+(sa mise à jour verrouille le store : risque d'interblocage) ; ses
+lecteurs (réserve vendeur, trajet marchand de `brain_sales`, butin laissé
+au sol, outils de la trousse, `seller_quote`) lisent tous
+`brain_d17::coin_rate`.
+Rejeté : un plancher de prix au niveau du magasin (contraire à « aucun
+plancher ») ; un but `Obtain` dans le graphe (une jambe de production
+aurait pu couper des ifs au lieu d'acheter, et le plafond d'achat
+suivait la bourse, pas l'exutoire). Détails : `docs/economy.md`
+§ « Arbitrage marchand ouvert à tous ».
 
 ## 2026-11-17 — Financement des teneurs par dons en jeu (`fund-makers`)
 

@@ -13,6 +13,13 @@
 //!
 //! The coins the shops pay are new money: the coin ledger tags them
 //! `shop_sold`, `orchestrator economy` prints them (Q3 tracking).
+//!
+//! Merchant arbitrage (plan équilibre D2, `brain_arbitrage`): a lot bought
+//! on the market for a shop is filed here (`note_arbitrage`) until its
+//! trip leaves; the other bots read its units as sold there
+//! (`fleet_sales_for`), the selling pass sends it to the shop whatever
+//! its stock, for the units it bought (`arbitrage_units`, `shop_split`). The market makers' outlet is what a
+//! unit nets there over a lot, the trip paid (`net_shop_outlet`).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -31,6 +38,10 @@ pub struct SaleLine {
     pub qty: i64,
     pub min_unit: i64,
     pub value: i64,
+    /// Units of the line bought for the shop (merchant arbitrage, D2):
+    /// priced on the shop's whole proceeds, the trip counts them all; the
+    /// other units count their gain over the market.
+    pub whole: i64,
 }
 
 /// One shop trip: the shop key, its keeper site, the lots.
@@ -42,10 +53,18 @@ pub struct ShopSalePlan {
 }
 
 impl ShopSalePlan {
-    /// Coins gained over the market (first-unit value, an upper bound:
-    /// the script stops at each line's minimum).
+    /// Coins the trip is worth (first-unit value, an upper bound: the
+    /// script stops at each line's minimum): the units bought for the shop
+    /// (`whole`) the shop's whole proceeds (priced on them, never left
+    /// banked), every other unit its gain over the market.
     pub fn gain(&self) -> i64 {
-        self.lines.iter().map(|line| (line.value - line.min_unit + 1).max(0) * line.qty).sum()
+        self.lines
+            .iter()
+            .map(|line| {
+                let whole = line.whole.clamp(0, line.qty.max(0));
+                line.value.max(0) * whole + (line.value - line.min_unit + 1).max(0) * (line.qty - whole)
+            })
+            .sum()
     }
 
     /// `market cleanup` arguments of the trip.
@@ -62,16 +81,46 @@ impl ShopSalePlan {
 /// A candidate lot: object, free units, what the market pays per unit.
 pub type Candidate = (String, i64, i64);
 
+/// How a free pile splits between the shop trip and the market listing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShopSplit {
+    /// Units for the shop trip.
+    pub to_shop: i64,
+    /// Of them, units the arbitrage bought (whole proceeds).
+    pub whole: i64,
+    /// Units left to the market listing.
+    pub to_market: i64,
+}
+
+/// Pure (merchant arbitrage, D2): a free pile of `qty` units, `bought` of
+/// them bought for a shop, the shop paying more than the market or not.
+/// The bought units (never more than the pile) go to the shop whatever
+/// the overstock rule and count their whole proceeds; the rest of the
+/// pile follows the normal rule: the shop unless `rest_overstocked`, else
+/// the market. The market pays more: all of it to the market.
+pub fn shop_split(qty: i64, bought: i64, rest_overstocked: bool, shop_beats_market: bool) -> ShopSplit {
+    let qty = qty.max(0);
+    if !shop_beats_market {
+        return ShopSplit { to_shop: 0, whole: 0, to_market: qty };
+    }
+    let whole = bought.clamp(0, qty);
+    let rest = qty - whole;
+    let to_shop = whole + if rest_overstocked { 0 } else { rest };
+    ShopSplit { to_shop, whole, to_market: qty - to_shop }
+}
+
 /// The trip (pure): per shop, the lots it pays more for than the market;
-/// the shop with the largest gain, its keeper site nearest `position`
-/// (x, z, level). `None` when nothing beats the market or the gain is
-/// under `min_gain` coins.
-pub fn plan_shop_sale(candidates: &[Candidate], position: Option<(i64, i64, i64)>, min_gain: i64, shops_of: &dyn Fn(&str) -> Vec<lifescape_gamedata::shop_sale::SaleShop>) -> Option<ShopSalePlan> {
+/// the shop with the largest gain (`ShopSalePlan::gain`: the units of
+/// `whole_units` bought for a shop count their whole proceeds), its
+/// keeper site nearest `position` (x, z, level). `None` when nothing
+/// beats the market or the gain is under `min_gain` coins.
+pub fn plan_shop_sale(candidates: &[Candidate], position: Option<(i64, i64, i64)>, min_gain: i64, whole_units: &[(String, i64)], shops_of: &dyn Fn(&str) -> Vec<lifescape_gamedata::shop_sale::SaleShop>) -> Option<ShopSalePlan> {
     let mut by_shop: HashMap<String, (Vec<(i64, i64, i64)>, Vec<SaleLine>)> = HashMap::new();
     for (item, qty, pays) in candidates.iter().filter(|(_, qty, _)| *qty > 0) {
+        let whole = whole_units.iter().filter(|(name, _)| name == item).map(|(_, units)| *units).sum::<i64>();
         for shop in shops_of(item).into_iter().filter(|shop| shop.value > *pays) {
             let entry = by_shop.entry(shop.shop.clone()).or_insert_with(|| (shop.sites.clone(), Vec::new()));
-            entry.1.push(SaleLine { item: item.clone(), qty: *qty, min_unit: pays + 1, value: shop.value });
+            entry.1.push(SaleLine { item: item.clone(), qty: *qty, min_unit: pays + 1, value: shop.value, whole });
         }
     }
     let distance = |site: &(i64, i64, i64)| match position {
@@ -250,12 +299,185 @@ pub fn note(account: &str, plan: ShopSalePlan) {
 
 /// Takes the account's pending trip (the janitor launch) and remembers it
 /// as sent under the janitor node `node_id` that carries it: its sales
-/// read back into the shop's likely stock.
+/// read back into the shop's likely stock. The account's arbitrage lots
+/// of the trip's objects are on their way now: the trip counts them.
 pub fn take(account: &str, node_id: &str) -> Option<ShopSalePlan> {
     let plan = pending().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(account)?;
     let trip = SentTrip { account: account.to_string(), shop: plan.shop.clone(), launched: unix_now(), node_id: node_id.to_string(), items: plan.lines.iter().map(|line| (line.item.clone(), line.qty)).collect() };
     sent().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(trip);
+    arbitrage_lots().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).retain(|lot| lot.account != account || !plan.lines.iter().any(|line| line.item == lot.item));
     Some(plan)
+}
+
+/// One merchant arbitrage lot (plan équilibre D2, `brain_arbitrage`):
+/// units really bought on the market for `shop` (its bid's own deals,
+/// never the units it asked for) plus the units of the earlier lot still
+/// carried. Until the account's shop trip carries them, every OTHER bot
+/// reads them as already sold there (several bots never flood one shop
+/// on its base stock); the buyer itself does not (they are its trip).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArbitrageInFlight {
+    pub account: String,
+    pub shop: String,
+    pub item: String,
+    /// The object's book id (its deals are read by it).
+    pub item_id: i64,
+    /// Units of the account's earlier lot of the object, still held.
+    pub carried: i64,
+    /// Units the bid bought (its deals since `since`).
+    pub bought: i64,
+    /// Unix seconds (the store clock) of the bid.
+    pub since: i64,
+    /// The bid still rests on the book.
+    pub resting: bool,
+}
+
+impl ArbitrageInFlight {
+    /// Units on their way to the shop.
+    pub fn units(&self) -> i64 {
+        self.carried.max(0) + self.bought.max(0)
+    }
+}
+
+/// A lot whose trip never left is forgotten after this long (the trip
+/// report window).
+pub const ARBITRAGE_MEMORY_SECS: i64 = TRIP_REPORT_SECS;
+
+fn arbitrage_lots() -> &'static Mutex<Vec<ArbitrageInFlight>> {
+    static TABLE: OnceLock<Mutex<Vec<ArbitrageInFlight>>> = OnceLock::new();
+    TABLE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn live_arbitrage() -> Vec<ArbitrageInFlight> {
+    let now = unix_now();
+    let mut table = arbitrage_lots().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    table.retain(|lot| now - lot.since <= ARBITRAGE_MEMORY_SECS);
+    table.clone()
+}
+
+/// Pure: files `lot` in `table`, replacing the account's lot of the same
+/// object (one bid per object; the caller carries its units over).
+pub fn note_in(table: &mut Vec<ArbitrageInFlight>, lot: ArbitrageInFlight) {
+    table.retain(|known| known.account != lot.account || known.item != lot.item);
+    table.push(lot);
+}
+
+/// Pure: the account's lot of `item` now holds `bought` units of its bid;
+/// `resting` false once the bid left the book: a lot with nothing bought
+/// nor carried is then dropped (no phantom units).
+pub fn settle_in(table: &mut Vec<ArbitrageInFlight>, account: &str, item: &str, bought: i64, resting: bool) {
+    for lot in table.iter_mut().filter(|lot| lot.account == account && lot.item == item) {
+        lot.bought = bought.max(0);
+        lot.resting = resting;
+    }
+    table.retain(|lot| lot.account != account || lot.item != item || lot.resting || lot.units() > 0);
+}
+
+/// Pure: the account's lots holding units, as (object, units).
+pub fn units_in(table: &[ArbitrageInFlight], account: &str) -> Vec<(String, i64)> {
+    table.iter().filter(|lot| lot.account == account && lot.units() > 0).map(|lot| (lot.item.clone(), lot.units())).collect()
+}
+
+/// Pure: units `account` bought of the book `item_id` since `since`
+/// (store clock), failed deals left out: what its arbitrage bid filled.
+pub fn bought_since(deals: &[lifescape_store::Deal], account: &str, item_id: i64, since: i64) -> i64 {
+    deals
+        .iter()
+        .filter(|deal| deal.buyer == account && deal.status != lifescape_store::DealStatus::Failed && crate::market_audit::book_item(deal.item_id) == item_id && deal.created_clock >= since)
+        .map(|deal| deal.quantity.max(0))
+        .sum()
+}
+
+/// Files the account's arbitrage lot (`note_in`).
+pub fn note_arbitrage(lot: ArbitrageInFlight) {
+    note_in(&mut arbitrage_lots().lock().unwrap_or_else(|poisoned| poisoned.into_inner()), lot);
+}
+
+/// Updates the account's lot of `item` (`settle_in`).
+pub fn settle_arbitrage(account: &str, item: &str, bought: i64, resting: bool) {
+    settle_in(&mut arbitrage_lots().lock().unwrap_or_else(|poisoned| poisoned.into_inner()), account, item, bought, resting);
+}
+
+/// The account's lots (live ones).
+pub fn own_arbitrage(account: &str) -> Vec<ArbitrageInFlight> {
+    live_arbitrage().into_iter().filter(|lot| lot.account == account).collect()
+}
+
+/// Units the account bought to sell to a merchant, per object (units
+/// really bought, plus its earlier lot still carried), their trip not
+/// sent yet: the selling pass sends THOSE units to the shop whatever the
+/// overstock rule, on the shop's whole proceeds (`shop_split`; they were
+/// priced unit by unit on its likely stock); the rest of the pile follows
+/// the normal rule.
+pub fn arbitrage_units(account: &str) -> Vec<(String, i64)> {
+    units_in(&live_arbitrage(), account)
+}
+
+/// Pure: `sales` plus every lot in flight of ANOTHER account than
+/// `account`, as units sold there now.
+pub fn with_others_arbitrage(mut sales: ShopSales, lots: &[ArbitrageInFlight], account: &str) -> ShopSales {
+    for lot in lots.iter().filter(|lot| lot.account != account && lot.units() > 0) {
+        sales.entry((lot.shop.clone(), lot.item.clone())).or_default().push((lot.units(), 0));
+    }
+    sales
+}
+
+/// The fleet's recent sales as `account` reads them: the trips sent
+/// (`load_fleet_sales`) and the other accounts' arbitrage lots in flight.
+pub fn fleet_sales_for(service: &crate::market_service::MarketService, account: &str) -> ShopSales {
+    with_others_arbitrage(load_fleet_sales(service), &live_arbitrage(), account)
+}
+
+/// What `shop` likely pays for the unit of rank `rank` of a lot of
+/// `item`, `ahead` units of the same seller landing before it: the
+/// server's stock-based price at its likely stock (`sales`) plus them.
+pub fn shop_unit_value(shop: &str, item: &str, sales: &ShopSales, ahead: i64, rank: i64) -> Option<i64> {
+    let sold = sales.get(&(shop.to_string(), item.to_string())).map(Vec::as_slice).unwrap_or(&[]);
+    let held = lifescape_gamedata::shop_sale::likely_held(shop, item, sold);
+    lifescape_gamedata::shop_sale::unit_value_floor(shop, item, held + ahead.max(0) + rank.max(0))
+}
+
+/// What `shop` likely pays for each unit of a lot of `item` (rank 0
+/// first), `ahead` units landing before it: the values down to the
+/// shop's floor (`calc_shop_value` stops falling there), at most
+/// `max_units` of them; a rank past the end pays the last value. `None`:
+/// the shop does not buy it. A few reads of the game data (shop list,
+/// keeper deltas) per object, never one per unit, and no store read (the
+/// arbitrage pass weighs every object an open shop buys).
+pub fn shop_ladder(shop: &str, item: &str, sales: &ShopSales, ahead: i64, max_units: i64) -> Option<Vec<i64>> {
+    let sold = sales.get(&(shop.to_string(), item.to_string())).map(Vec::as_slice).unwrap_or(&[]);
+    let held = lifescape_gamedata::shop_sale::likely_held(shop, item, sold) + ahead.max(0);
+    let floor = lifescape_gamedata::shop_sale::unit_value_floor(shop, item, held + i64::from(i32::MAX))?;
+    let mut values = Vec::new();
+    for rank in 0..max_units.max(1) {
+        let value = lifescape_gamedata::shop_sale::unit_value_floor(shop, item, held + rank)?;
+        values.push(value);
+        if value <= floor {
+            break;
+        }
+    }
+    Some(values)
+}
+
+/// The value of rank `rank` on a `shop_ladder` (the last value past its
+/// end, 0 for an empty ladder).
+pub fn ladder_value(ladder: &[i64], rank: i64) -> i64 {
+    usize::try_from(rank).ok().and_then(|index| ladder.get(index)).or(ladder.last()).copied().unwrap_or(0)
+}
+
+/// What one unit of `item` nets a seller sending `units` of them to the
+/// best open shop at its likely stock (`sales`), the trip shared over
+/// them at `coin_rate` (`merchant_arbitrage::net_outlet`): the market
+/// makers' outlet (D2). `None` when no shop nets a coin.
+pub fn net_shop_outlet(item: &str, sales: &ShopSales, units: i64, coin_rate: f64) -> Option<i64> {
+    let units = units.max(1);
+    lifescape_gamedata::shop_sale::npc_sale_shops(item)
+        .iter()
+        .filter_map(|shop| {
+            let last = shop_unit_value(&shop.shop, item, sales, 0, units - 1)?;
+            lifescape_planner::merchant_arbitrage::net_outlet(last as f64, lifescape_planner::merchant_arbitrage::SHOP_SELL_TICKS_PER_UNIT, SHOP_TRIP_TICKS, coin_rate, units)
+        })
+        .max()
 }
 
 /// Drops a trip the last selling pass no longer backs.
@@ -309,13 +531,13 @@ mod tests {
     #[test]
     fn the_trip_carries_only_what_the_market_pays_less_for() {
         let candidates = vec![("iron_dagger".to_string(), 40, 0), ("bronze_med_helm".to_string(), 80, 12), ("feather".to_string(), 5000, 1)];
-        let plan = plan_shop_sale(&candidates, Some((3220, 3218, 0)), 100, &shops).expect("daggers pay the trip");
+        let plan = plan_shop_sale(&candidates, Some((3220, 3218, 0)), 100, &[], &shops).expect("daggers pay the trip");
         assert_eq!(plan.shop, "generalshop1", "Lumbridge is nearer than Falador");
-        assert_eq!(plan.lines, vec![SaleLine { item: "iron_dagger".to_string(), qty: 40, min_unit: 1, value: 14 }], "helms fetch 12 on the market: never sold for 9");
+        assert_eq!(plan.lines, vec![SaleLine { item: "iron_dagger".to_string(), qty: 40, min_unit: 1, value: 14, whole: 0 }], "helms fetch 12 on the market: never sold for 9");
         assert_eq!(plan.args()[..4], ["--sale-shop", "generalshop1", "--sale-site", "3212,3246,0"]);
         assert!(plan.args().contains(&"iron_dagger:40:1".to_string()));
-        assert_eq!(plan_shop_sale(&candidates, None, 10_000, &shops), None, "a trip that does not pay waits");
-        assert_eq!(plan_shop_sale(&[("bronze_med_helm".to_string(), 80, 12)], None, 1, &shops), None);
+        assert_eq!(plan_shop_sale(&candidates, None, 10_000, &[], &shops), None, "a trip that does not pay waits");
+        assert_eq!(plan_shop_sale(&[("bronze_med_helm".to_string(), 80, 12)], None, 1, &[], &shops), None);
     }
 
     /// Live 2026-11-19 (54 shop trips, 743 lots of the day stopped at
@@ -338,16 +560,121 @@ mod tests {
         let fresh = |item: &str| shops_at_likely_stock(item, &sales);
         let taxfree_now = fresh("mithril_platebody").into_iter().find(|shop| shop.shop == "taxfree").map(|shop| shop.value);
         assert_eq!(taxfree_now, Some(1092), "13 just sold: taxfree's next unit pays (600 - 390) x 5.2");
-        if let Some(plan) = plan_shop_sale(&candidates, Some((3092, 3243, 0)), 1, &fresh) {
+        if let Some(plan) = plan_shop_sale(&candidates, Some((3092, 3243, 0)), 1, &[], &fresh) {
             assert_ne!(plan.shop, "taxfree", "never a trip whose first unit pays under 1212");
             assert!(plan.lines.iter().all(|line| line.value >= line.min_unit), "{plan:?}");
         }
         let later = fleet_sales(&trips, &reports, 1030 + 3000, 600);
         let rested = |item: &str| shops_at_likely_stock(item, &later);
-        let plan = plan_shop_sale(&candidates, Some((3092, 3243, 0)), 1, &rested).expect("restocked down: the trip pays again");
+        let plan = plan_shop_sale(&candidates, Some((3092, 3243, 0)), 1, &[], &rested).expect("restocked down: the trip pays again");
         assert_eq!(plan.lines[0].value, 3120, "a base-stock first unit (Horvik pays as much, nearer)");
         assert_eq!(rested("mithril_platebody").into_iter().find(|shop| shop.shop == "taxfree").map(|shop| shop.value), Some(3120), "taxfree back to its base");
         assert_eq!(shops_at_likely_stock("mithril_platebody", &ShopSales::new()).first().map(|shop| shop.value), Some(3120), "no sale: the base stock");
+    }
+
+    /// Plan équilibre D2: a merchant arbitrage lot in flight counts at
+    /// its shop for every other bot (its units sold now: a second buyer
+    /// reads the floor, never the base stock), never for its own buyer
+    /// (the units are its trip). The makers' outlet nets the trip.
+    #[test]
+    fn an_arbitrage_lot_in_flight_counts_for_the_others_only() {
+        let shop = lifescape_gamedata::shop_sale::npc_sale_shops("yew_logs").into_iter().next().expect("a shop buys yew logs").shop;
+        let lots = vec![ArbitrageInFlight { account: "carl_miller".to_string(), shop: shop.clone(), item: "yew_logs".to_string(), item_id: 1515, carried: 0, bought: 300, since: 1000, resting: false }];
+        let others = with_others_arbitrage(ShopSales::new(), &lots, "amber_moore");
+        assert_eq!(others.get(&(shop.clone(), "yew_logs".to_string())), Some(&vec![(300, 0)]));
+        assert!(with_others_arbitrage(ShopSales::new(), &lots, "carl_miller").is_empty(), "its own lot is its trip");
+        let base = shop_unit_value(&shop, "yew_logs", &ShopSales::new(), 0, 0).expect("the shop buys");
+        assert!(base > 16, "base stock: {base}");
+        assert_eq!(shop_unit_value(&shop, "yew_logs", &others, 0, 0), Some(16), "300 logs ahead: the floor");
+        assert_eq!(shop_unit_value(&shop, "yew_logs", &ShopSales::new(), 300, 0), Some(16), "its own units ahead too");
+        assert_eq!(net_shop_outlet("yew_logs", &others, 500, 0.28), Some(15), "16 less the trip shared over 500 logs");
+        assert_eq!(net_shop_outlet("yew_logs", &others, 500, 20.0), None, "a dear trip nets nothing");
+    }
+
+    /// Review lot 5: a lot counts the units its bid really bought, never
+    /// the units it asked for. A bid that buys nothing and is withdrawn
+    /// leaves no lot (no phantom stock at the shop for the others, no
+    /// overstock exemption for the buyer); a partly filled one keeps what
+    /// it bought; units carried from the earlier lot count.
+    #[test]
+    fn an_arbitrage_lot_counts_only_what_its_bid_bought() {
+        let lot = |account: &str, carried: i64| ArbitrageInFlight { account: account.to_string(), shop: "generalshop1".to_string(), item: "yew_logs".to_string(), item_id: 1515, carried, bought: 0, since: 1000, resting: true };
+        let key = ("generalshop1".to_string(), "yew_logs".to_string());
+        let mut table = Vec::new();
+        note_in(&mut table, lot("carl_miller", 0));
+        assert!(with_others_arbitrage(ShopSales::new(), &table, "amber_moore").is_empty(), "1000 asked, nothing bought yet: nothing at the shop");
+        assert!(units_in(&table, "carl_miller").is_empty(), "no overstock exemption for an unfilled bid");
+        settle_in(&mut table, "carl_miller", "yew_logs", 300, true);
+        assert_eq!(with_others_arbitrage(ShopSales::new(), &table, "amber_moore").get(&key), Some(&vec![(300, 0)]));
+        assert_eq!(units_in(&table, "carl_miller"), vec![("yew_logs".to_string(), 300)]);
+        settle_in(&mut table, "carl_miller", "yew_logs", 300, false);
+        assert_eq!(table.len(), 1, "withdrawn after 300 bought: the 300 stay in flight");
+        note_in(&mut table, lot("wolfe_carl", 0));
+        settle_in(&mut table, "wolfe_carl", "yew_logs", 0, false);
+        assert!(table.iter().all(|lot| lot.account != "wolfe_carl"), "withdrawn with nothing bought: dropped");
+        note_in(&mut table, lot("carl_miller", 300));
+        assert_eq!(table.len(), 1, "one lot per object: the new bid replaces it, the 300 carried");
+        assert_eq!(with_others_arbitrage(ShopSales::new(), &table, "amber_moore").get(&key), Some(&vec![(300, 0)]));
+        let deal = |buyer: &str, item_id: i64, quantity: i64, created_clock: i64| lifescape_store::Deal {
+            deal_id: 1,
+            buyer: buyer.to_string(),
+            seller: "woodcutter".to_string(),
+            item_id,
+            quantity,
+            price: 1,
+            meeting_x: 0,
+            meeting_y: 0,
+            meeting_level: 0,
+            status: lifescape_store::DealStatus::Matched,
+            fail_reason: String::new(),
+            deadline_tick: 0,
+            created_clock,
+            updated_clock: created_clock,
+            taker_side: None,
+        };
+        let deals = vec![deal("carl_miller", 1515, 200, 999), deal("carl_miller", 1515, 120, 1000), deal("carl_miller", 1515, 80, 1200), deal("carl_miller", 1513, 50, 1200), deal("amber_moore", 1515, 70, 1200)];
+        assert_eq!(bought_since(&deals, "carl_miller", 1515, 1000), 200, "its own buys of that object since the bid");
+    }
+
+    /// Review lot 5: an arbitrage lot was priced on what the shop pays for
+    /// all of it, not on its gain over the market: a maker bids 14, the
+    /// shop pays 16, the 200 logs still pay the trip (3 200 coins against
+    /// 420) and never wait in the bank; a lot of plain surplus still needs
+    /// its gain over the market (400 < 420).
+    #[test]
+    fn an_arbitrage_lot_pays_its_trip_on_its_whole_proceeds() {
+        let shops = |item: &str| match item {
+            "yew_logs" => vec![SaleShop { shop: "generalshop1".to_string(), value: 16, sites: vec![(3212, 3246, 0)], ..SaleShop::default() }],
+            _ => Vec::new(),
+        };
+        let candidates = vec![("yew_logs".to_string(), 200, 14)];
+        assert_eq!(plan_shop_sale(&candidates, None, 420, &[], &shops), None, "surplus: 2 a log over the market, 400 < 420");
+        let plan = plan_shop_sale(&candidates, None, 420, &[("yew_logs".to_string(), 200)], &shops).expect("bought for the shop: it goes");
+        assert_eq!(plan.gain(), 3200);
+        assert_eq!(plan.lines[0].min_unit, 15, "never a log under what the market pays + 1");
+    }
+
+    /// Re-review lot 5: only the units the arbitrage BOUGHT escape the
+    /// overstock rule and count their whole proceeds. A woodcutter holds
+    /// 5000 logs it cut, its arbitrage bid bought 50 at 1: those 50 go to
+    /// the shop whatever the overstock, the 4950 others follow the normal
+    /// rule (overstocked: the market); a pile the trip carries counts 50 x
+    /// 16 + 4950 x its gain over the market, never 5000 x 16.
+    #[test]
+    fn only_the_units_bought_for_the_shop_escape_the_surplus_rules() {
+        assert_eq!(shop_split(5000, 50, true, true), ShopSplit { to_shop: 50, whole: 50, to_market: 4950 }, "the 4950 cut logs are overstock");
+        assert_eq!(shop_split(5000, 50, false, true), ShopSplit { to_shop: 5000, whole: 50, to_market: 0 }, "not overstocked: all go, 50 of them whole");
+        assert_eq!(shop_split(5000, 0, true, true), ShopSplit { to_shop: 0, whole: 0, to_market: 5000 }, "nothing bought: the normal rule");
+        assert_eq!(shop_split(30, 50, true, true), ShopSplit { to_shop: 30, whole: 30, to_market: 0 }, "never more than the pile");
+        assert_eq!(shop_split(5000, 50, true, false), ShopSplit { to_shop: 0, whole: 0, to_market: 5000 }, "the market pays more: the market");
+        let shops = |item: &str| match item {
+            "yew_logs" => vec![SaleShop { shop: "generalshop1".to_string(), value: 16, sites: vec![(3212, 3246, 0)], ..SaleShop::default() }],
+            _ => Vec::new(),
+        };
+        let pile = vec![("yew_logs".to_string(), 5000, 14)];
+        let plan = plan_shop_sale(&pile, None, 420, &[("yew_logs".to_string(), 50)], &shops).expect("a trip");
+        assert_eq!(plan.gain(), 50 * 16 + 4950 * 2, "never 5000 x 16");
+        assert_eq!(plan.lines[0].whole, 50);
     }
 
     /// Lot 8 review: a trip launched and not reported yet (the Bandit Camp

@@ -261,7 +261,8 @@ pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value
 /// What the run of a money or coin node brings to the market (plan
 /// équilibre step 2): its product and units. A 100 % market lot its lot
 /// (`node.batch`, products); a recipe on its own stock its lot of
-/// actions times the products an action yields; any other method its
+/// actions times the products an action yields (a filler window: at
+/// most what its budget makes at its measured rate); any other method its
 /// units per 6000 ticks measured for the bot (`per_6000(method,
 /// product)`) over the run's `budget_ticks`. `None`: nothing for the
 /// market (alchemy and coins, a fight without a product, no rate).
@@ -280,7 +281,11 @@ pub fn run_claim(node: &Node, method: &str, budget_ticks: u64, per_6000: &dyn Fn
     } else if stock_lot && node.batch > 0 {
         let (_, way) = lifescape_planner::method_way::method_way(recipe)?;
         let out = if way.expected_out() > 0.0 { way.expected_out() } else { 1.0 };
-        (node.batch as f64 * out).floor() as i64
+        let lot = (node.batch as f64 * out).floor() as i64;
+        // A filler window stops at its budget (review lot 3, point 3):
+        // what it makes at its measured rate, never more than its lot.
+        let window = crate::brain_filler::is_filler_node(&node.id).then(|| per_6000(method, &product)).flatten();
+        window.map_or(lot, |rate| lot.min(crate::market_claims::run_units(rate, budget_ticks as f64)))
     } else {
         crate::market_claims::run_units(per_6000(method, &product)?, budget_ticks as f64)
     };

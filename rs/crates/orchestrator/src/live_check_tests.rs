@@ -223,7 +223,7 @@ fn live_check() {
                     nodes[0].deps.push(id.clone());
                     nodes.push(lifescape_planner::Node::new(&id, lifescape_planner::NodeKind::ObtainItems { item: input.clone(), count: qty * lot.count }, Vec::new(), qty * lot.count));
                 }
-                let value_of = |item: &str| reader.view(item).and_then(|view| view.best_bid().max(view.current)).map(|price| price as f64);
+                let value_of = |item: &str| lifescape_planner::derived_demand::product_value(reader.view(item).as_ref(), lifescape_planner::derived_demand::product_lot(&nodes, item));
                 let input_price = |item: &str| reader.view(item).and_then(|view| view.best_ask().or(view.current)).unwrap_or(1) as f64;
                 let prices = lifescape_planner::derived_demand::DerivedPrices { value_of: &value_of, input_price: &input_price, units_per_6000: &units, coin_rate: rate };
                 let coins = held("coins");

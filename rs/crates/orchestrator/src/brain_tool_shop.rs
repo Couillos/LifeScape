@@ -133,10 +133,8 @@ impl KitView {
             let offer = lifescape_planner::tool_upgrade::cheapest(lifescape_planner::tool_kit::kit_price(&tier), ask, make);
             offers.insert(tier, offer);
         }
-        let coin_rate = service
-            .as_ref()
-            .map(|service| crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account).coins_per_tick)
-            .unwrap_or(lifescape_planner::market_fit::MIN_COIN_RATE);
+        // The bot's time value (D1): what its work really earns per tick.
+        let coin_rate = crate::brain_d17::coin_rate(&job.account);
         KitView {
             offers,
             axe_work: lifescape_planner::tool_upgrade::planned_work(life, "bronze_axe", &level_u8),

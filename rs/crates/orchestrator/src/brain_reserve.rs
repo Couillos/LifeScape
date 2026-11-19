@@ -24,10 +24,14 @@
 //!   graph, per unit), else the planner's cold-start rate of the
 //!   gathering leg (`method_rate`, the game prior). Nothing at all: no
 //!   time cost.
-//! - coins per tick: the best of the bot's own methods, measured as
-//!   (coins looted or shop-sold + units it farmed x its OWN last sale
-//!   price of them) / ticks, never under `market_fit::MIN_COIN_RATE`
-//!   (0.1: never free time, the floor `bid_response` prices with).
+//! - coins per tick: the bot's time value (plan équilibre D1, the ONE
+//!   rate of the brain): what its work really earned per tick of work
+//!   (`brain_d17::coin_rate`, `time_value`), never under
+//!   `market_fit::MIN_COIN_RATE`. Read by the caller BEFORE it locks the
+//!   store (its refresh locks the store: a read under the lock would
+//!   deadlock) and handed to `OwnCosts::load`. The second rate this file
+//!   measured (the best own method at its own last sale price) is gone
+//!   (lot 5, 2026-11-19).
 //! - a unit it BOUGHT costs at least its own last purchase price.
 //! - never over what MAKING it costs the bot as `bid_response` prices a
 //!   bid quota (`bid_response::production_cost`: coins + ticks at the
@@ -201,53 +205,6 @@ pub fn measured_inputs_per_unit(reports: &[OwnReport], display: &str, weight: &d
     inputs
 }
 
-/// Best measured coins per tick over the bot's own methods: coins
-/// looted or shop-sold, plus the units it farmed (net of what it sold to
-/// a shop in that report) at its own last sale price. `None` below one
-/// coin earned.
-pub fn measured_coins_per_tick(reports: &[OwnReport], own_sale: &dyn Fn(&str) -> Option<i64>) -> Option<f64> {
-    let mut by_method: Vec<(String, f64, i64)> = Vec::new();
-    for report in reports.iter().filter(|report| counted(report)) {
-        let mut coins = 0.0;
-        for line in &report.lines {
-            if coin_gain(line) {
-                coins += line.quantity as f64;
-            } else if farm_line(line) && !crate::brain_reserve::is_coins(&line.item) {
-                let shop_sold: i64 = report
-                    .lines
-                    .iter()
-                    .filter(|other| other.provenance == "shop_sold" && other.quantity < 0 && other.item.eq_ignore_ascii_case(&line.item))
-                    .map(|other| -other.quantity)
-                    .sum();
-                let kept = (line.quantity - shop_sold).max(0);
-                coins += kept as f64 * own_sale(&line.item).unwrap_or(0).max(0) as f64;
-            } else if input_line(line) {
-                // A processing run nets its inputs at their own sale
-                // price: forging bars is worth the helms minus the bars.
-                coins += line.quantity as f64 * own_sale(&line.item).unwrap_or(0).max(0) as f64;
-            }
-        }
-        match by_method.iter_mut().find(|(method, _, _)| *method == report.method) {
-            Some(entry) => {
-                entry.1 += coins;
-                entry.2 += report.ticks;
-            }
-            None => by_method.push((report.method.clone(), coins, report.ticks)),
-        }
-    }
-    by_method
-        .into_iter()
-        .filter(|(_, coins, ticks)| *coins >= 1.0 && *ticks > 0)
-        .map(|(_, coins, ticks)| coins / ticks as f64)
-        .fold(None, |best: Option<f64>, rate| Some(best.map_or(rate, |known| known.max(rate))))
-}
-
-/// The bot's coins per tick: its best measured method, never under the
-/// shared floor `market_fit::MIN_COIN_RATE` (one tick is never free).
-pub fn coins_per_tick(reports: &[OwnReport], own_sale: &dyn Fn(&str) -> Option<i64>) -> f64 {
-    measured_coins_per_tick(reports, own_sale).unwrap_or(0.0).max(lifescape_planner::market_fit::MIN_COIN_RATE)
-}
-
 /// Planner estimate from the bot's own graph: the cheapest farm way of an
 /// obtain node of `item` (debug name), its `est_ticks` per unit.
 pub fn planned_ticks_per_unit(life: &Life, item: &str) -> Option<f64> {
@@ -380,15 +337,12 @@ pub struct OwnCosts {
 }
 
 impl OwnCosts {
-    /// Reads the account's own reports and own sale prices.
-    pub fn load(store: &Store, account: &str) -> OwnCosts {
+    /// Reads the account's own reports; `coins_per_tick` is its time
+    /// value (`brain_d17::coin_rate`, read before the store was locked),
+    /// floored at `market_fit::MIN_COIN_RATE`.
+    pub fn load(store: &Store, account: &str, coins_per_tick: f64) -> OwnCosts {
         let reports = own_reports(store.account_reports(account, OWN_REPORTS).unwrap_or_default());
-        let own_sale = |display: &str| {
-            let id = obj_of_display(display)?.obj_id as i64;
-            store.last_own_fill(account, id, false).ok().flatten().map(|(price, _)| crate::market_units::to_unit(id, price))
-        };
-        let coins_per_tick = coins_per_tick(&reports, &own_sale);
-        OwnCosts { account: account.to_string(), reports, coins_per_tick }
+        OwnCosts { account: account.to_string(), reports, coins_per_tick: coins_per_tick.max(lifescape_planner::market_fit::MIN_COIN_RATE) }
     }
 
     /// Reserve of `item` (debug name, obj id `item_id`), capped at

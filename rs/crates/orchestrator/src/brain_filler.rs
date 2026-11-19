@@ -10,9 +10,12 @@
 //!   as before: filled → done, partial → re-resolve, deadline → failure);
 //! - launches the graph's next ready node that is not a parked wait
 //!   (`next_ready_except`);
-//! - with none, runs a FILLER: one short money window (`FILLER_TICKS`),
-//!   coin-dropping spots first (the wait is often a wallet short of a few
-//!   coins), steered off banned skills. Its node (`fill-<id>`) is not in
+//! - with none, runs a FILLER: one short money window (`FILLER_TICKS`)
+//!   chosen like a money node (plan équilibre step 3, `pick_window`: the
+//!   money guide's lines on the shared demand, `money_pick`'s draw, only
+//!   the lines a window works on its own; live 2026-11-19: a fixed list
+//!   made fillers 20 % of the fleet's time, 52 % of it yew logs resting
+//!   at 1 coin), steered off banned skills. Its node (`fill-<id>`) is not in
 //!   the graph: the fold hands its report here (`fold_filler_report`),
 //!   nothing is counted on the graph, but a filler that failed or ended
 //!   without working (live 2026-11-14: `melee men` from the mill top,
@@ -25,6 +28,8 @@
 use std::sync::Arc;
 
 use lifescape_json::Value;
+use lifescape_planner::expand::ReadyCtx;
+use lifescape_planner::guide_pick::GuideLine;
 use lifescape_planner::{Life, Node, NodeKind, NodeStatus};
 
 use crate::brain::push_history;
@@ -35,6 +40,9 @@ use crate::jobs::Job;
 pub const FILLER_TICKS: u64 = 1500;
 /// A failed or empty filler keeps its skill out of the fillers this long.
 pub const FILLER_RETRY_TICKS: u64 = 500;
+/// A refused filler attempt (no work, blocked, no script) is tried again
+/// after this many ticks, never every pass.
+pub const FILLER_REFUSAL_TICKS: u64 = 50;
 /// History prefix of a filler launch (`filler:<method>`).
 pub(crate) const FILLER_LAUNCH_TAG: &str = "filler:";
 /// History prefix of a filler that failed (`filler_failed:<method>`).
@@ -162,6 +170,110 @@ pub(crate) fn settle_parked(job: &Job, life: &mut Life) -> (bool, Vec<String>) {
     (changed, waiting)
 }
 
+/// Why a filler window found no work (typed, logged by the caller,
+/// never a silent idle).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum FillerRefusal {
+    /// Nothing outside the skills of the fillers that just failed is
+    /// workable (`steer_for_work`).
+    NoWork(String),
+    /// The resolve blocked (a tool, a fare, a combat level to train).
+    Blocked(String),
+    /// No money method resolved at all.
+    NoMethod,
+}
+
+impl std::fmt::Display for FillerRefusal {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FillerRefusal::NoWork(reason) => write!(out, "no filler: {reason}"),
+            FillerRefusal::Blocked(reason) => write!(out, "filler blocked: {reason}"),
+            FillerRefusal::NoMethod => write!(out, "no money method workable"),
+        }
+    }
+}
+
+/// What a filler window works: its method, the banned skill it works
+/// through (every workable method banned), and whether the money guide
+/// drew it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FillerPick {
+    pub method: String,
+    pub through: Option<String>,
+    pub from_guide: bool,
+}
+
+/// Last refused filler attempt per account (unix seconds): the next
+/// attempt waits `FILLER_REFUSAL_TICKS` (review lot 3, point 6: each
+/// attempt reads the money guide twice, alchemy and money).
+fn refusals() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, i64>> {
+    static TABLE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, i64>>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(Default::default).lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// True while `account`'s last refused filler is under
+/// `FILLER_REFUSAL_TICKS` old at `now` (unix seconds).
+pub(crate) fn refused_recently(account: &str, now: i64) -> bool {
+    refusals().get(account).is_some_and(|since| crate::brain_stuck::seconds_to_ticks(now - since) < FILLER_REFUSAL_TICKS)
+}
+
+/// A filler attempt of `account` was refused at `now` (unix seconds).
+pub(crate) fn note_refusal(account: &str, now: i64) {
+    refusals().insert(account.to_string(), now);
+}
+
+/// A filler of `account` launched: the next attempt never waits.
+pub(crate) fn clear_refusal(account: &str) {
+    refusals().remove(account);
+}
+
+/// True for a money line a filler window works on its own, at once
+/// (review lot 3): class 0 of `money_pick::class_of` only (tools held,
+/// food in hand where the spot bites: a class 1 fight without food stops
+/// `food_blocked` after the bank, a class 2 line blocks on its tool and
+/// the worker idles the whole wait); never a 100 % market lot (its
+/// purchases are graph nodes a window never places); never a skill of
+/// the fillers that just failed (`failed`: the strict exclusion of
+/// `steer_for_work`, a guide of that skill alone would leave no work).
+/// Quarantined, cooled or quest-gated lines are never drawn anyway.
+pub(crate) fn window_works(line: &GuideLine, ctx: &ReadyCtx, failed: &[String]) -> bool {
+    !lifescape_planner::trade_craft::is_trade(&line.method)
+        && !lifescape_planner::method_banned(&line.method, failed)
+        && lifescape_planner::money_pick::class_of(line, ctx) == Some(0)
+}
+
+/// Resolves a filler window's coin node on `ctx` (levels, tools, wallet,
+/// position, market, quests and draw seed already filled) like a money
+/// node (plan équilibre step 3): `publish` hands the money guide's lines
+/// (the brain's `brain_money::publish`, each line's profit read on the
+/// shared demand at this pick), only the lines a window works on its own
+/// stay (`window_works`), `money_pick` draws. No drawable line: the
+/// static money methods rank, as for every money node (docs/planner.md,
+/// R7), logged by the caller (`FillerPick::from_guide` false). Then the
+/// window steers off the bans (`steer_for_work`).
+pub(crate) fn pick_window(node: &mut Node, ctx: &mut ReadyCtx, publish: &mut dyn FnMut(&mut ReadyCtx, &Node), banned: &[String], failed: &[String]) -> Result<FillerPick, FillerRefusal> {
+    publish(ctx, node);
+    let lines: Vec<GuideLine> = ctx.money_guide.iter().filter(|line| window_works(line, ctx, failed)).cloned().collect();
+    ctx.money_guide = lines;
+    ctx.drawn.borrow_mut().take();
+    lifescape_planner::resolve_ready(node, ctx);
+    let drawn = ctx.drawn.borrow().as_ref().map(|choice| choice.method.clone());
+    let through = match lifescape_planner::steer_for_work(node, ctx, banned, failed) {
+        Ok(lifescape_planner::WorkSteer::ThroughBan(skill)) => Some(skill),
+        Ok(lifescape_planner::WorkSteer::OffBans(_)) => None,
+        Err(reason) => return Err(FillerRefusal::NoWork(reason)),
+    };
+    match (&node.status, node.method.clone()) {
+        (NodeStatus::Blocked { reason }, _) => Err(FillerRefusal::Blocked(reason.clone())),
+        (_, Some(method)) if !method.is_empty() => {
+            // A ban steering may move the window off the drawn line.
+            let from_guide = drawn.as_deref() == Some(method.as_str());
+            Ok(FillerPick { method, through, from_guide })
+        }
+        _ => Err(FillerRefusal::NoMethod),
+    }
+}
+
 /// One filler window while `waiting` rests on the book and the graph has
 /// nothing else ready. Returns true when a run was queued (the caller
 /// saved the life first). Never through a ban; nothing workable is
@@ -170,6 +282,11 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
     let Some(first) = waiting.first() else { return false };
     // A filler just queued: the worker may still read idle (one run at a time).
     if crate::brain_launch::recent_launch(&job.account) {
+        return false;
+    }
+    // A refused attempt is not read again every pass (its reason is
+    // logged once, `note_idle`).
+    if refused_recently(&job.account, now_secs()) {
         return false;
     }
     let coins = crate::brain_plan::holdings_count(job, "coins");
@@ -185,41 +302,51 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
     });
     ctx.crowd = crate::site_crowd::others(&job.account);
     crate::brain_market::fill_ctx(&mut ctx, &node, live);
-    lifescape_planner::resolve_ready(&mut node, &ctx);
+    // Like a money node (plan équilibre step 3): the quests it finished
+    // gate the guide's lines, its draw has its own seed.
+    ctx.quests_done = crate::brain_rescue::quests_done(life);
+    ctx.draw_seed = lifescape_planner::guide_pick::seed_for(life.profile.seed, &node.id, life.memory.draws);
     let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now_secs() - stamp);
     let banned = lifescape_planner::banned_skills(&life.history, &ticks_since);
     // A filler that just failed (or ended without working) sits out,
     // strictly; a goal ban is avoided when anything else works, never a
     // reason to idle (2026-11-14, george_97: "no filler" for a whole ban).
     let failed = failed_filler_skills(life, &ticks_since);
-    let through = match lifescape_planner::steer_for_work(&mut node, &ctx, &banned, &failed) {
-        Ok(lifescape_planner::WorkSteer::ThroughBan(skill)) => Some(skill),
-        Ok(lifescape_planner::WorkSteer::OffBans(_)) => None,
-        Err(reason) => {
-            note_idle(life, &format!("{} awaiting its fill, no filler: {reason}", waiting.join(",")));
+    // The money guide's lines (alchemy of its stock priced for the static
+    // ranking too), never the 100 % market lots (`window_works`).
+    let reader: &Life = life;
+    let mut publish = |ctx: &mut ReadyCtx, node: &Node| {
+        crate::brain_alch::publish(ctx, node, reader, live);
+        crate::brain_money::publish(ctx, node, reader, live, job);
+    };
+    let picked = pick_window(&mut node, &mut ctx, &mut publish, &banned, &failed);
+    let pick = match picked {
+        Ok(pick) => pick,
+        Err(refusal) => {
+            note_idle(life, &format!("{} awaiting its fill, {refusal}", waiting.join(",")));
+            note_refusal(&job.account, now_secs());
             return false;
         }
     };
-    let method = match (&node.status, node.method.clone()) {
-        (NodeStatus::Blocked { reason }, _) => {
-            note_idle(life, &format!("{} awaiting its fill, filler blocked: {reason}", waiting.join(",")));
-            return false;
-        }
-        (_, Some(method)) if !method.is_empty() => method,
-        _ => {
-            note_idle(life, &format!("{} awaiting its fill, no money method workable", waiting.join(",")));
-            return false;
-        }
-    };
+    if !pick.from_guide {
+        crate::logln!("brain {}: {} no money guide line a window works now ({} kept): static money method {}", job.account, node.id, ctx.money_guide.len(), pick.method);
+    }
+    let (method, through) = (pick.method, pick.through);
     let Some((script, mut args)) = lifescape_planner::map_method(&method, &node, Some((0, FILLER_TICKS))) else {
         note_idle(life, &format!("{} awaiting its fill, filler {method} maps to no script", waiting.join(",")));
+        note_refusal(&job.account, now_secs());
         return false;
     };
     if !crate::registry::script_known(&script) {
         note_idle(life, &format!("{} awaiting its fill, filler script {script} unknown", waiting.join(",")));
+        note_refusal(&job.account, now_secs());
         return false;
     }
+    clear_refusal(&job.account);
     crate::site_crowd::note(&job.account, node.site);
+    // The guide's choice, logged and kept under the kind `filler` (its
+    // own pool; the draw counter moves on: the next window draws again).
+    crate::brain_picks::record_filler(life, &node, &ctx, now_secs());
     // Its product goes on the public order board until its report (plan
     // équilibre step 2).
     crate::brain_money::claim_launch(&job.account, &node, &method, Some((0, FILLER_TICKS)), live);

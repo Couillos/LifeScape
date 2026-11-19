@@ -283,6 +283,21 @@ fn a_money_run_claims_what_it_brings() {
     assert_eq!(super::run_claim(&node, "gather:mining/coal", 18_000, &rate), Some(("coal".to_string(), 360)));
 }
 
+/// Review lot 3, point 3: a filler window cooking its 200 raw trout
+/// stops after 1500 ticks: it claims what the window makes at its
+/// measured rate (120 a window of 6000: 30), never the whole lot.
+#[test]
+fn a_filler_stock_lot_claims_what_its_window_makes() {
+    let mut filler = lifescape_planner::Node::new("fill-n7", lifescape_planner::NodeKind::HaveCoins { amount: 1 }, Vec::new(), 0);
+    filler.batch = 200;
+    let rate = |_: &str, _: &str| Some(120.0);
+    assert_eq!(super::run_claim(&filler, "cook:trout", 1_500, &rate), Some(("trout".to_string(), 30)));
+    filler.batch = 10;
+    let (_, way) = lifescape_planner::method_way::method_way("cook:trout").expect("cooking trout");
+    let small = (10.0 * way.expected_out()).floor() as i64;
+    assert_eq!(super::run_claim(&filler, "cook:trout", 1_500, &rate), Some(("trout".to_string(), small)), "a small lot: the lot");
+}
+
 /// Review lot 2, point 5: a trade line ranks on the lot the bot really
 /// takes (demand, wallet, asks), its purchase spread over that lot only.
 #[test]

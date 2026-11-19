@@ -73,10 +73,16 @@ impl MarketService {
         }
         // A raised bid is covered like a fresh one (user 2026-11-19, point
         // 1): the extra coins come out of the free coins, else refused.
+        // `max_remaining` (review lot 4): the remainder cut to the need of
+        // now, never raised; a raise with a cut is covered on the NEW
+        // remainder (re-review lot 4, point 2).
+        let cap = request.get("max_remaining").as_i64().filter(|cap| *cap >= 1);
+        let kept = cap.map(|cap| cap.min(row.remaining)).unwrap_or(row.remaining);
         if row.side == lifescape_store::OrderSide::Buy && price > row.price {
             let (_, free) = self.free_coverage(&account, lifescape_store::OrderSide::Buy, item);
-            if crate::market_audit::affordable_raise(item, row.remaining, row.price, price, free) < price {
-                let extra = crate::market_units::deal_coins(item, row.remaining, price) - crate::market_units::deal_coins(item, row.remaining, row.price);
+            let extra = crate::market_units::deal_coins(item, kept, price) - crate::market_units::deal_coins(item, row.remaining, row.price);
+            let covered = if kept < row.remaining { extra <= free } else { crate::market_audit::affordable_raise(item, row.remaining, row.price, price, free) >= price };
+            if !covered {
                 return Self::err(format!("market rejected: buyer holds {free} free coins, the raise needs {extra}"));
             }
         }
@@ -85,6 +91,7 @@ impl MarketService {
         let Some(old) = self.withdraw_from_book(item, order_id) else {
             return Self::err(format!("order {order_id} is not resting (filled or in flight)"));
         };
+        let remaining = cap.map(|cap| cap.min(old.remaining)).unwrap_or(old.remaining);
         // 2. Carnet: replacement row first, then the old row closes. Any
         // refusal rolls the book back, so book and carnet never diverge.
         // The replacement joins the old row's lineage (root, t0, motive:
@@ -96,7 +103,7 @@ impl MarketService {
                 account: account.clone(),
                 side: row.side,
                 item_id: item,
-                quantity: old.remaining,
+                quantity: remaining,
                 price,
                 dormant: false,
                 clock,
@@ -140,7 +147,7 @@ impl MarketService {
             let book = engine.books.entry(item).or_default();
             let pre: HashMap<u64, Order> = book.orders().into_iter().map(|order| (order.id, order)).collect();
             let taker_seq = book.next_seq();
-            book.place_guarded(replacement as u64, &account, item, side, old.remaining, price, &kept_apart).map(|(fills, _rests)| {
+            book.place_guarded(replacement as u64, &account, item, side, remaining, price, &kept_apart).map(|(fills, _rests)| {
                 fills
                     .into_iter()
                     .map(|fill| {
