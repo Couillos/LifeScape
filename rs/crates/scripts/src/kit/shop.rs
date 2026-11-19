@@ -521,28 +521,51 @@ pub fn sell_units(bot: &mut Bot, form: u16, obj_name: &str, shop: &str, count: u
             break;
         }
         let units_before = pack_total(bot, form);
+        // Both stops are logged: 3 294 lots of the day ended "sold 0"
+        // with no line saying why (lot 8, cause still open).
         let Some((button, size)) = sell_batch_for(paying.min(units_before)) else {
+            bot.log(&format!("shopsell {obj_name}: no unit of form {form} in the pack view after {sold} (paying {paying}) at {:?}", bot.position()));
             break;
         };
         let Some(slot) = bot.world.inv.get(&side_com).and_then(|slots| slots.iter().find(|(_, (held, _))| *held == form).map(|(slot, _)| *slot)) else {
+            let side = bot.world.inv.get(&side_com).map(|slots| slots.len());
+            bot.log(&format!("shopsell {obj_name}: form {form} not in the shop's side inventory ({side:?} slots) after {sold} at {:?}", bot.position()));
             break;
         };
         let coins_before = pack_total(bot, coins);
+        let pauses_before = bot.pauses_done;
         bot.inv_button(button, form, slot, side_com)?;
         let deadline = bot.world.ticks + SELL_UNIT_TICKS;
-        while bot.world.ticks < deadline && pack_total(bot, form) >= units_before {
+        while bot.world.ticks < deadline && pack_total(bot, form) >= units_before && bot.pauses_done == pauses_before {
             bot.pump(1)?;
         }
-        let gone = units_before.saturating_sub(pack_total(bot, form));
+        let Some(gone) = batch_sold(units_before, pack_total(bot, form), pauses_before, bot.pauses_done) else {
+            bot.log(&format!("shopsell {obj_name}: a market pause cut the sale after {sold} at {:?}", bot.position()));
+            break;
+        };
         if gone == 0 {
             bot.log(&format!("shopsell {obj_name}: the shop took nothing of a {size} batch at {:?}", bot.position()));
             break;
         }
         bot.pump(1)?;
         sold += gone;
+        if bot.pauses_done != pauses_before {
+            // Sold before the pause, its coins banked by it: no coin read.
+            bot.log(&format!("shopsell {obj_name}: a market pause followed the batch after {sold} at {:?}", bot.position()));
+            break;
+        }
         earned += i64::from(pack_total(bot, coins)) - i64::from(coins_before);
     }
     Ok((sold, earned))
+}
+
+/// Pure: units one sale batch sold, read from the pack (`units_before`,
+/// `units_after`). `None` when a market pause closed meanwhile
+/// (`pauses_before` / `pauses_after`): the pause banked the pack, the
+/// units gone are no sale (lot 8 re-review: the whole pile read as sold,
+/// the coins negative); the caller stops and resumes from the bank.
+pub fn batch_sold(units_before: u32, units_after: u32, pauses_before: u64, pauses_after: u64) -> Option<u32> {
+    (pauses_after == pauses_before).then(|| units_before.saturating_sub(units_after))
 }
 
 /// Buy-button batches for an amount on the shop's own inventory: 10s,
@@ -564,6 +587,16 @@ mod tests {
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::world::NpcInfo;
     use lifescape_sdk::Bot;
+
+    /// Lot 8 re-review: a pause in a sale batch's wait banks the pack; the
+    /// units gone are never counted as sold (no negative coins, the lot's
+    /// rest resumes from the bank).
+    #[test]
+    fn a_batch_cut_by_a_pause_sells_nothing() {
+        assert_eq!(super::batch_sold(158, 148, 4, 4), Some(10), "a plain batch");
+        assert_eq!(super::batch_sold(158, 0, 4, 5), None, "the pause banked the pack");
+        assert_eq!(super::batch_sold(158, 158, 4, 4), Some(0), "the shop took nothing");
+    }
 
     fn bob_type() -> u16 {
         (0..8000usize)

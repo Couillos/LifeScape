@@ -29,7 +29,7 @@ fn fresh_now() -> BotNow<'static> {
 }
 
 fn fleet_bot() -> FleetBot {
-    FleetBot { account: "pin".to_string(), levels: Vec::new(), ironman: false, market_affinity: 0.5, seed: 3, kind: None }
+    FleetBot { account: "pin".to_string(), levels: Vec::new(), ironman: false, market_affinity: 0.5, seed: 3, kind: None, market_maker: false }
 }
 
 fn life_pinned(skill: &str) -> Life {

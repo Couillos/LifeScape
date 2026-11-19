@@ -7,6 +7,18 @@ use crate::Error;
 /// Latest schema version this build understands.
 pub const SCHEMA_VERSION: u32 = 9;
 
+/// Index of the task reports by creation clock (the time value's window,
+/// `work_gains`; plan équilibre lot 1).
+pub(crate) const REPORT_CLOCK_INDEX: &str = "idx_task_reports_clock";
+
+/// Indexes every open ensures after the migrations: `IF NOT EXISTS`
+/// (idempotent, a no-op once built), no data rewritten and NO version
+/// bump, so a binary without them still opens the file (a reverted lot
+/// never meets a newer schema) and no other step's number is taken.
+fn ensured_indexes() -> String {
+    format!("CREATE INDEX IF NOT EXISTS {REPORT_CLOCK_INDEX} ON task_reports(created_clock);")
+}
+
 pub(crate) const MIGRATION_V1: &str = "
 CREATE TABLE IF NOT EXISTS items(
     item_id INTEGER PRIMARY KEY,
@@ -243,10 +255,12 @@ pub fn current_version(connection: &rusqlite::Connection) -> Result<u32, Error> 
 /// migration, a write batch) before failing typed.
 pub const BUSY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Applies every migration newer than the file version, in order.
+/// Applies every migration newer than the file version, in order, then
+/// ensures `ensured_indexes`.
 pub fn apply_migrations(connection: &rusqlite::Connection) -> Result<(), Error> {
     let found = current_version(connection)?;
-    migrate_from(connection, found)
+    migrate_from(connection, found)?;
+    connection.execute_batch(&ensured_indexes()).map_err(|source| Error::Sql(format!("ensured indexes: {source}")))
 }
 
 /// Migrates a file whose version an opener read as `seen` (2026-11-16,
@@ -373,6 +387,41 @@ mod schema_tests {
         // Reopen keeps the version: migrations are idempotent.
         let reopened = Store::open(&path)?;
         assert_eq!(reopened.schema_version()?, SCHEMA_VERSION);
+        Ok(())
+    }
+
+    /// Every open ensures the report clock index, idempotent and without a
+    /// version bump (an older binary still opens the file: a revert never
+    /// meets a newer schema); a file that lacks it gains it, rows kept.
+    #[test]
+    fn every_open_ensures_the_report_clock_index() -> Result<(), Error> {
+        let path = temp_database_path("clock-index");
+        let _remove_guard = RemoveGuard { path: path.clone() };
+        let has_index = |store: &Store| -> Result<bool, Error> {
+            let count: i64 = store.connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1", [REPORT_CLOCK_INDEX], |row| row.get(0))?;
+            Ok(count == 1)
+        };
+        {
+            let store = Store::open(&path)?;
+            assert!(has_index(&store)?, "a new file has it");
+            store.record_task_report(&crate::NewTaskReport {
+                account: "ann".to_string(),
+                node_id: "n1".to_string(),
+                method: "woodcut".to_string(),
+                script: "woodcut".to_string(),
+                ticks: 600,
+                stop: "goal_reached".to_string(),
+                context_level: 1,
+                clock: 77,
+            })?;
+            store.connection.execute_batch(&format!("DROP INDEX {REPORT_CLOCK_INDEX}"))?;
+        }
+        let reopened = Store::open(&path)?;
+        assert!(has_index(&reopened)?, "an older file gains it at open");
+        assert_eq!(reopened.schema_version()?, SCHEMA_VERSION, "no version bump");
+        assert_eq!(reopened.newest_report_clock()?, Some(77), "rows kept");
+        drop(reopened);
+        assert!(has_index(&Store::open(&path)?)?, "idempotent reopen");
         Ok(())
     }
 

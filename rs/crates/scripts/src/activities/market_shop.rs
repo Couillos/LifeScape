@@ -109,31 +109,54 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // difference ("You don't have enough coins").
     let price_each = lifescape_gamedata::shop_buy::unit_price_ceiling(&item, shop.as_deref()).unwrap_or(entry.price).clamp(1, i64::from(u32::MAX)) as u32;
     let need = (qty.max(1) as u32).saturating_mul(price_each);
-    let mut held = bot.inventory().get(&coins).copied().unwrap_or(0);
-    if held < need {
-        let bank = crate::kit::bank::nearest_bank(bot)?;
-        if bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
-            bot.pump(2)?;
-            let banked = bot.bank_items().get(&coins).copied().unwrap_or(0);
-            if banked > 0 {
-                let _ = bot.bank_withdraw(coins, (need - held).min(banked), 300);
-            }
-            let _ = bot.close_modal();
-            bot.pump(3)?;
-        }
-        held = bot.inventory().get(&coins).copied().unwrap_or(0);
-    }
-    bot.log(&format!("shopbuy {item} x{qty}: carrying {held} coins"));
-    if let Some((x, z, level)) = site {
+    if site.is_some() {
         bot.assigned_site = site;
         crate::kit::uniform::wear_uniform(bot, &wear)?;
-        // The keeper's own floor: Scavvo and Valaine trade upstairs in the
-        // Champions' Guild (level 1); the keeper pick reads the bot's level.
-        if !crate::kit::site::at_site(bot) && !crate::skill_walk::walk_checked_at(bot, x, z, level, crate::kit::site::SITE_WALK_TICKS)? {
-            return Err(ScriptError::Failed(format!("shopbuy {item}: shop site ({x},{z}) not reached from {:?}", bot.position())));
-        }
     }
-    let bought = crate::kit::shop::buy_stock_at(bot, &item, qty, shop.as_deref())?;
+    // One pass: coins, the keeper's site, the trade (`kit::site::pass_leg`).
+    // A market pause banks the coins and leaves the bot at the Varrock
+    // square (live 2026-11-19 lara_lane: "You don't have enough coins" at
+    // the gem trader, "trade gave no emerald"): coins and walk again.
+    let mut pauses_at_load: Option<u64> = None;
+    let mut restarts = 0u32;
+    let mut walked = false;
+    let bought = loop {
+        let here = (bot.world.x, bot.world.z, bot.world.level);
+        match crate::kit::site::pass_leg(pauses_at_load, bot.pauses_done, walked, here, site) {
+            crate::kit::site::PassLeg::Load => {
+                if pauses_at_load.is_some() {
+                    restarts += 1;
+                    if restarts > crate::kit::site::PASS_PAUSE_RESTARTS {
+                        return Err(ScriptError::Failed(format!("shopbuy {item}: {} market pauses already broke the trip, at {:?}", crate::kit::site::PASS_PAUSE_RESTARTS, bot.position())));
+                    }
+                    bot.log(&format!("shopbuy {item}: a market pause left us at {:?}, coins and shop again", bot.position()));
+                }
+                pauses_at_load = Some(bot.pauses_done);
+                walked = false;
+                let held = carry_coins(bot, coins, need.saturating_add(bot.fare_reserve))?;
+                bot.log(&format!("shopbuy {item} x{qty}: carrying {held} coins"));
+            }
+            crate::kit::site::PassLeg::Walk => {
+                // The keeper's own floor: Scavvo and Valaine trade upstairs in the
+                // Champions' Guild (level 1); the keeper pick reads the bot's level.
+                let Some((x, z, level)) = site else { continue };
+                if !crate::skill_walk::walk_checked_at(bot, x, z, level, crate::kit::site::SITE_WALK_TICKS)? {
+                    return Err(ScriptError::Failed(format!("shopbuy {item}: shop site ({x},{z}) not reached from {:?}", bot.position())));
+                }
+                walked = true;
+            }
+            crate::kit::site::PassLeg::Act => {
+                let outcome = crate::kit::shop::buy_stock_at(bot, &item, qty, shop.as_deref());
+                let paused = pauses_at_load.is_some_and(|mark| crate::kit::site::paused_since(mark, bot.pauses_done));
+                match outcome {
+                    Ok(bought) if bought > 0 || !paused => break bought,
+                    Err(ScriptError::Failed(_)) if paused => continue,
+                    Ok(_) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+    };
     let held = obj_id(bot, &item).map(|id| bot.inventory().get(&id).copied().unwrap_or(0)).unwrap_or(0);
     bot.log(&format!("shopbuy {item} x{qty}: bought {bought}, holding {held}"));
     if !shop_bought_any(bought, held, qty) {
@@ -144,6 +167,28 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bot.log(&format!("shopbuy {item}: the shop had {bought} of {qty}, the rest comes another way"));
     }
     Ok(0)
+}
+
+/// Coins in the pack up to `want` (pack-first, bank-backed): a fresh
+/// session has not seen its bank yet (live 2026-11-12: harry_page went to
+/// the shop "carrying 0 coins" with 25 banked), so the bank is opened
+/// whenever the pack falls short. Returns the coins carried.
+fn carry_coins(bot: &mut Bot, coins: u16, want: u32) -> Result<u32, ScriptError> {
+    let held = bot.inventory().get(&coins).copied().unwrap_or(0);
+    if held >= want {
+        return Ok(held);
+    }
+    let bank = crate::kit::bank::nearest_bank(bot)?;
+    if bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
+        bot.pump(2)?;
+        let banked = bot.bank_items().get(&coins).copied().unwrap_or(0);
+        if banked > 0 {
+            let _ = bot.bank_withdraw(coins, (want - held).min(banked), 300);
+        }
+        let _ = bot.close_modal();
+        bot.pump(3)?;
+    }
+    Ok(bot.inventory().get(&coins).copied().unwrap_or(0))
 }
 
 /// True when the trip did its part: some units bought, or the wanted

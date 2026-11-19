@@ -205,6 +205,39 @@ plus gros bouton qui tient dedans (`sell_batch_for` : vendre 10, 5 puis
 1 ; une boutique n'a pas de « vendre X » en rev 274) ; 28 bûches d'if =
 6 clics au lieu de 28. Les pièces créées sont `shop_sold` dans le
 registre de pièces ; `orchestrator economy` imprime « npc shop sales ».
+Stock probable de la boutique (lot 8, 2026-11-19) : la boutique ne se
+juge plus à son stock de base. Chaque voyage envoyé (`brain_npc_sale::
+take`) est retenu en mémoire du démon (compte, boutique, heure, objets et
+unités prévues, 6 h) ; les lignes `shop_sold` des rapports suivants du
+compte (store, horloge unix) donnent ce que la flotte a vraiment vendu
+là, et quand ; seul le rapport du nœud janitor du voyage (`node_id`)
+compte comme son retour (le rapport de la tâche précédente, ingéré la
+même seconde, non). Tant que ce rapport manque (2 h au plus), ses
+unités prévues comptent comme vendues au départ du voyage (décrues
+depuis, une session tuée ne bloque pas la boutique) : un deuxième bot
+planifié pendant le trajet (~1000 ticks au Bandit Camp) ne lit jamais le
+stock de base. Lecture : une seule requête (`Store::shop_sales_since`,
+index `idx_task_reports_clock` créé à l'ouverture, version de schéma
+inchangée) depuis le plus ancien voyage retenu, en cache 45 s, faite
+seulement si un objet du passage a une boutique acheteuse
+(`cpu_profile` « sales.npc_shop_rows »). La valeur décroît du
+`shop_delta` de chaque gardien (`shop_haggle.json` : Horvik 20,
+Noterazzo 30 ; 30 si inconnu), plus 30 pour tous.
+Règle serveur du réassort (`../lostcity/engine/src/engine/World.ts`
+l. 1189-1207, `INV_STOCKRATE` l. 122) : à chaque tick multiple du taux,
+un objet listé au-dessus de son stock de base perd une unité (taux de
+son entrée, `shops.json` `rate`), un objet non listé d'un magasin
+général en perd une toutes les 100 ticks. `shop_sale::likely_held` =
+stock de base + ventes de la flotte, chacune décrue depuis son arrivée
+(unités entières, arrondi prudent) ; `likely_unit_value` = valeur
+minorée de l'unité suivante à ce stock. Le choix « la boutique paie plus
+que le marché » (`brain_sales`) et le plan du voyage (`plan_shop_sale`,
+`shops_at_likely_stock`) lisent cette valeur : jamais un voyage dont la
+première unité paie déjà sous le minimum (live : 743 lots du jour
+arrêtés d'emblée par « the next unit pays under », taxfree à 13 cottes
+de mithril tenues paie 1092 < 1212). Après un redémarrage du démon la
+mémoire des voyages est vide : retour au stock de base jusqu'aux
+voyages suivants.
 Depuis le 2026-11-15 tout
 objet F2P qu'un marchand stocke peut lui être acheté (§ Achats aux
 marchands de `planner.md`, `decisions.md`). Les marchands tirés (~10 %,
@@ -335,6 +368,43 @@ pièce dont la consommation mesurée (`task_flows` input/ammo/rune/bait/
 supply/food, lignes v1 `consumed`) est > 0 (≥ 6 → 0) ; asks à 1 pièce
 (objets, ordres, unités) ; objets en asks seuls jamais échangés (65 →
 ≤ 20) ; amends de la fenêtre (par minute : CPU de la marche).
+
+### Section « équilibre » d'`orchestrator economy` (plan-equilibre, étape 0)
+
+Tableau horaire de docs/plan-equilibre.txt (lot 0), staff et exclusions
+hors champ, chaque chiffre à côté de sa base du 2026-11-19 et de sa cible
+(docs/plan-equilibre-dev.txt §M). Requêtes : `store/src/balance.rs` ;
+calcul et impression : `orchestrator/src/economy_balance.rs`.
+
+- Jours de stock invendu (`Store::unsold_stock`) : unités au repos dans
+  les annonces de vente maintenant (ouvertes ou appariées, reste > 0, non
+  dormantes) / unités échangées par jour sur la fenêtre (`executions`).
+  Total flotte = toutes les unités en annonce / tout le volume de la
+  fenêtre par jour (`Store::window_traded_units` : toutes les exécutions,
+  objets épuisés sans annonce restante compris) ; les 15 objets échangés
+  au stock le plus long ; à part, les objets en annonce jamais échangés
+  dans la fenêtre (nombre, unités, les 5 plus gros). Les quantités sont
+  des unités : la cotation par lot est coupée
+  (`market_units::LOT_QUOTATION = false`). Pas de cible §M : à suivre.
+- Temps de la flotte par compétence (`Store::work_by_method`) :
+  `task_reports.work_ticks` de la fenêtre par méthode du planificateur ;
+  un rapport compte tout son travail à l'heure où il est enregistré (fin
+  du run) : un long run commencé avant la fenêtre y tombe en entier, un
+  run en cours n'y est pas encore. La compétence vient de
+  `planner::activity::band_skill` (style de combat d'abord, sinon la voie
+  du jeu de la méthode, lots 100 % marché par leur recette), jamais d'une
+  liste à la main ; le travail qu'aucune compétence ne règle (teneurs,
+  boutique, ramassage…) est noté `(none) <famille>`. La part « magie »
+  compte aussi le combat magique (`fight:magic/…`) et les malédictions
+  (`curse:…`) ; la récolte d'essence (`essence:`) compte en minage.
+  Lignes cibles : artisanat + magie + cuisine + runes (3,2 % → > 10 %) et
+  ifs (méthodes dont la voie produit des bûches d'if, 21 % → < 10 %).
+- Part du remplissage : travail des nœuds `fill-*`
+  (`brain_filler::is_filler_node`), 20 % → < 10 %.
+- Lots 100 % marché : réalisé / prévu des lots fermés (totaux R5 de
+  `trade_report::closed_totals`), lots ouverts dans la fenêtre puis tous
+  les lots enregistrés, 16 % → ≥ 70 % ; à côté, le nombre de lots encore
+  ouverts (achat, fabrication ou vente) dont le réalisé reste à venir.
 
 ## Place de Varrock (échange physique)
 
@@ -707,6 +777,21 @@ ticks), jamais le prix d'une unité appliqué à une fenêtre :
   sur 988 par fenêtre, pas 988). Moins de 5 fills marquent le prix
   `thin`, de même qu'un volume qui dépasse le volume échangé quand le
   prix courant en porte encore la majorité ;
+- DEMANDE PARTAGÉE (plan équilibre étape 2, 2026-11-19) : la demande du
+  marché (bids + volume des 5 derniers fills au prix courant) est
+  servie d'abord par l'offre déjà là : les annonces au repos à ce prix
+  ou dessous (le meilleur bid pour un objet jamais échangé) et les
+  unités RÉCLAMÉES par les producteurs au tableau des commandes
+  (`Quote::claimed`, `guide_engine::ahead_units`). Ces unités prennent
+  les meilleurs acheteurs d'abord (bids au-dessus du prix, puis le
+  volume au prix, puis les bids restants) ; la boutique PNJ n'a pas de
+  profondeur à partager. Construction du guide : TOUTES les
+  réclamations du moment (`market_claims::claimed_total`, lues par
+  `web_guides::quote_on_board` dans `guides_store::build_set` et dans la
+  reconstruction `web_guides::build_guide` du daemon ; un processus sans
+  le tableau du daemon n'en lit aucune) ; choix d'un bot : celles des AUTRES
+  telles qu'elles sont à l'instant (§ Tableau des commandes). Test
+  `guide_volume_tests::the_guide_shares_the_recent_volume_with_claims_and_resting_asks` ;
 - vente d'un objet jamais échangé : pas de prix courant ; bids pour
   leur profondeur, le reste au PNJ (Q3, `web_guides::NPC_SALE_VOLUME`)
   ou 0 sans débouché ;
@@ -933,6 +1018,39 @@ vente par défaut (motif `trade`, horizon d'un surplus, réserve = son coût
 propre). Ironman exclu. Le guide reste la seule source du choix (lecture
 du jeu précalculé, aucun calcul à la demande).
 
+Demande partagée (plan équilibre étape 2, 2026-11-19 ; constat : prévu
++208 k, réalisé +34 k, barre de mithril de 1 301 à 350, pots non cuits
+faits par plusieurs bots à la fois) : un lot est taillé et prévu sur ce
+que le marché prend ENCORE pour ce bot, jamais sur tout le volume récent
+(`trade_craft::offer_from_row`, `brain_trade::offers_for`) :
+- demande = bids + volume des 5 derniers fills au prix courant, moins
+  les annonces au repos à ce prix ou dessous, moins les unités réclamées
+  par les AUTRES producteurs au tableau des commandes à l'instant du
+  choix (`market_claims::claimed_by_others`, la cotation du cycle porte
+  ces réclamations vives) ; échelle de vente partagée du produit
+  (`guide_engine::sale_ladder`, `TradeOffer::sale`) ;
+- aucune demande restante (moins d'une unité) : aucun lot proposé (log
+  de refus « no demand left for … ») ; la boutique PNJ ne compte pas
+  comme demande d'un lot 100 % market (son produit part en annonce) ;
+- taille : au plus la demande (`LotBound::Demand`, « demand » dans le
+  log et le suivi), en plus de la fenêtre, des asks des intrants et de
+  la bourse ;
+- profit de classement (revue lot 2, point 5) = net du lot réellement
+  pris (vente le long de l'échelle partagée − intrants au prix du guide,
+  `TradeOffer::lot_profit`) par 6000 ticks de CE lot : son craft
+  (`craft_ticks_per_unit`, le temps de la ligne hors achats) plus UN
+  achat (trajet à la place + attente du marché, `Prereqs::purchase_ticks`,
+  fixe par lot) : `TradeOffer::lot_rate`. L'offre le calcule sur le lot
+  que la demande prend (au plus une fenêtre) ; les lignes du bot
+  (`brain_money::lines_for`) sur le lot que SA bourse, les asks et la
+  demande permettent (`lot_size`). Jamais une marge de 15 unités
+  extrapolée à une fenêtre ; aucune porte sur le profit du guide (qui
+  compte la propre réclamation du bot) : seul ce profit relu décide.
+  Prévu du lot (`TradeLot::predicted`) = `lot_profit` du lot verrouillé ;
+- le lot réclame ses produits au tableau dès le verrou (`brain_trade::
+  note_lot`, horizon = craft au rendement du guide + une fenêtre
+  d'achats), jusqu'au rapport du run de craft.
+
 Suivi « profit prévu vs réalisé » (`trade_report.rs`, section de
 `orchestrator economy`, tableau « 100 % market lots » de la page economy,
 `/api/economy` clés `trades` et `trades_closed`) : une ligne par lot des
@@ -948,7 +1066,9 @@ plafonnées aux produits faits ; réalisé = ventes − achats ; statut
   demande) pour choisir la méthode d'une tranche cotée à la résolution
   (forge, magie dès confuse, cuisine, artisanat, feu, prière) : score
   d'une ligne pour le bot = ticks propres par XP + poids(thrift) ×
-  pièces par XP converties au D17 du bot, une ligne marché ×(1,5 −
+  pièces par XP converties à la valeur du temps du bot (D1, § Valeur du
+  temps : le gain réel mesuré ; le D17 avant le 2026-11-19), une ligne
+  marché ×(1,5 −
   market_affinity) (`planner::train_score`, `docs/planner.md` §
   « Entraînement par le guide et les traits ») ; meilleur score en
   tirage pondéré de R7 (`train_score::pick`, `guide_pick`) ; le guide
@@ -964,24 +1084,28 @@ sapphire_amulet` à 21,8 M/6000) est SUPPRIMÉE, avec `cached_profit_rows`,
 `profit` de `/api/rates/table`. Chaque lecteur du cerveau lit
 `guides_store::current()` via `brain_d17` (jamais un calcul à la
 demande), sémantique R7 :
-- D17 d'un bot (`brain_d17::bot_d17`) = meilleur profit/6000 des lignes
+- D17 d'un bot (`brain_d17::best_row`, affichage seul depuis D1) = meilleur profit/6000 des lignes
   cotées et gagnantes de SES vues (`brain_money::bot_rows` : la vue de
   bande de son niveau dans chaque compétence) à sa portée
   (`feasible_for(..).within_reach()`, jugé comme `guide_read::
   best_profit_in` : sans stock, sans bourse, asks du cycle ; Ironman :
   aucune ligne marché) ; un bot au même niveau partout lit exactement le
   D17 de `brain_train` ;
-- taux de pièces d'un bot (`brain_d17::coin_rate`) = D17 / 6000, plancher
-  `market_fit::MIN_COIN_RATE` (0,1 ; aucun jeu publié ou aucune ligne :
-  le plancher) : réponse aux bids (`brain_bids::bot_rate`), alchimie
-  (`brain_alch`), demande dérivée (`brain_market::derived_reserve`) ;
-- `ReadyCtx::coins_per_tick` (temps d'un achat) = ce même taux, posé par
-  `brain_market::guide_coins` (dans `fill_ctx`) pour tout nœud ; avant le
-  premier jeu, le 0,5 du contexte aveugle ;
+- taux de pièces d'un bot (`brain_d17::coin_rate`) : REMPLACÉ le
+  2026-11-19 par le gain réel mesuré (D1, § Valeur du temps : le gain
+  réel mesuré) ; le D17 ne sert plus qu'à l'affichage (`bid-why`) et au
+  classement propre du guide ;
+- `ReadyCtx::coins_per_tick` (temps d'un achat) = cette même valeur du
+  temps mesurée, posée par `brain_plan::ready_ctx` pour tout nœud
+  (`brain_market::guide_coins` ne la touche plus) ;
 - profit d'une méthode d'un nœud argent/pièces (`method_profit`) = sa
   meilleure ligne cotée dans les lignes du bot (`brain_d17::
   method_profit_in`, clé d'activité) ; le guide valorise déjà ce que le
-  marché absorbe (D12) : plus de saturation par-dessus ;
+  marché absorbe (D12), net des annonces au repos et des réclamations
+  (demande partagée, plan équilibre étape 2) : plus de saturation
+  par-dessus ; au tirage du nœud, les lignes du bot sont revalorisées
+  sur les réclamations des autres à l'instant (`brain_money::lines_for`,
+  `guide_share`) ;
 - poids des ambitions par type (`market_demand::kind_profits`) =
   meilleure ligne du catalogue par type (`brain_d17::kind_profits` :
   lignes cotées sans condition impossible pour tous, type de leur
@@ -1341,7 +1465,8 @@ fills) ou publiques (carnet, prints) ; jamais l'état privé d'un autre.
   d'achat. Plafond partagé avec la réponse aux offres : la réserve ne
   dépasse jamais le coût de FABRICATION que `bid_response` donne au bot
   (`bid_response::production_cost` = chemin « make » de `unit_cost`,
-  pièces + ticks × taux du bot (son D17, `brain_d17::coin_rate`) ; calculé une fois par passe
+  pièces + ticks × taux du bot (sa valeur du temps mesurée, D1,
+  `brain_d17::coin_rate`) ; calculé une fois par passe
   par `brain_bids::production_costs_for`, mêmes niveaux, bans, quêtes,
   rendements et carnet que le tirage), arrondi bas, ≥ 1 : un quota compte
   les bids au-dessus de ce coût, le producteur ne garde donc jamais le
@@ -1433,10 +1558,11 @@ d'achat que ce bot sait fabriquer avec profit :
   fabrication / 200 récolte ; chaque intrant à SON coût unitaire). Un
   stock détenu coûte ce que sa vente rapporterait (meilleur bid public)
   et aucun temps. Total = pièces + ticks × taux du bot.
-- Taux du bot (`brain_bids::bot_rate` → `brain_d17::coin_rate`) : son
-  D17 / 6000, le meilleur profit du guide money à sa portée (niveaux,
-  combat, quêtes, Ironman), plancher 0,1 pièce/tick (le temps n'est
-  jamais gratuit).
+- Taux du bot (`brain_bids::bot_rate` → `brain_d17::coin_rate`) : ce
+  que son travail a réellement rapporté par tick sur 12 h (D1, § Valeur
+  du temps : le gain réel mesuré), la moyenne mesurée de la flotte sans
+  mesure propre, plancher 0,1 pièce/tick (le temps n'est jamais
+  gratuit). Avant le 2026-11-19 : son D17 / 6000.
 - Profondeur : bids qui paient plus que le coût total ; moins les asks au
   repos à ≤ 125 % du meilleur bid (offre déjà en route : ces vendeurs
   descendent vers les bids) ; moins le stock libre du bot (il le vend
@@ -1778,8 +1904,11 @@ d'alchimie du bot lanceur) qu'une jambe de production fabrique :
   objets sans jambe de production écartés avant toute lecture du store ;
   volume lu seulement pour un objet avec bids, prix échangé ou alchimie.
 
-Taux du bot (2026-11-17) : son D17 dans le guide money précalculé
-(`brain_bids::bot_rate`, `brain_d17`), plus la table `rates_profit`
+Taux du bot (2026-11-19, D1) : son gain réel mesuré (§ Valeur du temps :
+le gain réel mesuré) ; `bid-why` affiche ce taux, sa source (mesure
+propre, moyenne de la flotte ou plancher) et, à titre indicatif, la
+ligne D17. Historique (2026-11-17) : son D17 dans le guide money
+précalculé (`brain_bids::bot_rate`, `brain_d17`), plus la table `rates_profit`
 « réalisable » (`rate_rows`/`realizable_rows`, supprimées) : le guide
 valorise déjà ce que le marché absorbe (D12) ; le cas live de 2026-11-14
 (`smith` tranche 1 à 65 929 / 6000 sur quelques fills de cimeterres,
@@ -1793,6 +1922,56 @@ les autres (jamais qui, jamais autre chose) et le retire de ce que le
 marché absorbe. Public comme le tableau des commandes d'artisanat d'un
 vrai jeu : D22 tient (voir `decisions.md`). En mémoire, expire après 2 ×
 la durée estimée du lot (10 min à 6 h), libéré au tirage suivant du bot.
+
+Toute production publie (plan équilibre étape 2, 2026-11-19 ; constat :
+le guide prêtait à CHAQUE bot toute la demande récente d'un objet, tous
+se ruaient sur la même activité, son prix s'effondrait) :
+- réponse à une offre (`bid:<objet>`) : son lot, clé « but »
+  (`market_claims::claim`), libéré au tirage suivant ;
+- run d'un nœud argent/pièces (`brain_launch` → `brain_money::
+  claim_launch`) et fenêtre de remplissage (`brain_filler::launch_filler`)
+  : clé = l'id du nœud (`claim_run`) ; unités = unités par 6000 ticks
+  MESURÉES pour ce bot (`brain_plan::farm_yield` : son niveau, son outil)
+  × ticks du budget / 6000 (`run_units`), une recette sur son stock son
+  lot d'actions × produits par action, un lot 100 % market son lot ;
+  rien pour l'alchimie, un combat sans produit ou une méthode sans
+  rendement estimé (`brain_money::run_claim`) ; expire à 2 × le budget ;
+- lot 100 % market : ses produits dès le verrou (`brain_trade::note_lot`),
+  remplacés par le lot du run de craft à son lancement ;
+- publication seulement au lancement RÉEL (après le contrôle du script) ;
+- libération : à TOUT rapport qui nomme le nœud, avant toute autre
+  vérification, même un rapport ignoré (nœud retiré, inconnu, déjà
+  déplacé : `brain_fold::reported_node`) et au rapport d'une fenêtre de
+  remplissage (`fold_filler_report`) ; au run sans rapport (ouvrier
+  inactif : `brain_inflight::fold_lost_report`, arrêt opérateur ou
+  redémarrage : `fold_stopped`) ; au lancement refusé
+  (`fold_refused_launch`, remplissage refusé) ; au nœud sans script
+  (`fail_no_script`) ; au tirage du but suivant (`release`) ; sinon à
+  l'expiration (même règle qu'avant).
+- biais connu (revue lot 2, point 3) : les vues partagées du guide
+  comptent TOUTES les réclamations, celle du bot lui-même comprise ;
+  jusqu'au cycle suivant (300 s au plus), ce que le cerveau lit du
+  guide SANS revalorisation au choix voit donc la production du bot
+  comme une offre d'un autre : son D17 (`brain_d17::bot_d17`, taux de
+  pièces `coin_rate`, `ReadyCtx::coins_per_tick` de `guide_coins`) et le
+  profit d'une méthode d'un nœud (`method_profit_in`) peuvent baisser
+  pendant qu'il produit. Le lot 1 remplace `coin_rate` par le gain
+  mesuré ; restent `guide_coins` et `method_profit`. Les lignes du guide
+  money au tirage et les lots 100 % market, eux, relisent la demande
+  avec les réclamations des AUTRES seulement : un bot enchaîne son
+  propre lot.
+Lecteurs : la construction du guide money (toutes les réclamations,
+`claimed_total`, vues partagées) ; au CHOIX d'un bot, les réclamations
+des AUTRES à l'instant (`claimed_by_others`) : lignes du guide money
+(`brain_money::publish` → `planner::guide_share::SharedDemand` : chaque
+produit d'une ligne revalorisé sur la demande que les autres laissent,
+la ligne qui ne gagne plus disparaît ; place d'un lot sur stock moins
+les unités réclamées), offres 100 % market (§ Exécution 100 % market),
+réponses aux offres (`MarketReader`, inchangé). Deux bots qui
+choisissent l'un après l'autre ne reçoivent donc jamais tous deux la
+demande entière : le premier publie au lancement, le second lit ce qui
+reste. Toujours aucun plancher ni bande de prix : seules l'offre (annonces,
+réclamations) et la demande (bids, volume récent) bougent la valeur.
 
 Demande dérivée (`planner/src/derived_demand.rs`,
 `brain_market::derived_reserve`) : quand un nœud d'obtention nourrit un
@@ -1816,7 +1995,20 @@ compte pour un type quand son échelle liste l'objet OU que sa
 compétence primaire le fabrique à n'importe quel palier (adamant hors de
 portée de toute la flotte → forgerons), et pour moitié par étape de
 recette quand sa compétence en fabrique un intrant (minerai, charbon →
-mineurs) ; une marge connue négative ne tire personne. L'échelle du
+mineurs) ; une marge connue négative ne tire personne. Depuis la
+décision D3 (2026-11-19) le métier suit le BESOIN seul : le poids d'un
+type est ce besoin (`KindDemand::need` : part de la masse des offres
+servies, chaque objet compressé ln(1 + ln(1 + poids)) pour qu'une offre
+aberrante ne décide pas seule, doublé quand aucune annonce de vente ne
+repose ; + part du profit ; ÷ (1 + bots qui tiennent déjà le type)),
+plus aucune adéquation aux niveaux ; un type sans besoin n'est tiré que
+si aucun n'en a. Exceptions (tirage au niveau d'avant) : Zezima,
+N0valyfe, Yogosun et les teneurs de marché
+(`ambition_fleet::LEVEL_LED_ACCOUNTS`). Un achat non servi ou refusé
+par le marché n'est plus un jalon bloqué (jamais de changement
+d'ambition « bloqué 3 fois » pour un manque du marché) : le jalon se
+refroidit 6000 ticks (décision utilisateur 2026-11-19), le bot passe au
+suivant ou à un but d'appoint. L'échelle du
 forgeron va jusqu'à l'adamant (minage 70, forge 78 dague/heaume/
 cimeterre, forge 88 plastron/jambières).
 
@@ -1985,6 +2177,81 @@ reconstruits depuis les rapports en base au démarrage) ; le profit est la
 valeur nette du run médian aux prix du jour. Taux propres après correction :
 4 à 6,5 pièces par tick. Une récolte sans site F2P n'est plus une jambe
 (`obtain_legs` : pas d'érable F2P).
+
+## Valeur du temps : le gain réel mesuré (D1, 2026-11-19)
+
+Constat (plan équilibre, étape 1) : `brain_d17::coin_rate` valait le D17
+du bot, la MEILLEURE ligne théorique du guide money à sa portée
+(`best_row_in`, chaînes jamais exécutées comprises) : 1,1 à 1,5 pièce par
+tick affichées le 2026-11-19 au matin, 10,71 pour tous l'après-midi (la
+chaîne `dye:reddye` à 64 259 / 6000), pour ~0,28 réellement créées par
+tick de travail. Chaque lecteur surévaluait le temps du bot : les
+producteurs refusaient les offres d'achat modestes, les plafonds d'achat
+d'intrants restaient bas.
+
+Règle (décision utilisateur D1) : la valeur d'un tick d'un bot = ce que
+son travail a RÉELLEMENT rapporté par tick de travail sur une fenêtre
+glissante, mesuré dans le store, jamais sous `market_fit::MIN_COIN_RATE`
+(0,1) ; un compte sans mesure lit la moyenne mesurée de la flotte.
+- Mesure (`store::work_gains`, `Store::work_flows_since`) : les rapports
+  contrat 2 (`measure_version` 2) créés depuis 12 h, leurs `work_ticks`
+  sommés par compte (pauses exclues) et leurs flux (`task_flows`) nets par
+  compte et par objet.
+- Valorisation (`orchestrator/src/time_value.rs`) : chaque objet au prix
+  courant (`rates_price::price_estimate` : médiane des cinq derniers
+  fills bornée par le carnet, sinon le carnet, sinon 1 ; pièces = 1), un
+  seul lecteur de prix, aucune nouvelle source. Gain = Σ quantité nette ×
+  prix : produits, sous-produits, butin et pièces entrent ; intrants,
+  consommables (runes, appât, munitions, nourriture), péages, morts et
+  objets jetés sortent ; une vente au marchand PNJ compte ses pièces moins
+  l'objet au prix courant, un achat au marchand l'objet reçu au prix
+  courant moins ses pièces. Causes NON comptées : `traded` (un échange entre joueurs déplace
+  la richesse, il n'en crée pas ; un don de pièces gonflerait le
+  receveur) et `unattributed` (flux que rien n'explique, une alerte).
+- Taux = gain / ticks de travail du compte s'il a au moins
+  `MIN_MEASURED_WORK_TICKS` (6000, une fenêtre du guide : en dessous, un
+  seul run d'achat ou de rangement décide) ; sinon la moyenne de la
+  flotte = Σ gains / Σ ticks de travail des comptes hors staff et hors
+  liste exclue (`economy_guard::excluded_accounts`, règle 11) ; rien de
+  mesuré du tout (service marché absent, store en erreur, journalisée) :
+  le plancher. Toujours ≥ 0,1.
+- Fenêtre 12 h (`WINDOW_SECS`) : un run dure quelques minutes, mais la
+  vente d'une production (rangement de banque vendu au marchand, offres
+  du marché) arrive par vagues d'heures ; sur 3 à 6 h une seule vente au
+  marchand fait varier un compte du simple au triple (live 2026-11-19 :
+  ella_quill −0,09 à 0,28 selon la fenêtre), sur 24 h le taux garde le
+  souvenir d'un niveau ou d'une activité quittés depuis longtemps. 12 h
+  = ~190 rapports par compte, la fenêtre de l'audit du plan équilibre
+  (flotte 0,28 pièce/tick sur la copie du 2026-11-19, 74 comptes mesurés).
+- Rafraîchi au plus toutes les 300 s (`REFRESH`, la cadence du guide) par
+  le premier lecteur après l'échéance (une mesure sous le verrou du
+  store, deux requêtes par l'index des rapports par horloge
+  `idx_task_reports_clock`, assuré à chaque ouverture du store sans
+  changer la version du schéma : 138 ms sur la copie du 2026-11-19, 234
+  objets valorisés) ; les autres lecteurs attendent la mesure en cours au
+  lieu de la recalculer. Journal : `time value: N accounts measured over
+  12 h, fleet X coins/tick …`. Lecture hors ligne d'une copie : test
+  ignoré `time_value_of_a_copy` (`LIFESCAPE_CHECK_DB`,
+  `LIFESCAPE_CHECK_ACCOUNTS`), fenêtre terminée au rapport le plus récent
+  de la copie.
+
+Lecteurs (tous via `brain_d17::coin_rate(compte)`) : réponse aux offres et
+coût de fabrication du plafond vendeur (`brain_bids::bot_rate`,
+`production_costs_for`), demande dérivée (`brain_market::derived_reserve`),
+alchimie (`brain_alch::time_rate`, l'alchimiste toujours à 0), score
+d'entraînement (`brain_train::fill_ctx` → `Climb::coin_rate` : pièces par
+XP converties à 1 / taux), temps d'un achat (`ReadyCtx::coins_per_tick`
+posé par `brain_plan::ready_ctx` : il ne fait qu'ordonner les
+alternatives d'un nœud par leurs ticks estimés, jamais les règles
+d'obtention), `bid-why` (taux et sa source). La ligne D17 (`best_row`) ne
+sert plus qu'à l'affichage (ligne D17 de `bid-why`) ; le classement propre
+du guide garde ses profits (`method_profit_in`
+des nœuds argent, `kind_profits` des ambitions, le D17 interne du guide
+pour sourcer une chaîne et convertir les pièces de ses lignes
+d'entraînement, `brain_train::guide_covers`) : rien de ce classement ne
+change. La réserve vendeur (`brain_reserve::coins_per_tick`, meilleure
+méthode propre au dernier prix de vente) reste un autre taux mesuré, hors
+de cette étape.
 
 ## Registre d'objets : d'où vient et où part chaque objet (2026-11-15)
 

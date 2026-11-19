@@ -59,7 +59,31 @@ pub fn fold_refused_launch(life: &mut lifescape_planner::Life, node_id: &str) ->
         return false;
     }
     lifescape_planner::retry_uncounted(life, index);
+    // Never ran: nothing of its claim is on its way (review lot 2, point 2).
+    crate::market_claims::release_run(&life.account, node_id);
     true
+}
+
+/// The active node at `position` went idle without a report (crash,
+/// restart): the failure counts (`record_failure`, history `failed` or
+/// `abandoned`) and its run's claim on the order board ends (review lot
+/// 2, point 2: never a leak until expiry).
+pub fn fold_lost_report(life: &mut lifescape_planner::Life, position: usize, text: &str) -> lifescape_planner::FailureFold {
+    let id = life.nodes[position].id.clone();
+    crate::market_claims::release_run(&life.account, &id);
+    let fold = lifescape_planner::record_failure(life, position, text);
+    crate::brain::push_history(life, &id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "failed" });
+    fold
+}
+
+/// The active node at `position` went idle after an operator stop or a
+/// daemon restart: retried uncounted (history `stopped`), its run's
+/// claim on the order board ended (review lot 2, point 2).
+pub fn fold_stopped(life: &mut lifescape_planner::Life, position: usize) {
+    let id = life.nodes[position].id.clone();
+    crate::market_claims::release_run(&life.account, &id);
+    lifescape_planner::retry_uncounted(life, position);
+    crate::brain::push_history(life, &id, "stopped");
 }
 
 /// True when a launch error proves the script never started: the worker
@@ -111,6 +135,54 @@ mod tests {
         assert!(super::refusal_never_ran("busy: market is running"));
         assert!(super::refusal_never_ran("no session, open lucy_rhodes first"));
         assert!(!super::refusal_never_ran("io: timed out"), "transport: the run may have started");
+    }
+
+    /// A money node of account `account`, launched (active), its run's
+    /// coal on the order board.
+    fn claimed_run(account: &str) -> Life {
+        let mut node = Node::new("n12", NodeKind::MakeMoney, Vec::new(), 0);
+        node.method = Some("gather:mining/coal".to_string());
+        let mut life = Life {
+            schema: 1,
+            account: account.to_string(),
+            created_at: 0,
+            seed: 1,
+            profile: Profile::new(false, 0.5, 0.5, 1, Archetype::Producer),
+            goal: GoalKind::MakeMoney,
+            nodes: vec![node],
+            engagement: None,
+            active: None,
+            history: Vec::new(),
+            ambition: None,
+            goal_origin: None,
+            memory: Default::default(),
+        };
+        lifescape_planner::mark_launched(&mut life, 0);
+        crate::market_claims::claim_run(account, "n12", &format!("{account}_coal"), 300, 3_600);
+        life
+    }
+
+    fn claimed(account: &str) -> Option<i64> {
+        crate::market_claims::claimed_total().get(&format!("{account}_coal")).copied()
+    }
+
+    /// Review lot 2, point 2: a run that ends without a report (idle
+    /// worker: crash, or an operator stop), or whose launch the worker
+    /// refused, releases its claim at once (never a leak until expiry).
+    #[test]
+    fn a_run_without_report_releases_its_claim() {
+        let mut lost = claimed_run("inflight_lost");
+        assert_eq!(claimed("inflight_lost"), Some(300));
+        super::fold_lost_report(&mut lost, 0, "no report");
+        assert_eq!(claimed("inflight_lost"), None, "crash: released");
+        assert_eq!(lost.nodes[0].failures, 1, "the failure counts");
+        let mut stopped = claimed_run("inflight_stopped");
+        super::fold_stopped(&mut stopped, 0);
+        assert_eq!(claimed("inflight_stopped"), None, "operator stop: released");
+        assert_eq!(stopped.nodes[0].failures, 0, "uncounted");
+        let mut refused = claimed_run("inflight_refused");
+        assert!(fold_refused_launch(&mut refused, "n12"));
+        assert_eq!(claimed("inflight_refused"), None, "never ran: released");
     }
 
     /// Plan P10 red test: an idle worker whose report waits in the inbox

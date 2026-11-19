@@ -270,6 +270,16 @@ fn casts_left(bot: &Bot, spec: &TaskSpec, done: u32, want_base: Option<u32>) -> 
     by_count.into_iter().chain(by_want).min().unwrap_or(u32::MAX)
 }
 
+/// What one call of a cast step did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastOutcome {
+    /// One cast paid its XP: a unit.
+    Cast,
+    /// The pack funds no cast any more (a market pause banked the runes,
+    /// live 2026-11-19): no unit, the loop refills from the bank.
+    Refill,
+}
+
 /// Cast loop with bank refills: the order's stops first, a refill when
 /// the pack funds no cast, then `cast` once. Count 0 = no count. A
 /// goalless run that ran dry after casting ends `(done, None)`; any
@@ -280,6 +290,19 @@ pub fn run_casts(
     load: &SpellLoad,
     keep: &[u16],
     mut cast: impl FnMut(&mut Bot) -> Result<(), ScriptError>,
+) -> Result<(u32, Option<StopReason>), ScriptError> {
+    run_cast_steps(bot, spec, load, keep, |cast_bot| cast(cast_bot).map(|_| CastOutcome::Cast))
+}
+
+/// `run_casts` with a step that may ask for a refill instead of a cast
+/// (`CastOutcome::Refill`: no unit counted, the loop's own pack check
+/// takes the runes again).
+pub fn run_cast_steps(
+    bot: &mut Bot,
+    spec: &TaskSpec,
+    load: &SpellLoad,
+    keep: &[u16],
+    mut cast: impl FnMut(&mut Bot) -> Result<CastOutcome, ScriptError>,
 ) -> Result<(u32, Option<StopReason>), ScriptError> {
     let mut spec = spec.clone();
     spec.targets.count = spec.targets.count.filter(|count| *count > 0);
@@ -312,8 +335,10 @@ pub fn run_casts(
             refill(bot, &site, load, keep, wanted)?;
             bank = Some(site);
         }
-        cast(bot)?;
-        state.note_unit();
+        match cast(bot)? {
+            CastOutcome::Cast => state.note_unit(),
+            CastOutcome::Refill => bot.log(&format!("{}: the pack funds no cast any more, refilling", load.spell)),
+        }
     }
 }
 
@@ -432,5 +457,26 @@ pub(crate) mod tests {
         let mut plain = load.clone();
         plain.noted_target = false;
         assert_eq!(plain.pack_casts(&bot), 0, "unnoted loads read the base form only");
+    }
+
+    /// Lot 8 review: a market pause banks the runes mid-cast (curse: 12
+    /// "You do not have enough ... Runes" refusals). The cast step says
+    /// `Refill`: no unit counted, the loop's pack check runs again (here
+    /// the pack still funds the cast, so the next step casts).
+    #[test]
+    fn a_refill_step_counts_no_unit() {
+        let runes = crate::activities::enchant_teleport::spell_runes("confuse");
+        let load = SpellLoad::new("confuse", runes, Vec::new());
+        let mut bot = stocked_bot(&[("bodyrune", 10), ("earthrune", 20), ("waterrune", 30)], &[]);
+        assert!(load.pack_casts(&bot) > 0, "funded");
+        let spec = crate::kit::cycle::parse_cli("curse", &["chickens".to_string(), "2".to_string()]).expect("order");
+        let mut steps = vec![super::CastOutcome::Cast, super::CastOutcome::Refill, super::CastOutcome::Cast].into_iter();
+        let mut calls = 0u32;
+        let (done, _) = super::run_cast_steps(&mut bot, &spec, &load, &[], |_| {
+            calls += 1;
+            Ok(steps.next().expect("no third unit asked"))
+        })
+        .expect("runs offline");
+        assert_eq!((done, calls), (2, 3), "the refill step is no cast");
     }
 }

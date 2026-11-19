@@ -25,7 +25,7 @@ fn now<'view>(level_of: &'view dyn Fn(&str) -> u8, coins: i64, held: &'view dyn 
 }
 
 fn bid(item: &str, margin: Option<f64>) -> Vec<DemandItem> {
-    vec![DemandItem { item: item.to_string(), weight: 500.0, unmet: 100, margin }]
+    vec![DemandItem { asked: false, item: item.to_string(), weight: 500.0, unmet: 100, margin }]
 }
 
 fn demand_stones(ambition: &super::Ambition) -> usize {
@@ -174,6 +174,7 @@ fn fleet_bot(seed: u64) -> FleetBot {
         market_affinity: 0.5,
         seed,
         kind: Some("fisher".to_string()),
+        market_maker: false,
     }
 }
 

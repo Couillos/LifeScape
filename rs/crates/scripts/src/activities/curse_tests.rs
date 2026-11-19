@@ -1,4 +1,4 @@
-use super::{all_taken, choose_step, CastBudget, CAST_WAIT_TICKS, PICKS_PER_CAST, curse_refusal, debuff_level, run_curse, taken_foe, CurseFoes, CurseRefusal, CurseStep, LOWERED_BAN_TICKS, MAGIC_STAT};
+use super::{all_taken, choose_step, CastBudget, CAST_WAIT_TICKS, PICKS_PER_CAST, TAKEN_BAN_TICKS, UNDER_ATTACK_HOLD_TICKS, curse_refusal, debuff_level, run_curse, taken_foe, CurseFoes, CurseRefusal, CurseStep, LOWERED_BAN_TICKS, MAGIC_STAT};
 
 /// The server's lines (`player_magic.rs2`, `player_combat.rs2`) by what
 /// the loop does about them.
@@ -132,4 +132,74 @@ fn waiting_for_the_regen_spends_no_pick() {
     let mut late = CastBudget::new(1000);
     assert!(late.step(CurseStep::Search, 1000 + CAST_WAIT_TICKS).is_err(), "no XP past the regen bound fails loud");
     assert!(CAST_WAIT_TICKS > LOWERED_BAN_TICKS, "the bound outlasts one regeneration");
+}
+
+/// Live 2026-11-19 (ida_reed t=556844..556855, alicefield t=14430..14442,
+/// wolfe_jack t=87906..87918): after "I'm already under attack!" the
+/// loop re-cast the same cow every tick, twelve refusals in twelve ticks
+/// ("no cows foe took curse in 12 refused casts"). The server refuses
+/// any other target while a foe hit us in the last 8 ticks
+/// (`player_combat.rs2` `player_in_combat_check`): no cast for that
+/// window, a wait that spends no pick (auto-retaliate deals with the
+/// unseen aggressor); a known aggressor still comes first.
+#[test]
+fn under_attack_holds_the_casts_for_the_combat_window() {
+    let mut foes = CurseFoes::default();
+    let camp = [(160u16, 3032, 3306), (163, 3035, 3306)];
+    foes.under_attack(1000);
+    assert_eq!(choose_step(None, &camp, (3032, 3306), &foes, 1001), CurseStep::Wait, "no cast while the window runs");
+    assert_eq!(choose_step(None, &camp, (3032, 3306), &foes, 1000 + UNDER_ATTACK_HOLD_TICKS - 1), CurseStep::Wait);
+    assert_eq!(choose_step(None, &camp, (3032, 3306), &foes, 1000 + UNDER_ATTACK_HOLD_TICKS), CurseStep::Cast(160), "the window lapsed");
+    assert_eq!(choose_step(Some(163), &camp, (3032, 3306), &foes, 1001), CurseStep::Cast(163), "a seen aggressor is the legal target");
+    let mut budget = CastBudget::new(1000);
+    for tick in 0..UNDER_ATTACK_HOLD_TICKS {
+        assert!(budget.step(CurseStep::Wait, 1000 + tick).is_ok(), "waiting is no pick");
+    }
+}
+
+/// Live 2026-11-19 (34 runs: "no cows foe took weaken in 270 ticks ...
+/// (last line \"Accepted trade.\")"): a market pause took the caster to
+/// Varrock mid-cast; the walk back to the camp ate the 270-tick bound
+/// meant for the camp's regeneration. A walk back to the camp restarts
+/// the bound (and the picks): only time spent at the camp counts.
+#[test]
+fn a_walk_back_to_the_camp_restarts_the_cast_bound() {
+    let mut budget = CastBudget::new(1000);
+    budget.refused();
+    assert!(budget.step(CurseStep::Search, 1000 + CAST_WAIT_TICKS).is_err(), "the pause and the walk ate the bound");
+    budget.restart(1000 + CAST_WAIT_TICKS);
+    assert!(budget.step(CurseStep::Cast(7), 1000 + CAST_WAIT_TICKS + 1).is_ok(), "at the camp again: a fresh bound");
+    assert!(budget.step(CurseStep::Search, 1000 + 2 * CAST_WAIT_TICKS).is_err(), "still bounded once back");
+}
+
+/// Live 2026-11-19 (arthur_75 t=22426..22626, alice_swift t=92919..93119,
+/// River Lum cows): a cow facing us took twelve casts 20 ticks apart,
+/// none answered (no XP, no line), because an aggressor bypassed every
+/// ban. A foe whose cast went unanswered stays out for its ban even when
+/// it faces us; a lowered aggressor is still finished.
+#[test]
+fn an_unanswered_aggressor_respects_its_ban() {
+    let mut foes = CurseFoes::default();
+    let camp = [(405u16, 3180, 3326), (460, 3184, 3328)];
+    foes.ban(405, 2000 + TAKEN_BAN_TICKS);
+    assert_eq!(choose_step(Some(405), &camp, (3180, 3325), &foes, 2001), CurseStep::Cast(460), "the silent aggressor is skipped");
+    assert_eq!(choose_step(Some(405), &camp, (3180, 3325), &foes, 2000 + TAKEN_BAN_TICKS), CurseStep::Cast(405), "its ban runs out");
+    foes.mark_lowered(460, 2001);
+    assert_eq!(choose_step(Some(460), &camp, (3180, 3325), &foes, 2002), CurseStep::Finish(460), "a lowered aggressor is finished");
+}
+
+/// Lot 8 re-review: the real step with the runes banked (a market pause
+/// banks everything but the tools): `curse_once` asks for a refill
+/// before any click, never a cast the server answers "You do not have
+/// enough ... Runes" (`run_cast_steps` then refills from the bank).
+#[test]
+fn a_cast_step_with_no_runes_in_the_pack_asks_a_refill() {
+    let mut bot = crate::kit::spell_load::tests::stocked_bot(&[], &[("bodyrune", 50), ("earthrune", 100), ("waterrune", 100)]);
+    bot.world.stats.insert(MAGIC_STAT, (30, 0));
+    let spot = lifescape_gamedata::combat_spots::by_key("cows").expect("the cow camp");
+    let load = crate::kit::spell_load::SpellLoad::new("curse", crate::activities::enchant_teleport::spell_runes("curse"), Vec::new());
+    assert_eq!(load.pack_casts(&bot), 0, "the pack funds no cast");
+    let mut foes = CurseFoes::default();
+    let outcome = super::curse_once(&mut bot, &spot, "curse", &mut foes, &load).expect("no network touched");
+    assert_eq!(outcome, crate::kit::spell_load::CastOutcome::Refill);
 }

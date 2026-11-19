@@ -110,8 +110,8 @@ pub fn group_skills(group: &str) -> Vec<&'static str> {
     }
 }
 
-/// What a kind's own skills produce in one step for an open bid beyond
-/// its ladder (user 2026-11-15: "motive les bots a produire les
+/// What a kind's own skills produce in one step (a leg no other way
+/// dominates, `dominated`) for an open bid beyond its ladder (user 2026-11-15: "motive les bots a produire les
 /// ressources manquantes sur le marché"): a production leg trained by one
 /// of the kind's group skills whose inputs are none or gathered by those
 /// same skills (a smith's steel bars from mined ore and coal). Returns
@@ -125,7 +125,7 @@ pub fn servable(kind: &str, item: &str) -> Option<(String, u8)> {
             .iter()
             .any(|leg| leg.inputs.is_empty() && leg.skill.as_ref().is_some_and(|(skill, _)| skills.contains(&skill.as_str())))
     };
-    crate::obtain_legs::production_legs(item).into_iter().find_map(|leg| {
+    undominated_legs(item).into_iter().find_map(|leg| {
         let (skill, level) = leg.skill.clone()?;
         let own = skills.contains(&skill.as_str()) && leg.inputs.iter().all(|(input, _)| gathered(input));
         own.then(|| (skill, u8::try_from(level.clamp(1, 99)).unwrap_or(99)))
@@ -137,7 +137,8 @@ pub fn ladder_offers(kind: &str, item: &str) -> bool {
     spec(kind).is_some_and(|found| found.ladder.iter().any(|rung| matches!(rung.then, Then::Produce(items, _, _) if items.contains(&item))))
 }
 
-/// Skill-fit of a kind for a bot: (1 + lead / 5)², where lead is how far
+/// Skill-fit of a kind for a bot (read only by the level-led draw and
+/// coverage of the D3 exceptions, `ambition_fleet::level_led`): (1 + lead / 5)², where lead is how far
 /// the best skill of its primary group stands above the bot's mean over
 /// the groups (frank_lane woodcutting 64 among levels ~10: ~120 for the
 /// woodcutter, 1 elsewhere). Fresh bots fit everything at 1.
@@ -164,14 +165,56 @@ pub struct DemandItem {
     /// production way makes it or no price is known. Only a positive
     /// margin makes a demand milestone.
     pub margin: Option<f64>,
+    /// A resting sell offer of the object exists on the public book
+    /// (`market_demand`): wanted AND missing from the asks weighs more in
+    /// the need (D3: scarcity = unserved bids, missing sell offers).
+    pub asked: bool,
 }
 
 /// Demand weight of one kind, with the product that drives it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KindDemand {
     pub kind: String,
+    /// The level-led draw's demand factor (as before D3, never below 1):
+    /// 1 + share of the open-bid VALUE it serves + share of the best guide
+    /// profit.
     pub weight: f64,
+    /// The NEED alone (decision D3, user 2026-11-19): the scarcity of what
+    /// the kind produces = share of the open-bid MASS it serves (each
+    /// object's `need_mass`: compressed, doubled without asks; 0..1) +
+    /// share of the best guide profit (the prices its products fetch,
+    /// 0..1); 0 when nothing calls for it. `ambition_fleet::saturate`
+    /// divides it by 1 + the kind's holders.
+    pub need: f64,
+    /// The object of the level-led `weight` (heaviest served bid share).
     pub top_item: Option<String>,
+    /// The object that carries the need, when it weighs at least
+    /// `NEED_LABEL_FLOOR` of it (`why` `need:<item>`).
+    pub need_item: Option<String>,
+}
+
+/// An object without any resting sell offer weighs this many times more
+/// in the need (D3: scarcity = unserved bids AND missing sell offers).
+pub const UNASKED_FACTOR: f64 = 2.0;
+
+/// Share of THE KIND's need one object must carry to name it in the
+/// draw's `why` (`need:<item>`; below, `need`): the label names a real
+/// driver even among hundreds of bids, never one of many equal crumbs.
+pub const NEED_LABEL_FLOOR: f64 = 0.05;
+
+/// Mass of one wanted object in the need (lot 6 review 2026-11-19: one
+/// amulet_of_power wish at 1.3 M a unit was 72 % of all bid value):
+/// ln(1 + ln(1 + weight)), so a bid a million times heavier weighs about
+/// 1.5 × an ordinary one (weight 1 400 → 2.1, 4.7 G → 3.1, 1 → 0.5);
+/// × `UNASKED_FACTOR` when no sell offer rests for it. A plain
+/// ln(1 + weight) still gave a 78 M bid ~2.6 ordinary bids.
+pub fn need_mass(item: &DemandItem) -> f64 {
+    let compressed = (1.0 + (1.0 + item.weight.max(0.0)).ln()).ln();
+    if item.asked {
+        compressed
+    } else {
+        compressed * UNASKED_FACTOR
+    }
 }
 
 /// Every product a kind's ladder can make.
@@ -267,7 +310,9 @@ pub fn ladder_level(kind: &str, skill: &str) -> u8 {
     spec(kind).map(|entry| entry.ladder.iter().filter(|rung| rung.skill == skill).map(|rung| rung.level).max().unwrap_or(0)).unwrap_or(0)
 }
 
-/// How much a kind answers the demand for `item`: 1 when its ladder lists
+/// How much a kind answers the demand for `item` (only through legs no
+/// other way dominates, `dominated`: superheat never makes a mage answer
+/// the bar demand, user 2026-11-19): 1 when its ladder lists
 /// the object or its primary skill makes it at any tier (adamant armour
 /// out of every bot's reach still calls for smiths: « devenir forgeron
 /// parce que l'adamant se vend », 2026-11-14); half per recipe step when
@@ -281,9 +326,34 @@ pub fn serves(kind: &str, item: &str) -> f64 {
     serves_at(&skills, item, 0)
 }
 
+/// A production leg DOMINATED by another way to the same object (user
+/// decision 2026-11-19, « pourtant ça coûte rien de faire fondre aux
+/// fours »): another leg of `legs` that a SKILL makes needs a subset of
+/// its inputs, each in a quantity at most its own, and it needs strictly
+/// more (an extra input or a larger quantity). A ground spawn or a drop
+/// farm (no skill, no input) dominates nothing: it is no way to MAKE the
+/// object (it would otherwise strip every rune, smithed piece and bar). Superheat (ore + coal + nature rune) is
+/// dominated by the furnace (ore + coal): its skill does not serve the
+/// bar. Pure game data (inputs only, no price); equal input lists never
+/// dominate each other.
+pub fn dominated(leg: &crate::obtain_legs::ProductionLeg, legs: &[crate::obtain_legs::ProductionLeg]) -> bool {
+    let quantity = |inputs: &[(String, i64)], item: &str| inputs.iter().filter(|(name, _)| name == item).map(|(_, count)| *count).sum::<i64>();
+    legs.iter().filter(|other| other.skill.is_some()).any(|other| {
+        let within = other.inputs.iter().all(|(item, _)| quantity(&other.inputs, item) <= quantity(&leg.inputs, item));
+        let more = leg.inputs.iter().any(|(item, _)| quantity(&leg.inputs, item) > quantity(&other.inputs, item));
+        within && more
+    })
+}
+
+/// The production legs of `item` that no other leg dominates (`dominated`).
+fn undominated_legs(item: &str) -> Vec<crate::obtain_legs::ProductionLeg> {
+    let legs = crate::obtain_legs::production_legs(item);
+    legs.iter().filter(|leg| !dominated(leg, &legs)).cloned().collect()
+}
+
 fn serves_at(skills: &[&str], item: &str, depth: u8) -> f64 {
     let mut best: f64 = 0.0;
-    for leg in crate::obtain_legs::production_legs(item) {
+    for leg in undominated_legs(item) {
         if leg.skill.as_ref().is_some_and(|(skill, _)| skills.contains(&skill.as_str())) {
             return 0.5f64.powi(i32::from(depth));
         }
@@ -300,16 +370,23 @@ fn serves_at(skills: &[&str], item: &str, depth: u8) -> f64 {
 /// answers (`serves`: its own products at any tier in full, the inputs
 /// its skill makes at half per step; 0..n) + its best profit relative to
 /// the fleet's best (0..1, chain evals and measured methods, `(kind,
-/// profit)`). A bid whose known margin is a loss pulls nobody. Keeps the
-/// draw random, tilted toward what buyers wait for and what pays.
+/// profit)`). A bid whose known margin is a loss pulls nobody. The
+/// level-led draw (`ambition_fleet::level_led`) reads that `weight`; the
+/// need-led draw (D3) reads `need`: the share of the bid MASS served
+/// (`need_mass`, robust to one outlier, doubled without asks) + the same
+/// profit share. Keeps the draw random, tilted toward what buyers wait
+/// for and what pays.
 pub fn kind_weights(items: &[DemandItem], kind_profits: &[(String, f64)]) -> Vec<KindDemand> {
     let wanted_items: Vec<&DemandItem> = items.iter().filter(|wanted| wanted.weight > 0.0 && wanted.margin.is_none_or(|margin| margin > 0.0)).collect();
     let top_weight = wanted_items.iter().map(|entry| entry.weight).fold(0.0, f64::max);
     let top_profit = kind_profits.iter().map(|(_, profit)| *profit).fold(0.0, f64::max);
+    let total_mass: f64 = wanted_items.iter().map(|wanted| need_mass(wanted)).sum();
     let mut out = Vec::new();
     for entry in specs().iter().filter(|entry| !crate::ambition::ladderless(entry.kind)) {
         let mut demand = 0.0;
         let mut top: Option<(&DemandItem, f64)> = None;
+        let mut offer = 0.0;
+        let mut driver: Option<(&DemandItem, f64)> = None;
         for wanted in &wanted_items {
             let answer = serves(entry.kind, &wanted.item);
             if answer <= 0.0 {
@@ -320,10 +397,17 @@ pub fn kind_weights(items: &[DemandItem], kind_profits: &[(String, f64)]) -> Vec
             if top.is_none_or(|(_, known)| share > known) {
                 top = Some((wanted, share));
             }
+            let part = if total_mass > 0.0 { answer * need_mass(wanted) / total_mass } else { 0.0 };
+            offer += part;
+            if driver.is_none_or(|(_, known)| part > known) {
+                driver = Some((wanted, part));
+            }
         }
         let profit = kind_profits.iter().filter(|(kind, _)| kind == entry.kind).map(|(_, profit)| *profit).fold(0.0, f64::max);
         let profit_share = if top_profit > 0.0 { profit.max(0.0) / top_profit } else { 0.0 };
-        out.push(KindDemand { kind: entry.kind.to_string(), weight: 1.0 + demand + profit_share, top_item: top.map(|(wanted, _)| wanted.item.clone()) });
+        let need = offer + profit_share;
+        let need_item = driver.filter(|(_, part)| need > 0.0 && *part >= NEED_LABEL_FLOOR * need).map(|(wanted, _)| wanted.item.clone());
+        out.push(KindDemand { kind: entry.kind.to_string(), weight: 1.0 + demand + profit_share, need, top_item: top.map(|(wanted, _)| wanted.item.clone()), need_item });
     }
     out
 }

@@ -105,16 +105,28 @@ pub fn run_telegrab_wine(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let wine = obj_id(bot, PRODUCT)?;
     let load = telegrab_load();
     wield_staff_for(bot, &load.runes)?;
-    stock_for(bot, &load, &keep, 1)?;
-    walk_to_stand(bot)?;
-    for _ in 0..WINE_EMPTY_LIMIT {
-        if wine_on_floor(bot, wine) {
+    // A market pause in the respawn wait banks the runes and leaves the
+    // bot at the Varrock square (`kit::site::reload_after_pause`): runes
+    // and stand again, never a cast from the square.
+    let mut restarts = 0u32;
+    loop {
+        let pauses_at_load = bot.pauses_done;
+        stock_for(bot, &load, &keep, 1)?;
+        walk_to_stand(bot)?;
+        for _ in 0..WINE_EMPTY_LIMIT {
+            if wine_on_floor(bot, wine) {
+                break;
+            }
+            bot.log("altar empty, waiting for the respawn");
+            for _ in 0..10 {
+                bot.pump(2)?;
+            }
+        }
+        if !crate::kit::site::reload_after_pause(pauses_at_load, bot.pauses_done, restarts) {
             break;
         }
-        bot.log("altar empty, waiting for the respawn");
-        for _ in 0..10 {
-            bot.pump(2)?;
-        }
+        restarts += 1;
+        bot.log(&format!("telegrab: a market pause left us at {:?}, runes and stand again", bot.position()));
     }
     if !wine_on_floor(bot, wine) {
         return Err(ScriptError::Failed(format!("wine gone at {WINE_SPAWN:?} from {:?}", bot.position())));

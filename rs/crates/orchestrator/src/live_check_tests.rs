@@ -15,7 +15,8 @@
 //! fills of the copy, else the high alchemy value) and the bids they
 //! open at; then, on the copy's book plus those bids, the lot each bot
 //! would make (the planner's `choose`: every valued object, its own coin
-//! rate from the copy's money guide (D17), the snapshot's rates, its
+//! rate measured on the copy (D1, `time_value::measure_in`), the
+//! snapshot's rates, its
 //! position, its ambition's levels; claims of the bots before it on the
 //! board), the input bids that lot would post (derived demand), and the
 //! fleet's ambition weights. Read-only on the copies.
@@ -88,8 +89,13 @@ fn live_check() {
         .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|text| crate::rates_service::snapshot_from_json(&text))
         .unwrap_or_default();
-    // The coin rates read the money guide of the copy (one cycle, `brain_d17`).
+    // The money guide of the copy (one cycle): its best lines, shown.
     let guides = crate::guides_store::build_set(&store, &snapshot, &crate::web_guides::StoreWaits::default());
+    // Each bot's coin rate: what its work really earned on the copy (D1),
+    // the window ending at the copy's newest report (an old copy is never
+    // read empty, every bot at the floor).
+    let copy_end = store.newest_report_clock().expect("newest report").expect("a report in the copy");
+    let time_values = crate::time_value::measure_in(&store, copy_end).expect("time values of the copy");
     // The copy's resting book by debug name.
     let mut owners: Vec<(String, String, bool, i64, i64)> = Vec::new();
     for order in store.resting_orders().expect("orders") {
@@ -159,7 +165,7 @@ fn live_check() {
             caster,
             rate: &lifescape_planner::work_rate::prior_rate,
         };
-        let rate = crate::brain_d17::rate_of(crate::brain_d17::bot_d17(&guides, &crate::brain_bids::key_of(&life, &state)));
+        let rate = time_values.rate(&account);
         // Every valued lot (spread ignored), best rate first; `*` preempts.
         let mut lots: Vec<lifescape_planner::bid_response::Opportunity> = state.with_producer(&life, rate, |producer| {
             let market = |item: &str| reader.view(item);

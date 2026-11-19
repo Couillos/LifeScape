@@ -217,6 +217,15 @@ décision datée dans `docs/decisions.md`.
   `ReadyCtx::money_guide` ; `planner::money_pick::resolve_from_guide`
   tire. Aucun guide ou aucune ligne tirable : classement statique d'avant
   R7, loggé.
+- Demande partagée (plan équilibre étape 2, 2026-11-19) : le profit
+  d'une ligne pour ce bot est relu AU CHOIX sur les réclamations des
+  autres à l'instant (`planner::guide_share::SharedDemand` : chaque
+  produit de la ligne revalorisé le long de l'échelle de vente partagée,
+  `guide_engine::sale_ladder` : bids et volume récent moins annonces au
+  repos au prix et réclamations ; une ligne qui ne gagne plus disparaît).
+  Le run lancé publie ses unités au tableau des commandes
+  (`brain_money::claim_launch`, docs/economy.md § Tableau des commandes),
+  libérées à son rapport : le bot suivant lit ce qui reste.
 - Recette sur stock (suite R7) : `planner::stock_lot` (pur) :
   `stock_inputs` (intrants de stock d'une action : recette, sort ou
   service sur un objet, jamais une rune, une récolte ni un combat ;
@@ -246,9 +255,10 @@ décision datée dans `docs/decisions.md`.
   la passe dans `brain_bids::with_bot_state`) : l'entraînement d'un lot
   (`training_rows` : actions, intrants brûlés) via `sizing::*_with` ; les
   unités/6000 d'une jambe lisent déjà l'estimateur (`rates_read`, n ≥ 3
-  mélangé au prior, outil du bot). Le taux de pièces du bot est son D17
-  dans le guide money (`brain_d17::coin_rate`, 2026-11-17 : plus la table
-  `rates_profit`) ; `own_use_items` ne lit que des
+  mélangé au prior, outil du bot). Le taux de pièces du bot est son gain
+  réel mesuré par tick de travail (`brain_d17::coin_rate`, D1 du plan
+  équilibre, 2026-11-19 ; son D17 dans le guide money du 2026-11-17 au
+  2026-11-19, la table `rates_profit` avant) ; `own_use_items` ne lit que des
   NOMS d'intrants (la mesure change les quantités, pas l'ensemble) : prior
   gardé.
 - Trait rapide ↔ économe : ne pèse PAS sur l'argent (décision utilisateur
@@ -969,9 +979,91 @@ buts de transformation 20 % sous 0,4, 53 % entre 0,4 et 0,6, 74 % à
 partir de 0,6, les 12 groupes couverts. Log par compte : `brain <acct>: ambition <kind>
 (<why>) — milestones …`.
 
+Besoin seul (décision utilisateur D3, 2026-11-19, docs/plan-equilibre.txt
+étape 6) : le tirage ci-dessus (adéquation aux niveaux) faisait gagner la
+compétence déjà en tête (bûcheronnage en tête pour 43 bots sur 74, 28 %
+du temps de la flotte contre 0,6 % d'artisanat) et la boucle
+s'entretenait. Désormais le poids d'un type = son BESOIN seul
+(`KindDemand::need`) × l'inclinaison du trait `market_affinity` (le
+trait n'est pas un niveau). Besoin = part de la MASSE des offres d'achat
+ouvertes qu'il sert (0..1) + part du meilleur profit du guide money
+(0..1), puis saturation. Masse d'un objet (`ambition_catalog::need_mass`,
+revue du lot 6) = ln(1 + ln(1 + poids du signal)) : une offre aberrante
+ne possède plus le besoin (en live, un souhait d'amulettes de puissance
+à 1,3 M l'unité faisait 72 % de la valeur des offres ; une offre un
+million de fois plus lourde pèse ~1,5 offre ordinaire ; un simple
+ln(1 + poids) lui laissait encore ~2,6 offres) ; × `UNASKED_FACTOR` = 2
+quand AUCUNE annonce de vente ne repose pour l'objet (D3 : rareté =
+offres non servies ET annonces absentes ; lu dans le même carnet public
+que les offres, `DemandSignal::asks` → `DemandItem::asked`, teneurs
+compris, et les annonces du bot lui-même aussi : seules ses OFFRES
+d'achat sont écartées, `market_demand::signals_seen_from`). Saturation (`ambition_fleet::saturate`) : besoin ÷ (1 + nombre
+de bots de la flotte qui tiennent déjà ce type) ; le cerveau la calcule
+sur les autres vies (`brain_ambition::need_demand`), `assign_fleet` sur
+les types tenus et tirés dans la passe. `weight` (tirage au niveau des
+exceptions) garde l'ancienne formule. Les niveaux ne jouent
+plus aucun rôle : ni dans le tirage, ni dans le choix d'un trou de
+couverture ni dans le score de couverture d'`assign_fleet`
+(`gap_score` = (1 + besoin du type du trou) × inclinaison, départage
+par la graine ; la réparation de couverture lit donc les poids de
+demande quand un trou est ouvert). Un type sans besoin n'est jamais tiré tant qu'un
+autre en a ; aucun besoin nulle part (marché fermé, premier cycle) :
+besoins égaux, tirage uniforme × inclinaison (`why` = `random`). `why`
+= `need:<objet>` quand un objet porte au moins `NEED_LABEL_FLOOR` = 5 %
+du besoin DU TYPE (même parmi des centaines d'offres), sinon `need`.
+Tous les jalons ouverts refroidis : log `every open milestone cools`
+(but d'appoint), jamais « banned skill » sans compétence. Changement facultatif d'un bot au besoin : seulement vers un type
+qui a du besoin (sinon il garde son ambition). Exceptions
+(`ambition_fleet::LEVEL_LED_ACCOUNTS`, `level_led`) : Zezima, N0valyfe,
+Yogosun et tout teneur de marché (archétype `MarketMaker` ou ambition
+`market_maker`, `FleetBot::market_maker`) gardent le tirage d'avant
+(demande × √adéquation × inclinaison). Tests :
+`ambition_fleet::need_tests` (bûcheron 70 / artisan 30 : demande
+d'artisanat seule → artisan à chaque graine, demande de bûches seule →
+bûcheron, exceptions au niveau ; une offre de 78 M parmi 30 ordinaires
+≤ 1,5/n de la part ; objet sans annonce > objet annoncé ; dix artisans
+abaissent le besoin d'artisan ; étiquette seulement pour un vrai moteur).
+
+Voies dominées (décision utilisateur 2026-11-19, « pourtant ça coûte
+rien de faire fondre aux fours » ; `ambition_catalog::dominated`) : une
+jambe de production qu'une AUTRE jambe faite par une compétence domine
+(intrants de l'autre ⊂ les siens, chaque quantité ≤, et elle en demande
+strictement plus) ne fait pas servir l'objet à sa compétence, ni à ses
+intrants : `serves` et `servable` ne lisent que les jambes non dominées.
+Données du jeu seules, aucun prix. Une apparition au sol ou une ferme de
+butin (sans compétence ni intrant) ne domine rien : ce n'est pas une
+façon de FABRIQUER. Dans les données rev 274, seules les 8 jambes de
+sort de fonte sont dominées (bronze, fer, acier, argent, or, mithril,
+adamantite, runite : intrants du four + 4 runes de feu + 1 rune de
+nature) : le mage ne répond plus à la demande de barres ni de pièces
+forgées, le runier non plus par la rune de nature ; forgeron 1, mineur
+½ inchangés. Aucun objet n'a deux compétences en voies non dominées
+(le cas « alternative gardée » est testé sur des jambes construites :
+`need_tests::only_a_superset_of_inputs_is_dominated`). Le poids au
+niveau des exceptions lit le même `serves`.
+
+Manque au marché (D3) : un but bloqué parce qu'un achat est resté non
+servi ou a été refusé par le marché (`bans_scope::market_shortfall` sur
+la dernière erreur de la cause) ne bannit aucune compétence ET ne compte
+plus comme jalon bloqué : `brain_succession::close_goal` passe
+`GoalEnd::MarketShortfall` à `brain_ambition::after_close`, qui rouvre le
+jalon (`ambition::on_goal_shortfall` : `pending`, `blocked_count`
+inchangé) et le REFROIDIT `MILESTONE_SHORTFALL_COOL_TICKS` = 6000 ticks
+(décision utilisateur 2026-11-19 : entrée `cool:milestone:<type>/<id>`,
+`ambition::milestone_cool_key`, historique `cool` ; `next_feasible_milestone`
+le saute pendant ce temps, le bot travaille le jalon suivant ou un but
+d'appoint ; sans cela « market rejected: buyer holds X coins » le
+relançait à chaque cycle ; `goals::goal_closed` ignore les entrées
+`cool`, écrites ici après la clôture). Log `milestone mN: market shortfall, not a
+block; cooled 6000 ticks`. Avant :
+49 changements d'ambition en 24 h après « jalon bloqué 3 fois », les
+transformations d'abord. Tout autre échec compte toujours un blocage
+(tests `brain_succession::a_market_shortfall_is_no_milestone_block`,
+`a_market_shortfall_cools_its_milestone`).
+
 Contrat du fichier (rendu par la page `life`, lu par les ventes) :
 `ambition = {kind, label, groups, why: coverage:<groupe>|
-random|demand:<objet>, milestones: [{id, label, kind: level|produce|equip|coins,
+random|demand:<objet>|need:<objet>|need, milestones: [{id, label, kind: level|produce|equip|coins,
 target, status: pending|active|done|blocked, progress: [cur, target],
 blocked_count, origin: ladder|demand:<objet>|extend}], drawn_at_tick,
 drawn_at, rung, revisions: [{tick, at_secs, from, to, why}]}` et
@@ -991,8 +1083,12 @@ par type d'ambition, `brain_d17::kind_profits` : catalogue coté, sans
 condition impossible pour tous, chaînes comprises ; vide avant le premier
 jeu ; 2026-11-17 : plus `chain_profits` ni la table `rates_profit`),
 `kind_demand()` (entrées du planner :
-`DemandItem`, `KindDemand` = 1 + part de la demande servie + part du
-meilleur profit).
+`DemandItem` (avec `asked` : une annonce de vente repose pour l'objet),
+`KindDemand` : `weight` = 1 + part de la VALEUR des offres servie + part
+du meilleur profit (tirage au niveau des exceptions), `need` = part de
+la MASSE servie (`need_mass`) + part du meilleur profit (tirage au
+besoin, saturé ensuite), `need_item` = l'objet qui porte ≥ 5 % du
+besoin). `DemandSignal::asks` = unités en annonce de vente au repos.
 
 ## L7 : précisions d'implémentation
 
@@ -1459,9 +1555,17 @@ d'une récolte planifiée (plumes, appât de pêche :
   `workable`, outils détenus, ni quarantaine ni refroidissement) ;
   `pick_offer` supprimé. Sans guide : `money_methods` la classe sur son
   profit/6000 comme avant.
-- Lot (`lot_size`) : min(volume d'une fenêtre de la ligne, profondeur des
-  asks + unités détenues, bourse libre au coût du carnet — chaque unité au
-  moins au prix courant) ; borne affichée `capital` | `depth` | `window`.
+- Lot (`lot_size`) : min(volume d'une fenêtre de la ligne, demande
+  partagée du produit — plan équilibre étape 2, `TradeOffer::demand` :
+  bids + volume récent moins annonces au repos au prix et réclamations
+  des autres —, profondeur des asks + unités détenues, bourse libre au
+  coût du carnet — chaque unité au moins au prix courant) ; borne
+  affichée `capital` | `depth` | `window` | `demand`. Aucune demande
+  restante : aucune offre. Profit et prévu sur ce lot
+  (`TradeOffer::lot_profit`) ; classement = net du lot par 6000 ticks de
+  son craft plus UN achat (trajet + attente du marché, `lot_rate`), sur le
+  lot que la bourse, les asks et la demande permettent ; docs/economy.md
+  § Exécution 100 % market.
 - Séquence : `lock` bloque `missing:<intrants>` (lot dans `node.batch`) →
   `record_block_from` dépose une obtention par intrant à jambe `market:buy`
   SEULE (`replan`, `trade_craft::buys_input` ; un outil manquant garde les

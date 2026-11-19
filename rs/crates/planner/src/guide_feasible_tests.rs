@@ -181,6 +181,8 @@ fn conditions_list_every_requirement() {
         quest_points: 5,
         tools: vec!["hammer".to_string()],
         capital: 500.0,
+        purchase_ticks: 0.0,
+        purchases_per_6000: 0.0,
         ironman: false,
         stock: vec![("coal".to_string(), 19.0)],
         market: vec![need("naturerune", 28.0, 0.0, 0.0, true)],

@@ -18,6 +18,9 @@
 //!   without working (live 2026-11-14: `melee men` from the mill top,
 //!   goal_reached after 0 ticks, relaunched every 10 s for an hour) keeps
 //!   its skill out of the next fillers for `FILLER_RETRY_TICKS`.
+//!   Its product goes on the public order board for the window (plan
+//!   équilibre step 2, `brain_money::claim_launch`), released at its
+//!   report.
 
 use std::sync::Arc;
 
@@ -58,6 +61,9 @@ pub(crate) fn filler_worked(report: &Value) -> Option<bool> {
 /// Fold one filler report into the history (never into the graph).
 /// Returns the log line.
 pub(crate) fn fold_filler_report(life: &mut Life, node_id: &str, report: &Value) -> String {
+    // The window is over: its units are no longer on their way (plan
+    // équilibre step 2), whatever it made.
+    crate::market_claims::release_run(&life.account, node_id);
     // The launch tag names the method at its site (`method@x,z,level`).
     let launched = life
         .history
@@ -214,6 +220,9 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
         return false;
     }
     crate::site_crowd::note(&job.account, node.site);
+    // Its product goes on the public order board until its report (plan
+    // équilibre step 2).
+    crate::brain_money::claim_launch(&job.account, &node, &method, Some((0, FILLER_TICKS)), live);
     let through = through.map(|skill| format!(" through the {skill} ban (every workable money method is banned)")).unwrap_or_default();
     crate::logln!("brain {}: {} awaiting its fill, working {method} meanwhile{through} ({FILLER_TICKS} ticks): {script} {}", job.account, waiting.join(","), args.join(" "));
     push_history(life, &node.id, &format!("{FILLER_LAUNCH_TAG}{}", lifescape_planner::cooldown::cool_key(&method, node.site)));
@@ -227,6 +236,8 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
     let reply = orch.run_job(&job.account, &script, &values);
     if reply.get("ok").as_bool() != Some(true) {
         crate::logln!("brain {}: filler launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
+        // No window, no units on their way (review lot 2, point 2).
+        crate::market_claims::release_run(&job.account, &node.id);
     }
     true
 }

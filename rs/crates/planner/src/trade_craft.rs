@@ -39,7 +39,8 @@
 use lifescape_json::{object, str_value, Value};
 
 use crate::expand::ReadyCtx;
-use crate::guide_model::{Family, MoneyRow, Outlet, Quote};
+use crate::guide_engine::{ladder_value, market_depth, sale_ladder, SaleLevel};
+use crate::guide_model::{Family, MoneyRow, Outlet, Quote, ShopNeed};
 use crate::model::{Node, NodeStatus};
 
 /// Prefix of the method: `trade:craft/<recipe>`, the recipe a guide
@@ -88,21 +89,70 @@ pub struct TradeInput {
 pub struct TradeOffer {
     pub method: String,
     pub product: String,
-    /// Guide profit per 6000 ticks of the row's time (D6, D15).
+    /// Profit per 6000 ticks (D6, D15) of the lot the shared demand
+    /// takes (`demand`, at most one window; plan équilibre step 2): that
+    /// lot's net over its craft plus its one purchase (`lot_rate`).
     pub profit_6000: f64,
     /// Products per 6000 ticks of the row (the volume the guide priced).
     pub product_per_6000: f64,
-    /// Price the guide sells one product at.
+    /// Mean price one product of the demand-sized lot sells at.
     pub unit_sale: f64,
     pub inputs: Vec<TradeInput>,
+    /// Units of the product the MARKET still takes for this bot (plan
+    /// équilibre step 2: bids and the recent volume at the current price,
+    /// minus the asks resting at or under it and the units other
+    /// producers claimed); unbounded for a bare offer (bought stock).
+    pub demand: f64,
+    /// Coins of inputs (and the row's other flows) per product, at the
+    /// guide's prices.
+    pub unit_cost: f64,
+    /// The product's shared sale ladder (`guide_engine::sale_ladder`);
+    /// empty for a bare offer.
+    pub sale: Vec<SaleLevel>,
+    /// Craft ticks per product (the row's time without its purchases).
+    pub craft_ticks_per_unit: f64,
+    /// Ticks of the lot's one purchase (square trip, market wait).
+    pub purchase_ticks: f64,
 }
 
 impl TradeOffer {
     /// Guide profit of one product (`profit_6000` over the products of
     /// the window).
     pub fn unit_profit(&self) -> f64 {
+        if !self.sale.is_empty() {
+            return self.unit_sale - self.unit_cost;
+        }
         if self.product_per_6000 > 0.0 {
             self.profit_6000 / self.product_per_6000
+        } else {
+            0.0
+        }
+    }
+
+    /// Coins a lot of `lot` products nets (its sale down the shared
+    /// ladder minus its inputs at the guide's prices); a bare offer: its
+    /// guide profit per product (none).
+    pub fn lot_profit(&self, lot: i64) -> f64 {
+        if self.sale.is_empty() {
+            return self.unit_profit() * lot as f64;
+        }
+        ladder_value(&self.sale, lot as f64) - self.unit_cost * lot as f64
+    }
+
+    /// Ticks a lot of `lot` products takes: its craft plus its one
+    /// purchase (fixed per lot, never spread over a window it does not
+    /// fill).
+    pub fn lot_ticks(&self, lot: i64) -> f64 {
+        lot.max(0) as f64 * self.craft_ticks_per_unit + self.purchase_ticks
+    }
+
+    /// Coins per 6000 ticks a lot of `lot` products earns (review lot 2,
+    /// point 5: the ranking of a trade lot, on the lot really taken); 0
+    /// without time.
+    pub fn lot_rate(&self, lot: i64) -> f64 {
+        let ticks = self.lot_ticks(lot);
+        if ticks > 0.0 {
+            self.lot_profit(lot) * crate::guide_model::WINDOW_TICKS / ticks
         } else {
             0.0
         }
@@ -131,19 +181,27 @@ fn bought_cause(cause: &str) -> bool {
 /// coins: nothing to craft nor sell) and whose every purchase is a
 /// market one (a shop purchase has no `market:buy` leg). Whether THIS
 /// bot can work it is `eligible` (`guide_feasible::feasible_for`).
-pub fn offer_from_row(row: &MoneyRow, quote: &dyn Fn(&str) -> Option<Quote>, held: &dyn Fn(&str) -> i64) -> Result<TradeOffer, String> {
+///
+/// Shared demand (plan équilibre step 2): `quote` carries the claims of
+/// the OTHER producers (`Quote::claimed`); the product's demand is what
+/// the market still takes (`guide_engine::market_depth` of its shared
+/// ladder, `shop` the best F2P shop past it). No demand left: no offer
+/// (the lot sells on the market, never into a book already served).
+/// The profit is the margin of the lot that demand takes (at most one
+/// window), at the row's speed.
+pub fn offer_from_row(row: &MoneyRow, quote: &dyn Fn(&str) -> Option<Quote>, shop: &dyn Fn(&str) -> Option<(f64, ShopNeed)>, held: &dyn Fn(&str) -> i64) -> Result<TradeOffer, String> {
     if row.family != Family::Market {
         return Err(format!("{}: not a market row ({})", row.method, row.family.as_str()));
     }
     if !row.priced {
         return Err(format!("{}: unpriced (an input nothing prices)", row.method));
     }
-    if row.profit_6000 <= 0.0 {
-        return Err(format!("{}: no profit ({:.0} / 6000)", row.method, row.profit_6000));
-    }
+    // No gate on the guide's own profit (review lot 2, point 1): the guide
+    // counts EVERY claim, this bot's own included; the profit that
+    // decides is the one re-read below on the claims of the others.
     let product = crate::guide_methods::own_product(&row.method).filter(|product| product != "coins").ok_or_else(|| format!("{}: no product to sell", row.method))?;
     let sold = row.flows.iter().find(|line| line.item == product && line.per_6000 > 0.0).ok_or_else(|| format!("{}: the row makes no {product}", row.method))?;
-    let (product_per_6000, unit_sale) = (sold.per_6000, sold.unit_price);
+    let product_per_6000 = sold.per_6000;
     let mut inputs: Vec<TradeInput> = Vec::new();
     for line in row.flows.iter().filter(|line| line.per_6000 < 0.0 && line.item != "coins" && bought_cause(&line.cause)) {
         if line.outlet != Outlet::Market {
@@ -163,7 +221,34 @@ pub fn offer_from_row(row: &MoneyRow, quote: &dyn Fn(&str) -> Option<Quote>, hel
     if inputs.is_empty() {
         return Err(format!("{}: nothing to buy", row.method));
     }
-    Ok(TradeOffer { method: method_of(&row.method), product, profit_6000: row.profit_6000, product_per_6000, unit_sale, inputs })
+    let sold_quote = quote(&product).ok_or_else(|| format!("{}: {product} has no quote (the cycle never priced it)", row.method))?;
+    let sale = sale_ladder(&sold_quote, shop(&product));
+    let demand = market_depth(&sale);
+    if demand < 1.0 {
+        return Err(format!(
+            "{}: no demand left for {product} ({:.0} recent units, {:.0} claimed by other producers or resting at or under {:.0})",
+            row.method,
+            sold_quote.fill_units,
+            crate::guide_engine::ahead_units(&sold_quote),
+            sold_quote.price
+        ));
+    }
+    // Everything but the product, per product (inputs, consumables, the
+    // row's other flows), at the guide's prices.
+    let unit_cost = (sold.value_6000 - row.profit_6000) / product_per_6000;
+    let window = (product_per_6000.floor() as i64).max(1);
+    let lot = window.min(demand.floor() as i64).max(1);
+    let unit_sale = ladder_value(&sale, lot as f64) / lot as f64;
+    let purchase_ticks = row.prereqs.purchase_ticks.max(0.0);
+    let craft_ticks_per_unit = (crate::guide_model::WINDOW_TICKS - row.prereqs.purchases_per_6000.max(0.0) * purchase_ticks).max(0.0) / product_per_6000;
+    let mut offer = TradeOffer { method: method_of(&row.method), product, profit_6000: 0.0, product_per_6000, unit_sale, inputs, demand, unit_cost, sale, craft_ticks_per_unit, purchase_ticks };
+    // Ranked on the lot the demand takes, its purchase spread over that
+    // lot only (review lot 2, point 5).
+    offer.profit_6000 = offer.lot_rate(lot);
+    if offer.profit_6000 <= 0.0 {
+        return Err(format!("{}: no profit on the {lot} {} the shared demand takes ({unit_sale:.0} a unit, {unit_cost:.0} of inputs)", row.method, offer.product));
+    }
+    Ok(offer)
 }
 
 /// The bare offer of a trade method from its recipe's way (inputs per
@@ -179,7 +264,7 @@ pub fn recipe_offer(method: &str, held: &dyn Fn(&str) -> i64) -> Option<TradeOff
         .iter()
         .map(|(item, per_action)| TradeInput { item: item.clone(), per_unit: (*per_action).max(1) as f64 / out, asks: Vec::new(), floor: 0.0, held: held(item).max(0) })
         .collect();
-    (!inputs.is_empty()).then(|| TradeOffer { method: method.to_string(), product, profit_6000: 0.0, product_per_6000: 0.0, unit_sale: 0.0, inputs })
+    (!inputs.is_empty()).then(|| TradeOffer { method: method.to_string(), product, profit_6000: 0.0, product_per_6000: 0.0, unit_sale: 0.0, inputs, demand: f64::INFINITY, unit_cost: 0.0, sale: Vec::new(), craft_ticks_per_unit: 0.0, purchase_ticks: 0.0 })
 }
 
 /// True when a bot may work the market row now (D22: the one judgement,
@@ -197,15 +282,16 @@ pub fn eligible(row: &MoneyRow, bot: &crate::guide_feasible::BotState) -> bool {
 
 /// Offers of the market rows a bot may work, one per method (the first
 /// row of a method wins: the reader orders them), best profit first; the
-/// units it holds are `bot.held`.
-pub fn offers(rows: &[&MoneyRow], quote: &dyn Fn(&str) -> Option<Quote>, bot: &crate::guide_feasible::BotState) -> Vec<TradeOffer> {
+/// units it holds are `bot.held`; `quote` with the claims of the other
+/// producers, `shop` the best F2P shop of an object (`offer_from_row`).
+pub fn offers(rows: &[&MoneyRow], quote: &dyn Fn(&str) -> Option<Quote>, shop: &dyn Fn(&str) -> Option<(f64, ShopNeed)>, bot: &crate::guide_feasible::BotState) -> Vec<TradeOffer> {
     let held = |item: &str| (bot.held)(item).max(0.0).floor() as i64;
     let mut out: Vec<TradeOffer> = Vec::new();
     for row in rows {
         if !eligible(row, bot) || out.iter().any(|known| known.method == method_of(&row.method)) {
             continue;
         }
-        if let Ok(offer) = offer_from_row(row, quote, &held) {
+        if let Ok(offer) = offer_from_row(row, quote, shop, &held) {
             out.push(offer);
         }
     }
@@ -222,6 +308,9 @@ pub enum LotBound {
     Depth,
     /// One window's volume of the row (what the guide priced).
     Window,
+    /// What the market still takes of the product (plan équilibre step
+    /// 2: the shared demand, `TradeOffer::demand`).
+    Demand,
 }
 
 impl LotBound {
@@ -230,6 +319,7 @@ impl LotBound {
             LotBound::Capital => "capital",
             LotBound::Depth => "depth",
             LotBound::Window => "window",
+            LotBound::Demand => "demand",
         }
     }
 }
@@ -271,8 +361,9 @@ fn lot_cost(offer: &TradeOffer, lot: i64) -> Option<f64> {
 }
 
 /// The lot a bot works: as many products as one window of the row (the
-/// volume the guide priced), the asks of every input (held units first)
-/// and the free wallet allow. `lot` 0: nothing fits (no capital, no ask).
+/// volume the guide priced), the shared demand of the product (plan
+/// équilibre step 2), the asks of every input (held units first) and the
+/// free wallet allow. `lot` 0: nothing fits (no capital, no ask).
 pub fn lot_size(offer: &TradeOffer, wallet: i64) -> LotPlan {
     let window = (offer.product_per_6000.floor() as i64).max(1);
     let depth = offer
@@ -289,7 +380,8 @@ pub fn lot_size(offer: &TradeOffer, wallet: i64) -> LotPlan {
         .min()
         .unwrap_or(0)
         .max(0);
-    let (upper, upper_bound) = if depth < window { (depth, LotBound::Depth) } else { (window, LotBound::Window) };
+    let demand = if offer.demand.is_finite() { offer.demand.max(0.0).floor() as i64 } else { i64::MAX };
+    let (upper, upper_bound) = [(window, LotBound::Window), (demand, LotBound::Demand), (depth, LotBound::Depth)].into_iter().fold((i64::MAX, LotBound::Window), |best, bound| if bound.0 < best.0 { bound } else { best });
     let fits = |lot: i64| lot_cost(offer, lot).is_some_and(|coins| coins <= wallet.max(0) as f64);
     // The cost grows with the lot: the largest lot the wallet pays.
     let (mut low, mut high) = (0i64, upper);
@@ -455,7 +547,7 @@ pub fn open_lot(lots: &mut Vec<TradeLot>, node: &Node, ctx: &ReadyCtx, now: i64)
         buys,
         cost: lot_cost(offer, lot).unwrap_or(0.0).ceil() as i64,
         bound: bound.to_string(),
-        predicted: (offer.unit_profit() * lot as f64).round() as i64,
+        predicted: offer.lot_profit(lot).round() as i64,
         guide_per_6000: offer.product_per_6000,
         opened: now,
         made: None,

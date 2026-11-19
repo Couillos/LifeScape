@@ -58,7 +58,9 @@ impl NoGoal {
     pub fn describe(&self) -> String {
         match self {
             NoGoal::NoAmbition => "no ambition assigned".to_string(),
-            NoGoal::MilestonesBanned(skills) => format!("every open milestone trains a banned skill ({})", skills.join(",")),
+            // Empty: the open milestones are cooling (market shortfall).
+            NoGoal::MilestonesBanned(skills) if skills.is_empty() => "every open milestone cools (market shortfall)".to_string(),
+            NoGoal::MilestonesBanned(skills) => format!("every open milestone trains a banned skill or cools ({})", skills.join(",")),
             NoGoal::Achieved => "ambition achieved, nothing left to draw".to_string(),
             NoGoal::NothingTrainable => "every skill banned or maxed".to_string(),
         }
@@ -66,14 +68,17 @@ impl NoGoal {
 }
 
 /// True when the current goal was already closed: the latest entry that
-/// is neither graph bookkeeping nor a noted ban expiry is a goal close
+/// is neither graph bookkeeping, a cooldown (`cool`) nor a noted ban
+/// expiry is a goal close
 /// (`done:` / `stuck:`). A closed goal is never closed twice (live: a
 /// finished graph with no goal left re-pushed `done:` on every pass).
 pub fn goal_closed(history: &[HistoryEntry]) -> bool {
     history
         .iter()
         .rev()
-        .find(|entry| entry.node != "graph" && !(entry.node == "goal" && entry.outcome.starts_with(crate::bans::UNBAN_TAG)))
+        // Cooldown entries are bookkeeping too: a milestone cooled at the
+        // close (market shortfall, D3) leaves the goal closed.
+        .find(|entry| entry.node != "graph" && entry.node != crate::cooldown::COOL_NODE && !(entry.node == "goal" && entry.outcome.starts_with(crate::bans::UNBAN_TAG)))
         .is_some_and(|entry| entry.node == "goal" && (entry.outcome.starts_with(DONE_TAG) || entry.outcome.starts_with(STUCK_TAG)))
 }
 
@@ -119,7 +124,7 @@ pub fn draw_goal_origin_with(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_s
     if ambition.kind != crate::ambition::GENERALIST {
         let cooled = crate::cooldown::cooled_keys(&life.history, ticks_since);
         let sick = |method: &str| quarantined(method) || crate::cooldown::method_cooled(&cooled, method);
-        if let Some(stone) = crate::ambition::next_feasible_milestone(ambition, &avoid, &sick) {
+        if let Some(stone) = crate::ambition::next_feasible_milestone(ambition, &avoid, &sick, &cooled) {
             return Ok((crate::ambition::goal_for_milestone(stone), Some(stone.id.clone())));
         }
         let open = ambition.milestones.iter().any(|stone| stone.status != crate::ambition::MilestoneStatus::Done);

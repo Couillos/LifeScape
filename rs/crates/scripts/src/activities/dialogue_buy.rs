@@ -72,8 +72,22 @@ pub fn run_dialogue_buy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     bot.log(&format!("dialogue_buy: {want} {item} from {} at ({},{}) for {} coins each", shop.npc, spawn.0, spawn.1, shop.cost));
     let mut bought = 0u32;
     let mut dry = 0u32;
+    // A market pause banks the coins at Varrock (`kit::site::
+    // reload_after_pause`): fetched again, never a `coins` block for
+    // coins the bank holds. The talk walks back to the seller itself.
+    let mut pauses_at_load = bot.pauses_done;
+    let mut restarts = 0u32;
     while bought < want {
         check_events(bot)?;
+        if pack_total(bot, coins) < shop.cost as u32 + reserve && crate::kit::site::reload_after_pause(pauses_at_load, bot.pauses_done, restarts) {
+            restarts += 1;
+            pauses_at_load = bot.pauses_done;
+            let short = (shop.cost as u32 * (want - bought) + reserve).saturating_sub(pack_total(bot, coins));
+            bot.log(&format!("dialogue_buy: a market pause banked the coins, fetching {short} at {:?}", bot.position()));
+            let keep: Vec<u16> = pack_slots(bot).iter().map(|(_, (held, _))| *held).collect();
+            let bank = crate::kit::bank::nearest_bank(bot)?;
+            crate::kit::bank::bank_trip(bot, &bank, &keep, short)?;
+        }
         if pack_total(bot, coins) < shop.cost as u32 + reserve {
             bot.log(&format!("dialogue_buy: out of coins after {bought} {item}"));
             return Err(ScriptError::Blocked { missing: vec![format!("coins:{}", shop.cost as u32 * (want - bought))] });
@@ -95,6 +109,7 @@ pub fn run_dialogue_buy(bot: &mut Bot, args: &[String]) -> ScriptResult {
             continue;
         }
         dry = 0;
+        restarts = 0;
         bought += gained;
     }
     bot.log(&format!("dialogue_buy: {bought} {item} bought"));

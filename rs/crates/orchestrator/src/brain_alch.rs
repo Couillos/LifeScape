@@ -8,7 +8,7 @@
 //!   gathering and coin spots, only when the cast beats selling
 //!   (`publish`), its runes gated by `tools::required_tool`;
 //! - draw: a stock worth alching (net ≥ `BID_MIN_PROFIT`, rate ≥ the
-//!   bot's own coin rate (its D17), no margin, runes held) draws a
+//!   bot's own coin rate (its measured gain per tick, D1), no margin, runes held) draws a
 //!   `MakeMoney` goal of origin `alch:<object>` (`alch_goal_for`);
 //! - sales: a caster never lists what alchs for more than it sells
 //!   (`alch_keep`); the cast's net (`alch_floor`) is an opening anchor
@@ -175,22 +175,15 @@ fn natures_held(live: &Value) -> i64 {
     crate::brain_ambition::live_count(live, NATURE_RUNE)
 }
 
-/// Coins one tick of the caster's time is worth: its D17 in the money
-/// guide (`brain_d17::coin_rate`: live levels, combat, quests).
-fn own_coin_rate(life: &Life, live: &Value) -> f64 {
-    let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
-    let quests = crate::brain_rescue::quests_done(life);
-    crate::brain_d17::coin_rate(&crate::brain_d17::BotKey { level_of: &level_of, combat: crate::brain_plan::live_combat(live), quests_done: &quests, ironman: life.profile.ironman })
-}
-
-/// Coins one tick of this caster's time costs an alchemy: its D17, zero
-/// for the alchemist (alchemy is its mission, user 2026-11-18: every
-/// cast that nets coins is worth it, the best margins first).
-fn time_rate(life: &Life, live: &Value) -> f64 {
+/// Coins one tick of this caster's time costs an alchemy: what its work
+/// really earns per tick (`brain_d17::coin_rate`, D1), zero for the
+/// alchemist (alchemy is its mission, user 2026-11-18: every cast that
+/// nets coins is worth it, the best margins first).
+fn time_rate(life: &Life) -> f64 {
     if lifescape_planner::is_alcher(life) {
         0.0
     } else {
-        own_coin_rate(life, live)
+        crate::brain_d17::coin_rate(&life.account)
     }
 }
 
@@ -206,7 +199,7 @@ pub(crate) fn alch_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, Stri
     if casts < lifescape_planner::alchemy::MIN_ALCH_CASTS {
         return None;
     }
-    let own_rate = time_rate(life, live);
+    let own_rate = time_rate(life);
     let rate = pick.profit_each / lifescape_planner::alchemy::CAST_TICKS;
     let profit = casts as f64 * (pick.profit_each - lifescape_planner::alchemy::CAST_TICKS * own_rate);
     let too_slow = !lifescape_planner::is_alcher(life) && rate < own_rate.max(lifescape_planner::market_fit::MIN_COIN_RATE);
@@ -355,7 +348,7 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
     if let Some(id) = obj_id(NATURE_RUNE) {
         claim(&job.account, id);
     }
-    let own_rate = time_rate(life, live);
+    let own_rate = time_rate(life);
     let coins = crate::brain_gear::free_coins(job, None);
     let natures = natures_held(live);
     let mut placed = 0;

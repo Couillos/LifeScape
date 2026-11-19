@@ -609,11 +609,14 @@ pub fn next_milestone<'a>(ambition: &'a Ambition, avoid: &[String]) -> Option<&'
 /// a product every production leg of which is `sick` (quarantined fleet
 /// wide, cooled for this bot) or trains a banned skill. The next open
 /// milestone is drawn instead; the skipped one stays open.
-pub fn next_feasible_milestone<'a>(ambition: &'a Ambition, avoid: &[String], sick: &dyn Fn(&str) -> bool) -> Option<&'a Milestone> {
+/// A milestone cooling after a market shortfall (`cooled` holds its
+/// `milestone_cool_key`, `MILESTONE_SHORTFALL_COOL_TICKS`) is skipped too.
+pub fn next_feasible_milestone<'a>(ambition: &'a Ambition, avoid: &[String], sick: &dyn Fn(&str) -> bool, cooled: &[String]) -> Option<&'a Milestone> {
     ambition
         .milestones
         .iter()
         .filter(|stone| stone.status != MilestoneStatus::Done)
+        .filter(|stone| !cooled.contains(&milestone_cool_key(&ambition.kind, &stone.id)))
         .filter(|stone| stone.target.skills().iter().all(|skill| !avoid.contains(skill)))
         .find(|stone| milestone_workable(&stone.target, avoid, sick))
 }
@@ -704,6 +707,35 @@ pub fn on_goal_closed(life: &mut Life, stuck: bool) -> CloseOutcome {
             CloseOutcome::Reopened(origin)
         }
     }
+}
+
+/// Cooldown of a milestone after a MARKET shortfall (user decision
+/// 2026-11-19, lot 6 review): no block, no redraw, but the milestone is
+/// not drawn again for 6000 ticks (1 h in prod), so the bot works its
+/// next milestone or a side goal instead of relaunching the same unfilled
+/// buy every cycle (`market rejected: buyer holds X coins`).
+pub const MILESTONE_SHORTFALL_COOL_TICKS: u64 = 6000;
+
+/// Cooldown key of one milestone (`cooldown` history, node `cool`): the
+/// kind is in the key, a new ambition's `m1` is another milestone.
+pub fn milestone_cool_key(kind: &str, id: &str) -> String {
+    format!("milestone:{kind}/{id}")
+}
+
+/// Fold a goal that a MARKET shortfall stopped (a buy left unfilled or
+/// refused, `bans_scope::market_shortfall`) into its milestone: reopened
+/// (`Pending` unless done), never a block (decision D3, user 2026-11-19:
+/// the market's shortfall is not the bot's failure; before, 49
+/// transformation ambitions a day were redrawn after « blocked 3 times »).
+pub fn on_goal_shortfall(life: &mut Life) -> CloseOutcome {
+    let Some(origin) = life.goal_origin.take() else { return CloseOutcome::Unlinked };
+    let Some(stone) = life.ambition.as_mut().and_then(|ambition| ambition.milestones.iter_mut().find(|stone| stone.id == origin)) else {
+        return CloseOutcome::Unlinked;
+    };
+    if stone.status != MilestoneStatus::Done {
+        stone.status = MilestoneStatus::Pending;
+    }
+    CloseOutcome::Reopened(origin)
 }
 
 /// Every rung materialized and every milestone done: the ambition is met.

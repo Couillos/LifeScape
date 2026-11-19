@@ -237,10 +237,22 @@ pub(crate) fn fresh_error<'a>(decision: &Verdict, last_error: &'a str) -> &'a st
 
 /// Fold one pushed report into the graph; launches nothing (the launch
 /// pass runs right after, same brain tick).
+/// The node a report names (empty: none). Its run is over whatever the
+/// fold decides next (ignored, retired, unknown, folded): its claim on the
+/// order board ends here, before any early return (plan équilibre step
+/// 2, review lot 2 point 2).
+pub(crate) fn reported_node(account: &str, report: &Value) -> String {
+    let node_id = report.get("node_id").as_str().unwrap_or("").to_string();
+    if !node_id.is_empty() {
+        crate::market_claims::release_run(account, &node_id);
+    }
+    node_id
+}
+
 pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &Value) {
     let account = job.account.clone();
+    let node_id = reported_node(&account, report);
     let Some(mut life) = load_life(&account) else { return };
-    let node_id = report.get("node_id").as_str().unwrap_or("").to_string();
     if node_id.is_empty() {
         return;
     }
@@ -470,6 +482,19 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
 #[cfg(test)]
 mod tests {
     use super::{verdict, Verdict};
+
+    /// Review lot 2, point 2: any report releases its run's claim first,
+    /// even one the fold then ignores (a retired or unknown node, a node
+    /// the graph already moved), so no claim outlives its run.
+    #[test]
+    fn a_report_releases_its_runs_claim_even_when_ignored() {
+        crate::market_claims::claim_run("fold_claims_probe", "n41", "fold_claims_coal", 120, 3_600);
+        let ignored = lifescape_json::parse(r#"{"node_id":"n41","stop":"budget_exhausted","ticks":6000}"#).expect("report");
+        assert_eq!(super::reported_node("fold_claims_probe", &ignored), "n41");
+        assert_eq!(crate::market_claims::claimed_total().get("fold_claims_coal"), None, "released before any check");
+        let anonymous = lifescape_json::parse(r#"{"stop":"failed"}"#).expect("report");
+        assert_eq!(super::reported_node("fold_claims_probe", &anonymous), "", "no node named");
+    }
 
     /// A spot that killed the bot bans its skill at once (contract).
     #[test]

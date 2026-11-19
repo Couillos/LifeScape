@@ -1,9 +1,12 @@
 //! Fleet coverage of ambitions (user decision 2026-11-13): at least one
 //! bot per F2P skill group (12, melee as one; the merchant role was
 //! removed in wave 3, plan marché Q6);
-//! beyond that, random long-term ambitions weighted by demand and by the
-//! bot's own levels. Pure: every bot's levels, profile and current kind
-//! come in as plain values; the daemon reads the life files.
+//! beyond that, random long-term ambitions weighted by the NEED alone
+//! (decision D3, user 2026-11-19: the scarcity of what a kind produces,
+//! never the bot's levels), except for `LEVEL_LED_ACCOUNTS` and the
+//! market makers, which keep the level-led draw (demand × √fit). Pure:
+//! every bot's levels, profile and current kind come in as plain values;
+//! the daemon reads the life files.
 
 use crate::ambition::{may_change, pinned, Ambition, GENERALIST};
 use crate::ambition_catalog::{fit, kind_for_group, primary_group, transform_share, KindDemand, GROUPS, specs};
@@ -18,6 +21,42 @@ pub struct FleetBot {
     pub seed: u64,
     /// Current ambition kind (`None`: to assign).
     pub kind: Option<String>,
+    /// A market maker (`Archetype::MarketMaker`): keeps the level-led
+    /// draw (D3 exception).
+    pub market_maker: bool,
+}
+
+/// Accounts that keep the LEVEL-LED draw (demand × √fit × the trait's
+/// tilt, as before D3), together with every market maker
+/// (`FleetBot::market_maker` or a `market_maker` ambition). Every other
+/// bot draws by need alone. Decided by the user on 2026-11-19 (decision
+/// D3, docs/plan-equilibre.txt step 6). Matched without case.
+pub const LEVEL_LED_ACCOUNTS: [&str; 3] = ["Zezima", "N0valyfe", "Yogosun"];
+
+/// True when the bot keeps the level-led draw (`LEVEL_LED_ACCOUNTS`, a
+/// market maker); false: its ambition follows the need alone.
+pub fn level_led(bot: &FleetBot) -> bool {
+    bot.market_maker
+        || bot.kind.as_deref() == Some(crate::market_maker::MARKET_MAKER_KIND)
+        || LEVEL_LED_ACCOUNTS.iter().any(|name| name.eq_ignore_ascii_case(&bot.account))
+}
+
+/// Saturation (D3 review 2026-11-19): each kind's need divided by 1 +
+/// the number of fleet bots already holding it (`held`: their kinds), so
+/// ten crafters lower the crafter need. The level-led `weight` is kept.
+pub fn saturate(demand: &[KindDemand], held: &[&str]) -> Vec<KindDemand> {
+    demand
+        .iter()
+        .map(|row| {
+            let holders = held.iter().filter(|kind| **kind == row.kind).count();
+            KindDemand { need: row.need / (1 + holders) as f64, ..row.clone() }
+        })
+        .collect()
+}
+
+/// Need of one kind (`KindDemand::need`, 0 when unknown).
+fn need_of(kind: &str, demand: &[KindDemand]) -> f64 {
+    demand.iter().find(|known| known.kind == kind).map(|known| known.need.max(0.0)).unwrap_or(0.0)
 }
 
 impl FleetBot {
@@ -74,18 +113,20 @@ pub fn affinity_tilt(kind: &str, affinity: f64) -> f64 {
     2f64.powf(AFFINITY_TILT * lean * transforms)
 }
 
-/// Score of one bot for one gap: skill fit × the trait's tilt.
-fn gap_score(bot: &FleetBot, group: &str) -> Option<f64> {
+/// Score of one bot for one gap, × the trait's tilt: a level-led bot's
+/// skill fit; any other bot's 1 + the need of the gap's kind (D3: levels
+/// play no role).
+fn gap_score(bot: &FleetBot, group: &str, demand: &[KindDemand]) -> Option<f64> {
     let kind = kind_for_group(group)?;
-    Some(fit(kind, &|skill| bot.level(skill)) * affinity_tilt(kind, bot.market_affinity))
+    let base = if level_led(bot) { fit(kind, &|skill| bot.level(skill)) } else { 1.0 + need_of(kind, demand) };
+    Some(base * affinity_tilt(kind, bot.market_affinity))
 }
 
 /// Fleet pass: every bot without an ambition gets one. Coverage first
-/// (global greedy: the best-fitting (bot, gap) pair goes first, fit ×
-/// the trait's tilt `affinity_tilt`, seeded
-/// tie-break), then a demand- and level-weighted random draw for the
-/// rest. Bots that already hold an ambition count as coverage and are
-/// never reassigned here.
+/// (global greedy: the best-scoring (bot, gap) pair goes first,
+/// `gap_score`, seeded tie-break), then `draw_kind` for the rest. Bots
+/// that already hold an ambition count as coverage and are never
+/// reassigned here.
 pub fn assign_fleet(bots: &[FleetBot], demand: &[KindDemand]) -> Vec<Assignment> {
     let held: Vec<&str> = bots.iter().filter_map(|bot| bot.kind.as_deref()).collect();
     let mut gaps = coverage_gaps(&held);
@@ -96,7 +137,7 @@ pub fn assign_fleet(bots: &[FleetBot], demand: &[KindDemand]) -> Vec<Assignment>
         let mut best: Option<(f64, u64, usize, usize)> = None;
         for (bot_at, bot) in free.iter().enumerate() {
             for (gap_at, gap) in gaps.iter().enumerate() {
-                let Some(score) = gap_score(bot, gap) else { continue };
+                let Some(score) = gap_score(bot, gap, demand) else { continue };
                 let tie = mix(bot.seed, gap);
                 if best.is_none_or(|(known, known_tie, _, _)| score > known + 1e-9 || ((score - known).abs() <= 1e-9 && tie < known_tie)) {
                     best = Some((score, tie, bot_at, gap_at));
@@ -109,23 +150,33 @@ pub fn assign_fleet(bots: &[FleetBot], demand: &[KindDemand]) -> Vec<Assignment>
         let kind = kind_for_group(&group).unwrap_or(GENERALIST);
         out.push(Assignment { account: bot.account.clone(), kind: kind.to_string(), why: format!("coverage:{group}") });
     }
+    // Saturation (D3): the kinds held and drawn so far lower their need.
+    let mut held_now: Vec<String> = held.iter().map(|kind| kind.to_string()).collect();
+    held_now.extend(out.iter().map(|row| row.kind.clone()));
     for bot in free {
-        let (kind, why) = draw_kind(bot, &[], demand, &[]);
+        let refs: Vec<&str> = held_now.iter().map(String::as_str).collect();
+        let (kind, why) = draw_kind(bot, &[], &saturate(demand, &refs), &[]);
+        held_now.push(kind.clone());
         out.push(Assignment { account: bot.account.clone(), kind, why });
     }
     out
 }
 
-/// One bot's draw: an open coverage gap it can hold (best fit × the
-/// trait's tilt, seeded tie-break) wins; otherwise a random kind weighted
-/// by demand × √fit × `affinity_tilt` (user lever 2026-11-17: a market
-/// profile leans on transformation kinds; never an operator-only kind).
-/// Past coverage
-/// the draw stays random (user decision 2026-11-13): levels tilt it (√fit
-/// = 1 + lead/5) but never fix it, or the inherited melee levels turn the
-/// whole fleet into warriors. `exclude` keeps kinds out (the one just blocked). `why`:
-/// coverage, `demand:<item>` when open bids tilted the draw
-/// (weight ≥ 1.5 with a product), else `random`.
+/// One bot's draw: an open coverage gap it can hold (best `gap_score`,
+/// seeded tie-break) wins; otherwise a seeded random kind (never an
+/// operator-only kind), × `affinity_tilt` (user lever 2026-11-17: a
+/// market profile leans on transformation kinds):
+/// - by NEED alone (decision D3, user 2026-11-19): weight = the kind's
+///   `need`; a kind nothing calls for is never drawn while another is;
+///   no need anywhere = equal needs (uniform × tilt, `why` `random`).
+///   `why`: `need:<item>` (the object carrying at least
+///   `NEED_LABEL_FLOOR` of its need), else `need`;
+/// - level-led (`level_led`: `LEVEL_LED_ACCOUNTS`, market makers, the
+///   draw before D3): demand weight × √fit (√fit = 1 + lead/5; levels
+///   tilt it but never fix it, user decision 2026-11-13). `why`:
+///   `demand:<item>` when open bids tilted it (weight ≥ 1.5 with a
+///   product), else `random`.
+/// `exclude` keeps kinds out (the one just blocked).
 pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude: &[&str]) -> (String, String) {
     let mut best_gap: Option<(f64, u64, &str)> = None;
     for gap in gaps {
@@ -133,7 +184,7 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
         if exclude.contains(&kind) {
             continue;
         }
-        let Some(score) = gap_score(bot, gap) else { continue };
+        let Some(score) = gap_score(bot, gap, demand) else { continue };
         let tie = mix(bot.seed, gap);
         if best_gap.is_none_or(|(known, known_tie, _)| score > known + 1e-9 || ((score - known).abs() <= 1e-9 && tie < known_tie)) {
             best_gap = Some((score, tie, gap));
@@ -143,30 +194,57 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
         let kind = kind_for_group(gap).unwrap_or(GENERALIST);
         return (kind.to_string(), format!("coverage:{gap}"));
     }
-    let mut weighted: Vec<(&str, f64, Option<String>)> = Vec::new();
     let operator_only = |kind: &str| crate::ambition::ladderless(kind) || kind == crate::market_maker::MARKET_MAKER_KIND;
-    for entry in specs().iter().filter(|entry| !operator_only(entry.kind) && !exclude.contains(&entry.kind)) {
-        let tilt = demand.iter().find(|known| known.kind == entry.kind);
-        let demand_weight = tilt.map(|known| known.weight).unwrap_or(1.0).max(0.01);
-        let weight = demand_weight * fit(entry.kind, &|skill| bot.level(skill)).sqrt() * affinity_tilt(entry.kind, bot.market_affinity);
-        let top = tilt.filter(|known| known.weight >= 1.5).and_then(|known| known.top_item.clone());
-        weighted.push((entry.kind, weight, top));
-    }
+    let drawable: Vec<&str> = specs().iter().map(|entry| entry.kind).filter(|kind| !operator_only(kind) && !exclude.contains(kind)).collect();
+    let weighted = if level_led(bot) { level_led_weights(bot, &drawable, demand) } else { need_weights(bot, &drawable, demand) };
     let total: f64 = weighted.iter().map(|(_, weight, _)| *weight).sum();
     if weighted.is_empty() || total <= 0.0 {
         return (GENERALIST.to_string(), "random".to_string());
     }
     let roll = (mix(bot.seed, "ambition") % 1_000_000) as f64 / 1_000_000.0 * total;
     let mut seen = 0.0;
-    for (kind, weight, top) in &weighted {
+    for (kind, weight, why) in &weighted {
         seen += weight;
         if roll < seen {
-            let why = top.as_ref().map(|item| format!("demand:{item}")).unwrap_or_else(|| "random".to_string());
-            return (kind.to_string(), why);
+            return (kind.to_string(), why.clone());
         }
     }
-    let (kind, _, top) = weighted.last().cloned().unwrap_or((GENERALIST, 0.0, None));
-    (kind.to_string(), top.map(|item| format!("demand:{item}")).unwrap_or_else(|| "random".to_string()))
+    let (kind, _, why) = weighted.last().cloned().unwrap_or((GENERALIST, 0.0, "random".to_string()));
+    (kind.to_string(), why)
+}
+
+/// Level-led weights (the draw before D3): demand weight × √fit × tilt.
+fn level_led_weights<'kinds>(bot: &FleetBot, drawable: &[&'kinds str], demand: &[KindDemand]) -> Vec<(&'kinds str, f64, String)> {
+    let mut weighted = Vec::new();
+    for kind in drawable {
+        let known = demand.iter().find(|known| known.kind == *kind);
+        let demand_weight = known.map(|known| known.weight).unwrap_or(1.0).max(0.01);
+        let weight = demand_weight * fit(kind, &|skill| bot.level(skill)).sqrt() * affinity_tilt(kind, bot.market_affinity);
+        let top = known.filter(|known| known.weight >= 1.5).and_then(|known| known.top_item.clone());
+        weighted.push((*kind, weight, top.map(|item| format!("demand:{item}")).unwrap_or_else(|| "random".to_string())));
+    }
+    weighted
+}
+
+/// Need weights (D3): the kind's need × tilt; no need anywhere = equal
+/// needs (tilt alone, `random`).
+fn need_weights<'kinds>(bot: &FleetBot, drawable: &[&'kinds str], demand: &[KindDemand]) -> Vec<(&'kinds str, f64, String)> {
+    let any_need = drawable.iter().any(|kind| need_of(kind, demand) > 0.0);
+    let mut weighted = Vec::new();
+    for kind in drawable {
+        let tilt = affinity_tilt(kind, bot.market_affinity);
+        if !any_need {
+            weighted.push((*kind, tilt, "random".to_string()));
+            continue;
+        }
+        let need = need_of(kind, demand);
+        if need <= 0.0 {
+            continue;
+        }
+        let driver = demand.iter().find(|known| known.kind == *kind).and_then(|known| known.need_item.clone());
+        weighted.push((*kind, need * tilt, driver.map(|item| format!("need:{item}")).unwrap_or_else(|| "need".to_string())));
+    }
+    weighted
 }
 
 /// Coverage repair (review 2026-11-13): an open gap (a group no fleet
@@ -188,9 +266,10 @@ pub fn coverage_repair(ambition: &Ambition, bot: &FleetBot, gaps: &[String], red
 /// when `AMBITION_CHANGE_TICKS` passed since the last change. A bot whose
 /// primary group another bot also covers (`redundant`) fills an open gap
 /// first; otherwise one chance in four (seeded per completed milestone)
-/// of a fresh demand-weighted draw. The sole holder of a group never
-/// leaves it, nor does an operator pin. Returns (kind, why) when the
-/// ambition should change.
+/// of a fresh `draw_kind`. A need-led bot (D3) changes only toward a
+/// kind that has need (no need elsewhere: it keeps its ambition). The
+/// sole holder of a group never leaves it, nor does an operator pin.
+/// Returns (kind, why) when the ambition should change.
 pub fn optional_change(ambition: &Ambition, bot: &FleetBot, gaps: &[String], redundant: bool, demand: &[KindDemand], ticks_since: &dyn Fn(i64) -> u64) -> Option<(String, String)> {
     if ambition.kind == GENERALIST || pinned(ambition) || !may_change(ambition, ticks_since) || !redundant {
         return None;
@@ -204,9 +283,16 @@ pub fn optional_change(ambition: &Ambition, bot: &FleetBot, gaps: &[String], red
         return None;
     }
     let (kind, why) = draw_kind(bot, &[], demand, &[current]);
+    if !level_led(bot) && why != "need" && !why.starts_with("need:") {
+        return None;
+    }
     Some((kind, why))
 }
 
 #[cfg(test)]
 #[path = "ambition_market_tests.rs"]
 mod market_tests;
+
+#[cfg(test)]
+#[path = "ambition_need_tests.rs"]
+mod need_tests;

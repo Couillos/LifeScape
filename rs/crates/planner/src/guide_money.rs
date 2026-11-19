@@ -200,6 +200,8 @@ pub fn market_row_with(engine: &Engine, place: &Place, band: i64, per_purchase: 
     // inputs of one window of work).
     let inputs_per_6000: f64 = priced.lines.iter().filter(|line| line.cause == "input" && line.per_6000 < 0.0).map(|line| -line.value_6000).sum::<f64>() / scale;
     row.prereqs.capital = if lots > 0.0 { inputs_per_6000 / lots } else { inputs_per_6000 };
+    row.prereqs.purchase_ticks = trip + wait;
+    row.prereqs.purchases_per_6000 = purchases * scale;
     row.prereqs.ironman = false;
     apply_flows(&mut row, priced);
     row.xp_6000 = xp_scaled(&place.ask.method, &place.ask.style, answer, place.ask.level, scale);

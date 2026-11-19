@@ -88,6 +88,12 @@ pub struct Quote {
     pub fill_units: f64,
     pub bids: Vec<(f64, f64)>,
     pub asks: Vec<(f64, f64)>,
+    /// Units other producers publicly claimed on the order board (plan
+    /// équilibre step 2, `orchestrator::market_claims`: supply already on
+    /// its way, never who): the guide's build reads every claim, a bot's
+    /// pick the claims of the others. They sell before a new producer
+    /// (`guide_engine::ahead_units`).
+    pub claimed: f64,
 }
 
 /// Fills a current price needs to rest on to be called "traded" rather
@@ -361,6 +367,12 @@ pub struct Prereqs {
     pub tools: Vec<String>,
     /// Coins one lot ties up (100 % market).
     pub capital: f64,
+    /// Ticks one purchase of a 100 % market row spends off its work (a
+    /// square round trip and the market wait), fixed per lot bought.
+    pub purchase_ticks: f64,
+    /// Purchases per 6000 ticks of the row's time (its craft time is the
+    /// rest: `trade_craft::TradeOffer::lot_ticks`).
+    pub purchases_per_6000: f64,
     /// False for rows an Ironman cannot work (market family).
     pub ironman: bool,
     /// Stock one lot of a recipe on owned stock transforms (debug name,

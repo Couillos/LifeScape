@@ -15,6 +15,10 @@ pub const LOWERED_BAN_TICKS: u64 = 100;
 pub const TAKEN_BAN_TICKS: u64 = 30;
 /// Ticks a retaliating foe gets to die before the loop moves on.
 pub const FINISH_TICKS: u64 = 150;
+/// Ticks no cast is tried after "I'm already under attack!": the server
+/// refuses every other target while a foe hit us within the last 8 ticks
+/// (`player_combat.rs2` `player_in_combat_check`, `%lastcombat + 8`).
+pub const UNDER_ATTACK_HOLD_TICKS: u64 = 8;
 /// Picks one cast may try before it fails loud.
 pub const PICKS_PER_CAST: u32 = 12;
 /// Ticks one cast may wait for its XP (regen of the camp's lowered foes,
@@ -61,6 +65,14 @@ impl CastBudget {
     pub fn refused(&mut self) {
         self.refused += 1;
     }
+
+    /// A market pause closed, or the caster walked back to the camp (the
+    /// pause left it at the Varrock square): neither is a wait for the
+    /// regeneration, the bound and the picks start again from `now`.
+    pub fn restart(&mut self, now: u64) {
+        self.started = now;
+        self.refused = 0;
+    }
 }
 /// Tiles from the bot within which a camp NPC is a candidate.
 pub const FOE_RADIUS: i32 = 15;
@@ -97,6 +109,8 @@ pub fn curse_refusal(line: &str) -> Option<CurseRefusal> {
 pub struct CurseFoes {
     banned: HashMap<u16, u64>,
     lowered: HashMap<u16, u64>,
+    /// No cast before this tick (an unseen foe attacks us).
+    hold_until: u64,
 }
 
 impl CurseFoes {
@@ -111,6 +125,17 @@ impl CurseFoes {
     pub fn mark_lowered(&mut self, slot: u16, now: u64) {
         self.lowered.insert(slot, now + LOWERED_BAN_TICKS);
         self.ban(slot, now + LOWERED_BAN_TICKS);
+    }
+
+    /// "I'm already under attack!": a foe we do not see hits us; no
+    /// other target is legal until the server's combat window lapses.
+    pub fn under_attack(&mut self, now: u64) {
+        self.hold_until = self.hold_until.max(now + UNDER_ATTACK_HOLD_TICKS);
+    }
+
+    /// True while the combat window of `under_attack` runs.
+    pub fn is_held(&self, now: u64) -> bool {
+        self.hold_until > now
     }
 
     pub fn is_lowered(&self, slot: u16, now: u64) -> bool {
@@ -131,13 +156,26 @@ pub enum CurseStep {
     Cast(u16),
     /// No candidate in sight: walk to the camp or wait.
     Search,
+    /// An unseen foe attacks us: no cast until the combat window lapses.
+    Wait,
 }
 
 /// Pure choice: an aggressor first (the only legal target while it hits
-/// us), finished when lowered; else the nearest camp foe not banned.
+/// us), finished when lowered, skipped while a cast on it went
+/// unanswered (banned: a stale or unreachable face, live 2026-11-19 slot
+/// 405 at River Lum); no cast while an unseen foe holds us
+/// (`under_attack`); else the nearest camp foe not banned.
 pub fn choose_step(aggressor: Option<u16>, candidates: &[(u16, i32, i32)], here: (i32, i32), foes: &CurseFoes, now: u64) -> CurseStep {
     if let Some(slot) = aggressor {
-        return if foes.is_lowered(slot, now) { CurseStep::Finish(slot) } else { CurseStep::Cast(slot) };
+        if foes.is_lowered(slot, now) {
+            return CurseStep::Finish(slot);
+        }
+        if !foes.is_banned(slot, now) {
+            return CurseStep::Cast(slot);
+        }
+    }
+    if foes.is_held(now) {
+        return CurseStep::Wait;
     }
     candidates
         .iter()

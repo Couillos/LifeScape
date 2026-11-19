@@ -23,6 +23,7 @@ use lifescape_planner::{
 };
 
 use crate::brain::push_history;
+use crate::brain_ambition::GoalEnd;
 
 /// History tag of a drawn goal (`goal: next:<label>`).
 pub const NEXT_TAG: &str = "next:";
@@ -56,23 +57,33 @@ fn ticks_since(stamp: i64) -> u64 {
 
 /// Close the current goal once: `done:<skills>`, or one ban per trained
 /// skill (stuck), each logged with its cause; then fold the close into
-/// the goal's milestone (`brain_ambition::after_close`).
+/// the goal's milestone (`brain_ambition::after_close`): a goal stuck on
+/// a market shortfall (a buy left unfilled or refused) bans nothing and
+/// never counts a milestone block (decision D3, user 2026-11-19).
 pub(crate) fn close_goal(life: &mut Life, live: &Value, stuck: bool) {
-    close_goal_history(life, stuck);
-    crate::brain_ambition::after_close(life, live, stuck);
+    let shortfall = close_goal_history(life, stuck);
+    let end = match (stuck, shortfall) {
+        (false, _) => GoalEnd::Done,
+        (true, true) => GoalEnd::MarketShortfall,
+        (true, false) => GoalEnd::Stuck,
+    };
+    crate::brain_ambition::after_close(life, live, end);
 }
 
-fn close_goal_history(life: &mut Life, stuck: bool) {
+/// Writes the close into the history; true when a stuck goal's cause is
+/// a market shortfall (`lifescape_planner::market_shortfall`).
+fn close_goal_history(life: &mut Life, stuck: bool) -> bool {
     let mut skills = goal_skills(&life.goal);
     if !stuck {
         push_history(life, "goal", &format!("{DONE_TAG}{}", skills.join(",")));
-        return;
+        return false;
     }
     let cause = stuck_cause(life).unwrap_or(StuckCause {
         node: "?".to_string(),
         class: "graph stuck".to_string(),
         last_error: "no abandoned node found".to_string(),
     });
+    let shortfall = lifescape_planner::market_shortfall(&cause.last_error);
     // A quest that failed for good cools as a quest, never as the skills
     // of the goal waiting on it (user rule 2026-11-14: Rune Mysteries
     // banned mining on bh99tw2f): its nodes wait out the cooldown
@@ -80,7 +91,7 @@ fn close_goal_history(life: &mut Life, stuck: bool) {
     if let Some(quest) = lifescape_planner::node_quest(life, &cause.node) {
         crate::logln!("brain {}: quest {quest} cooling {SKILL_BAN_TICKS} ticks, no skill banned: {}", life.account, cause.describe());
         push_history(life, "goal", &ban_entry(&lifescape_planner::quest_ban_key(&quest), SKILL_BAN_TICKS, &cause));
-        return;
+        return shortfall;
     }
     // The failed item takes its dependency subtree down (user decision
     // 2026-11-13): every skill that needs it, not only the goal's (a
@@ -100,18 +111,19 @@ fn close_goal_history(life: &mut Life, stuck: bool) {
     }
     // A buy the market did not fill or refused is the market's shortfall,
     // never the bot's failure at a skill (user 2026-11-19).
-    if lifescape_planner::market_shortfall(&cause.last_error) {
+    if shortfall {
         skills.clear();
     }
     if skills.is_empty() {
         crate::logln!("brain {}: goal {} stuck: {}", life.account, goal_label(&life.goal), cause.describe());
         push_history(life, "goal", &ban_entry("", 0, &cause));
-        return;
+        return shortfall;
     }
     for skill in &skills {
         crate::logln!("brain {}: skill {skill} banned {SKILL_BAN_TICKS} ticks: {} (node {}, {})", life.account, cause.class, cause.node, cause.last_error);
         push_history(life, "goal", &ban_entry(skill, SKILL_BAN_TICKS, &cause));
     }
+    false
 }
 
 /// Note every ban that ran out (one log line and one `unban:` entry per
@@ -182,7 +194,8 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
         // the next draw returns to the ambition once a milestone is free.
         Err(NoGoal::MilestonesBanned(skills)) => match side_goal_for(life, live, &skills) {
             Some((goal, origin)) => {
-                crate::logln!("brain {}: side goal {} while {} banned", life.account, goal_label(&goal), skills.join(","));
+                let why = if skills.is_empty() { "every open milestone cools".to_string() } else { format!("{} banned", skills.join(",")) };
+                crate::logln!("brain {}: side goal {} while {why}", life.account, goal_label(&goal));
                 Ok((goal, Some(origin)))
             }
             None => Err(NoGoal::MilestonesBanned(skills)),
@@ -440,5 +453,75 @@ mod tests {
         assert_eq!(banned, vec!["quest:runemysteries".to_string()], "no skill, the quest cools");
         assert_eq!(lifescape_planner::cooled_quests(&life.history, &fresh), vec!["runemysteries".to_string()]);
         assert!(lifescape_planner::goal_closed(&life.history), "the goal is closed once");
+    }
+
+    /// D3 (user 2026-11-19, plan-equilibre step 6): a buy the market did
+    /// not fill, or refused, is the market's shortfall, never a milestone
+    /// block (49 transformation ambitions redrawn in 24 h after « blocked
+    /// 3 times »); any other failure still counts one.
+    #[test]
+    fn a_market_shortfall_is_no_milestone_block() {
+        let cases = [
+            ("market order for 5 iron_bar unfilled after 6000 ticks (held 0, 0 cancelled)", 0),
+            ("market rejected: buyer holds 3 free coins, the raise needs 9", 0),
+            ("Failed: no anvil in reach", 1),
+        ];
+        for (last_error, blocks) in cases {
+            let mut smith = life_with(GoalKind::Produce { item: "iron_dagger".to_string(), count: 10 });
+            smith.ambition = new_ambition("smith", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: 0 }).ok();
+            let origin = smith.ambition.as_ref().and_then(|ambition| lifescape_planner::next_milestone(ambition, &[])).map(|stone| stone.id.clone()).expect("a milestone");
+            lifescape_planner::mark_drawn(&mut smith, Some(&origin));
+            let mut buy = Node::new("n1", NodeKind::ObtainItems { item: "iron_bar".to_string(), count: 5 }, Vec::new(), 5);
+            buy.status = NodeStatus::Abandoned;
+            buy.failures = 3;
+            buy.last_error = last_error.to_string();
+            smith.nodes = vec![buy];
+            smith.history.push(HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
+            super::close_goal(&mut smith, &live(&[]), true);
+            let stone = smith.ambition.as_ref().and_then(|ambition| ambition.milestones.iter().find(|stone| stone.id == origin)).cloned().expect("milestone kept");
+            assert_eq!(stone.blocked_count, blocks, "{last_error}: {stone:?}");
+            assert_eq!(stone.status == MilestoneStatus::Blocked, blocks > 0, "{last_error}: {stone:?}");
+            assert!(lifescape_planner::goal_closed(&smith.history), "{last_error}: the goal is closed once");
+        }
+    }
+
+    /// Lot 6 review (user decision 2026-11-19): a market shortfall cools
+    /// its milestone `MILESTONE_SHORTFALL_COOL_TICKS`, so « market
+    /// rejected: buyer holds X coins » never relaunches it every cycle:
+    /// two shortfalls in a row never draw the same milestone inside the
+    /// cooldown; once it lapses, it can be drawn again (never blocked).
+    #[test]
+    fn a_market_shortfall_cools_its_milestone() {
+        fn shortfall(life: &mut Life) {
+            let mut buy = Node::new("n1", NodeKind::ObtainItems { item: "iron_bar".to_string(), count: 5 }, Vec::new(), 5);
+            buy.status = NodeStatus::Abandoned;
+            buy.failures = 3;
+            buy.last_error = "market rejected: buyer holds 3 free coins, the raise needs 9".to_string();
+            life.nodes = vec![buy];
+            life.history.push(HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
+            super::close_goal(life, &live(&[]), true);
+        }
+        let mut smith = life_with(GoalKind::Produce { item: "iron_dagger".to_string(), count: 10 });
+        smith.ambition = new_ambition("smith", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: 0 }).ok();
+        let first = smith.ambition.as_ref().and_then(|ambition| lifescape_planner::next_milestone(ambition, &[])).map(|stone| stone.id.clone()).expect("a milestone");
+        lifescape_planner::mark_drawn(&mut smith, Some(&first));
+        shortfall(&mut smith);
+        let fresh = |_: i64| 0u64;
+        let draw = |life: &Life, ticks_since: &dyn Fn(i64) -> u64| lifescape_planner::draw_goal_origin_with(life, &|_| 1, ticks_since, &|_| false);
+        let (_, origin) = draw(&smith, &fresh).expect("the next milestone");
+        let second = origin.expect("a milestone origin");
+        assert_ne!(second, first, "the cooled milestone is not relaunched at once");
+        lifescape_planner::mark_drawn(&mut smith, Some(&second));
+        shortfall(&mut smith);
+        if let Ok((_, Some(third))) = draw(&smith, &fresh) {
+            assert!(third != first && third != second, "both cooled, got {third}");
+        }
+        let lapsed = |_: i64| lifescape_planner::MILESTONE_SHORTFALL_COOL_TICKS;
+        let (_, again) = draw(&smith, &lapsed).expect("a milestone after the cooldown");
+        assert_eq!(again.as_deref(), Some(first.as_str()), "free again once the cooldown lapsed");
+        let blocks: u32 = smith.ambition.as_ref().map(|ambition| ambition.milestones.iter().map(|stone| stone.blocked_count).sum()).unwrap_or(0);
+        assert_eq!(blocks, 0, "never a block");
+        let every_cooled = lifescape_planner::NoGoal::MilestonesBanned(Vec::new()).describe();
+        assert!(every_cooled.contains("every open milestone cools"), "no banned skill to name: {every_cooled}");
     }
 }

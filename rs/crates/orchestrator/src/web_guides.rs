@@ -137,7 +137,18 @@ pub fn quote_of(store: &Store, item: &str) -> Quote {
         fill_units: last.iter().filter(|fill| fill.price >= 1 && fill.quantity >= 1).map(|fill| fill.quantity as f64).sum(),
         bids: levels(bids),
         asks: levels(asks),
+        // The order board is read by the guides' build (`guides_store`).
+        claimed: 0.0,
     }
+}
+
+/// `quote_of` with the units producers claimed on the order board
+/// (`market_claims::claimed_total`, plan équilibre step 2): what every
+/// build of the guides reads, the brain's set and the CLI's rebuild.
+pub fn quote_on_board(store: &Store, item: &str, claims: &HashMap<String, i64>) -> Quote {
+    let mut quote = quote_of(store, item);
+    quote.claimed = claims.get(item).copied().unwrap_or(0).max(0) as f64;
+    quote
 }
 
 fn site_of(text: &str) -> Option<(i64, i64, i64)> {
@@ -222,6 +233,9 @@ pub fn build_guide(store: &Store, snapshot: &crate::rates_service::Snapshot, kin
     let measured = measured_keys(snapshot);
     let now = crate::rates_service::now_secs();
     let prices: RefCell<HashMap<String, Quote>> = RefCell::new(HashMap::new());
+    // The order board as the brain's set reads it (plan équilibre step 2;
+    // a process without the daemon's board reads none).
+    let claims = crate::market_claims::claimed_total();
     let timers: RefCell<BTreeMap<&'static str, (u64, Duration)>> = RefCell::new(BTreeMap::new());
     let timed = |name: &'static str, began: Instant| {
         let mut slot = timers.borrow_mut();
@@ -240,7 +254,7 @@ pub fn build_guide(store: &Store, snapshot: &crate::rates_service::Snapshot, kin
             return known.clone();
         }
         let began = Instant::now();
-        let quote = quote_of(store, item);
+        let quote = quote_on_board(store, item, &claims);
         timed("price", began);
         prices.borrow_mut().insert(item.to_string(), quote.clone());
         quote

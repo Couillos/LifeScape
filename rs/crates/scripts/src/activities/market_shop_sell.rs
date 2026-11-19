@@ -101,57 +101,122 @@ fn keeper_at(shop: &str, site: (i32, i32, i32)) -> Option<String> {
     access.npcs.iter().filter_map(|npc| lifescape_gamedata::npc_by_id(*npc)).find(|npc| npc.spawns.iter().any(|spawn| (spawn.x, spawn.z, spawn.level) == (i64::from(site.0), i64::from(site.1), i64::from(site.2)))).and_then(|npc| npc.name).map(str::to_string)
 }
 
-/// Runs the trip; returns the units sold. Nothing carried or banked of a
-/// lot skips it; an unreachable keeper fails typed.
-pub fn run_shop_sale(bot: &mut Bot, order: &SaleOrder) -> Result<u32, ScriptError> {
-    let keeper = keeper_at(&order.shop, order.site).ok_or_else(|| ScriptError::Usage(format!("no F2P keeper of {} at {:?}", order.shop, order.site)))?;
-    // Withdraw every lot (banknotes for non-stackables: one slot each).
-    let bank = crate::kit::bank::nearest_bank(bot)?;
-    if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
-        return Err(ScriptError::Blocked { missing: vec!["bank".to_string()] });
-    }
-    bot.pump(2)?;
-    let mut forms: Vec<(SaleLot, u16)> = Vec::new();
-    for lot in &order.lots {
+/// Takes every lot into the pack (banknotes for non-stackables: one slot
+/// each), only the units not carried yet; returns the lots carried with
+/// their form (empty: nothing left to sell).
+fn withdraw_lots(bot: &mut Bot, lots: &[SaleLot]) -> Result<Vec<(SaleLot, u16)>, ScriptError> {
+    let mut wanted: Vec<(&SaleLot, u16, u16, u32)> = Vec::new();
+    for lot in lots {
         let base = obj_id(bot, &lot.item)?;
-        let banked = bot.bank_items().get(&base).copied().unwrap_or(0);
-        let take = lot.qty.min(banked);
         let note = crate::market_client::trade_id(base);
-        if take > 0 {
-            let outcome = if note != base { bot.bank_withdraw_noted(base, note, take, 300) } else { bot.bank_withdraw(base, take, 300) };
-            if let Err(error) = outcome {
-                bot.log(&format!("shopsell {}: withdraw failed ({error})", lot.item));
+        let carried = crate::kit::pack::pack_total(bot, base) + if note != base { crate::kit::pack::pack_total(bot, note) } else { 0 };
+        wanted.push((lot, base, note, lot.qty.saturating_sub(carried)));
+    }
+    if wanted.iter().any(|(_, _, _, missing)| *missing > 0) {
+        let bank = crate::kit::bank::nearest_bank(bot)?;
+        if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
+            return Err(ScriptError::Blocked { missing: vec!["bank".to_string()] });
+        }
+        bot.pump(2)?;
+        for (lot, base, note, missing) in &wanted {
+            let banked = bot.bank_items().get(base).copied().unwrap_or(0);
+            let take = (*missing).min(banked);
+            if take > 0 {
+                let outcome = if note != base { bot.bank_withdraw_noted(*base, *note, take, 300) } else { bot.bank_withdraw(*base, take, 300) };
+                if let Err(error) = outcome {
+                    bot.log(&format!("shopsell {}: withdraw failed ({error})", lot.item));
+                }
             }
         }
+        let _ = bot.close_modal();
+        bot.pump(3)?;
+    }
+    let mut forms: Vec<(SaleLot, u16)> = Vec::new();
+    for (lot, base, note, _) in wanted {
         let form = if crate::kit::pack::pack_total(bot, note) > 0 { note } else { base };
         let carried = crate::kit::pack::pack_total(bot, form).min(lot.qty);
         if carried > 0 {
             forms.push((SaleLot { qty: carried, ..lot.clone() }, form));
         }
     }
-    let _ = bot.close_modal();
-    bot.pump(3)?;
-    if forms.is_empty() {
-        bot.log("shopsell: nothing to sell (lots gone since the plan)");
-        return Ok(0);
-    }
+    Ok(forms)
+}
+
+/// Runs the trip; returns the units sold. Nothing carried or banked of a
+/// lot skips it; an unreachable keeper fails typed. The keeper trade
+/// runs on the keeper's site with the lots carried (`kit::site::pass_leg`):
+/// a market pause in between (walk, trade wait) sends the sale back to
+/// the bank and the site, at most `PASS_PAUSE_RESTARTS` times.
+pub fn run_shop_sale(bot: &mut Bot, order: &SaleOrder) -> Result<u32, ScriptError> {
+    use crate::kit::site::{pass_leg, paused_since, PassLeg, PASS_PAUSE_RESTARTS};
+    let keeper = keeper_at(&order.shop, order.site).ok_or_else(|| ScriptError::Usage(format!("no F2P keeper of {} at {:?}", order.shop, order.site)))?;
     let (x, z, level) = order.site;
     bot.assigned_site = Some(order.site);
-    if !crate::kit::site::at_site(bot) && !crate::skill_walk::walk_checked_at(bot, x, z, level, crate::kit::site::SITE_WALK_TICKS)? {
-        return Err(ScriptError::Failed(format!("shopsell: {} site ({x},{z}) not reached from {:?}", order.shop, bot.position())));
-    }
-    if !crate::kit::shop::trade_to_keeper(bot, &keeper, order.site)? {
-        return Err(ScriptError::Failed(format!("shopsell: trade with {keeper} failed at {:?}", bot.position())));
-    }
+    let mut pauses_at_withdraw: Option<u64> = None;
+    let mut restarts = 0u32;
+    let mut walked = false;
+    let mut forms: Vec<(SaleLot, u16)> = Vec::new();
+    // Units still to sell per lot: a pause in the sale itself resumes
+    // with what is left (lot 8 review).
+    let mut remaining: Vec<SaleLot> = order.lots.clone();
     let mut total = 0u32;
-    for (lot, form) in &forms {
-        let (sold, coins) = crate::kit::shop::sell_units(bot, *form, &lot.item, &order.shop, lot.qty, lot.min_unit)?;
-        bot.log(&format!("shopsell {}: sold {sold}/{} to {} for {coins} coins (at least {} each)", lot.item, lot.qty, order.shop, lot.min_unit));
-        total += sold;
+    'trip: loop {
+        let here = (bot.world.x, bot.world.z, bot.world.level);
+        match pass_leg(pauses_at_withdraw, bot.pauses_done, walked, here, Some(order.site)) {
+            PassLeg::Load => {
+                if pauses_at_withdraw.is_some() {
+                    restarts += 1;
+                    if restarts > PASS_PAUSE_RESTARTS {
+                        return Err(ScriptError::Failed(format!("shopsell: {PASS_PAUSE_RESTARTS} market pauses already broke the trip to {}, at {:?}", order.shop, bot.position())));
+                    }
+                    bot.log(&format!("shopsell: a market pause left us at {:?}, back to the bank then {} ({x},{z})", bot.position(), order.shop));
+                }
+                pauses_at_withdraw = Some(bot.pauses_done);
+                walked = false;
+                forms = withdraw_lots(bot, &remaining)?;
+                if forms.is_empty() {
+                    bot.log("shopsell: nothing to sell (lots gone since the plan)");
+                    return Ok(total);
+                }
+            }
+            PassLeg::Walk => {
+                if !crate::skill_walk::walk_checked_at(bot, x, z, level, crate::kit::site::SITE_WALK_TICKS)? {
+                    return Err(ScriptError::Failed(format!("shopsell: {} site ({x},{z}) not reached from {:?}", order.shop, bot.position())));
+                }
+                walked = true;
+            }
+            PassLeg::Act => {
+                let opened = crate::kit::shop::trade_to_keeper(bot, &keeper, order.site)?;
+                if pauses_at_withdraw.is_some_and(|mark| paused_since(mark, bot.pauses_done)) {
+                    // A pause during the trade wait banked the lots: the
+                    // next leg takes them again (a shop open since waits).
+                    if opened {
+                        bot.close_modal()?;
+                    }
+                    continue;
+                }
+                if !opened {
+                    return Err(ScriptError::Failed(format!("shopsell: trade with {keeper} failed at {:?}", bot.position())));
+                }
+                for (lot, form) in &forms {
+                    let (sold, coins) = crate::kit::shop::sell_units(bot, *form, &lot.item, &order.shop, lot.qty, lot.min_unit)?;
+                    bot.log(&format!("shopsell {}: sold {sold}/{} to {} for {coins} coins (at least {} each)", lot.item, lot.qty, order.shop, lot.min_unit));
+                    total += sold;
+                    if let Some(left) = remaining.iter_mut().find(|left| left.item == lot.item) {
+                        left.qty = left.qty.saturating_sub(sold);
+                    }
+                    if pauses_at_withdraw.is_some_and(|mark| paused_since(mark, bot.pauses_done)) {
+                        // A pause inside the sale banked the rest: resume.
+                        remaining.retain(|left| left.qty > 0);
+                        continue 'trip;
+                    }
+                }
+                bot.close_modal()?;
+                bot.pump(3)?;
+                return Ok(total);
+            }
+        }
     }
-    bot.close_modal()?;
-    bot.pump(3)?;
-    Ok(total)
 }
 
 #[cfg(test)]
@@ -167,6 +232,25 @@ mod tests {
         assert!(parse_lot("a:1:2:3").is_err());
         assert_eq!(parse_site("3212,3246,0").ok(), Some((3212, 3246, 0)));
         assert!(parse_site("3212,3246").is_err());
+    }
+
+    /// Live 2026-11-19 (alice_swift, alice_knight: "shopsell: trade with
+    /// noterazzo failed at (0, 3185, 3436)"): a market delivery paused
+    /// the trade at the Bandit Camp, banked the lots at Edgeville and left
+    /// the bot at the Varrock square; the sale then clicked for Noterazzo
+    /// from Varrock. After a pause the sale takes its lots again and
+    /// walks back before any trade; off the site it walks; on the site
+    /// with no pause it trades.
+    #[test]
+    fn a_paused_sale_goes_back_to_its_shop() {
+        use crate::kit::site::{pass_leg, PassLeg};
+        let camp = Some((3025, 3701, 0));
+        let varrock = (3185, 3436, 0);
+        assert_eq!(pass_leg(None, 0, false, varrock, camp), PassLeg::Load, "the lots first");
+        assert_eq!(pass_leg(Some(3), 3, false, varrock, camp), PassLeg::Walk, "lots carried, off the site");
+        assert_eq!(pass_leg(Some(3), 3, false, (3023, 3701, 0), camp), PassLeg::Act, "at the keeper");
+        assert_eq!(pass_leg(Some(3), 4, false, varrock, camp), PassLeg::Load, "a pause banked the pack and moved us");
+        assert_eq!(pass_leg(Some(3), 4, false, (3023, 3701, 0), camp), PassLeg::Load, "even back on the site: the lots are banked");
     }
 
     #[test]

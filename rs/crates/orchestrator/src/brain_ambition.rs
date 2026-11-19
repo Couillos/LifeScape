@@ -6,7 +6,8 @@
 //!
 //! - `ensure`: the first pass that meets a life without ambition runs the
 //!   fleet assignment over EVERY life file (coverage of the 12 F2P groups
-//!   first, then random weighted by demand and levels),
+//!   first, then random weighted by need; level-led for the D3
+//!   exceptions, `lifescape_planner::LEVEL_LED_ACCOUNTS`),
 //!   writes each one and logs `brain <acct>: ambition <kind> (<why>) —
 //!   milestones …`.
 //! - `before_draw`: milestones read the live levels, coins and stock, a
@@ -16,7 +17,7 @@
 //!   group, else its ladder extends.
 //! - `after_close`: a goal close folds into its milestone; blocked
 //!   `MILESTONE_MAX_BLOCKS` times redraws the ambition (approved policy,
-//!   logged), a completed milestone may change it (optional, at most once
+//!   logged), a market shortfall never counts a block (D3), a completed milestone may change it (optional, at most once
 //!   every `AMBITION_CHANGE_TICKS`).
 //! - `coverage_pass`: uncovered groups are logged once per change and a
 //!   redundant bot past the throttle fills one (review 2026-11-13).
@@ -29,9 +30,10 @@ use lifescape_json::Value;
 use lifescape_planner::ambition_catalog::{group_skills, primary_group, specs};
 use lifescape_planner::{
     achieved, assign_fleet, coverage_gaps, coverage_repair, describe_ambition, draw_kind, extend_ambition, new_ambition, new_ambition_extended,
-    on_goal_closed, optional_change, pinned, refresh, release_pin, revise, Ambition, BotNow, CloseOutcome, DemandItem, FleetBot, KindDemand, Life, Stamp, GROUPS,
-    MILESTONE_MAX_BLOCKS,
+    milestone_cool_key, on_goal_closed, on_goal_shortfall, optional_change, saturate, pinned, refresh, release_pin, revise, Ambition, BotNow, CloseOutcome, DemandItem, FleetBot, KindDemand, Life, Stamp, GROUPS,
+    MILESTONE_MAX_BLOCKS, MILESTONE_SHORTFALL_COOL_TICKS,
 };
+use lifescape_planner::cooldown::{cool_entry, COOL_NODE};
 
 use crate::brain::{lives_dir, load_life, save_life};
 use crate::daemon::Orchestrator;
@@ -89,6 +91,7 @@ fn fleet_bot(life: &Life, levels: Vec<(String, u8)>) -> FleetBot {
         market_affinity: life.profile.market_affinity,
         seed: life.seed,
         kind: life.ambition.as_ref().map(|ambition| ambition.kind.clone()),
+        market_maker: lifescape_planner::maker_role(life).is_some(),
     }
 }
 
@@ -147,9 +150,10 @@ fn live_of(orch: &Orchestrator, account: &str) -> Option<Value> {
     let inner = job.inner.try_lock().ok()?;
     inner.live.clone()
 }
-/// Gaps the rest of the fleet leaves open, and whether another bot holds
-/// this life's primary group too.
-fn fleet_view(life: &Life) -> (Vec<String>, bool) {
+/// Gaps the rest of the fleet leaves open, whether another bot holds
+/// this life's primary group too, and the kinds the other bots hold
+/// (the need's saturation, D3).
+fn fleet_view(life: &Life) -> (Vec<String>, bool, Vec<String>) {
     let others = other_lives(&life.account);
     let kinds: Vec<&str> = others.iter().filter_map(|other| other.ambition.as_ref().map(|ambition| ambition.kind.as_str())).collect();
     let mine = life.ambition.as_ref().and_then(|ambition| primary_group(&ambition.kind));
@@ -158,7 +162,16 @@ fn fleet_view(life: &Life) -> (Vec<String>, bool) {
     if let Some(ambition) = life.ambition.as_ref() {
         all.push(ambition.kind.as_str());
     }
-    (coverage_gaps(&all), redundant)
+    let held: Vec<String> = kinds.iter().map(|kind| kind.to_string()).collect();
+    (coverage_gaps(&all), redundant, held)
+}
+
+/// The draw inputs one bot reads (its own bids left out), the need
+/// saturated by the kinds the other bots hold (D3).
+fn need_demand(account: &str, held: &[String]) -> (Vec<DemandItem>, Vec<KindDemand>) {
+    let (items, weights) = crate::market_demand::kind_demand_for(account);
+    let refs: Vec<&str> = held.iter().map(String::as_str).collect();
+    (items, saturate(&weights, &refs))
 }
 
 /// Units of one object on the bot (pack, bank, worn) in the live
@@ -266,8 +279,8 @@ pub(crate) fn ensure(orch: &Orchestrator, life: &mut Life, live: &Value) -> bool
 /// Redraw this life's ambition now (blocked, achieved past the throttle):
 /// the fleet's open gaps first, never back to `exclude`.
 fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str) {
-    let (items, weights) = crate::market_demand::kind_demand_for(&life.account);
-    let (gaps, _) = fleet_view(life);
+    let (gaps, _, held) = fleet_view(life);
+    let (items, weights) = need_demand(&life.account, &held);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
     let first = draw_kind(&bot, &gaps, &weights, exclude);
     let inputs = DrawInputs { items, weights, gaps };
@@ -315,7 +328,7 @@ fn on_achieved(life: &mut Life, live: &Value) {
     let Some(ambition) = life.ambition.as_ref() else { return };
     let kind = ambition.kind.clone();
     let throttled = !lifescape_planner::may_change(ambition, &ticks_since);
-    let (_, redundant) = fleet_view(life);
+    let (_, redundant, _) = fleet_view(life);
     // An operator pin never leaves its kind: it extends toward its level.
     let held = pinned(ambition);
     if redundant && !throttled && !held {
@@ -340,11 +353,38 @@ fn on_achieved(life: &mut Life, live: &Value) {
     }
 }
 
+/// How a goal ended, as its milestone sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GoalEnd {
+    Done,
+    Stuck,
+    /// Stuck on a buy the market did not fill or refused
+    /// (`lifescape_planner::market_shortfall`): never a milestone block
+    /// (decision D3, user 2026-11-19).
+    MarketShortfall,
+}
+
 /// After a goal close: fold it into its milestone. Blocked
 /// `MILESTONE_MAX_BLOCKS` times redraws the ambition at once (approved
-/// policy); a done milestone may change it (optional, throttled).
-pub(crate) fn after_close(life: &mut Life, live: &Value, stuck: bool) {
-    match on_goal_closed(life, stuck) {
+/// policy); a market shortfall only reopens the milestone (D3); a done
+/// milestone may change it (optional, throttled).
+pub(crate) fn after_close(life: &mut Life, live: &Value, end: GoalEnd) {
+    let outcome = match end {
+        GoalEnd::MarketShortfall => {
+            let kind = life.ambition.as_ref().map(|ambition| ambition.kind.clone()).unwrap_or_default();
+            let outcome = on_goal_shortfall(life);
+            if let CloseOutcome::Reopened(milestone_id) = &outcome {
+                // Cooled, never relaunched every cycle (user 2026-11-19).
+                let key = milestone_cool_key(&kind, milestone_id);
+                crate::brain::push_history(life, COOL_NODE, &cool_entry(&key, MILESTONE_SHORTFALL_COOL_TICKS, "market shortfall"));
+                crate::logln!("brain {}: milestone {milestone_id}: market shortfall, not a block; cooled {MILESTONE_SHORTFALL_COOL_TICKS} ticks", life.account);
+            }
+            outcome
+        }
+        GoalEnd::Done => on_goal_closed(life, false),
+        GoalEnd::Stuck => on_goal_closed(life, true),
+    };
+    match outcome {
         CloseOutcome::Unlinked | CloseOutcome::Reopened(_) => {}
         CloseOutcome::Blocked { id, count } => {
             crate::logln!("brain {}: milestone {id} blocked ({count}/{MILESTONE_MAX_BLOCKS})", life.account);
@@ -370,8 +410,8 @@ fn maybe_change(life: &mut Life, live: &Value) {
     if !lifescape_planner::may_change(&ambition, &ticks_since) {
         return;
     }
-    let (items, weights): (Vec<DemandItem>, Vec<KindDemand>) = crate::market_demand::kind_demand_for(&life.account);
-    let (gaps, redundant) = fleet_view(life);
+    let (gaps, redundant, held) = fleet_view(life);
+    let (items, weights) = need_demand(&life.account, &held);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
     if let Some((kind, why)) = optional_change(&ambition, &bot, &gaps, redundant, &weights, &ticks_since) {
         let current = ambition.kind.clone();
@@ -436,7 +476,7 @@ pub(crate) fn coverage_pass(life: &mut Life, live: &Value) -> bool {
         table.insert(life.account.clone(), wall);
     }
     let Some(ambition) = life.ambition.clone() else { return false };
-    let (gaps, redundant) = fleet_view(life);
+    let (gaps, redundant, held) = fleet_view(life);
     {
         let mut logged = last_gaps().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if *logged != gaps {
@@ -453,10 +493,15 @@ pub(crate) fn coverage_pass(life: &mut Life, live: &Value) -> bool {
         }
     }
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
-    // A gap draw never reads the demand weights (coverage wins first).
-    let Some((kind, why)) = coverage_repair(&ambition, &bot, &gaps, redundant, &[], &ticks_since) else { return false };
-    let items = crate::market_demand::demand_items(&crate::market_demand::signals_for(&life.account));
-    let inputs = DrawInputs { items, weights: Vec::new(), gaps };
+    // A need-led bot (D3) picks among the gaps by need: the weights are
+    // read only when a gap is open and this bot may take it.
+    let (items, weights) = if gaps.is_empty() || !redundant || !lifescape_planner::may_change(&ambition, &ticks_since) {
+        (Vec::new(), Vec::new())
+    } else {
+        need_demand(&life.account, &held)
+    };
+    let Some((kind, why)) = coverage_repair(&ambition, &bot, &gaps, redundant, &weights, &ticks_since) else { return false };
+    let inputs = DrawInputs { items, weights, gaps };
     let before = life.ambition.clone();
     let current = ambition.kind.clone();
     replace(life, live, &bot, (kind, why.clone()), &inputs, &[current.as_str()], &format!("repair:{why}"));

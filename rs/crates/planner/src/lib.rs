@@ -37,6 +37,7 @@ pub mod guide_money;
 pub mod guide_pick;
 pub mod guide_prereq;
 pub mod guide_read;
+pub mod guide_share;
 pub mod guide_training;
 pub mod goals;
 pub mod lifecycle;
@@ -109,12 +110,12 @@ pub use goals::{append_goal, append_goal_with, draw_goal, draw_goal_origin, draw
 pub use ambition::{
     achieved, ambition_from_value, describe as describe_ambition, ambition_to_value, drop_stale_products, extend as extend_ambition, goal_for_milestone, mark_drawn, may_change, new_ambition,
     new_ambition_extended, next_milestone, open_count, pinned, pinned_ambition, release_pin, AmbitionError, BotNow, Pin,
-    on_goal_closed, refresh, revise, Ambition, CloseOutcome, Milestone, MilestoneStatus, Revision, Stamp, Target,
-    AMBITION_CHANGE_TICKS, ALCHER, GENERALIST, MILESTONE_MAX_BLOCKS, OVERALL,
+    on_goal_closed, on_goal_shortfall, refresh, revise, Ambition, CloseOutcome, Milestone, MilestoneStatus, Revision, Stamp, Target,
+    milestone_cool_key, AMBITION_CHANGE_TICKS, ALCHER, GENERALIST, MILESTONE_MAX_BLOCKS, MILESTONE_SHORTFALL_COOL_TICKS, OVERALL,
 };
 pub use ambition_catalog::{kind_weights, DemandItem, KindDemand, GROUPS};
 pub use market_maker::{become_quoting, maker_post, maker_role, quoting, switch_due, MakerPhase, MakerRole, MAKER_POSTS, MAKE_METHOD, MARKET_MAKER_KIND, MAKER_ROLE_CAUSE};
-pub use ambition_fleet::{assign_fleet, coverage_gaps, coverage_repair, draw_kind, optional_change, Assignment, FleetBot};
+pub use ambition_fleet::{assign_fleet, coverage_gaps, coverage_repair, draw_kind, level_led, saturate, optional_change, Assignment, FleetBot, LEVEL_LED_ACCOUNTS};
 pub use mapping::map_method;
 pub use model::{
     Alternative, Archetype, Engagement, GoalKind, HistoryEntry, Life, Node, NodeKind, NodeStatus,

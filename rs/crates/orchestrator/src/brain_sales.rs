@@ -506,6 +506,10 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     let pressed = lifescape_planner::needs_cleanup(crate::brain_plan::bank_types(job));
     // Q3: what an F2P shop pays more for than the market goes to the shop.
     let mut shop_candidates: Vec<crate::brain_npc_sale::Candidate> = Vec::new();
+    // The shops' likely stock (lot 8): the fleet's own recent sales
+    // there, decayed by the server's restock, never the base stock alone.
+    let shop_sales: std::cell::OnceCell<crate::brain_npc_sale::ShopSales> = std::cell::OnceCell::new();
+    let fleet_sales = || shop_sales.get_or_init(|| crate::brain_npc_sale::load_fleet_sales(&service));
     let learning = service.seller_learning(&job.account);
     for (name, item, qty) in offers {
         if quoted.contains(&crate::market_audit::book_item(item)) {
@@ -517,7 +521,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         // Overstock goes to the alchemy outlet on the market (the shop
         // takes a few units before its price sinks).
         let overstock = service.overstocked(&job.account, item, qty);
-        if let Some(shop_value) = lifescape_gamedata::shop_sale::npc_sale_value(&name).filter(|_| !overstock) {
+        if let Some(shop_value) = lifescape_gamedata::shop_sale::npc_sale_value(&name).filter(|_| !overstock).and_then(|_| crate::brain_npc_sale::likely_sale_value(&name, fleet_sales())) {
             let reference = service.reference(item);
             let (bid, _) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
             let bid = bid.map(|price| crate::market_units::to_unit(item, price));
@@ -582,7 +586,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     // Q3: one shop trip when it pays more than its ticks at the bot's
     // own rate; the janitor node carries it (`brain_npc_sale`).
     let min_gain = (crate::brain_npc_sale::SHOP_TRIP_TICKS * costs.coins_per_tick).ceil() as i64;
-    match crate::brain_npc_sale::plan_shop_sale(&shop_candidates, crate::brain_npc_sale::live_position(&live), min_gain, &lifescape_gamedata::shop_sale::npc_sale_shops) {
+    match crate::brain_npc_sale::plan_shop_sale(&shop_candidates, crate::brain_npc_sale::live_position(&live), min_gain, &|item: &str| crate::brain_npc_sale::shops_at_likely_stock(item, fleet_sales())) {
         Some(plan) => {
             crate::logln!("brain {}: npc shop sale planned at {} ({} lots, gain {} over the market, trip worth {min_gain})", job.account, plan.shop, plan.lines.len(), plan.gain());
             crate::brain_npc_sale::note(&job.account, plan);

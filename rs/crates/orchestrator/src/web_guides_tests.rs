@@ -314,3 +314,15 @@ fn economy_top_activities_read_the_money_guide() -> Result<(), lifescape_store::
     }
     Ok(())
 }
+
+/// Review lot 2, point 4: every build of the guides (the brain's set and
+/// the CLI's rebuild) reads the quote with the order board's claims.
+#[test]
+fn a_quote_on_the_board_carries_the_claims() -> Result<(), lifescape_store::Error> {
+    let store = Store::open_in_memory()?;
+    store.upsert_item(&lifescape_store::Item { item_id: 1095, name: "Leather chaps".to_string(), shop_price: 20, alch_value: 8 })?;
+    let claims: HashMap<String, i64> = [("leather_chaps".to_string(), 12)].into_iter().collect();
+    assert_eq!(quote_on_board(&store, "leather_chaps", &claims).claimed, 12.0);
+    assert_eq!(quote_on_board(&store, "leather_chaps", &HashMap::new()).claimed, 0.0);
+    Ok(())
+}

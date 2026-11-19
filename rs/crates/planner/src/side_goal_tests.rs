@@ -10,7 +10,7 @@ fn banned(skills: &[&str]) -> Vec<String> {
 }
 
 fn bid(item: &str, weight: f64, margin: f64) -> DemandItem {
-    DemandItem { item: item.to_string(), weight, unmet: 40, margin: Some(margin) }
+    DemandItem { asked: false, item: item.to_string(), weight, unmet: 40, margin: Some(margin) }
 }
 
 fn nothing_held(_: &str) -> i64 {

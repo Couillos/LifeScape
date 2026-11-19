@@ -14,6 +14,7 @@
 //! Candles are a cache: `executions` is the source of truth and any candle
 //! set can be rebuilt with [`Store::rebuild_candles`].
 
+pub mod balance;
 pub mod candle_chain;
 pub mod candles;
 pub mod deals;
@@ -30,7 +31,9 @@ pub mod prices;
 mod provenance_v8;
 pub mod reports;
 pub mod schema;
+pub mod work_gains;
 
+pub use balance::{stock_days, MethodWork, UnsoldStock};
 pub use candle_chain::chain_candles;
 pub use candles::{Candle, Execution, NewExecution, YieldCandleResolution};
 pub use deals::{Deal, DealStatus, NewDeal};
@@ -43,6 +46,7 @@ pub use market_criteria::MarketCriteria;
 pub use measures::{PurgeCounts, ReportMeasure, StoredMeasure};
 pub use orders::{NewOrder, Order, OrderSide, OrderStatus, AMENDED_REASON};
 pub use reports::{NewTaskReport, NewTaskYield, TaskReport, TaskYield, YieldAggregate};
+pub use work_gains::AccountWork;
 
 use std::path::Path;
 
@@ -116,6 +120,8 @@ impl Store {
         // never a raw SQLITE_BUSY (2026-11-16 migration race).
         connection.busy_timeout(schema::BUSY_WAIT)?;
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        // Also ensures the reports-by-time index (`schema::REPORT_CLOCK_INDEX`:
+        // measured gains, the brain's likely shop stock) without a version change.
         schema::apply_migrations(&connection)?;
         Ok(Self { connection })
     }

@@ -124,6 +124,19 @@ fn areas() -> Vec<Area> {
             gate: Gate::Guild { area: "crafting_guild", skill: "crafting", level: 40, uniform: Some("brown_apron") },
             door: Some((2933, 3290, 0)),
         },
+        // The guild's wheel room east of the door (x 2935..2938, z
+        // 3289..3292: the four pottery wheels, the jug on its table; south
+        // walls (2936..2937,3293) in m45_51), open only from the guild
+        // interior: offline `route 2933 3295 0 2936 3290 0` crosses door
+        // 2647; live 2026-11-19, pottery sent there below crafting 40
+        // ("shaping consumed nothing" at the door, 65 failures).
+        Area {
+            x: (2935, 2938),
+            z: (3289, 3292),
+            levels: (0, 0),
+            gate: Gate::Guild { area: "crafting_guild", skill: "crafting", level: 40, uniform: Some("brown_apron") },
+            door: Some((2933, 3290, 0)),
+        },
         // The guild's north room west of the door (walls x 2927..2932,
         // z up to 3292: pottery oven, amulet mould on the table), open
         // only from the guild interior: live admin2 2026-11-16, the mould
@@ -356,6 +369,30 @@ mod tests {
         }
         assert!(!behind_boat(2833, 9657, 0), "Elvarg's lair is Crandor's");
         assert!(!behind_boat(3222, 9618, 0), "another dungeon");
+    }
+
+    /// Live 2026-11-19 (frank_shaw crafting 27, pia_brown, 65 failures
+    /// "shaping consumed nothing" at (2933,3289) and (3011,3355)): the
+    /// four guild wheels (2935..2938, 3289..3291) read public, the brain
+    /// sent pottery there, the walk died on the guild door (crafting 40 +
+    /// worn brown apron, `crafting_guild.rs2`). Offline `orchestrator
+    /// route 2933 3295 0 2936 3290 0`: 3 segments through door 2647. The
+    /// corridor west (x 2934) and the row north (z 3292) stay open.
+    #[test]
+    fn guild_wheels_are_gated() {
+        for station in crate::stations::stations_of("potterywheel") {
+            let gates = gates_at(station.x, station.z, station.level);
+            let guild = (2935..=2938).contains(&station.x) && (3289..=3291).contains(&station.z);
+            assert_eq!(gates.iter().any(|gate| gate.area() == "crafting_guild"), guild, "wheel ({},{}) gates {gates:?}", station.x, station.z);
+        }
+        assert_eq!(surface_of(2936, 3290, 0), (2933, 3290, 0), "an inside wheel reads at the door");
+        // The room reaches z 3292 (walls (2936,3293), (2937,3293), corners
+        // (2935,3292), (2938,3292) in m45_51): the jug (2936,3292) lies on
+        // its table, inside. The corridor west (x 2934) stays open.
+        assert!(gates_at(2936, 3292, 0).iter().any(|gate| gate.area() == "crafting_guild"), "the jug is inside the room");
+        for (x, z) in [(2934, 3291), (2934, 3289), (2934, 3292)] {
+            assert!(gates_at(x, z, 0).is_empty(), "({x},{z}) is outside the wheel room");
+        }
     }
 
     /// The crafting guild's gold and silver rocks are inside its door.

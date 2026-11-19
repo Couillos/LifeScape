@@ -76,7 +76,7 @@ fn brain_choice_bench() {
         });
         // After (R7): the draw of a climb, any skill.
         for skill in ["smithing", "woodcutting", "attack", "magic"] {
-            let climb = crate::brain_train::Climb { skill, level: *level, target: level.saturating_add(5).min(99), previous: None, food: None };
+            let climb = crate::brain_train::Climb { skill, level: *level, target: level.saturating_add(5).min(99), previous: None, food: None, coin_rate: lifescape_planner::market_fit::MIN_COIN_RATE };
             let cost = per_call(&format!("R7 {skill} climb: pick_from_guide (draw)"), 20, || crate::brain_train::pick_from_guide(&set, &climb, &life, &bot, &[], 7, &never, &rate).map(|found| found.pick.method));
             if skill == "smithing" {
                 after_train += cost;
@@ -95,12 +95,20 @@ fn brain_choice_bench() {
         let read = crate::brain_money::bot_rows(&set, &level_of, &[]);
         let rows = read.all();
         println!("  {} rows read, {} priced and earning", rows.len(), rows.iter().filter(|row| row.priced && row.profit_6000 > 0.0).count());
-        per_call("  of which lines_for", 20, || crate::brain_money::lines_for(&rows, &ctx, &bot, &[], 0.5, &|_| None).len());
+        // The shared demand of the pick (plan équilibre step 2) on the cycle's quotes.
+        let quote = |item: &str| set.quotes.get(item).cloned();
+        let shop = |item: &str| crate::web_guides::npc_volume_value(item);
+        let shared_lines = |ctx: &ReadyCtx, affinity: f64| {
+            let demand = lifescape_planner::guide_share::SharedDemand::new(&quote, &shop);
+            crate::brain_money::lines_for(&rows, ctx, &bot, &[], affinity, &|_| None, &|row| demand.profit(row))
+        };
+        per_call("  of which lines_for", 20, || shared_lines(&ctx, 0.5).len());
         after_money += per_call("R7 money: bot_rows + lines_for + draw", 20, || {
             let read = crate::brain_money::bot_rows(&set, &level_of, &[]);
             let rows = read.all();
             let mut drawn = ctx.clone();
-            drawn.money_guide = crate::brain_money::lines_for(&rows, &drawn, &bot, &[], life.profile.market_affinity, &|_| None);
+            let demand = lifescape_planner::guide_share::SharedDemand::new(&quote, &shop);
+            drawn.money_guide = crate::brain_money::lines_for(&rows, &drawn, &bot, &[], life.profile.market_affinity, &|_| None, &|row| demand.profit(row));
             drawn.draw_seed = 7;
             let mut node = Node::new("n1", NodeKind::MakeMoney, Vec::new(), 0);
             lifescape_planner::resolve_ready(&mut node, &drawn);
@@ -146,16 +154,16 @@ fn profit_reads_bench() {
         let key = crate::brain_d17::BotKey { level_of: &level_of, combat: level.max(3), quests_done: &none, ironman: false };
         let best = crate::brain_d17::best_row(&set, &key);
         println!("--- bot at {level}: D17 {:?} ({:?})", best.map(|row| row.profit_6000), best.map(|row| (row.family.as_str(), row.method.as_str(), row.band, row.confidence.runs)));
-        total += per_call("after: bot_d17 (bids, alchemy, derived demand)", 50, || crate::brain_d17::bot_d17(&set, &key));
+        total += per_call("after: D17 line (bid-why display)", 50, || crate::brain_d17::best_row(&set, &key).map(|row| row.profit_6000));
         let mut ctx = ReadyCtx::blind(0.5);
         ctx.levels = lifescape_planner::guide_methods::SKILLS.iter().map(|skill| (skill.to_string(), level)).collect();
         let money = Node::new("n1", NodeKind::MakeMoney, Vec::new(), 0);
         per_call("after: guide_coins (money node: D17 + method profits)", 50, || {
             let mut filled = ctx.clone();
-            crate::brain_market::guide_coins(&mut filled, &money, &set, level.max(3));
+            crate::brain_market::guide_coins(&mut filled, &money, &set);
             filled.method_profit.len()
         });
     }
     per_call("after: kind_profits (ambition weighing)", 50, || crate::brain_d17::kind_profits(&set).len());
-    println!("=== mean bot_d17 over {} bots: {:.3} ms", levels.len(), total / levels.len() as f64);
+    println!("=== mean D17 line over {} bots: {:.3} ms", levels.len(), total / levels.len() as f64);
 }

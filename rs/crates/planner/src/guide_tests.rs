@@ -86,8 +86,9 @@ impl Fixture {
         let price = |item: &str| match (self.quotes.get(item), self.prices.get(item)) {
             (Some(quote), _) => quote.clone(),
             // A traded object's market makers offer it at its price; its
-            // fills moved more than any window sells (a deep history).
-            (None, Some(price)) => Quote { price: *price, traded: true, median: *price, fills: 5, fill_units: 1e9, asks: vec![(*price, 1e9)], ..Quote::default() },
+            // fills moved more than any window sells past those asks (a
+            // deep history: the asks at the price sell first, step 2).
+            (None, Some(price)) => Quote { price: *price, traded: true, median: *price, fills: 5, fill_units: 2e9, asks: vec![(*price, 1e9)], ..Quote::default() },
             (None, None) => {
                 let (bids, asks) = self.books.get(item).cloned().unwrap_or_default();
                 // The book midpoint a never-traded quote carries: no value.
@@ -191,7 +192,7 @@ fn full_market_counts_trips_waits_and_capital() {
 fn chain_sums_upstream_ticks_and_compares_every_stage() {
     let mut fixture = Fixture::new();
     for (item, price) in [("iron_ore", 10.0), ("coal", 15.0)] {
-        fixture.quotes.insert(item, Quote { price, traded: true, median: price, fills: 5, fill_units: 500.0, bids: Vec::new(), asks: vec![(100.0, 1e9)] });
+        fixture.quotes.insert(item, Quote { price, traded: true, median: price, fills: 5, fill_units: 500.0, bids: Vec::new(), asks: vec![(100.0, 1e9)], claimed: 0.0 });
     }
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let chain = row(&rows, "smelt:steel_bar", Family::Chain);
@@ -375,7 +376,7 @@ fn a_book_clamp_moves_the_price_of_its_own_units_only() {
     let mut fixture = Fixture::new();
     fixture.yields.insert("smith:iron_2h_sword", answer(&[("iron_2h_sword", "product", 100.0), ("iron_bar", "input", -300.0)], &[("product", "iron_2h_sword", 100.0)]));
     fixture.prices.insert("iron_bar", 20.0);
-    fixture.quotes.insert("iron_2h_sword", Quote { price: 5000.0, traded: true, median: 500.0, fills: 5, fill_units: 500.0, bids: vec![(5000.0, 1.0)], asks: Vec::new() });
+    fixture.quotes.insert("iron_2h_sword", Quote { price: 5000.0, traded: true, median: 500.0, fills: 5, fill_units: 500.0, bids: vec![(5000.0, 1.0)], asks: Vec::new(), claimed: 0.0 });
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let sword = row(&rows, "smith:iron_2h_sword", Family::Recipe);
     let line = sword.flows.iter().find(|line| line.item == "iron_2h_sword").expect("sword line");
@@ -388,7 +389,7 @@ fn a_book_clamp_moves_the_price_of_its_own_units_only() {
     assert_eq!(sword.price_confidence, "thin");
     // Purchase: coal's median 15, cut to 5 by an ask for one unit: that
     // unit at 5, the rest up the asks (2026-11-16: never under an ask).
-    fixture.quotes.insert("coal", Quote { price: 5.0, traded: true, median: 15.0, fills: 5, fill_units: 500.0, bids: Vec::new(), asks: vec![(5.0, 1.0), (20.0, 1000.0)] });
+    fixture.quotes.insert("coal", Quote { price: 5.0, traded: true, median: 15.0, fills: 5, fill_units: 500.0, bids: Vec::new(), asks: vec![(5.0, 1.0), (20.0, 1000.0)], claimed: 0.0 });
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let market = row(&rows, "smelt:steel_bar", Family::Market);
     let coal = market.flows.iter().find(|line| line.item == "coal").expect("coal line");
@@ -405,7 +406,7 @@ fn a_book_clamp_moves_the_price_of_its_own_units_only() {
 #[test]
 fn thin_price_holds_for_the_traded_volume_only() {
     let mut fixture = Fixture::new();
-    fixture.quotes.insert("leather_chaps", Quote { price: 15411.0, traded: true, median: 15411.0, fills: 1, fill_units: 1.0, bids: vec![(400.0, 20.0)], asks: Vec::new() });
+    fixture.quotes.insert("leather_chaps", Quote { price: 15411.0, traded: true, median: 15411.0, fills: 1, fill_units: 1.0, bids: vec![(400.0, 20.0)], asks: Vec::new(), claimed: 0.0 });
     fixture.npc.insert("leather_chaps", 50.0);
     let (one, many) = fixture.run(|engine| (engine.sale_at("leather_chaps", 1.0), engine.sale_at("leather_chaps", 300.0)));
     assert!((one.price - 15411.0).abs() < 1e-9, "the traded unit: {}", one.price);
@@ -435,7 +436,7 @@ fn thin_price_holds_for_the_traded_volume_only() {
 #[test]
 fn purchase_costs_at_least_the_best_ask() {
     let mut fixture = Fixture::new();
-    fixture.quotes.insert("coal", Quote { price: 7.0, traded: true, median: 7.0, fills: 5, fill_units: 50.0, bids: Vec::new(), asks: vec![(35.0, 1000.0)] });
+    fixture.quotes.insert("coal", Quote { price: 7.0, traded: true, median: 7.0, fills: 5, fill_units: 50.0, bids: Vec::new(), asks: vec![(35.0, 1000.0)], claimed: 0.0 });
     let bought = fixture.run(|engine| engine.buy_at("coal", 200.0));
     assert!((bought.price - 35.0).abs() < 1e-9 && bought.available, "{bought:?}");
     assert_eq!(bought.basis, crate::guide_model::PriceBasis::Book);
@@ -444,12 +445,12 @@ fn purchase_costs_at_least_the_best_ask() {
     let coal = market.flows.iter().find(|line| line.item == "coal").expect("coal line");
     assert!((coal.unit_price - 35.0).abs() < 1e-9, "the market row buys at the ask: {}", coal.unit_price);
     // Asks under the current price cost the current price.
-    fixture.quotes.insert("coal", Quote { price: 7.0, traded: true, median: 7.0, fills: 5, fill_units: 50.0, bids: Vec::new(), asks: vec![(5.0, 1000.0)] });
+    fixture.quotes.insert("coal", Quote { price: 7.0, traded: true, median: 7.0, fills: 5, fill_units: 50.0, bids: Vec::new(), asks: vec![(5.0, 1000.0)], claimed: 0.0 });
     let bought = fixture.run(|engine| engine.buy_at("coal", 200.0));
     assert!((bought.price - 7.0).abs() < 1e-9 && bought.basis == crate::guide_model::PriceBasis::Traded, "{bought:?}");
     // Past the asks' depth: the shop, else the current price (at least
     // the last ask walked), the availability a condition.
-    fixture.quotes.insert("coal", Quote { price: 7.0, traded: true, median: 7.0, fills: 5, fill_units: 50.0, bids: Vec::new(), asks: vec![(35.0, 10.0)] });
+    fixture.quotes.insert("coal", Quote { price: 7.0, traded: true, median: 7.0, fills: 5, fill_units: 50.0, bids: Vec::new(), asks: vec![(35.0, 10.0)], claimed: 0.0 });
     let bought = fixture.run(|engine| engine.buy_at("coal", 200.0));
     assert!(!bought.available && bought.priced && (bought.price - 35.0).abs() < 1e-9, "{bought:?}");
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));

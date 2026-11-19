@@ -4,7 +4,7 @@
 
 use super::{eligible, input_count, is_trade, lot_finished, lot_size, method_of, note_made, offer_from_row, offers, open_inputs, open_lot, recipe_of, LotBound, TradeLot, LOTS_CAP};
 use crate::expand::ReadyCtx;
-use crate::guide_model::{Confidence, Family, FlowLine, MoneyRow, Outlet, PriceBasis, Prereqs, Quote};
+use crate::guide_model::{Confidence, Family, FlowLine, MoneyRow, Outlet, PriceBasis, Prereqs, Quote, ShopNeed};
 use crate::model::{Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
 
 const BRONZE: &str = "smelt:bronze_bar";
@@ -39,13 +39,20 @@ fn bronze_row() -> MoneyRow {
     }
 }
 
-/// Copper: 30 asks at 10, 30 at 11 (60 units); tin: 200 at 12.
+/// Copper: 30 asks at 10, 30 at 11 (60 units); tin: 200 at 12; bronze
+/// bars traded at 40, the last fills moved 1000 (a deep demand).
 fn quote(item: &str) -> Option<Quote> {
     match item {
+        "bronze_bar" => Some(Quote { price: 40.0, traded: true, median: 40.0, fills: 5, fill_units: 1000.0, ..Quote::default() }),
         "copper_ore" => Some(Quote { price: 10.0, traded: true, asks: vec![(11.0, 30.0), (10.0, 30.0)], ..Quote::default() }),
         "tin_ore" => Some(Quote { price: 12.0, traded: true, asks: vec![(12.0, 200.0)], ..Quote::default() }),
         _ => None,
     }
+}
+
+/// No F2P shop buys anything.
+fn no_shop(_: &str) -> Option<(f64, ShopNeed)> {
+    None
 }
 
 fn smith_ctx(held_copper: i64, held_tin: i64, wallet: i64) -> ReadyCtx {
@@ -57,7 +64,7 @@ fn smith_ctx(held_copper: i64, held_tin: i64, wallet: i64) -> ReadyCtx {
         "tin_ore" => held_tin,
         _ => 0,
     };
-    ctx.trades = vec![offer_from_row(&bronze_row(), &quote, &held).expect("bronze offer")];
+    ctx.trades = vec![offer_from_row(&bronze_row(), &quote, &no_shop, &held).expect("bronze offer")];
     ctx.trade_wallet = wallet;
     ctx
 }
@@ -122,7 +129,7 @@ fn a_trade_method_works_its_recipe_and_maps_to_its_script_with_the_lot() {
 #[test]
 fn the_lot_is_bounded_by_the_window_the_asks_and_the_wallet() {
     let held = |_: &str| 0;
-    let offer = offer_from_row(&bronze_row(), &quote, &held).expect("offer");
+    let offer = offer_from_row(&bronze_row(), &quote, &no_shop, &held).expect("offer");
     assert_eq!(offer.product, "bronze_bar");
     assert!((offer.unit_profit() - 18.0).abs() < 1e-9, "guide profit per bar");
     assert_eq!(offer.inputs.len(), 2);
@@ -139,13 +146,13 @@ fn the_lot_is_bounded_by_the_window_the_asks_and_the_wallet() {
     assert_eq!(lot_size(&offer, 0).lot, 0, "no wallet, no lot");
     // Held ore is crafted, never bought again; deep asks leave the window.
     let held = |item: &str| if item == "copper_ore" { 70 } else { 0 };
-    let stocked = offer_from_row(&bronze_row(), &quote, &held).expect("offer");
+    let stocked = offer_from_row(&bronze_row(), &quote, &no_shop, &held).expect("offer");
     let window = lot_size(&stocked, 1_000_000);
     assert_eq!((window.lot, window.bound), (100, LotBound::Window), "one window's volume at most");
     assert_eq!(window.buys, vec![("copper_ore".to_string(), 30), ("tin_ore".to_string(), 100)]);
     // A traded input costs at least its current price (D15).
     let dear = |item: &str| quote(item).map(|known| if item == "tin_ore" { Quote { price: 15.0, ..known } } else { known });
-    let floored = offer_from_row(&bronze_row(), &dear, &|_| 0).expect("offer");
+    let floored = offer_from_row(&bronze_row(), &dear, &no_shop, &|_| 0).expect("offer");
     assert_eq!(lot_size(&floored, 1_000_000).cost, 30 * 10 + 30 * 11 + 60 * 15);
 }
 
@@ -164,7 +171,7 @@ fn an_ironman_never_trades() {
     let none = |_: &str| 0.0;
     assert!(judge_bot(30, &none, None, false, |bot| eligible(&row, bot)));
     assert!(!judge_bot(30, &none, None, true, |bot| eligible(&row, bot)), "Ironman excluded");
-    assert!(judge_bot(30, &none, None, true, |bot| offers(&[&row], &quote, bot)).is_empty());
+    assert!(judge_bot(30, &none, None, true, |bot| offers(&[&row], &quote, &no_shop, bot)).is_empty());
     assert!(!judge_bot(0, &none, None, false, |bot| eligible(&row, bot)), "the level the row needs");
     let mut ctx = smith_ctx(0, 0, 10_000);
     assert!(crate::resolve_obtain::money_methods(&ctx).contains(&method_of(BRONZE)));
@@ -190,7 +197,7 @@ fn a_trade_is_offered_on_the_bots_own_feasibility() {
     let tin = |item: &str| if item == "tin_ore" { 20.0 } else { 0.0 };
     let holder = crate::guide_feasible::BotState { held: &tin, ..bot };
     assert!(eligible(&row, &holder), "its own tin");
-    assert_eq!(offers(&[&row], &tinless, &holder).len(), 1);
+    assert_eq!(offers(&[&row], &tinless, &no_shop, &holder).len(), 1);
     // A wallet under a lot's capital (616): offered, the lot bounded.
     assert!(judge_bot(30, &none, Some(100.0), false, |bot| eligible(&bronze_row(), bot)), "the wallet bounds the lot");
 }
@@ -200,19 +207,19 @@ fn only_priced_earning_market_rows_with_market_purchases_trade() {
     let held = |_: &str| 0;
     let mut shop = bronze_row();
     shop.flows[2].outlet = Outlet::Shop;
-    assert!(offer_from_row(&shop, &quote, &held).is_err(), "a shop purchase has no market leg");
+    assert!(offer_from_row(&shop, &quote, &no_shop, &held).is_err(), "a shop purchase has no market leg");
     let mut unpriced = bronze_row();
     unpriced.priced = false;
-    assert!(offer_from_row(&unpriced, &quote, &held).is_err(), "an input nothing prices");
+    assert!(offer_from_row(&unpriced, &quote, &no_shop, &held).is_err(), "an input nothing prices");
     let mut recipe = bronze_row();
     recipe.family = Family::Recipe;
-    assert!(offer_from_row(&recipe, &quote, &held).is_err());
+    assert!(offer_from_row(&recipe, &quote, &no_shop, &held).is_err());
     let mut loss = bronze_row();
     loss.profit_6000 = -5.0;
-    assert!(offer_from_row(&loss, &quote, &held).is_err());
+    assert!(offer_from_row(&loss, &quote, &no_shop, &held).is_err());
     let mut alch = bronze_row();
     alch.method = "alch:bronze_bar".to_string();
-    assert!(offer_from_row(&alch, &quote, &held).is_err(), "alchemy makes coins: nothing to craft nor sell");
+    assert!(offer_from_row(&alch, &quote, &no_shop, &held).is_err(), "alchemy makes coins: nothing to craft nor sell");
 }
 
 /// The whole lot: resolve sizes it and blocks on the ore, the block buys
@@ -334,4 +341,98 @@ fn a_bought_lot_whose_row_left_the_guide_is_still_crafted() {
     assert_eq!(node.method.as_deref(), Some(method.as_str()));
     assert_eq!(node.batch, 22);
     assert!(super::recipe_offer(BRONZE, &|_| 22).is_none(), "only a trade method");
+}
+
+/// Bronze bars whose last fills moved 30, 10 of them claimed by another
+/// smelter and 5 resting at the price: 15 left for this bot.
+fn shared(item: &str) -> Option<Quote> {
+    match item {
+        "bronze_bar" => Some(Quote { price: 40.0, traded: true, median: 40.0, fills: 5, fill_units: 30.0, claimed: 10.0, asks: vec![(40.0, 5.0)], ..Quote::default() }),
+        _ => quote(item),
+    }
+}
+
+/// Plan équilibre step 2: a 100 % market lot is sized and predicted on
+/// the demand the others leave (bids and the recent volume, minus the
+/// asks at or under the price and the claims), never on the whole
+/// recent volume.
+#[test]
+fn a_lot_is_sized_and_predicted_on_the_shared_demand() {
+    let offer = offer_from_row(&bronze_row(), &shared, &no_shop, &|_| 0).expect("15 bars left");
+    assert!((offer.demand - 15.0).abs() < 1e-9, "{}", offer.demand);
+    let plan = lot_size(&offer, 1_000_000);
+    assert_eq!((plan.lot, plan.bound), (15, LotBound::Demand));
+    assert!((offer.unit_profit() - 18.0).abs() < 1e-9, "the lot's bars at 40, inputs at 22: {}", offer.unit_profit());
+    let mut ctx = smith_ctx(0, 0, 1_000_000);
+    ctx.trades = vec![offer];
+    let mut node = ready_money();
+    crate::expand::resolve_ready(&mut node, &ctx);
+    assert_eq!(node.batch, 15, "the lot the demand takes");
+    let lot = open_lot(&mut Vec::new(), &node, &ctx, 0).expect("recorded");
+    assert_eq!((lot.lot, lot.predicted, lot.bound.as_str()), (15, 15 * 18, "demand"));
+}
+
+/// The guide's bronze row with one purchase (square trip + market wait)
+/// of 500 ticks, two of them per 6000 ticks of the row: the craft takes
+/// (6000 − 2 × 500) / 100 = 50 ticks a bar.
+fn bronze_with_trips() -> MoneyRow {
+    let mut row = bronze_row();
+    row.prereqs.purchase_ticks = 500.0;
+    row.prereqs.purchases_per_6000 = 2.0;
+    row
+}
+
+/// Review lot 2, point 5: a trade lot ranks on the lot the demand really
+/// takes, its fixed purchase (trip, market wait) spread over THAT lot
+/// only: 15 bars net 270 in 15 × 50 + 500 ticks (1 296 / 6000), a full
+/// demand lot of 100 nets 1 800 in 5 500 ticks; never the window's 1 800
+/// extrapolated from 15 bars.
+#[test]
+fn a_trade_lot_ranks_on_the_lot_the_demand_takes() {
+    let small = offer_from_row(&bronze_with_trips(), &shared, &no_shop, &|_| 0).expect("15 bars left");
+    let expected = 15.0 * 18.0 * 6000.0 / (15.0 * 50.0 + 500.0);
+    assert!((small.profit_6000 - expected).abs() < 1e-6, "{} vs {expected}", small.profit_6000);
+    assert!((small.lot_rate(15) - expected).abs() < 1e-6);
+    let full = offer_from_row(&bronze_with_trips(), &quote, &no_shop, &|_| 0).expect("deep demand");
+    let full_rate = 100.0 * 18.0 * 6000.0 / (100.0 * 50.0 + 500.0);
+    assert!((full.profit_6000 - full_rate).abs() < 1e-6, "{} vs {full_rate}", full.profit_6000);
+    assert!(small.profit_6000 < full.profit_6000, "a thin demand ranks lower");
+    assert!((small.unit_profit() - 18.0).abs() < 1e-9, "the margin of a bar is the same");
+}
+
+/// Review lot 2, point 1: the guide (built every 300 s with EVERY claim)
+/// valued this bot's own claimed bars at nothing: its row loses. Read
+/// again with the claims of the OTHERS (none), its lot is offered: a bot
+/// chains its own lot.
+#[test]
+fn an_own_claim_in_the_guide_never_hides_the_lot() {
+    let mut own_claimed = bronze_row();
+    own_claimed.flows[0] = line("bronze_bar", "product", 100.0, 0.0, Outlet::Market);
+    own_claimed.revenue_6000 = 0.0;
+    own_claimed.profit_6000 = -2200.0;
+    let offer = offer_from_row(&own_claimed, &quote, &no_shop, &|_| 0).expect("its own claim is not another producer's");
+    assert!((offer.unit_profit() - 18.0).abs() < 1e-9, "{}", offer.unit_profit());
+    assert!((offer.profit_6000 - 1800.0).abs() < 1e-6, "{}", offer.profit_6000);
+}
+
+/// Plan équilibre step 2: a lot whose product has no demand left (every
+/// recent bar claimed by other producers, or resting at the price) is
+/// not offered, even when a shop would take it.
+#[test]
+fn a_lot_without_remaining_demand_is_refused() {
+    let claimed = |item: &str| match item {
+        "bronze_bar" => Some(Quote { price: 40.0, traded: true, median: 40.0, fills: 5, fill_units: 30.0, claimed: 30.0, ..Quote::default() }),
+        _ => quote(item),
+    };
+    let shop = |item: &str| (item == "bronze_bar").then_some((35.0, ShopNeed::default()));
+    let refused = offer_from_row(&bronze_row(), &claimed, &shop, &|_| 0);
+    assert!(refused.as_ref().is_err_and(|why| why.contains("demand")), "{refused:?}");
+    let none = |_: &str| 0.0;
+    let row = bronze_row();
+    assert!(judge_bot(30, &none, Some(10_000.0), false, |bot| offers(&[&row], &claimed, &shop, bot)).is_empty(), "never offered");
+    let resting = |item: &str| match item {
+        "bronze_bar" => Some(Quote { price: 40.0, traded: true, median: 40.0, fills: 5, fill_units: 30.0, asks: vec![(38.0, 30.0)], ..Quote::default() }),
+        _ => quote(item),
+    };
+    assert!(offer_from_row(&bronze_row(), &resting, &no_shop, &|_| 0).is_err(), "30 bars already resting under the price");
 }

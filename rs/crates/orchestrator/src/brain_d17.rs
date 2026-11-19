@@ -4,7 +4,7 @@
 //! 2026-11-17 « Une seule source de profits : le guide money »). Every
 //! reader reads the precomputed set (`guides_store::current()`, never a
 //! build on demand) with the semantics of R7:
-//! - `bot_d17`: the D17 price of a bot, the best profit per 6000 ticks
+//! - `best_row`: the D17 line of a bot, the best profit per 6000 ticks
 //!   among the priced, earning rows of ITS views (`brain_money::bot_rows`:
 //!   each skill's band view, the activities its levels open) within its
 //!   reach (`guide_feasible::feasible_for(..).within_reach()`), judged as
@@ -12,9 +12,15 @@
 //!   cycle's asks): a bot at one level in every skill reads exactly the
 //!   D17 of `brain_train` (R7) at that level;
 //! - `coin_rate`: what one tick of the bot's time is worth (the bid
-//!   response, alchemy, derived demand): its D17 over 6000 ticks, never
-//!   under `market_fit::MIN_COIN_RATE` (a tick is never free; no guide
-//!   yet or no earning line: the floor);
+//!   response and the seller reserve's make cost, alchemy, derived
+//!   demand, the training score, the grind of a purchase): NOT its D17
+//!   since 2026-11-19 (plan équilibre step 1, decision D1): what its work
+//!   really earned per tick over 12 h (`time_value`), the fleet's
+//!   measured mean without a measure of its own, never under
+//!   `market_fit::MIN_COIN_RATE` (a tick is never free). The D17 line
+//!   (`best_row`) is only displayed (`bid-why`'s D17 line): a theoretical
+//!   best (chains never run included: 10.7 coins per tick for every bot
+//!   on 2026-11-19, ~0.28 really earned);
 //! - `method_profit_in`: a planner method's profit for the bot, its best
 //!   priced row in the bot's rows (its own band);
 //! - `kind_profits`: the best profit of each ambition kind, the guide's
@@ -26,8 +32,7 @@
 //! else 0): no reader applies a saturation of its own.
 
 use lifescape_planner::guide_feasible::{feasible_for, BotState};
-use lifescape_planner::guide_model::{MoneyRow, WINDOW_TICKS};
-use lifescape_planner::market_fit::MIN_COIN_RATE;
+use lifescape_planner::guide_model::MoneyRow;
 
 use crate::guides_store::GuideSet;
 
@@ -57,23 +62,10 @@ pub fn best_row_in<'a>(rows: &[&'a MoneyRow], key: &BotKey) -> Option<&'a MoneyR
         .fold(None, |best: Option<&MoneyRow>, row| if best.is_none_or(|known| row.profit_6000 > known.profit_6000) { Some(row) } else { best })
 }
 
-/// The D17 price of the bot in `set` (module doc).
-pub fn bot_d17(set: &GuideSet, key: &BotKey) -> Option<f64> {
-    best_row(set, key).map(|row| row.profit_6000)
-}
-
-/// Coins per tick of a D17 price (module doc).
-pub fn rate_of(d17: Option<f64>) -> f64 {
-    d17.map(|profit| profit / WINDOW_TICKS).unwrap_or(0.0).max(MIN_COIN_RATE)
-}
-
-/// Coins per tick of the bot's time in the last published set (module
-/// doc): the floor before the first set.
-pub fn coin_rate(key: &BotKey) -> f64 {
-    match crate::guides_store::current() {
-        Some(set) => rate_of(bot_d17(&set, key)),
-        None => MIN_COIN_RATE,
-    }
+/// Coins one tick of `account`'s time is worth (module doc, D1): its
+/// measured gain per tick of work (`time_value::rate`).
+pub fn coin_rate(account: &str) -> f64 {
+    crate::time_value::rate(account)
 }
 
 /// Profit per 6000 ticks of a planner `method` in `rows` (the bot's

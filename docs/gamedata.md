@@ -53,7 +53,16 @@ members exclu (`f2p_stock`). Une ligne à stock 0 (`.inv`, Grum, Drogo,
 Gerrant…) ne contient que ce que les joueurs revendent au PNJ : aucun bot
 ne vend aux PNJ, donc jamais une source d'achat ni un prix marchand
 (`shop_sources`, `merchant_price`, 2026-11-16 ; `shops.json` recorrigé :
-103 lignes lues 1 au lieu de 0). Zones fermées (`access::areas`) :
+103 lignes lues 1 au lieu de 0). `merchant_price` = premier prix de
+`shop_buy::purchase_steps` : seulement un gardien qu'un non-membre
+atteint, les mêmes boutiques que les voies `Shop` (plan équilibre étape 7,
+2026-11-19 : 71 objets échangeables portaient le prix d'une boutique hors carte F2P ou
+fermée en monde F2P, runes nature/loi/cosmiques de Lundail et de la Magic
+Guild, cape jaune du Fancy dress shop, espadon de Brimhaven… ; ce faux
+prix plafonnait les offres de stock et chiffrait la nourriture). Test
+`merchant_price_names_only_a_keeper_a_non_member_reaches` (invariant sur
+tous les objets F2P) ; flèches de fer : Lowe, 3 pièces, 1 500 + 1/15 ticks
+(`lowe_sells_iron_arrows`). Zones fermées (`access::areas`) :
 `Gate::Quest` pour une porte de quête jamais ouverte par le planner
 (placard du manoir, arrière-boutique de Wydin), enclos d'argent et salle
 nord (four, moule d'amulette) de la Crafting Guild, rangée sud de la

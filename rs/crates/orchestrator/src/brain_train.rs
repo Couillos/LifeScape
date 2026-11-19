@@ -16,8 +16,9 @@
 //!   a tool to obtain (2), else never; quarantined, cooled or excluded
 //!   methods never;
 //! - each line scored for THIS bot (`train_score`): ticks per XP plus
-//!   coins per XP converted at its D17 price, weighed by thrift and
-//!   market_affinity;
+//!   coins per XP converted at its time value (`Climb::coin_rate`: what
+//!   its work really earns per tick, D1, never its D17), weighed by
+//!   thrift and market_affinity;
 //! - the choice: the draw of `train_score::pick` (`guide_pick`: the first
 //!   non-empty class, a weighted draw among the lines within 15 % of its
 //!   best score, D10, the unmeasured lines' 5 % of exploration, D14), the
@@ -54,7 +55,8 @@ pub(crate) struct GuidePick {
     pub score: LineScore,
     /// Lines scored within the bot's reach (every class).
     pub scored: usize,
-    /// The bot's D17 price (best accessible money line per 6000).
+    /// The bot's D17 price (best accessible money line per 6000): the
+    /// log's figure, never its time value (`Climb::coin_rate`).
     pub best_profit: Option<f64>,
     pub choice: Choice,
 }
@@ -73,6 +75,10 @@ pub(crate) struct Climb<'a> {
     /// line works after its food (class 1 at best), the food obtained
     /// first. `None`: not judged (offline).
     pub food: Option<&'a dyn Fn(&str) -> Option<String>>,
+    /// Coins one tick of the bot's time is worth (D1, plan équilibre
+    /// step 1: its measured gain, `brain_d17::coin_rate`): the coins of a
+    /// line convert to ticks at it.
+    pub coin_rate: f64,
 }
 
 /// Levels of the skill one `reach_combat` launch reads its line for (its
@@ -168,7 +174,8 @@ pub(crate) fn pick_from_guide(set: &GuideSet, climb: &Climb, life: &Life, bot: &
     let lines: Vec<TrainingRow> = climb_lines(set, climb.skill, climb.level, bot.quests_done, stock).into_iter().filter(|row| !sick(&row.method)).collect();
     let best_profit = d17_of(set, climb.level, bot.quests_done);
     let food_short = |method: &str| climb.food.and_then(|food| food(method));
-    let ranked: Vec<Classed> = rank_classed(&lines, &life.profile, ticks_per_coin(best_profit), &|row| class_for(row, bot).map(|class| if food_short(&row.method).is_some() { class.max(1) } else { class }));
+    let per_coin = Some(1.0 / climb.coin_rate.max(lifescape_planner::market_fit::MIN_COIN_RATE));
+    let ranked: Vec<Classed> = rank_classed(&lines, &life.profile, per_coin, &|row| class_for(row, bot).map(|class| if food_short(&row.method).is_some() { class.max(1) } else { class }));
     let again = climb.previous.and_then(|method| ranked.iter().position(|line| line.class == 0 && line.row.method == method));
     let (index, drawn, sticky) = match again {
         Some(index) => (index, lifescape_planner::guide_pick::Drawn { index: 0, band: 1, candidates: ranked.iter().filter(|line| line.class == 0).count(), explored: false }, true),
@@ -238,7 +245,7 @@ pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Valu
     let sick = |method: &str| ctx.sick(method).is_some() || node.excluded.iter().any(|excluded| excluded == method);
     let rate = crate::brain_plan_read::live_rate();
     let food = |method: &str| lifescape_planner::food_gate::food_short(method, ctx);
-    let climb = Climb { skill, level, target: *target, previous: node.blocked_by.as_deref(), food: Some(&food) };
+    let climb = Climb { skill, level, target: *target, previous: node.blocked_by.as_deref(), food: Some(&food), coin_rate: crate::brain_d17::coin_rate(&life.account) };
     match pick_from_guide(&set, &climb, life, &bot, &stock, ctx.draw_seed, &sick, &rate) {
         Ok(found) => {
             crate::logln!(

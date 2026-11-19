@@ -35,7 +35,67 @@ pub fn site_bank(bot: &mut Bot) -> Option<knowledge::banks::Bank> {
 /// True when the bot stands inside the assigned site's working area (or
 /// no site was assigned).
 pub fn at_site(bot: &Bot) -> bool {
-    bot.assigned_site.is_none_or(|(x, z, level)| level == bot.world.level && (bot.world.x - x).abs().max((bot.world.z - z).abs()) <= SITE_RADIUS)
+    bot.assigned_site.is_none_or(|site| within_site((bot.world.x, bot.world.z, bot.world.level), site))
+}
+
+/// Pure: `here` stands inside the working area of `site` (same level,
+/// `SITE_RADIUS` tiles).
+pub fn within_site(here: (i32, i32, i32), site: (i32, i32, i32)) -> bool {
+    here.2 == site.2 && (here.0 - site.0).abs().max((here.1 - site.1).abs()) <= SITE_RADIUS
+}
+
+/// Pure: a market pause closed since `pauses_mark` (the session's
+/// closed-pause count, `Bot::pauses_done`). Since 2026-11-19 the pause
+/// leaves the bot at the Varrock square with the pack banked but the
+/// tools (`session_rescue::gate_market`): a single-pass script that
+/// walked to its site and carried its goods must take them and walk
+/// again before it acts.
+pub fn paused_since(pauses_mark: u64, pauses_now: u64) -> bool {
+    pauses_now != pauses_mark
+}
+
+/// Leg of a single-pass script (take the goods, walk to the site, act
+/// once there): shop sale, shop buy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassLeg {
+    /// Take the goods (lots, coins) from the bank: first pass, or a
+    /// market pause banked the pack meanwhile.
+    Load,
+    /// Walk to the site.
+    Walk,
+    /// Act at the site (keeper trade).
+    Act,
+}
+
+/// Restarts from the bank one single pass may take after market pauses
+/// (the SDK trip's own bound, `travel_pause::PAUSE_REPLANS`).
+pub const PASS_PAUSE_RESTARTS: u32 = 2;
+
+/// Pure: a load-and-act loop (tanning, dialogue buys) whose act came
+/// back empty takes its load again instead of failing: a pause closed
+/// since the load (`pauses_mark`) and fewer than `PASS_PAUSE_RESTARTS`
+/// restarts were spent.
+pub fn reload_after_pause(pauses_mark: u64, pauses_now: u64, restarts: u32) -> bool {
+    paused_since(pauses_mark, pauses_now) && restarts < PASS_PAUSE_RESTARTS
+}
+
+/// Pure: the leg a single pass runs next. `pauses_at_load` is the
+/// closed-pause count when the goods were taken (`None`: not yet),
+/// `pauses_now` the count now. A pause closed since then left the bot at
+/// the Varrock square with the pack banked (live 2026-11-19 alice_swift
+/// "trade with noterazzo failed at (0, 3185, 3436)", lara_lane "trade
+/// gave no emerald": "You don't have enough coins"): load again. Off the
+/// site: walk, once per load (`walked`): a walk that ended short of the
+/// site's area (the router's nearest reachable tile, a keeper upstairs
+/// such as Scavvo at level 1) acts from there as before, never an
+/// endless walk. Else act. No site: act where the bot stands.
+pub fn pass_leg(pauses_at_load: Option<u64>, pauses_now: u64, walked: bool, here: (i32, i32, i32), site: Option<(i32, i32, i32)>) -> PassLeg {
+    match pauses_at_load {
+        None => PassLeg::Load,
+        Some(mark) if paused_since(mark, pauses_now) => PassLeg::Load,
+        Some(_) if !walked && site.is_some_and(|site| !within_site(here, site)) => PassLeg::Walk,
+        Some(_) => PassLeg::Act,
+    }
 }
 
 /// Tag of a contended site in `Blocked { missing }` (user decision D4,
@@ -174,5 +234,43 @@ mod tests {
         bot.assigned_site = Some((3166, 3307, 2));
         let bank = site_bank(&mut bot).expect("a surface bank for the mill");
         assert!(!bank.members && bank.level == 0, "got {bank:?}");
+    }
+
+    /// Live 2026-11-19 (lara_lane, `market shopbuy emerald`): a delivery
+    /// paused the walk to the Al Kharid gem trader, banked the coins at
+    /// Varrock; the walk replanned, the trade answered "You don't have
+    /// enough coins" ("trade gave no emerald"). After a pause the buy
+    /// takes its coins again before walking back; a buy with no site
+    /// acts where it stands; the site's area is `SITE_RADIUS` wide.
+    #[test]
+    fn a_paused_single_pass_loads_again() {
+        use super::{pass_leg, within_site, PassLeg};
+        let gem_trader = Some((3287, 3211, 0));
+        let varrock = (3185, 3436, 0);
+        assert_eq!(pass_leg(None, 7, false, (3289, 3212, 0), gem_trader), PassLeg::Load, "coins first");
+        assert_eq!(pass_leg(Some(7), 8, false, (3289, 3212, 0), gem_trader), PassLeg::Load, "back at the trader, coins banked");
+        assert_eq!(pass_leg(Some(8), 8, false, varrock, gem_trader), PassLeg::Walk);
+        assert_eq!(pass_leg(Some(8), 8, false, (3289, 3212, 0), gem_trader), PassLeg::Act);
+        assert_eq!(pass_leg(Some(8), 8, false, varrock, None), PassLeg::Act, "no site: the keeper pick reads where we stand");
+        assert_eq!(pass_leg(Some(8), 9, false, varrock, None), PassLeg::Load, "still: the coins are banked");
+        // Lot 8 review: Scavvo trades upstairs (3191,3351,1); a walk that
+        // ends on another floor or short of the area acts from there.
+        let scavvo = Some((3191, 3351, 1));
+        assert_eq!(pass_leg(Some(8), 8, false, (3191, 3351, 0), scavvo), PassLeg::Walk, "first walk");
+        assert_eq!(pass_leg(Some(8), 8, true, (3191, 3351, 0), scavvo), PassLeg::Act, "walked once: act, never walk again");
+        assert_eq!(pass_leg(Some(8), 9, true, (3191, 3351, 0), scavvo), PassLeg::Load, "a pause still reloads");
+        assert!(within_site((3307, 3211, 0), (3287, 3211, 0)) && !within_site((3308, 3211, 0), (3287, 3211, 0)));
+        assert!(!within_site((3287, 3211, 1), (3287, 3211, 0)), "another floor");
+    }
+
+    /// A tanning or dialogue-buy load emptied by a pause (hides and coins
+    /// banked at Varrock) is taken again, twice at most; an empty act
+    /// with no pause stays a failure.
+    #[test]
+    fn an_emptied_load_is_taken_again_after_a_pause() {
+        use super::{reload_after_pause, PASS_PAUSE_RESTARTS};
+        assert!(reload_after_pause(4, 5, 0), "a pause banked the load");
+        assert!(!reload_after_pause(4, 4, 0), "no pause: the act really failed");
+        assert!(!reload_after_pause(4, 6, PASS_PAUSE_RESTARTS), "bounded");
     }
 }

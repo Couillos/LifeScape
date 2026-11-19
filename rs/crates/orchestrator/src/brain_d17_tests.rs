@@ -7,10 +7,12 @@ use std::time::Instant;
 
 use lifescape_planner::guide_model::{Confidence, Family, GuideFilter, MoneyRow, Prereqs};
 use lifescape_planner::guide_read::{MoneyView, TrainingView};
-use lifescape_planner::market_fit::MIN_COIN_RATE;
 
-use super::{bot_d17, kind_profits, method_profit_in, rate_of, BotKey};
+use super::{best_row, kind_profits, method_profit_in, BotKey};
 use crate::guides_store::GuideSet;
+
+/// A bot's measured time value (D1), distinct from any D17 of the tests.
+const MEASURED: f64 = 0.37;
 
 fn row(family: Family, method: &str, profit: f64) -> MoneyRow {
     MoneyRow {
@@ -54,6 +56,11 @@ fn set_with(catalog: Vec<MoneyRow>, bands: Vec<(u8, Vec<MoneyRow>)>) -> GuideSet
 
 /// Combat of a bot at `level` in every skill, as `guide_feasible::
 /// with_filter_bot` reads it for a filter.
+/// The D17 price of a bot: the profit of its D17 line (`best_row`).
+fn bot_d17(set: &GuideSet, key: &BotKey) -> Option<f64> {
+    best_row(set, key).map(|row| row.profit_6000)
+}
+
 fn combat_at(level: u8) -> u8 {
     lifescape_planner::combat::combat_level(&lifescape_planner::combat::BaseLevels { attack: level, strength: level, defence: level, hitpoints: level.max(10), ranged: level, prayer: level, magic: level })
 }
@@ -113,15 +120,6 @@ fn the_d17_is_the_best_line_within_the_bots_reach() {
     assert_eq!(bot_d17(&set, &novice), None, "no view of its band: no line");
 }
 
-/// One tick of the bot's time: its D17 over 6000 ticks, never under the
-/// shared floor.
-#[test]
-fn the_coin_rate_is_the_d17_per_tick_never_free() {
-    assert!((rate_of(Some(1200.0)) - 0.2).abs() < 1e-12);
-    assert_eq!(rate_of(Some(60.0)), MIN_COIN_RATE);
-    assert_eq!(rate_of(None), MIN_COIN_RATE);
-}
-
 /// A method's profit is its best priced row among the bot's rows (any
 /// site), keyed by the activity it works; nothing priced, no profit.
 #[test]
@@ -138,33 +136,38 @@ fn a_method_profit_is_its_guide_row() {
     assert_eq!(method_profit_in(&refs, "gather:woodcut/logs"), None, "not in the guide");
 }
 
-/// A node reads its coin figures in the guide (`brain_market::guide_coins`,
-/// what `fill_ctx` runs on the published set): the grind's coin rate is
-/// the bot's D17, a money node's methods carry their guide profit (the
-/// willow glut the guide prices low, D12, never a saturation on top), and
-/// the static ranking then takes cows (old live case 2026-11-14: willow
-/// published at 16 732 / 6000 with 33 364 logs unsold at 1 coin).
+/// A node reads its method profits in the guide (`brain_market::
+/// guide_coins`, what `fill_ctx` runs on the published set): a money
+/// node's methods carry their guide profit (the willow glut the guide
+/// prices low, D12, never a saturation on top), and the static ranking
+/// then takes cows (old live case 2026-11-14: willow published at 16 732
+/// / 6000 with 33 364 logs unsold at 1 coin). The grind's coin rate is
+/// NOT the guide's (D1, plan équilibre step 1): `ready_ctx` set it to the
+/// bot's measured time value, the guide leaves it as it found it.
 #[test]
 fn a_node_reads_its_coin_figures_in_the_guide() {
     let rows = vec![row(Family::Farm, "gather:woodcut/willow_logs", 1200.0), row(Family::Farm, "fight:melee/cows", 3000.0)];
     let set = set_with(Vec::new(), vec![(5, rows.clone()), (20, rows.clone()), (35, rows)]);
     let mut ctx = lifescape_planner::expand::ReadyCtx::blind(0.5);
+    ctx.coins_per_tick = MEASURED;
     ctx.levels = vec![("woodcutting".to_string(), 35), ("attack".to_string(), 20), ("strength".to_string(), 20), ("defence".to_string(), 20), ("hitpoints".to_string(), 20)];
     ctx.tools = vec!["bronze_axe".to_string()];
     let mut money = lifescape_planner::Node::new("n1", lifescape_planner::NodeKind::MakeMoney, Vec::new(), 0);
-    crate::brain_market::guide_coins(&mut ctx, &money, &set, 30);
-    assert!((ctx.coins_per_tick - 0.5).abs() < 1e-12, "D17 3000 / 6000: {}", ctx.coins_per_tick);
+    crate::brain_market::guide_coins(&mut ctx, &money, &set);
+    assert_eq!(ctx.coins_per_tick, MEASURED, "the measured time value, never the D17 (3000 / 6000)");
     let profit = |method: &str| ctx.method_profit.iter().find(|(known, _)| known == method).map(|(_, profit)| *profit);
     assert_eq!(profit("gather:woodcut/willow_logs"), Some(1200.0), "{:?}", ctx.method_profit);
     assert_eq!(profit("fight:melee/cows"), Some(3000.0), "{:?}", ctx.method_profit);
     lifescape_planner::resolve_ready(&mut money, &ctx);
     assert_eq!(money.method.as_deref(), Some("fight:melee/cows"), "{:?}", money.alternatives);
-    // An obtain node prices its grind at the same D17, no method profit.
+    // An obtain node prices its grind at the same measured value, no
+    // method profit.
     let mut obtain_ctx = lifescape_planner::expand::ReadyCtx::blind(0.5);
+    obtain_ctx.coins_per_tick = MEASURED;
     obtain_ctx.levels = ctx.levels.clone();
     let obtain = lifescape_planner::Node::new("n2", lifescape_planner::NodeKind::ObtainItems { item: "iron_bar".to_string(), count: 5 }, Vec::new(), 5);
-    crate::brain_market::guide_coins(&mut obtain_ctx, &obtain, &set, 30);
-    assert!((obtain_ctx.coins_per_tick - 0.5).abs() < 1e-12);
+    crate::brain_market::guide_coins(&mut obtain_ctx, &obtain, &set);
+    assert_eq!(obtain_ctx.coins_per_tick, MEASURED);
     assert!(obtain_ctx.method_profit.is_empty());
 }
 

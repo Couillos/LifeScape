@@ -45,6 +45,18 @@ pub struct DemandSignal {
     pub oldest_age_secs: i64,
     pub oldest_age_ticks: u64,
     pub weight: f64,
+    /// Units on resting sell offers of the item (public book, any seller,
+    /// market makers included): 0 = wanted and missing from the asks.
+    pub asks: i64,
+}
+
+/// Units on resting sell offers per item id (every seller, makers too).
+fn ask_units(orders: &[Order]) -> BTreeMap<i64, i64> {
+    let mut asked: BTreeMap<i64, i64> = BTreeMap::new();
+    for order in orders.iter().filter(|order| order.side == OrderSide::Sell && order.remaining > 0) {
+        *asked.entry(order.item_id).or_default() += order.remaining;
+    }
+    asked
 }
 
 /// Pure aggregation of resting orders (buy side, remaining > 0). A market
@@ -55,6 +67,7 @@ pub fn signals_from(orders: &[Order], now_secs: i64, name_of: &dyn Fn(i64) -> Op
     for order in orders.iter().filter(|order| order.side == OrderSide::Buy && order.remaining > 0 && order.motive != crate::market_lineage::MARKET_MAKE) {
         by_item.entry(order.item_id).or_default().push(order);
     }
+    let asked = ask_units(orders);
     let mut out = Vec::new();
     for (item_id, bids) in by_item {
         let Some(item) = name_of(item_id) else { continue };
@@ -77,6 +90,7 @@ pub fn signals_from(orders: &[Order], now_secs: i64, name_of: &dyn Fn(i64) -> Op
             oldest_age_secs,
             oldest_age_ticks,
             weight: best_bid.max(1) as f64 * unmet_qty as f64 * age_factor,
+            asks: asked.get(&item_id).copied().unwrap_or(0),
         });
     }
     out.sort_by(|left, right| right.weight.total_cmp(&left.weight));
@@ -117,12 +131,25 @@ fn signals_seen_by(account: Option<&str>) -> Vec<DemandSignal> {
             return Vec::new();
         }
     };
+    let name_of = |item_id: i64| lifescape_gamedata::obj_by_id(item_id.max(0) as usize).and_then(|obj| obj.name).map(str::to_string);
+    signals_seen_from(orders, account, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks)
+}
+
+/// Pure `signals_seen_by`: the bids of every account but `account` (a bot
+/// never answers its own bids); `asks` counts EVERY resting sell offer,
+/// the bot's own included (lot 6 review: an object only this bot sells
+/// is not « without asks » for it).
+pub fn signals_seen_from(orders: Vec<Order>, account: Option<&str>, now_secs: i64, name_of: &dyn Fn(i64) -> Option<String>, to_ticks: &dyn Fn(i64) -> u64) -> Vec<DemandSignal> {
+    let asked = ask_units(&orders);
     let orders = match account {
         Some(account) => others_orders(orders, account),
         None => orders,
     };
-    let name_of = |item_id: i64| lifescape_gamedata::obj_by_id(item_id.max(0) as usize).and_then(|obj| obj.name).map(str::to_string);
-    signals_from(&orders, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks)
+    let mut out = signals_from(&orders, now_secs, name_of, to_ticks);
+    for signal in &mut out {
+        signal.asks = asked.get(&signal.item_id).copied().unwrap_or(0);
+    }
+    out
 }
 
 /// Planner input: one `DemandItem` per signal, its margin priced at the
@@ -152,7 +179,7 @@ pub fn demand_items(signals: &[DemandSignal]) -> Vec<DemandItem> {
 pub fn demand_items_with(signals: &[DemandSignal], reference: &dyn Fn(&str) -> f64) -> Vec<DemandItem> {
     signals
         .iter()
-        .map(|signal| DemandItem { item: signal.item.clone(), weight: signal.weight, unmet: signal.unmet_qty, margin: bid_margin(signal, reference) })
+        .map(|signal| DemandItem { item: signal.item.clone(), weight: signal.weight, unmet: signal.unmet_qty, margin: bid_margin(signal, reference), asked: signal.asks > 0 })
         .collect()
 }
 
@@ -263,6 +290,27 @@ mod tests {
         assert_eq!(signals_from(&orders, 10, &name, &ticks).len(), 2, "the fleet view keeps every bid");
     }
 
+    /// Lot 6 review: `asks` counts every resting sell offer of the item
+    /// (makers included), the reading bot's own too; its own BIDS stay out.
+    #[test]
+    fn asks_count_every_resting_sell_offer() {
+        let mut own_ask = bid("seller", 2, 5, 40, 0);
+        own_ask.side = OrderSide::Sell;
+        let mut maker_ask = bid("maker", 3, 7, 40, 0);
+        maker_ask.side = OrderSide::Sell;
+        maker_ask.motive = crate::market_lineage::MARKET_MAKE.to_string();
+        let orders = vec![bid("other", 2, 4, 30, 0), own_ask, bid("seller", 3, 2, 30, 0), bid("other", 3, 1, 30, 0), maker_ask];
+        let name = |id: i64| Some(format!("item{id}"));
+        let ticks = |secs: i64| secs as u64;
+        let asks = |signals: &[super::DemandSignal], item: &str| signals.iter().find(|signal| signal.item == item).map(|signal| signal.asks);
+        let fleet = signals_from(&orders, 10, &name, &ticks);
+        assert_eq!((asks(&fleet, "item2"), asks(&fleet, "item3")), (Some(5), Some(7)), "{fleet:?}");
+        let seen = super::signals_seen_from(orders, Some("seller"), 10, &name, &ticks);
+        assert_eq!(asks(&seen, "item2"), Some(5), "its own ask still supplies the object: {seen:?}");
+        let item3 = seen.iter().find(|signal| signal.item == "item3").expect("the other bid");
+        assert_eq!((item3.unmet_qty, item3.asks), (1, 7), "own bid left out, the maker's ask counted");
+    }
+
     /// Review 2026-11-13 (finding 5): a bid only motivates production when
     /// it pays the inputs at their market reference: a steel platebody at
     /// 1 coin (5 bars) never does, a bronze one at 200 does, a gathered
@@ -279,6 +327,7 @@ mod tests {
             oldest_age_secs: 0,
             oldest_age_ticks: 0,
             weight: 1.0,
+            asks: 0,
         };
         let reference = |item: &str| match item {
             "bronze_bar" => 10.0,

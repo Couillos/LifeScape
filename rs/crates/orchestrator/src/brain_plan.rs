@@ -96,14 +96,15 @@ pub(crate) fn ready_ctx(life: &Life, node: &Node, live: &Value) -> ReadyCtx {
     ctx.cooled = crate::brain_cool::active(life);
     // A market maker's post (plan Q6): its slice's tile by the fountain.
     ctx.maker_post = lifescape_planner::maker_role(life).map(|role| lifescape_planner::maker_post(&role));
+    // The grind of a purchase: what one tick of this bot's work really
+    // earns (D1, `brain_d17::coin_rate`), never its best guide line.
+    ctx.coins_per_tick = crate::brain_d17::coin_rate(&life.account);
     let item_debug = match &node.kind {
         NodeKind::ObtainItems { item, .. } => item.clone(),
         _ => String::new(),
     };
     let snapshot = crate::rates_service::live_snapshot();
     if let Ok(store) = lifescape_store::Store::open(&crate::market_service::db_path()) {
-        // The grind's coin rate is the bot's D17 in the money guide,
-        // read with its levels and quests (`brain_market::fill_ctx`).
         if !item_debug.is_empty() {
             let display = display_of(&item_debug);
             let (price, _) = crate::rates_service::price_estimate(&store, &display);

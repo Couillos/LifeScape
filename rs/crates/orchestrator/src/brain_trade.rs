@@ -11,7 +11,7 @@
 use lifescape_json::Value;
 use lifescape_planner::expand::ReadyCtx;
 use lifescape_planner::guide_feasible::BotState;
-use lifescape_planner::guide_model::{Family, MoneyRow};
+use lifescape_planner::guide_model::{Family, MoneyRow, Quote, WINDOW_TICKS};
 use lifescape_planner::trade_craft;
 use lifescape_planner::{Life, Node, NodeKind};
 
@@ -42,11 +42,15 @@ pub fn market_rows<'a>(set: &'a GuideSet, level_of: &dyn Fn(&str) -> u8) -> Vec<
 /// reach (D22, `trade_craft::eligible` = `guide_feasible::feasible_for`
 /// on `bot`), plus the bare offer of the lot its node bought for
 /// (`blocked_by`) when that row left the guide (bought stock never
-/// strands).
-pub fn offers_for(set: &GuideSet, node: &Node, bot: &BotState) -> Vec<trade_craft::TradeOffer> {
+/// strands). Plan équilibre step 2: the cycle's quotes carry the units
+/// the OTHER producers claim now (`claimed`, the live public board): a
+/// product they already serve leaves no demand, no offer; a lot is
+/// sized and predicted on what they leave (`trade_craft::offer_from_row`).
+pub fn offers_for(set: &GuideSet, node: &Node, bot: &BotState, claimed: &dyn Fn(&str) -> f64) -> Vec<trade_craft::TradeOffer> {
     let rows = market_rows(set, bot.level_of);
-    let quote = |item: &str| set.quotes.get(item).cloned();
-    let mut offers = trade_craft::offers(&rows, &quote, bot);
+    let quote = |item: &str| set.quotes.get(item).cloned().map(|quote| Quote { claimed: claimed(item).max(0.0), ..quote });
+    let shop = |item: &str| crate::web_guides::npc_volume_value(item);
+    let mut offers = trade_craft::offers(&rows, &quote, &shop, bot);
     if let Some(bought) = node.blocked_by.as_deref().filter(|method| trade_craft::is_trade(method)) {
         if !offers.iter().any(|offer| offer.method == bought) {
             let held = |item: &str| (bot.held)(item).max(0.0).floor() as i64;
@@ -80,15 +84,28 @@ pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value
     let asks = |item: &str| cycle_asks(&set, item);
     let wallet = crate::brain_gear::free_coins(job, None);
     let bot = BotState { level_of: &level_of, combat: ctx.combat, quests_done: &ctx.quests_done, held: &held, coins: Some(wallet as f64), ironman: false, asks: &asks };
-    ctx.trades = offers_for(&set, node, &bot);
+    let claims = crate::market_claims::claimed_by_others(&job.account);
+    let claimed = |item: &str| claims.get(item).copied().unwrap_or(0) as f64;
+    ctx.trades = offers_for(&set, node, &bot, &claimed);
     ctx.trade_wallet = wallet;
 }
 
+/// Ticks a lot is on its way: its craft at the guide's yield, plus one
+/// window for its purchases (the claim's horizon, `market_claims`).
+pub fn lot_ticks(lot: &trade_craft::TradeLot) -> f64 {
+    let craft = if lot.guide_per_6000 > 0.0 { lot.lot as f64 * WINDOW_TICKS / lot.guide_per_6000 } else { WINDOW_TICKS };
+    craft + WINDOW_TICKS
+}
+
 /// Records the lot the resolve just locked (idempotent per node) and logs
-/// it: purchases, cost, predicted profit, what bounded it.
+/// it: purchases, cost, predicted profit, what bounded it. Its products
+/// go on the public order board (plan équilibre step 2) until the craft
+/// run reports (`market_claims::release_run`).
 pub(crate) fn note_lot(life: &mut Life, position: usize, ctx: &ReadyCtx, now: i64) {
     let node = life.nodes[position].clone();
     if let Some(lot) = trade_craft::open_lot(&mut life.memory.trades, &node, ctx, now) {
+        let secs = crate::market_claims::claim_secs(lot_ticks(&lot), crate::market_eta::live_tick_ms());
+        crate::market_claims::claim_run(&life.account, &node.id, &lot.product, lot.lot, secs);
         let buys: Vec<String> = lot.buys.iter().map(|(item, units)| format!("{units} {item}")).collect();
         crate::logln!(
             "brain {}: {} trade lot {} x{} (bound {}): buys {} for {}, predicted {:+} (guide {:.0} / 6000)",
@@ -176,6 +193,8 @@ mod tests {
         let mut quotes = std::collections::HashMap::new();
         quotes.insert("copper_ore".to_string(), Quote { price: 10.0, traded: true, asks: vec![(10.0, 60.0)], ..Quote::default() });
         quotes.insert("tin_ore".to_string(), Quote { price: 12.0, traded: true, asks: vec![(12.0, 200.0)], ..Quote::default() });
+        // Bronze bars: the last fills moved 150 at 40.
+        quotes.insert("bronze_bar".to_string(), Quote { price: 40.0, traded: true, median: 40.0, fills: 5, fill_units: 150.0, ..Quote::default() });
         crate::guides_store::GuideSet {
             built_unix_ms: 0,
             built: std::time::Instant::now(),
@@ -197,9 +216,35 @@ mod tests {
     /// The offers of a bot at `level_of` holding `held` (D22: judged by
     /// `feasible_for` on the cycle's asks, a wallet of 10 000).
     fn offers_of(guides: &crate::guides_store::GuideSet, node: &Node, level_of: &dyn Fn(&str) -> u8, held: &dyn Fn(&str) -> f64) -> Vec<lifescape_planner::trade_craft::TradeOffer> {
+        offers_claimed(guides, node, level_of, held, &|_| 0.0)
+    }
+
+    /// `offers_of` with `claimed` units of each object claimed by the
+    /// other producers on the public board.
+    fn offers_claimed(guides: &crate::guides_store::GuideSet, node: &Node, level_of: &dyn Fn(&str) -> u8, held: &dyn Fn(&str) -> f64, claimed: &dyn Fn(&str) -> f64) -> Vec<lifescape_planner::trade_craft::TradeOffer> {
         let asks = |item: &str| super::cycle_asks(guides, item);
         let bot = super::BotState { level_of, combat: 30, quests_done: &[], held, coins: Some(10_000.0), ironman: false, asks: &asks };
-        offers_for(guides, node, &bot)
+        offers_for(guides, node, &bot, claimed)
+    }
+
+    /// Plan équilibre step 2: two smelters on the same bars. The first
+    /// reads the 150 bars the market took recently; once it claims 60,
+    /// the second sees the 90 it leaves; once 150 are claimed, no demand
+    /// is left: no 100 % market lot for the next one. The cycle's quote
+    /// carries the LIVE claims of the others.
+    #[test]
+    fn a_trade_lot_reads_the_demand_the_other_producers_leave() {
+        let guides = set();
+        let node = Node::new("n1", NodeKind::MakeMoney, Vec::new(), 0);
+        let smith = |skill: &str| if skill == "smithing" { 28 } else { 1 };
+        let none = |_: &str| 0.0;
+        let first = offers_claimed(&guides, &node, &smith, &none, &|_| 0.0);
+        assert_eq!(first.len(), 1);
+        assert!((first[0].demand - 150.0).abs() < 1e-9, "{}", first[0].demand);
+        let second = offers_claimed(&guides, &node, &smith, &none, &|item| if item == "bronze_bar" { 60.0 } else { 0.0 });
+        assert!((second[0].demand - 90.0).abs() < 1e-9, "the first smelter's 60 are on their way: {}", second[0].demand);
+        let late = offers_claimed(&guides, &node, &smith, &none, &|item| if item == "bronze_bar" { 150.0 } else { 0.0 });
+        assert!(late.is_empty(), "no demand left: no lot offered: {late:?}");
     }
 
     #[test]

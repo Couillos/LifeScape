@@ -22,6 +22,8 @@ use crate::jobs::Job;
 pub(crate) fn fail_no_script(life: &mut Life, position: usize, method: &str) {
     let id = life.nodes[position].id.clone();
     crate::logln!("brain {}: no script for {method}, abandoning {id}", life.account);
+    // Nothing of a lot it locked is on its way any more.
+    crate::market_claims::release_run(&life.account, &id);
     lifescape_planner::record_contract_error(life, position, &format!("no-script: {method}"));
     push_history(life, &id, "abandoned");
 }
@@ -191,14 +193,12 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
                 }
                 _ if crate::brain_grace::take_operator_stop(&job.account) || crate::brain_grace::first_idle_since_start(&job.account) => {
                     crate::logln!("brain {}: {active_id} idle after a daemon restart or an operator stop, retrying uncounted", job.account);
-                    lifescape_planner::retry_uncounted(&mut life, position);
-                    push_history(&mut life, &active_id, "stopped");
+                    crate::brain_inflight::fold_stopped(&mut life, position);
                 }
                 _ => {
                     let text = "no report: worker went idle without reporting (crash or restart)";
                     crate::logln!("brain {}: {active_id} {text}", job.account);
-                    let fold = lifescape_planner::record_failure(&mut life, position, text);
-                    push_history(&mut life, &active_id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "failed" });
+                    crate::brain_inflight::fold_lost_report(&mut life, position, text);
                 }
             }
             lifescape_planner::normalize(&mut life);
@@ -751,7 +751,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         }
         if life.profile.ironman {
             args.push("--iron".to_string());
-        } else if let Some(plan) = crate::brain_npc_sale::take(&job.account) {
+        } else if let Some(plan) = crate::brain_npc_sale::take(&job.account, &node_snapshot.id) {
             // Q3: the shop trip first (never a unit under the market).
             args.extend(plan.args());
         }
@@ -763,6 +763,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let _ = save_life(&life);
         return;
     }
+    // A money run posts its product on the public order board (plan
+    // équilibre step 2) once it really launches, released at its report
+    // (`brain_fold::reported_node`), at a lost or refused run
+    // (`brain_inflight`) or at expiry.
+    crate::brain_money::claim_launch(&job.account, &node_snapshot, &method, budget, &live);
     // The planner's fine method rides to the task report (session-only
     // flag, stripped before the script parses, `report_meta`).
     args.push(crate::report_meta::METHOD_FLAG.to_string());

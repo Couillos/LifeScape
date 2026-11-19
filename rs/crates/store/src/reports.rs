@@ -197,6 +197,26 @@ impl Store {
         Ok(out)
     }
 
+    /// Every report created at or after `since` with its objects sold to
+    /// an NPC shop: (account, node id, created clock, display name, units
+    /// sold),
+    /// one row per `shop_sold` object line, one row ("", 0) for a report
+    /// without any. Report order. Read by the brain's likely shop stock
+    /// (lot 8), on `schema::REPORT_CLOCK_INDEX`.
+    pub fn shop_sales_since(&self, since: i64) -> Result<Vec<(String, String, i64, String, i64)>, Error> {
+        let mut statement = self.connection.prepare(
+            "SELECT r.account, r.node_id, r.created_clock, COALESCE(y.item_name, ''), COALESCE(-y.quantity, 0) FROM task_reports r \
+             LEFT JOIN task_yields y ON y.report_id = r.report_id AND y.provenance = 'shop_sold' AND y.quantity < 0 AND y.item_name != '' \
+             WHERE r.created_clock >= ?1 ORDER BY r.report_id, y.yield_id",
+        )?;
+        let rows = statement.query_map(rusqlite::params![since], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// Recomputes summed quantities per (method, item, provenance) join.
     /// Reports are counted distinct so multi-line reports count once.
     pub fn aggregate_yields(&self) -> Result<Vec<YieldAggregate>, Error> {
@@ -272,6 +292,35 @@ mod reports_tests {
             .ok_or_else(|| Error::NotFound("shrimp aggregate".to_string()))?;
         assert_eq!(shrimp_line.total_quantity, 300);
         assert_eq!(shrimp_line.report_count, 1);
+        Ok(())
+    }
+
+    /// Lot 8 review: the shops' likely stock reads every report since the
+    /// oldest remembered trip in one query (a report with no `shop_sold`
+    /// line still says the trip came back), never 30 rows per account.
+    #[test]
+    fn shop_sales_come_in_one_read() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        let report = |account: &str, clock: i64| NewTaskReport {
+            account: account.to_string(),
+            node_id: "n1".to_string(),
+            method: "market".to_string(),
+            script: "market".to_string(),
+            ticks: 100,
+            stop: "done".to_string(),
+            context_level: 0,
+            clock,
+        };
+        let line = |report_id: i64, item: &str, provenance: &str, quantity: i64| NewTaskYield { report_id, item_name: item.to_string(), provenance: provenance.to_string(), quantity, skill: String::new(), xp: 0 };
+        let old = store.record_task_report(&report("wolfe_carl", 900))?;
+        store.record_task_yield(&line(old, "Mithril platebody", "shop_sold", -40))?;
+        let sold = store.record_task_report(&report("wolfe_carl", 1030))?;
+        store.record_task_yield(&line(sold, "Mithril platebody", "shop_sold", -13))?;
+        store.record_task_yield(&line(sold, "Coins", "shop_sold", 25_000))?;
+        store.record_task_yield(&line(sold, "Logs", "loot", -3))?;
+        store.record_task_report(&report("amber_moore", 1040))?;
+        let rows = store.shop_sales_since(1000)?;
+        assert_eq!(rows, vec![("wolfe_carl".to_string(), "n1".to_string(), 1030, "Mithril platebody".to_string(), 13), ("amber_moore".to_string(), "n1".to_string(), 1040, String::new(), 0)]);
         Ok(())
     }
 }

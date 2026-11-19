@@ -116,3 +116,15 @@ fn a_failed_filler_cools_its_method_at_its_site() {
     let cooled = crate::brain_cool::active(&life);
     assert!(cooled.contains(&"gather:woodcut/yew_logs@3087,3481,0".to_string()), "cooled at its site: {cooled:?}");
 }
+
+/// Plan équilibre step 2: a filler's claim on the order board ends with
+/// its report, whatever the window made.
+#[test]
+fn a_filler_report_releases_its_claim() {
+    let mut life = life_of(Vec::new(), vec![entry("fill-n9", "filler:gather:mining/coal", 100)]);
+    life.account = "filler_claims_probe".to_string();
+    crate::market_claims::claim_run("filler_claims_probe", "fill-n9", "filler_claims_coal", 25, 600);
+    assert_eq!(crate::market_claims::claimed_total().get("filler_claims_coal"), Some(&25));
+    super::fold_filler_report(&mut life, "fill-n9", &report("budget_exhausted", 1500, None));
+    assert_eq!(crate::market_claims::claimed_total().get("filler_claims_coal"), None, "released at its report");
+}

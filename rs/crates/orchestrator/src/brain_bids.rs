@@ -6,8 +6,9 @@
 //! the market absorbs; `market_fit`: saturation, sale lots, coin rate);
 //! this file reads the PUBLIC book (the market engine's resting orders,
 //! the bot's own bids left out, current prices, 24 h volume, the public
-//! claims of the order board), the money guide (its D17 coin rate, `brain_d17`) and the bot's own
-//! state, then hands the draw a production quota (`bid:<item>`) when a
+//! claims of the order board), the bot's coin rate (what its work really
+//! earns per tick, D1: `brain_d17::coin_rate`) and the bot's own state,
+//! then hands the draw a production quota (`bid:<item>`) when a
 //! lot beats the ambition, and posts the claim on the board.
 //!
 //! Called on EVERY goal draw (`brain_succession::draw_next`), before the
@@ -311,7 +312,7 @@ pub(crate) fn explain_for(account: &str, item: &str) -> Result<Vec<String>, Stri
     Ok(with_bot_state(&life, &live, |state| {
         let key = key_of(&life, state);
         let best = guides.as_deref().and_then(|set| crate::brain_d17::best_row(set, &key));
-        let rate = crate::brain_d17::rate_of(best.map(|row| row.profit_6000));
+        let rate = bot_rate(&life);
         state.with_producer(&life, rate, |producer| {
             let market = |name: &str| reader.view(name);
             let view = reader.view(item).unwrap_or_default();
@@ -319,12 +320,14 @@ pub(crate) fn explain_for(account: &str, item: &str) -> Result<Vec<String>, Stri
             if view.bids.is_empty() {
                 lines.extend(crate::bid_why::related_bid_lines(item, &market));
             }
-            // What sets that rate: its D17, the best money guide line
-            // within its reach (`brain_d17`).
+            // What sets that rate: what its work really earned (D1,
+            // `time_value`); the D17, the best money guide line within
+            // its reach, for comparison only.
+            lines.push(time_value_line(account));
             lines.push(match (&guides, best) {
-                (None, _) => "  D17: no money guide published yet (the floor)".to_string(),
-                (Some(_), None) => "  D17: no earning money guide line within its reach (the floor)".to_string(),
-                (Some(_), Some(row)) => format!("  D17: {} {} band {}: {:.0} coins per 6000 ticks", row.family.as_str(), row.method, row.band, row.profit_6000),
+                (None, _) => "  D17 (display only): no money guide published yet".to_string(),
+                (Some(_), None) => "  D17 (display only): no earning money guide line within its reach".to_string(),
+                (Some(_), Some(row)) => format!("  D17 (display only): {} {} band {}: {:.0} coins per 6000 ticks", row.family.as_str(), row.method, row.band, row.profit_6000),
             });
             lines.extend(lifescape_planner::bid_response::explain(item, &view, &market, producer));
             lines
@@ -338,10 +341,21 @@ pub fn key_of<'a>(life: &Life, state: &'a BotState) -> crate::brain_d17::BotKey<
     crate::brain_d17::BotKey { level_of: state.level_of, combat: state.combat, quests_done: &state.quests_done, ironman: life.profile.ironman }
 }
 
-/// Coins one tick of this bot's time is worth: its D17 in the last
-/// published money guide (`brain_d17::coin_rate`, plan rendements D17).
-pub fn bot_rate(life: &Life, state: &BotState) -> f64 {
-    crate::brain_d17::coin_rate(&key_of(life, state))
+/// Coins one tick of this bot's time is worth: what its work really
+/// earned per tick (`brain_d17::coin_rate`, plan équilibre D1).
+pub fn bot_rate(life: &Life) -> f64 {
+    crate::brain_d17::coin_rate(&life.account)
+}
+
+/// `bid-why`'s line on where the bot's rate comes from (D1).
+fn time_value_line(account: &str) -> String {
+    use crate::time_value::RateSource;
+    let hours = crate::time_value::WINDOW_SECS / 3600;
+    match crate::time_value::current().map(|values| values.source(account)) {
+        Some(RateSource::Own(measured)) => format!("  time value (D1): own work, {:.0} coins over {} work ticks in {hours} h = {:.3}/tick", measured.value, measured.work_ticks, measured.per_tick()),
+        Some(RateSource::Fleet(fleet)) => format!("  time value (D1): no measure of its own in {hours} h, the fleet's mean {:.3}/tick ({:.0} coins over {} work ticks)", fleet.per_tick(), fleet.value, fleet.work_ticks),
+        Some(RateSource::Floor) | None => "  time value (D1): nothing measured, the floor".to_string(),
+    }
 }
 
 /// Pure choice: the lot this life makes now, if any (planner rules), at
@@ -431,7 +445,7 @@ pub(crate) fn production_costs_for(life: &Life, live: &Value, items: &[(String, 
     }
     let reader = MarketReader::live(&life.account);
     with_bot_state(life, live, |state| {
-        let rate = bot_rate(life, state);
+        let rate = bot_rate(life);
         state.with_producer(life, rate, |producer| {
             let market = |name: &str| reader.view(name);
             items
@@ -473,7 +487,7 @@ pub(crate) fn bid_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, Strin
         Some((at, seen_window, choice)) if now.saturating_sub(at) < CHOICE_TTL_SECS && seen_window == window => choice,
         _ => {
             let reader = MarketReader::live(&life.account);
-            let choice = with_bot_state(life, live, |state| choose(life, &reader, bot_rate(life, state), state));
+            let choice = with_bot_state(life, live, |state| choose(life, &reader, bot_rate(life), state));
             choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(life.account.clone(), (now, window, choice.clone()));
             choice
         }

@@ -49,11 +49,12 @@ C. CYCLE D'UN LOT
   4. Orchestrateur : fusion dans main, `cargo test --release --workspace
      --no-fail-fast` (seuls échecs tolérés : tests de chronométrage nav /
      concurrence store, crates intacts, relancés seuls), build release.
-  5. Déploiement : redémarrage du daemon ; redéploiement des workers si
-     sdk/scripts/session touchés ; d'abord UN bot témoin observé jusqu'au
-     comportement visé, puis la flotte.
-  6. Mesureur : 1 h après le déploiement (régression ? -> retour arrière
-     immédiat du lot par revert, rapport ; sinon vague suivante).
+  5. Vague suivante tout de suite : aucune attente ni déploiement entre
+     les vagues (décision utilisateur 2026-11-19).
+  6. Fin des trois vagues : UN déploiement (daemon puis workers, d'abord
+     un bot témoin observé jusqu'au comportement visé, puis la flotte),
+     puis le mesureur (1 h, puis bilan des critères M ; un lot qui fait
+     reculer un critère est retiré par revert, rapport).
 
 
 V. VAGUES (lots parallèles = fichiers disjoints)
@@ -91,7 +92,7 @@ VAGUE A — fondations et lots indépendants (en parallèle)
   Conflits : aucun fichier commun entre 0, 1, 6, 7, 8 (vérifié à la
   découpe ; sinon séquencer).
 
-VAGUE B — demande partagée (après A déployée + 1 h de mesure)
+VAGUE B — demande partagée (après la fusion de A)
   Lot 2  Autres producteurs (étape 2). orchestrator `market_claims`
          (publication de toute production lancée : nœud d'argent,
          remplissage, lot 100 % marché ; expiration) ; planner
@@ -100,7 +101,7 @@ VAGUE B — demande partagée (après A déployée + 1 h de mesure)
          sur cette demande. Tests : deux bots sur le même objet ne voient
          que leur part ; lot 100 % marché sans demande = rejeté. Daemon.
 
-VAGUE C — boucles de rappel (après B + 1 h de mesure ; 3, 4, 5 en parallèle si
+VAGUE C — boucles de rappel (après la fusion de B ; 3, 4, 5 en parallèle si
 fichiers disjoints, sinon 3 puis 4 puis 5)
   Lot 3  Remplissage par le guide (étape 3). orchestrator `brain_filler`
          -> `brain_money::publish`. Test : remplissage d'un bot dont la
@@ -147,6 +148,6 @@ Mesureur : « Lecture seule. Indicateurs du lot 0, fenêtre <h>, comparés
 T. COÛT ET CALENDRIER
 ---------------------
 Vague A : 5 développeurs + 5 relecteurs en parallèle, ~1 cycle ; vague B :
-1 + 1 ; vague C : 3 + 3. Mesure 1 h entre vagues : les trois vagues dans
-la journée. Les sous-agents coûtent en jetons : l'orchestrateur ne relance un
+1 + 1 ; vague C : 3 + 3. Aucune attente entre vagues ; un déploiement
+puis la mesure à la fin. Les sous-agents coûtent en jetons : l'orchestrateur ne relance un
 développeur que sur verdict À CORRIGER.

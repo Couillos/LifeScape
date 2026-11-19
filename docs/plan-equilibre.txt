@@ -150,8 +150,9 @@ Tableau horaire (étape 0, `orchestrator economy`) : objets cotés des deux
 côtés, écart médian, objets à 1 pièce, jours de stock invendu par objet,
 temps de la flotte par compétence, part du remplissage, lots 100 %
 marché prévus / réalisés.
-Ordre : 0 ; 1 et 2 (fondations) ; 3, 4, 5 ; 6, 7, 8. Après chaque
-étape, 1 h de mesure (retour arrière si un indicateur recule).
+Ordre : 0 ; 1 et 2 (fondations) ; 3, 4, 5 ; 6, 7, 8, sans attente entre
+les étapes ; un déploiement puis la mesure à la fin (retour arrière d'une
+étape qui fait reculer un indicateur).
 
 
 DÉCISIONS

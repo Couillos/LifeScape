@@ -637,27 +637,24 @@ pub fn shop_quest_points(item: &str) -> Option<i64> {
 
 /// Cheapest F2P NPC-shop price of `item` at base stock, the server
 /// formula (`shop.rs2` `calc_shop_value`: cost × max(100, sell
-/// multiplier) / 1000, at least 1). `None` when no F2P keeper stocks it:
-/// never a guessed price. Understocked shops charge more; the buy itself
-/// still checks the coins the trade asks.
+/// multiplier) / 1000, at least 1), at a keeper a non-member reaches:
+/// the cheapest first unit of `shop_buy::purchase_steps`, the same shops
+/// as the shop ways (`shop_reach`, quest-gated keepers included). `None`
+/// when no such keeper stocks it: never a guessed price, never a shop
+/// off the F2P map or closed on an F2P world (plan équilibre step 7,
+/// 2026-11-19: Lundail's 20-coin nature runes, the Fancy dress shop's
+/// yellow cape). Understocked shops charge more; the buy itself still
+/// checks the coins the trade asks.
 pub fn merchant_price(item: &str) -> Option<i64> {
-    let base = crate::objs_by_name(item).into_iter().next().map(|obj| obj.price)?;
-    crate::shops::all_shops()
-        .into_iter()
-        .filter(|shop| shop.members != Some(true) && shop.stocks.iter().any(|stock| stock.obj == item && stock.count > 0))
-        .flat_map(|shop| {
-            // The keeper's param, else the multiplier its F2P opener
-            // passes to `~openshop` (Zaff's staffs: no keeper row).
-            let opened: Vec<i64> = crate::shop_access::all()
-                .iter()
-                .flat_map(|npc| npc.f2p_opens.iter())
-                .filter(|open| open.inv == shop.name)
-                .filter_map(|open| open.sell_multiplier)
-                .collect();
-            shop.keepers.into_iter().map(|keeper| keeper.sell_multiplier.unwrap_or(1000)).chain(opened).collect::<Vec<_>>()
-        })
-        .map(|multiplier| (base * multiplier.max(100) / 1000).max(1))
-        .min()
+    // Pure function of the dumps: once per object per process.
+    static MEMO: OnceLock<std::sync::Mutex<HashMap<String, Option<i64>>>> = OnceLock::new();
+    let table = MEMO.get_or_init(Default::default);
+    if let Some(known) = table.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(item) {
+        return *known;
+    }
+    let found = crate::shop_buy::purchase_steps(item, 0).iter().map(|step| step.price).min();
+    table.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(item.to_string(), found);
+    found
 }
 
 /// True for an F2P woodcutting axe (never a battleaxe): the axe of the

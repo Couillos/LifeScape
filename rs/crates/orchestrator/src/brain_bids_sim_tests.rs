@@ -79,7 +79,7 @@ fn a_smith_answers_the_scimitar_bids_and_fills_them() {
     let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
     let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &sim_units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None, rate: &lifescape_planner::work_rate::prior_rate };
     let reader = scimitar_market();
-    let (found, rate) = choose(&life, &reader, crate::brain_bids::bot_rate(&life, &state), &state).expect("the bids pay");
+    let (found, rate) = choose(&life, &reader, crate::brain_bids::bot_rate(&life), &state).expect("the bids pay");
     assert!((rate - lifescape_planner::market_fit::MIN_COIN_RATE).abs() < 1e-9, "no money guide published: time at the floor");
     assert_eq!(found.count, 9, "half the 18 profitable bids: {found:?}");
     let (goal, origin) = bid_goal(&found);

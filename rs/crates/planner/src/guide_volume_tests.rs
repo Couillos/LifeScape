@@ -17,7 +17,7 @@ use crate::guide_training::training_guide;
 #[test]
 fn current_price_holds_for_the_recent_fill_volume_only() {
     let mut fixture = Fixture::new();
-    fixture.quotes.insert("leather_cowl", Quote { price: 462.0, traded: true, median: 462.0, fills: 5, fill_units: 5.0, bids: vec![(30.0, 100.0)], asks: Vec::new() });
+    fixture.quotes.insert("leather_cowl", Quote { price: 462.0, traded: true, median: 462.0, fills: 5, fill_units: 5.0, bids: vec![(30.0, 100.0)], asks: Vec::new(), claimed: 0.0 });
     fixture.npc.insert("leather_cowl", 10.0);
     let (five, eight, window) = fixture.run(|engine| (engine.sale_at("leather_cowl", 5.0), engine.sale_at("leather_cowl", 8.0), engine.sale_at("leather_cowl", 988.0)));
     assert!((five.price - 462.0).abs() < 1e-9 && five.basis == PriceBasis::Traded, "the traded volume: {five:?}");
@@ -51,7 +51,7 @@ fn current_price_holds_for_the_recent_fill_volume_only() {
 #[test]
 fn current_price_gives_no_purchase_depth() {
     let mut fixture = Fixture::new();
-    fixture.quotes.insert("coal", Quote { price: 15.0, traded: true, median: 15.0, fills: 5, fill_units: 5000.0, bids: Vec::new(), asks: vec![(10.0, 50.0)] });
+    fixture.quotes.insert("coal", Quote { price: 15.0, traded: true, median: 15.0, fills: 5, fill_units: 5000.0, bids: Vec::new(), asks: vec![(10.0, 50.0)], claimed: 0.0 });
     let (fifty, more) = fixture.run(|engine| (engine.buy_at("coal", 50.0), engine.buy_at("coal", 200.0)));
     assert!(fifty.available && (fifty.price - 15.0).abs() < 1e-9, "max(current price, ask): {fifty:?}");
     assert!(!more.available, "past the asks, no shop: not for sale: {more:?}");
@@ -116,4 +116,22 @@ fn consumable_market_line_names_the_available_volume() {
     let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
     let lines: Vec<Supply> = rows.iter().filter(|row| row.method == "teleport:varrock_teleport").map(|row| row.supply).collect();
     assert_eq!(lines, vec![Supply::Autonomous], "no copy");
+}
+
+/// Plan équilibre step 2: the guide's build reads the order board. Coal
+/// whose last five fills moved 5 units, 3 of them already claimed by
+/// other producers: a mining line sells 2 at the price, the rest is
+/// worth nothing (no bid, no shop); 2 coal resting at the price sell
+/// first too.
+#[test]
+fn the_guide_shares_the_recent_volume_with_claims_and_resting_asks() {
+    let mut fixture = Fixture::new();
+    fixture.quotes.insert("coal", Quote { price: 15.0, traded: true, median: 15.0, fills: 5, fill_units: 5.0, claimed: 3.0, ..Quote::default() });
+    let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
+    let coal = row(&rows, "gather:mining/coal", Family::Farm);
+    assert!((coal.profit_6000 - 2.0 * 15.0).abs() < 1e-9, "3 of the 5 claimed: {}", coal.profit_6000);
+    fixture.quotes.insert("coal", Quote { price: 15.0, traded: true, median: 15.0, fills: 5, fill_units: 5.0, claimed: 3.0, asks: vec![(15.0, 2.0)], ..Quote::default() });
+    let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
+    let coal = row(&rows, "gather:mining/coal", Family::Farm);
+    assert!(coal.profit_6000.abs() < 1e-9, "claims and resting asks took the 5: {}", coal.profit_6000);
 }

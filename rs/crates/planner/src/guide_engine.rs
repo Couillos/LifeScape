@@ -14,6 +14,11 @@
 //!   above the median pays its own units only. Fewer than five fills
 //!   flag the price `thin`; so does a volume that runs past the traded
 //!   one while the price still carries most of it;
+//! - SHARED demand (plan équilibre step 2, 2026-11-19): the market's
+//!   part of a sale (bids, the current price's volume) is served first
+//!   by the supply ahead: the asks resting at or under the price and the
+//!   units producers claimed on the public order board
+//!   (`Quote::claimed`, `ahead_units`);
 //! - SALE of a NEVER-TRADED object (no current price): the resting bids
 //!   best first (while they pay more than the shop), the rest to the
 //!   best F2P shop (Q3) or worth nothing without one;
@@ -201,14 +206,51 @@ fn traded_basis(quote: &Quote) -> PriceBasis {
     }
 }
 
+/// Units of supply ahead of a new seller (plan équilibre step 2): the
+/// units other producers claimed on the public order board
+/// (`Quote::claimed`) and the asks already resting at or under the
+/// price the sale starts at (a traded object's current price, else its
+/// best bid). They sell first: a new producer's demand is what they
+/// leave.
+pub fn ahead_units(quote: &Quote) -> f64 {
+    let reference = if quote.traded { quote.price.min(median_of(quote)) } else { quote.bids.iter().map(|(price, _)| *price).fold(0.0, f64::max) };
+    let resting: f64 = quote.asks.iter().filter(|(price, units)| *price <= reference && *units > 0.0).map(|(_, units)| *units).sum();
+    quote.claimed.max(0.0) + resting
+}
+
+/// Takes `ahead` units off the market steps, best first (the supply
+/// ahead serves the best buyers); a shop step has no depth to share.
+fn net_ahead(steps: &mut Vec<Step>, ahead: f64) {
+    let mut left = ahead.max(0.0);
+    for step in steps.iter_mut().filter(|step| step.tier != Tier::Shop) {
+        if left <= 0.0 {
+            break;
+        }
+        let taken = step.depth.min(left);
+        step.depth -= taken;
+        left -= taken;
+    }
+    steps.retain(|step| step.depth > 0.0);
+}
+
 /// Sale steps of a quote, best first (D12, Q3, users 2026-11-16 and
 /// 2026-11-17). A traded object: the bids above its price for their
 /// units, then its price for the units its last fills moved
 /// (`Quote::fill_units`), then the remaining bids and the shop; a shop
 /// paying more than the price takes every unit the bids above it leave.
 /// A never-traded object: the bids above the shop, then the shop. A
-/// shop step carries the shop's condition (Q7).
+/// shop step carries the shop's condition (Q7). The market steps are
+/// SHARED (plan équilibre step 2): the supply ahead (`ahead_units`:
+/// claims of other producers, asks resting at or under the price)
+/// takes their units first.
 fn sale_steps(quote: &Quote, offer: Option<(f64, ShopNeed)>) -> Vec<Step> {
+    let mut steps = gross_sale_steps(quote, offer);
+    net_ahead(&mut steps, ahead_units(quote));
+    steps
+}
+
+/// `sale_steps` before the supply ahead.
+fn gross_sale_steps(quote: &Quote, offer: Option<(f64, ShopNeed)>) -> Vec<Step> {
     let shop = offer.map(|(price, _)| price);
     let shop_step = |(price, need): (f64, ShopNeed)| Step { price, depth: f64::INFINITY, tier: Tier::Shop, need };
     let above_shop = |step: &Step| shop.map_or(true, |shop| step.price > shop);
@@ -226,6 +268,43 @@ fn sale_steps(quote: &Quote, offer: Option<(f64, ShopNeed)>) -> Vec<Step> {
     steps.extend(bids[lifting..].iter().copied().take_while(above_shop));
     steps.extend(offer.map(shop_step));
     steps
+}
+
+/// One level of an object's sale ladder (`sale_ladder`): a unit price
+/// for at most `depth` units; `market` false for a shop (no depth limit).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SaleLevel {
+    pub price: f64,
+    pub depth: f64,
+    pub market: bool,
+}
+
+/// The shared sale ladder of a quote, best first (`sale_steps`: the
+/// supply ahead already served), `offer` the best F2P shop's price.
+pub fn sale_ladder(quote: &Quote, offer: Option<(f64, ShopNeed)>) -> Vec<SaleLevel> {
+    sale_steps(quote, offer).into_iter().map(|step| SaleLevel { price: step.price, depth: step.depth, market: step.tier != Tier::Shop }).collect()
+}
+
+/// Coins `units` bring down a ladder (past its depth: worth nothing, as
+/// the guide's walk).
+pub fn ladder_value(ladder: &[SaleLevel], units: f64) -> f64 {
+    let mut left = units.max(0.0);
+    let mut value = 0.0;
+    for level in ladder {
+        if left <= 0.0 {
+            break;
+        }
+        let taken = level.depth.min(left);
+        value += taken * level.price;
+        left -= taken;
+    }
+    value
+}
+
+/// Units the MARKET still takes down a ladder (bids and the current
+/// price's volume, the supply ahead served; never a shop).
+pub fn market_depth(ladder: &[SaleLevel]) -> f64 {
+    ladder.iter().filter(|level| level.market).map(|level| level.depth).sum()
 }
 
 /// Purchase steps of a quote, cheapest first (D15, Q7, user

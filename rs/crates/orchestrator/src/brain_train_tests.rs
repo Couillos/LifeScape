@@ -60,6 +60,11 @@ fn line(skill: &str, method: &str, supply: Supply, xp_6000: f64, coins_6000: f64
     }
 }
 
+/// Coins per tick of the money line (`money_line`): the time value the
+/// climbs of these tests price their coins at (D1: the bot's measured
+/// gain, here the same 5 coins per tick).
+const MONEY_LINE_RATE: f64 = 30_000.0 / 6000.0;
+
 /// The bot's best money line (D17): 30 000 coins per 6000 ticks.
 fn money_line() -> MoneyRow {
     MoneyRow {
@@ -184,7 +189,34 @@ fn pick_seeded(set: &GuideSet, skill: &str, level: u8, target: u8, life: &Life, 
     let asks = |_: &str| None;
     let bot = BotState { level_of: &level_of, combat: 126, quests_done: quests, held: &held_units, coins: None, ironman: life.profile.ironman, asks: &asks };
     let never = |_: &str| false;
-    pick_from_guide(set, &Climb { skill, level, target, previous, food: None }, life, &bot, stock, seed, &never, &lifescape_planner::work_rate::prior_rate)
+    pick_from_guide(set, &Climb { skill, level, target, previous, food: None, coin_rate: MONEY_LINE_RATE }, life, &bot, stock, seed, &never, &lifescape_planner::work_rate::prior_rate)
+}
+
+/// D1 (plan équilibre step 1): the coins of a line convert at the bot's
+/// MEASURED time value (`Climb::coin_rate`), never at its best guide line
+/// (D17). The market bot of the firemaking example buys its logs while a
+/// tick earns it 5 coins; at the 0.1 floor the logs cost it 10 ticks a
+/// coin and it cuts them itself, the D17 line unchanged.
+#[test]
+fn the_climb_converts_coins_at_the_measured_time_value() {
+    let set = set_with(vec![
+        line("firemaking", "fire:yew_logs", Supply::Autonomous, 30_000.0, 0.0),
+        line("firemaking", "fire:yew_logs", Supply::Market, 60_000.0, -30_000.0),
+    ]);
+    let life = life_with(1.0, 0.5);
+    let level_of = |_: &str| 60u8;
+    let none = |_: &str| 0.0;
+    let asks = |_: &str| None;
+    let bot = BotState { level_of: &level_of, combat: 126, quests_done: &[], held: &none, coins: None, ironman: false, asks: &asks };
+    let never = |_: &str| false;
+    let at = |coin_rate: f64| {
+        let climb = Climb { skill: "firemaking", level: 60, target: 65, previous: None, food: None, coin_rate };
+        pick_from_guide(&set, &climb, &life, &bot, &[], 1, &never, &lifescape_planner::work_rate::prior_rate).expect("a line")
+    };
+    assert_eq!(at(MONEY_LINE_RATE).supply, Supply::Market, "5 coins a tick: the logs are bought");
+    let floor = at(lifescape_planner::market_fit::MIN_COIN_RATE);
+    assert_eq!(floor.supply, Supply::Autonomous, "0.1 coin a tick: the logs are cut");
+    assert_eq!(floor.best_profit, Some(30_000.0), "the D17 line stays the guide's, for display");
 }
 
 /// R7: two lines within 15 % of each other are both drawn across seeds
@@ -295,7 +327,7 @@ fn a_biting_spot_waits_for_its_food() {
     let bot = BotState { level_of: &level_of, combat: 126, quests_done: &[], held: &none, coins: None, ironman: false, asks: &asks };
     let never = |_: &str| false;
     let food = |method: &str| (method == "fight:melee/men").then(|| "herring".to_string());
-    let climb = Climb { skill: "attack", level: 58, target: 60, previous: None, food: Some(&food) };
+    let climb = Climb { skill: "attack", level: 58, target: 60, previous: None, food: Some(&food), coin_rate: MONEY_LINE_RATE };
     let both = set_with(vec![men.clone(), cows]);
     let found = pick_from_guide(&both, &climb, &life, &bot, &[], 1, &never, &lifescape_planner::work_rate::prior_rate).expect("a line");
     assert_eq!((found.pick.method.as_str(), found.choice.class), ("fight:melee/cows", 0), "fed lines first");

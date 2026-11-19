@@ -1062,7 +1062,10 @@ Décisions utilisateur (`planner::guide_*`, `docs/economy.md` § Rendements) :
    boutiques parcourus ensemble du moins cher ; au-delà, ligne bloquée.
    `shop_delta` dumpé hors ligne (`gamedata/data/shop_haggle.json`,
    `orchestrator::dump_shop_haggle`). Boutiques : F2P atteignables sans
-   quête (comme la vente Q3) ; `merchant_price` (cerveau) inchangé.
+   quête (comme la vente Q3) ; `merchant_price` (cerveau) inchangé —
+   depuis le 2026-11-19 (plan équilibre, étape 7) il suit les mêmes
+   gardiens que `purchase_steps` (plus de prix pour les 71 objets
+   échangeables qu'aucune boutique F2P ne vend).
 3. Chaînes (D16 révisé) : chaque intrant (et consommable) par la voie la
    MOINS COÛTEUSE : farmer (ticks × prix D17 du bot − autres flux de la
    source) ou acheter (prix au volume) ; égalité = farmer ; prix D17 =
@@ -1754,11 +1757,13 @@ Décision : chaque lecteur lit le guide money précalculé
    sans bourse, asks du cycle ; Ironman : jamais une ligne marché). Test :
    un bot au même niveau partout lit exactement le D17 de `brain_train`
    (jeu des priors, niveaux 1 à 99, avec et sans quête).
-2. Taux de pièces (`coin_rate`, `brain_bids::bot_rate`) = D17 / 6000,
+2. [Remplacé par D1 (plan équilibre, 2026-11-19) : gain réel mesuré, voir
+   l'entrée du 2026-11-19.] Taux de pièces (`coin_rate`, `brain_bids::bot_rate`) = D17 / 6000,
    plancher `MIN_COIN_RATE` (aucun jeu ou aucune ligne : le plancher) :
    bids (`choose` prend le taux), `production_costs_for`, `bid-why` (ligne
    « D17 : famille méthode tranche profit »), alchimie, demande dérivée.
-3. `coins_per_tick` = ce taux, posé par `brain_market::guide_coins` (dans
+3. [Remplacé par D1 (plan équilibre, 2026-11-19) pour `coins_per_tick`,
+   posé par `brain_plan::ready_ctx`.] `coins_per_tick` = ce taux, posé par `brain_market::guide_coins` (dans
    `fill_ctx`) pour tout nœud ; `method_profit` = meilleure ligne cotée de
    l'activité de la méthode dans les lignes du bot. Plus de saturation par
    méthode : le guide valorise déjà le volume absorbé (D12).
@@ -1790,6 +1795,33 @@ non jugé dans le D17 comme dans R7) à ~56 600. Ces lignes du guide
 fixent désormais le prix du temps des bots (bids, alchimie) : une
 aberration du guide s'y propage comme elle se propageait déjà au D17 de
 l'entraînement.
+## 2026-11-19 — D1 : la valeur du temps d'un bot est son gain réel mesuré (plan équilibre, étape 1)
+
+Constat : `brain_d17::coin_rate` = D17 / 6000, la meilleure ligne
+théorique du guide money à portée (chaînes jamais exécutées comprises) :
+10,71 pièces/tick pour tous les bots le 2026-11-19 (`dye:reddye`), pour
+~0,28 réellement gagnées par tick de travail (mesure de la flotte sur
+12 h). Chaque lecteur surévaluait le temps du bot : producteurs qui
+refusent les offres d'achat modestes, plafonds d'achat d'intrants bas.
+Décision utilisateur (D1) : la valeur d'un tick d'un bot = ce que son
+travail a réellement rapporté par tick de travail sur une fenêtre
+glissante (rapports contrat 2 du store, flux valorisés au prix courant /
+ticks de travail), jamais sous `MIN_COIN_RATE` ; sans mesure propre, la
+moyenne mesurée de la flotte.
+Mise en œuvre : `store::work_gains` (requête), `orchestrator::time_value`
+(valorisation par `rates_price::price_estimate`, causes `traded` et
+`unattributed` exclues, 6000 ticks de travail minimum pour une mesure
+propre, fenêtre 12 h, rafraîchie toutes les 300 s), lue par
+`brain_d17::coin_rate(compte)` : réponse aux offres, demande dérivée,
+alchimie, score d'entraînement, `coins_per_tick` d'un nœud (qui n'ordonne
+que les alternatives par ticks estimés). La ligne D17 (`best_row`) ne
+reste qu'affichée (`bid-why`) ; `bot_d17` et `rate_of` sont supprimés.
+Index `idx_task_reports_clock` assuré à chaque ouverture (sans changer la
+version du schéma : un binaire plus ancien ouvre toujours le fichier, un
+retour arrière du lot reste possible). Détails : `docs/economy.md`
+§ « Valeur du temps : le gain réel mesuré ». La réserve vendeur
+(`brain_reserve::coins_per_tick`) reste hors de cette décision (lot 5).
+
 ## 2026-11-17 — Financement des teneurs par dons en jeu (`fund-makers`)
 
 Demande utilisateur : « force les users les plus riches à donner de

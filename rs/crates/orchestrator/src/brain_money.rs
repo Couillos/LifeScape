@@ -28,6 +28,10 @@
 //!   levels, combat, quests, stock, free wallet, the cycle's asks):
 //!   feasible, or within reach after a tool or a lot's coins; priced and
 //!   earning only (a line that loses coins is no money method);
+//! - each row's profit read for THIS bot now (plan équilibre step 2,
+//!   `guide_share::SharedDemand`): its products on the demand the other
+//!   producers' live claims and the resting asks leave; a run launched
+//!   posts its own units on the order board (`claim_launch`);
 //! - one line per method (the best profit), its weight the profit times
 //!   the profile (`guide_pick::merit_money`: market_affinity on a market
 //!   line), its runs the yield's measured runs (exploration, D14).
@@ -40,8 +44,9 @@ use std::collections::HashMap;
 use lifescape_json::Value;
 use lifescape_planner::expand::ReadyCtx;
 use lifescape_planner::guide_feasible::{feasible_for, BotState, Feasibility};
-use lifescape_planner::guide_model::{Family, MoneyRow};
+use lifescape_planner::guide_model::{Family, MoneyRow, Quote};
 use lifescape_planner::guide_pick::{merit_money, GuideLine};
+use lifescape_planner::guide_share::SharedDemand;
 use lifescape_planner::{Life, Node, NodeKind};
 
 use crate::guides_store::GuideSet;
@@ -145,11 +150,27 @@ fn launched(row: &MoneyRow, ctx: &ReadyCtx) -> Option<String> {
 /// object on `bot.held`. A recipe's lot never makes more than its
 /// product's market absorbs (point 2, user 2026-11-18:
 /// `product_room(method)`, actions, `None` unknown): a lot it cannot
-/// sell is no line.
-pub fn lines_for(rows: &[&MoneyRow], ctx: &ReadyCtx, bot: &BotState, stock: &[(String, f64)], affinity: f64, product_room: &dyn Fn(&str) -> Option<i64>) -> Vec<GuideLine> {
+/// sell is no line. A row's profit is the one THIS bot reads now
+/// (`shared`, plan équilibre step 2: its products on the demand the
+/// other producers' live claims leave, `guide_share`); a trade lot its
+/// offer's (already shared); a line that no longer earns is none.
+pub fn lines_for(rows: &[&MoneyRow], ctx: &ReadyCtx, bot: &BotState, stock: &[(String, f64)], affinity: f64, product_room: &dyn Fn(&str) -> Option<i64>, shared: &dyn Fn(&MoneyRow) -> f64) -> Vec<GuideLine> {
     let mut best: HashMap<String, GuideLine> = HashMap::new();
-    for row in rows.iter().filter(|row| row.priced && row.profit_6000 > 0.0) {
+    for row in rows.iter().filter(|row| row.priced) {
         let Some(method) = launched(row, ctx) else { continue };
+        // A trade lot ranks on the lot this bot really takes (demand,
+        // wallet, asks: `lot_size`), its purchase spread over that lot
+        // only (review lot 2, point 5); no lot fits: its offer's.
+        let profit = match lifescape_planner::trade_craft::offer_in(ctx, &method) {
+            Some(offer) => match lifescape_planner::trade_craft::lot_size(offer, ctx.trade_wallet).lot {
+                lot if lot >= 1 => offer.lot_rate(lot),
+                _ => offer.profit_6000,
+            },
+            None => shared(row),
+        };
+        if profit <= 0.0 {
+            continue;
+        }
         let stock_held = |item: &str| {
             if row.prereqs.stock.iter().any(|(name, _)| name == item) {
                 stock.iter().filter(|(name, _)| name == item).map(|(_, units)| *units).sum()
@@ -163,8 +184,6 @@ pub fn lines_for(rows: &[&MoneyRow], ctx: &ReadyCtx, bot: &BotState, stock: &[(S
             judged if judged.within_reach() => false,
             _ => continue,
         };
-        // A trade lot ranks on its offer's profit (the lot it can buy).
-        let profit = lifescape_planner::trade_craft::offer_in(ctx, &method).map(|offer| offer.profit_6000).unwrap_or(row.profit_6000);
         // A recipe on its own stock runs the lot its free stock covers.
         let lot = if row.family == Family::Recipe { lifescape_planner::stock_lot::lot_of(&method, &stock_held) } else { 0 };
         let lot = if lot > 0 { product_room(&method).map_or(lot, |room| lot.min(room)) } else { lot };
@@ -215,18 +234,85 @@ pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value
     let quests = ctx.quests_done.clone();
     let bot = BotState { level_of: &level_of, combat: ctx.combat, quests_done: &quests, held: &held, coins: Some(wallet as f64), ironman: life.profile.ironman, asks: &asks };
     let service = crate::market_service::shared();
+    // The other producers' claims as they stand NOW (plan équilibre
+    // step 2, the public board): supply on its way, never this bot's.
+    let claims = crate::market_claims::claimed_by_others(&job.account);
+    let claimed = |item: &str| claims.get(item).copied().unwrap_or(0).max(0);
     let product_room = |method: &str| -> Option<i64> {
         let (product, way) = lifescape_planner::method_way::method_way(method)?;
         let id = crate::brain_gear::obj_id(&product)?;
         let view = service.as_ref()?.public_view(&job.account, id);
         let per_action = way.qty.map_or(1, |(least, most)| (least + most + 1) / 2).max(1);
-        Some(lifescape_planner::market_fit::absorbable_actions(&view, crate::brain_plan::holdings_count(job, &product), per_action))
+        // The others' claimed units fill the room before this lot.
+        let ahead = crate::brain_plan::holdings_count(job, &product) + claimed(&product);
+        Some(lifescape_planner::market_fit::absorbable_actions(&view, ahead, per_action))
     };
-    let lines = lines_for(&rows, ctx, &bot, &stock, life.profile.market_affinity, &product_room);
+    let quote = |item: &str| set.quotes.get(item).cloned().map(|quote| Quote { claimed: claimed(item) as f64, ..quote });
+    let shop = |item: &str| crate::web_guides::npc_volume_value(item);
+    let demand = SharedDemand::new(&quote, &shop);
+    let shared = |row: &MoneyRow| demand.profit(row);
+    let lines = lines_for(&rows, ctx, &bot, &stock, life.profile.market_affinity, &product_room, &shared);
     if lines.is_empty() {
         crate::logln!("brain {}: {} money: no earning guide line within reach ({} rows read), static money methods", job.account, node.id, rows.len());
     }
     ctx.money_guide = lines;
+}
+
+/// What the run of a money or coin node brings to the market (plan
+/// équilibre step 2): its product and units. A 100 % market lot its lot
+/// (`node.batch`, products); a recipe on its own stock its lot of
+/// actions times the products an action yields; any other method its
+/// units per 6000 ticks measured for the bot (`per_6000(method,
+/// product)`) over the run's `budget_ticks`. `None`: nothing for the
+/// market (alchemy and coins, a fight without a product, no rate).
+pub fn run_claim(node: &Node, method: &str, budget_ticks: u64, per_6000: &dyn Fn(&str, &str) -> Option<f64>) -> Option<(String, i64)> {
+    if method.starts_with("alch:") {
+        return None;
+    }
+    let recipe = lifescape_planner::trade_craft::inner(method);
+    let product = lifescape_planner::guide_methods::own_product(recipe).filter(|product| product != "coins")?;
+    // Only a recipe on its own stock reads the node's batch (its lot of
+    // actions, review lot 2 point 6): a batch an earlier stock lot left
+    // never sizes a harvest.
+    let stock_lot = lifescape_planner::stock_lot::stock_inputs(recipe).is_some();
+    let units = if lifescape_planner::trade_craft::is_trade(method) {
+        node.batch
+    } else if stock_lot && node.batch > 0 {
+        let (_, way) = lifescape_planner::method_way::method_way(recipe)?;
+        let out = if way.expected_out() > 0.0 { way.expected_out() } else { 1.0 };
+        (node.batch as f64 * out).floor() as i64
+    } else {
+        crate::market_claims::run_units(per_6000(method, &product)?, budget_ticks as f64)
+    };
+    (units > 0).then_some((product, units))
+}
+
+/// Posts the run a money or coin node (or a filler window) launches on
+/// the public order board (plan équilibre step 2, `market_claims`): its
+/// product's units (`run_claim`) for twice its budget at most, until
+/// its report (`release_run`). A run that brings nothing to the market
+/// ends the node's previous claim.
+pub(crate) fn claim_launch(account: &str, node: &Node, method: &str, budget: Option<(u64, u64)>, live: &Value) {
+    if !matches!(node.kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) {
+        return;
+    }
+    let Some((_, ticks)) = budget else { return };
+    let snapshot = crate::rates_service::live_snapshot();
+    let per_6000 = |method: &str, product: &str| match crate::brain_plan::farm_yield(&snapshot, method, &crate::rates_names::display_of(product), live) {
+        Ok(rate) if rate > 0.0 => Some(rate),
+        Ok(_) => None,
+        Err(error) => {
+            crate::rates_read::log_rate_error(&error);
+            None
+        }
+    };
+    let Some((product, units)) = run_claim(node, method, ticks, &per_6000) else {
+        crate::market_claims::release_run(account, &node.id);
+        return;
+    };
+    let secs = crate::market_claims::claim_secs(ticks as f64, crate::market_eta::live_tick_ms());
+    crate::market_claims::claim_run(account, &node.id, &product, units, secs);
+    crate::logln!("brain {account}: {} claims {units} {product} on the order board ({method}, {ticks} ticks)", node.id);
 }
 
 #[cfg(test)]

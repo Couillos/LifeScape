@@ -31,9 +31,9 @@ fn obj_id(item: &str) -> Option<i64> {
 }
 
 /// Fills the market and level inputs of `ctx` for `node`: best ask of
-/// the node's object, base levels, and the bot's coin figures read in
+/// the node's object, base levels, and the bot's method profits read in
 /// the precomputed money guide (`guide_coins`); none before the first
-/// set (the blind context's).
+/// set.
 pub fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, live: &Value) {
     ctx.levels = live_levels(live);
     if let NodeKind::ObtainItems { item, .. } = &node.kind {
@@ -43,24 +43,21 @@ pub fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, live: &Value) {
         }
     }
     if let Some(set) = crate::guides_store::current() {
-        guide_coins(ctx, node, &set, crate::brain_plan::live_combat(live));
+        guide_coins(ctx, node, &set);
     }
 }
 
-/// The bot's coin figures read in the money guide `set` (one source,
-/// `brain_d17`), from `ctx`'s levels, quests and Ironman flag: its D17
-/// prices the grind of a purchase (`coins_per_tick`, every node), and a
-/// money node's methods carry their guide profit (`method_profit`: the
-/// best priced row of the method's activity in the bot's own band rows).
-/// The guide already prices what the market absorbs (D12): no saturation
-/// on top.
-pub fn guide_coins(ctx: &mut ReadyCtx, node: &Node, set: &crate::guides_store::GuideSet, combat: u8) {
+/// The bot's method profits read in the money guide `set` (one source,
+/// `brain_d17`), from `ctx`'s levels: a money node's methods carry their
+/// guide profit (`method_profit`: the best priced row of the method's
+/// activity in the bot's own band rows). The guide already prices what
+/// the market absorbs (D12): no saturation on top. The grind of a
+/// purchase (`coins_per_tick`) is the bot's measured time value
+/// (`brain_plan::ready_ctx`, D1), never its D17: left as found.
+pub fn guide_coins(ctx: &mut ReadyCtx, node: &Node, set: &crate::guides_store::GuideSet) {
     let levels = ctx.levels.clone();
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
-    let quests = ctx.quests_done.clone();
-    let key = crate::brain_d17::BotKey { level_of: &level_of, combat, quests_done: &quests, ironman: ctx.ironman };
     let read = crate::brain_money::bot_rows(set, &level_of, &[]);
-    ctx.coins_per_tick = crate::brain_d17::rate_of(crate::brain_d17::best_row_in(&read.rows, &key).map(|row| row.profit_6000));
     if matches!(node.kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) {
         for method in lifescape_planner::resolve_obtain::money_methods(ctx) {
             if let Some(profit) = crate::brain_d17::method_profit_in(&read.rows, &method) {
@@ -131,7 +128,8 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn 
 /// Reservation price of what the obtain node at `index` gets, when it
 /// feeds a product the bot's graph makes (derived demand, public values:
 /// others' best bid or the current price; other inputs at the best ask or
-/// current price; the bot's own rates and its D17 coin rate). `None` otherwise.
+/// current price; the bot's own rates and its measured coin rate, D1).
+/// `None` otherwise.
 pub(crate) fn derived_reserve(life: &lifescape_planner::Life, index: usize, live: &Value) -> Option<f64> {
     let node = life.nodes.get(index)?;
     let consumed = life.nodes.iter().any(|other| other.deps.contains(&node.id) && matches!(other.kind, NodeKind::ObtainItems { .. }));
@@ -141,7 +139,7 @@ pub(crate) fn derived_reserve(life: &lifescape_planner::Life, index: usize, live
     let _phase = crate::cpu_profile::phase("market.derived_reserve");
     let reader = crate::brain_bids::MarketReader::live(&life.account);
     crate::brain_bids::with_bot_state(life, live, |state| {
-        let rate = crate::brain_bids::bot_rate(life, state);
+        let rate = crate::brain_bids::bot_rate(life);
         let value_of = |item: &str| reader.view(item).and_then(|view| view.best_bid().max(view.current)).map(|price| price as f64);
         let input_price = |item: &str| reader.view(item).and_then(|view| view.best_ask().or(view.current)).unwrap_or(1) as f64;
         let prices = lifescape_planner::derived_demand::DerivedPrices { value_of: &value_of, input_price: &input_price, units_per_6000: state.units, coin_rate: rate };

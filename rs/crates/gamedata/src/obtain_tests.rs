@@ -365,3 +365,58 @@ fn carried_tools_cover_every_recipe_tool() {
         assert!(!super::is_carried_tool(product), "{product}");
     }
 }
+
+/// Plan équilibre, step 7 (2026-11-19): the merchant price is what a
+/// non-member pays a keeper he REACHES, the same keepers as the shop
+/// ways (`shop_reach`) and the purchase ladder (`shop_buy`). Server
+/// truth: Lundail (`area_mage_arena/configs/mage_arena.inv`,
+/// `magearena_runeshop`) stands off the F2P map and the Magic Guild store
+/// is members, so no F2P keeper sells nature, law or cosmic runes; the
+/// Fancy dress shop owner (`area_varrock/scripts/fancy_dress_shop_owner.rs2`:
+/// "Sorry, we're closed" when `map_members = ^false`) never opens
+/// `fancyclothesstore` (yellow cape); the Canifis werewolf store (black
+/// cape), Brimhaven's restaurant (swordfish), Ardougne's adventurer shop
+/// (balls of wool), the desert and Viking stores (buckets of water) and
+/// the Karamja jungle store (bronze bars) are members areas. The old
+/// price read any non-members shop row: 71 tradeable F2P objects carried a keeper
+/// price no bot can pay (nature rune 20), which capped stock bids
+/// (`brain_stock::stock_ceiling`) and priced food (`brain_food`).
+#[test]
+fn merchant_price_names_only_a_keeper_a_non_member_reaches() {
+    for item in ["naturerune", "lawrune", "cosmicrune", "yellow_cape", "black_cape", "swordfish", "ball_of_wool", "bucket_water", "bronze_bar"] {
+        assert!(!super::ways(item).iter().any(|way| way.kind == WayKind::Shop), "{item}: no F2P shop way");
+        assert_eq!(super::merchant_price(item), None, "{item}: no F2P keeper, no merchant price");
+    }
+    // Every F2P object: a merchant price exactly when a reachable keeper
+    // sells it, at its cheapest base-stock unit.
+    let mut wrong = Vec::new();
+    for obj in crate::all_objs() {
+        let Some(name) = obj.name else { continue };
+        if obj.members != Some(false) || name.starts_with("cert_") {
+            continue;
+        }
+        let cheapest = crate::shop_buy::purchase_steps(name, 0).iter().map(|step| step.price).min();
+        let shop_way = super::ways(name).iter().any(|way| way.kind == WayKind::Shop);
+        if super::merchant_price(name) != cheapest || shop_way != cheapest.is_some() {
+            wrong.push(format!("{name}: price {:?}, ladder {cheapest:?}, shop way {shop_way}", super::merchant_price(name)));
+        }
+    }
+    assert!(wrong.is_empty(), "{} objects: {wrong:?}", wrong.len());
+}
+
+/// Plan équilibre, step 7: iron arrows have no F2P production (fletching
+/// is members) but Lowe's Archery Emporium sells them
+/// (`area_varrock/configs/varrock.inv` `[archeryshop]`
+/// `stock2=iron_arrow,1500,15`, keeper `lowe`, sell multiplier 1000): a
+/// shop way at 3 coins, 1 500 in stock plus one back every 15 ticks.
+#[test]
+fn lowe_sells_iron_arrows() {
+    let way = super::ways("iron_arrow").into_iter().find(|way| way.kind == WayKind::Shop && way.detail == "archeryshop").expect("Lowe's shop way");
+    assert_eq!(way.quest_points, 0, "open to every bot");
+    assert!(way.quest.is_none());
+    assert!(super::merchant_route("iron_arrow"));
+    assert_eq!(super::merchant_price("iron_arrow"), Some(3));
+    let window: i64 = crate::shop_buy::purchase_steps("iron_arrow", 6000).iter().filter(|step| step.shop == "archeryshop").map(|step| step.units).sum();
+    assert_eq!(window, 1500 + 6000 / 15, "base stock plus the restock of one window");
+    assert!(!producible_f2p("iron_arrow"), "no F2P recipe makes arrows");
+}

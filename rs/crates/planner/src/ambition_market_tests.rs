@@ -50,6 +50,7 @@ fn the_fleet_ambitions_follow_market_affinity() {
             market_affinity: index as f64 / 75.0,
             seed: 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(index + 1),
             kind: None,
+            market_maker: false,
         })
         .collect();
     let assigned = assign_fleet(&fleet, &[]);

@@ -11,7 +11,10 @@
 //! (plan marché Q6) lists each maker: slice, phase, capital, P&L, mean
 //! spread, book share, stock (`market_maker_report`). The bot choices
 //! section (plan rendements R7, `brain_picks`) tallies the choices the
-//! bots drew from the guides: methods chosen, exploration share.
+//! bots drew from the guides: methods chosen, exploration share. The
+//! équilibre section (plan-equilibre step 0, `economy_balance`) prints
+//! days of unsold stock, fleet work time per skill, the filler share and
+//! the 100 % market lots realized over predicted, each beside its target.
 
 use lifescape_store::{laspeyres, Store};
 
@@ -89,8 +92,10 @@ pub fn economy_cli(args: &[String]) -> i32 {
     }
     crate::market_maker_report::print_rows(&crate::market_maker_report::maker_rows(&store, &crate::brain::lives_dir()));
     crate::funding_cmd::print_section();
-    crate::trade_report::print_rows(&crate::trade_report::trade_rows(&store, &crate::brain::lives_dir()));
+    let trade_rows = crate::trade_report::trade_rows(&store, &crate::brain::lives_dir());
+    crate::trade_report::print_rows(&trade_rows);
     crate::brain_picks::print_section(&crate::brain_picks::fleet_picks(&crate::brain::lives_dir()), since, hours);
+    crate::economy_balance::print_section(&store, &trade_rows, since, hours, &excluded);
     0
 }
 

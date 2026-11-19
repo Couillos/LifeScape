@@ -144,7 +144,9 @@ fn lineages_of(rows: Vec<BuyRow>) -> Vec<BuyLineage> {
     out
 }
 
-fn excluded_account(excluded: &[String], account: &str) -> bool {
+/// True when `account` is one of `excluded` (any case): staff and the
+/// persisted exclusions.
+pub(crate) fn excluded_account(excluded: &[String], account: &str) -> bool {
     excluded.iter().any(|name| name.eq_ignore_ascii_case(account))
 }
 

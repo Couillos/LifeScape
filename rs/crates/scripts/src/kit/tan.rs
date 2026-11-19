@@ -195,7 +195,12 @@ pub fn run_tanning(bot: &mut Bot, spec: &crate::kit::cycle::TaskSpec, hide_name:
     let hide = obj_id(bot, hide_name)?;
     let coins = obj_id(bot, "coins")?;
     let mut tanned = 0u32;
+    let mut restarts = 0u32;
     while tanned < want {
+        // A market pause banks the hides and coins at Varrock and leaves
+        // the bot there (`kit::site::reload_after_pause`): the load is
+        // taken again, never a tanner sought from the square.
+        let pauses_at_load = bot.pauses_done;
         let bank = crate::kit::bank::nearest_bank(bot)?;
         crate::kit::bank::bank_trip(bot, &bank, &[], 0)?;
         let free = crate::kit::pack::free_slots(bot) as u32;
@@ -209,11 +214,18 @@ pub fn run_tanning(bot: &mut Bot, spec: &crate::kit::cycle::TaskSpec, hide_name:
         }
         crate::kit::bank::bank_withdraw_items(bot, &bank, &[coins], held.saturating_mul(cost))?;
         walk_to_tanner(bot)?;
-        let done = tan_carried(bot, hide_name, &leather_name, cost, coms)?;
+        let outcome = tan_carried(bot, hide_name, &leather_name, cost, coms);
+        if matches!(outcome, Ok(0) | Err(ScriptError::Failed(_) | ScriptError::Blocked { .. })) && crate::kit::site::reload_after_pause(pauses_at_load, bot.pauses_done, restarts) {
+            restarts += 1;
+            bot.log(&format!("tanning: a market pause emptied the load at {:?}, loading again", bot.position()));
+            continue;
+        }
+        let done = outcome?;
         if done == 0 {
             return Err(ScriptError::Failed(format!("the tanner tanned no {hide_name} at {:?}", bot.position())));
         }
         tanned += done;
+        restarts = 0;
         bot.log(&format!("ok tanned {done} {hide_name} into {leather_name} ({tanned} so far)"));
     }
     let bank = crate::kit::bank::nearest_bank(bot)?;

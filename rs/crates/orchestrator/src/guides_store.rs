@@ -144,11 +144,14 @@ pub fn build_set(store: &Store, snapshot: &crate::rates_service::Snapshot, waits
     let now = crate::rates_service::now_secs();
     let prices: RefCell<HashMap<String, Quote>> = RefCell::new(HashMap::new());
     let rate = |ask: &RateAsk| crate::web_guides::answer_of(snapshot, ask, now);
+    // The order board of the build (plan équilibre step 2): every claim
+    // is supply on its way, netted from the demand of the shared views.
+    let claims = crate::market_claims::claimed_total();
     let price = |item: &str| {
         if let Some(known) = prices.borrow().get(item) {
             return known.clone();
         }
-        let quote = crate::web_guides::quote_of(store, item);
+        let quote = crate::web_guides::quote_on_board(store, item, &claims);
         prices.borrow_mut().insert(item.to_string(), quote.clone());
         quote
     };

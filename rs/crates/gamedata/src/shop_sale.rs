@@ -91,12 +91,12 @@ pub fn npc_sale_value(item: &str) -> Option<i64> {
 }
 
 /// Largest `shop_delta` param of the server's shop keepers (content npc
-/// configs: 10, 20 or 30); the dump does not carry it per keeper.
+/// configs: 10, 20 or 30): the floor when `shop_haggle.json` knows none.
 pub const MAX_SHOP_DELTA: i64 = 30;
 
 /// What `shop` pays AT LEAST for the next unit of `item` while it holds
-/// `held` units of it (`adjusted_item_cost_selling`): the steepest delta
-/// when the shop holds its base stock or more, none under it (the lower
+/// `held` units of it (`adjusted_item_cost_selling`): the steepest delta of
+/// its keepers (`shop_haggle.json`) when the shop holds its base stock or more, none under it (the lower
 /// bound either way). `None`: the shop does not buy it or its buy
 /// multiplier is unknown. The selling script checks every unit against
 /// the market with this bound: never a unit sold under it.
@@ -110,8 +110,81 @@ pub fn unit_value_floor(shop: &str, item: &str, held: i64) -> Option<i64> {
     // `price_mod`: a stocked object counts from its base, another from 0.
     let base = entry.stocks.iter().find(|stock| stock.obj == item).map(|stock| stock.count).unwrap_or(0);
     let diff = held - base;
-    let delta = if diff >= 0 { MAX_SHOP_DELTA } else { 0 };
+    // The keepers' own `shop_delta` (`shop_haggle.json`), the steepest of
+    // the shop's keepers (the lower bound); `MAX_SHOP_DELTA` when none
+    // is known.
+    let keeper_delta = entry.keepers.iter().filter_map(|keeper| crate::shop_buy::keeper_haggle(&keeper.npc)).max().unwrap_or(MAX_SHOP_DELTA);
+    let delta = if diff >= 0 { keeper_delta } else { 0 };
     Some(calc_shop_value(obj.price, delta, multiplier, diff))
+}
+
+/// Engine `World.INV_STOCKRATE` (`engine/src/engine/World.ts:122`): a
+/// general store loses one unit of an object it does not list every
+/// 100 ticks (`World.ts:1204`).
+pub const UNLISTED_STOCK_RATE: i64 = 100;
+
+/// Ticks per unit the stock of `item` in `shop` drifts back to its base
+/// (`World.ts:1189-1207`, each tick of the inv cleanup): a listed object
+/// over its base count loses one unit every `stockrate` ticks of its
+/// entry; an unlisted object of a general store one every
+/// `UNLISTED_STOCK_RATE`. `None`: the shop never drifts (no restock) or
+/// does not buy the object.
+pub fn stock_drift_ticks(shop: &str, item: &str) -> Option<i64> {
+    let entry = crate::shops::shop_list().iter().find(|entry| entry.name.eq_ignore_ascii_case(shop))?;
+    if !entry.restock {
+        return None;
+    }
+    match entry.stocks.iter().find(|stock| stock.obj == item) {
+        Some(stock) => (stock.rate > 0).then_some(stock.rate),
+        None => entry.allstock.then_some(UNLISTED_STOCK_RATE),
+    }
+}
+
+/// Base stock of `item` in `shop` (`price_mod`: 0 when unlisted).
+fn base_stock(shop: &str, item: &str) -> i64 {
+    crate::shops::shop_list()
+        .iter()
+        .find(|entry| entry.name.eq_ignore_ascii_case(shop))
+        .and_then(|entry| entry.stocks.iter().find(|stock| stock.obj == item))
+        .map(|stock| stock.count)
+        .unwrap_or(0)
+}
+
+/// Units of `item` that `shop` likely holds now: its base stock plus the
+/// units the fleet sold there, each sale (`units`, `ticks_ago`) decayed
+/// by the drift (`stock_drift_ticks`) from the moment it landed, oldest
+/// first. Never under the base (a bought-out stock pays more: the base
+/// is the cautious read).
+pub fn likely_held(shop: &str, item: &str, sales: &[(i64, i64)]) -> i64 {
+    let base = base_stock(shop, item);
+    let drift = stock_drift_ticks(shop, item);
+    let mut ordered: Vec<(i64, i64)> = sales.iter().copied().filter(|(units, _)| *units > 0).collect();
+    ordered.sort_by_key(|(_, ticks_ago)| std::cmp::Reverse(*ticks_ago));
+    // Whole units only between two sales (the engine drops one at each
+    // multiple of the rate): rounding down keeps the read cautious.
+    let decayed = |excess: i64, ticks: i64| match drift {
+        Some(rate) => (excess - ticks.max(0) / rate).max(0),
+        None => excess,
+    };
+    let mut excess = 0i64;
+    let mut last_ago: Option<i64> = None;
+    for (units, ticks_ago) in ordered {
+        if let Some(previous) = last_ago {
+            excess = decayed(excess, previous - ticks_ago);
+        }
+        excess += units;
+        last_ago = Some(ticks_ago);
+    }
+    if let Some(previous) = last_ago {
+        excess = decayed(excess, previous);
+    }
+    base + excess
+}
+
+/// What `shop` likely pays for the next unit of `item` (`unit_value_floor`
+/// at `likely_held`): the value the trip's first unit meets on arrival.
+pub fn likely_unit_value(shop: &str, item: &str, sales: &[(i64, i64)]) -> Option<i64> {
+    unit_value_floor(shop, item, likely_held(shop, item, sales))
 }
 
 #[cfg(test)]
@@ -163,5 +236,40 @@ mod tests {
         assert!(npc_sale_shops("rune_longsword").iter().all(SaleShop::open), "the open list: every bot reaches it");
         assert!(!npc_sale_shops("rune_longsword").iter().any(|shop| shop.shop == "runiteshop" || shop.shop == "runeplateshop"));
         assert!(npc_sale_shops_reachable("naturerune").iter().all(|shop| shop.shop != "magearena_runeshop" && shop.shop != "magicguildshop"));
+    }
+
+    /// Lot 8 review: the value falls by the keeper's own `shop_delta`
+    /// (`shop_haggle.json`: Horvik 20, Noterazzo 30), never 30 for all:
+    /// Horvik's tenth mithril platebody is worth more than it read.
+    #[test]
+    fn the_floor_reads_each_keepers_delta() {
+        let horvik = crate::shops::shop_list().iter().find(|shop| shop.name == "armourshop").expect("Horvik's shop");
+        let multiplier = horvik.keepers.iter().filter_map(|keeper| keeper.buy_multiplier).max().expect("buy multiplier");
+        assert_eq!(crate::shop_buy::keeper_haggle("horvik_the_armourer"), Some(20));
+        assert_eq!(unit_value_floor("armourshop", "mithril_platebody", 9), Some(calc_shop_value(5200, 20, multiplier, 8)), "Horvik (base stock 1): delta 20");
+        assert_eq!(unit_value_floor("taxfree", "mithril_platebody", 9), Some(calc_shop_value(5200, 30, 600, 9)), "Noterazzo: delta 30");
+    }
+
+    /// Engine `World.ts` (inv cleanup each tick): an object over its base
+    /// stock loses one unit every `stockrate` ticks of its listed entry,
+    /// an object a general store does not list one every
+    /// `INV_STOCKRATE` (100) ticks. Live 2026-11-19 taxfree (Bandit
+    /// Camp, buy multiplier 600, delta 30): mithril platebodies (cost
+    /// 5200) sold by the fleet 10-13 at a time; a bot arriving right
+    /// after one of them found its 1212-coin minimum out of reach.
+    #[test]
+    fn the_likely_stock_is_the_fleet_sales_decayed_by_the_restock() {
+        assert_eq!(stock_drift_ticks("taxfree", "mithril_platebody"), Some(UNLISTED_STOCK_RATE), "unlisted in a general store");
+        assert_eq!(stock_drift_ticks("taxfree", "hammer"), Some(100), "its listed rate");
+        assert_eq!(likely_held("taxfree", "mithril_platebody", &[]), 0, "no sale: the base stock (none)");
+        assert_eq!(likely_held("taxfree", "mithril_platebody", &[(20, 300)]), 17, "20 sold 300 ticks ago, 3 gone since");
+        assert_eq!(likely_held("taxfree", "mithril_platebody", &[(12, 1500), (12, 300)]), 9, "the first 12 gone before the second sale, 3 of it since");
+        assert_eq!(likely_held("taxfree", "mithril_platebody", &[(12, 300), (12, 1500)]), 9, "any order");
+        assert_eq!(likely_held("taxfree", "mithril_platebody", &[(20, 5000)]), 0, "fully restocked down");
+        assert_eq!(likely_held("taxfree", "hammer", &[(4, 100)]), 8, "base 5, 4 sold, one gone");
+        let fresh = likely_unit_value("taxfree", "mithril_platebody", &[(13, 0)]).expect("buys it");
+        assert!(fresh < 1212, "13 held pays {fresh}: no trip for a 1212 minimum");
+        assert_eq!(likely_unit_value("taxfree", "mithril_platebody", &[]), Some(3120), "base: 600 x 5200 / 1000");
+        assert!(likely_unit_value("taxfree", "mithril_platebody", &[(13, 1300)]).is_some_and(|value| value >= 1212), "decayed back under 13");
     }
 }

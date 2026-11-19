@@ -20,6 +20,7 @@ fn bot(account: &str, seed: u64, levels: &[(&str, u8)]) -> FleetBot {
         market_affinity: 0.5,
         seed,
         kind: None,
+        market_maker: false,
     }
 }
 
@@ -74,14 +75,16 @@ fn beyond_coverage_draws_vary_and_follow_demand() {
         seen.insert(draw_kind(&bot("x", seed * 104_729 + 3, &[]), &[], &[], &[]).0);
     }
     assert!(seen.len() >= 10, "random spread over the catalogue, got {seen:?}");
-    let demand = kind_weights(&[DemandItem { item: "bronze_platebody".to_string(), weight: 5000.0, unmet: 20, margin: Some(10.0) }], &[]);
+    let demand = kind_weights(&[DemandItem { asked: false, item: "bronze_platebody".to_string(), weight: 5000.0, unmet: 20, margin: Some(10.0) }], &[]);
     let smith = demand.iter().find(|row| row.kind == "smith").expect("smith weight");
     assert!(smith.weight >= 2.0 && smith.top_item.as_deref() == Some("bronze_platebody"), "{smith:?}");
     let smiths = (0..400u64).filter(|seed| draw_kind(&bot("x", seed * 7_919 + 1, &[]), &[], &demand, &[]).0 == "smith").count();
     let plain = (0..400u64).filter(|seed| draw_kind(&bot("x", seed * 7_919 + 1, &[]), &[], &[], &[]).0 == "smith").count();
     assert!(smiths > plain, "open bids tilt the draw: {smiths} vs {plain}");
     let (_, why) = (0..400u64).map(|seed| draw_kind(&bot("x", seed * 7_919 + 1, &[]), &[], &demand, &[])).find(|(kind, _)| kind == "smith").expect("a smith");
-    assert_eq!(why, "demand:bronze_platebody");
+    assert_eq!(why, "need:bronze_platebody", "need-led (D3)");
+    let exempt = (0..400u64).map(|seed| draw_kind(&bot("Zezima", seed * 7_919 + 1, &[]), &[], &demand, &[])).find(|(kind, _)| kind == "smith").expect("a smith");
+    assert_eq!(exempt.1, "demand:bronze_platebody", "level-led");
 }
 
 /// « Devenir forgeron parce que l'adamant se vend » (2026-11-14): open
@@ -90,7 +93,7 @@ fn beyond_coverage_draws_vary_and_follow_demand() {
 /// the bars); a bid whose known margin is a loss pulls nobody.
 #[test]
 fn out_of_reach_demand_calls_for_smiths_and_miners() {
-    let wanted = |item: &str, weight: f64, margin: Option<f64>| DemandItem { item: item.to_string(), weight, unmet: 5, margin };
+    let wanted = |item: &str, weight: f64, margin: Option<f64>| DemandItem { asked: false, item: item.to_string(), weight, unmet: 5, margin };
     let demand = kind_weights(&[wanted("adamant_platebody", 2900.0 * 5.0, Some(800.0)), wanted("raw_shrimp", 10.0, Some(2.0))], &[]);
     let weight = |kind: &str| demand.iter().find(|row| row.kind == kind).map(|row| row.weight).unwrap_or(0.0);
     assert!(weight("smith") >= 1.9, "{demand:?}");
@@ -121,11 +124,12 @@ fn melee_is_one_group() {
     assert!(skills.contains("attack") && skills.contains("strength") && skills.contains("defence"), "{skills:?}");
 }
 
-/// Past coverage the draw is random (user decision 2026-11-13: "au-delà
+/// Level-led accounts (D3 exceptions, `LEVEL_LED_ACCOUNTS`): past
+/// coverage the draw is random (user decision 2026-11-13: "au-delà
 /// aléatoire"), tilted toward a bot's strong group but never fixed by it.
 #[test]
 fn existing_levels_tilt_but_never_fix_the_draw() {
-    let frank = bot("frank_lane", 11, &[("woodcutting", 64), ("fishing", 12), ("attack", 10), ("mining", 8)]);
+    let frank = bot("Zezima", 11, &[("woodcutting", 64), ("fishing", 12), ("attack", 10), ("mining", 8)]);
     assert!(fit("woodcutter", &|skill| frank.level(skill)) > 50.0);
     let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for seed in 0..200u64 {
@@ -144,11 +148,11 @@ fn existing_levels_tilt_but_never_fix_the_draw() {
     // In a fleet pass, the best-fitting bot takes the matching gap.
     let mut fleet: Vec<FleetBot> = (0..14).map(|index| bot(&format!("b{index:02}"), index as u64 + 1, &[])).collect();
     fleet.push(frank.clone());
-    fleet.push(bot("smithy", 99, &[("smithing", 40), ("mining", 35)]));
+    fleet.push(bot("Yogosun", 99, &[("smithing", 40), ("mining", 35)]));
     let assigned = assign_fleet(&fleet, &[]);
     let assigned_to = |account: &str| assigned.iter().find(|row| row.account == account).map(|row| (row.kind.clone(), row.why.clone()));
-    assert_eq!(assigned_to("frank_lane"), Some(("woodcutter".to_string(), "coverage:woodcutting".to_string())));
-    assert_eq!(assigned_to("smithy").map(|(kind, _)| kind), Some("smith".to_string()));
+    assert_eq!(assigned_to("Zezima"), Some(("woodcutter".to_string(), "coverage:woodcutting".to_string())));
+    assert_eq!(assigned_to("Yogosun").map(|(kind, _)| kind), Some("smith".to_string()));
     // Milestones skip the rungs a high-level bot is far past.
     let ambition = new_ambition("woodcutter", "coverage:woodcutting", &BotNow { level_of: &|skill| frank.level(skill), coins: 0, held: &|_| 0 }, 11, &[], ZERO).expect("woodcutter");
     let first = &ambition.milestones[0];
@@ -260,9 +264,9 @@ fn an_unworkable_milestone_hands_over_to_the_next() {
     let legs: Vec<String> = crate::obtain_legs::production_legs(&item).into_iter().map(|leg| leg.method).collect();
     assert!(!legs.is_empty(), "bronze bars are made");
     let ambition = life.ambition.as_ref().expect("smith");
-    let first = crate::ambition::next_feasible_milestone(ambition, &[], &|_| false).expect("open");
+    let first = crate::ambition::next_feasible_milestone(ambition, &[], &|_| false, &[]).expect("open");
     assert_eq!(first.id, "m_quota", "workable: drawn first");
-    let next = crate::ambition::next_feasible_milestone(ambition, &[], &|method| legs.iter().any(|leg| leg == method)).expect("the next one");
+    let next = crate::ambition::next_feasible_milestone(ambition, &[], &|method| legs.iter().any(|leg| leg == method), &[]).expect("the next one");
     assert_ne!(next.id, "m_quota", "every leg quarantined: the next milestone");
     let sick_legs = legs.clone();
     let (goal, origin) = crate::goals::draw_goal_origin_with(&life, &|_| 1, &|_| 0, &|method| sick_legs.iter().any(|leg| leg == method)).expect("a goal");
@@ -308,7 +312,7 @@ fn refresh_materializes_and_achieves() {
 /// quantity, even when the bot must train first.
 #[test]
 fn open_bids_become_demand_milestones() {
-    let demand = vec![DemandItem { item: "bronze_platebody".to_string(), weight: 900.0, unmet: 12, margin: Some(10.0) }];
+    let demand = vec![DemandItem { asked: false, item: "bronze_platebody".to_string(), weight: 900.0, unmet: 12, margin: Some(10.0) }];
     let mut ambition = new_ambition("smith", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 5, &[], ZERO).expect("smith");
     refresh(&mut ambition, &BotNow { level_of: &levels(&[("smithing", 9)]), coins: 0, held: &|_| 0 }, 5, &demand);
     let next = next_milestone(&ambition, &[]).expect("open");
@@ -434,7 +438,7 @@ fn a_kind_serves_the_bids_its_own_skills_make() {
     assert_eq!(crate::ambition_catalog::servable("smith", "steel_bar").map(|(skill, _)| skill), Some("smithing".to_string()));
     assert_eq!(crate::ambition_catalog::servable("mage", "amulet_of_magic"), None);
     assert_eq!(crate::ambition_catalog::servable("warrior", "steel_bar"), None);
-    let bid = vec![DemandItem { item: "steel_bar".to_string(), weight: 900.0, unmet: 40, margin: Some(120.0) }];
+    let bid = vec![DemandItem { asked: false, item: "steel_bar".to_string(), weight: 900.0, unmet: 40, margin: Some(120.0) }];
     let smith_levels = [("smithing", 35u8), ("mining", 40u8)];
     let level_of = levels(&smith_levels);
     let mut smith = new_ambition("smith", "random", &BotNow { level_of: &level_of, coins: 0, held: &|_| 0 }, 3, &[], ZERO).expect("smith");

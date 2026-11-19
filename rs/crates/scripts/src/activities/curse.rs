@@ -14,7 +14,10 @@
 //! - a cursed foe retaliates (`npc_retaliate`): in a single-way camp no
 //!   other foe takes a cast while it attacks ("I'm already under
 //!   attack!"), so the caster finishes a lowered aggressor in melee and
-//!   casts again on one that splashed;
+//!   casts again on one that splashed; an aggressor it does not see
+//!   holds every cast for the 8-tick window (`player_in_combat_check`),
+//!   a wait that spends no pick; an aggressor whose cast went unanswered
+//!   keeps its ban like any foe;
 //! - "Someone else is fighting that." skips a foe held by another player.
 //!
 //! Process: poste camp de combat · action lancer · interface sort ·
@@ -27,10 +30,10 @@ use lifescape_sdk::Bot;
 
 pub use crate::kit::curse_camp::{
     all_taken, choose_step, curse_refusal, CastBudget, CastSpent, CurseFoes, CurseRefusal, CurseStep, CAST_WAIT_TICKS, CURSE_LAND_TICKS,
-    FINISH_TICKS, FOE_RADIUS, LOWERED_BAN_TICKS, PICKS_PER_CAST, TAKEN_BAN_TICKS,
+    FINISH_TICKS, FOE_RADIUS, LOWERED_BAN_TICKS, PICKS_PER_CAST, TAKEN_BAN_TICKS, UNDER_ATTACK_HOLD_TICKS,
 };
 use crate::kit::magic::{spell_com, wield_staff_for};
-use crate::kit::spell_load::{run_casts, SpellLoad};
+use crate::kit::spell_load::{run_cast_steps, CastOutcome, SpellLoad};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
@@ -105,14 +108,29 @@ fn reach_camp(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot) -> Resu
     Ok(())
 }
 
-/// One cast that paid its XP (the unit `run_casts` counts).
-fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: &str, foes: &mut CurseFoes) -> Result<(), ScriptError> {
+/// One cast that paid its XP (the unit `run_cast_steps` counts), or a
+/// refill when the pack funds no cast any more (a market pause banked
+/// the runes: never a cast the server answers "You do not have enough").
+fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: &str, foes: &mut CurseFoes, load: &SpellLoad) -> Result<CastOutcome, ScriptError> {
     let com = spell_com(bot, spell)?;
     let names: Vec<&str> = spot.npc_names.to_vec();
     let mut budget = CastBudget::new(bot.world.ticks);
+    let mut pauses_seen = bot.pauses_done;
+    // Set by a pause: the next walk back to the camp restarts the bound
+    // (only that one, never a chase inside the camp).
+    let mut returning = false;
     let spent = loop {
         check_events(bot)?;
         let now = bot.world.ticks;
+        // A market pause (Varrock square and back) is no camp wait.
+        if crate::kit::site::paused_since(pauses_seen, bot.pauses_done) {
+            pauses_seen = bot.pauses_done;
+            budget.restart(now);
+            returning = true;
+        }
+        if load.pack_casts(bot) == 0 {
+            return Ok(CastOutcome::Refill);
+        }
         let mut candidates = bot.npcs_named(&names);
         // Taken by another caster: the ones our own casts lowered aside.
         let by_others = candidates.iter().filter(|(slot, _, _)| !foes.is_banned(*slot, now) && taken_foe(bot, *slot, spell)).count();
@@ -131,7 +149,14 @@ fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: 
         let slot = match step {
             CurseStep::Search => {
                 let before = bot.world.ticks;
+                let from = (bot.world.x, bot.world.z);
                 reach_camp(bot, spot)?;
+                // The walk back after a pause restarts the bound at the
+                // camp.
+                if returning && (bot.world.x - from.0).abs().max((bot.world.z - from.1).abs()) > FOE_RADIUS {
+                    budget.restart(bot.world.ticks);
+                    returning = false;
+                }
                 // The tick bound only ends a loop whose ticks move: an
                 // instant walk refusal still waits one tick.
                 if bot.world.ticks == before {
@@ -143,10 +168,15 @@ fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: 
                 finish(bot, slot)?;
                 continue;
             }
+            CurseStep::Wait => {
+                bot.pump(1)?;
+                continue;
+            }
             CurseStep::Cast(slot) => slot,
         };
         let xp_before = magic_xp(bot);
         let seen = bot.world.messages.len();
+        let pauses_at_cast = bot.pauses_done;
         bot.op_npc_t(slot, com)?;
         let deadline = bot.world.ticks + CURSE_LAND_TICKS;
         let mut refusal = None;
@@ -156,16 +186,20 @@ fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: 
                 // Landed or splashed: XP paid. A landed curse lowers the
                 // foe; a second cast on it would be refused.
                 foes.ban(slot, bot.world.ticks + LOWERED_BAN_TICKS);
-                return Ok(());
+                return Ok(CastOutcome::Cast);
             }
             refusal = bot.world.messages.get(seen..).unwrap_or(&[]).iter().find_map(|line| curse_refusal(line));
+        }
+        // A pause in the wait took us away: no verdict on the foe.
+        if crate::kit::site::paused_since(pauses_at_cast, bot.pauses_done) {
+            continue;
         }
         budget.refused();
         let now = bot.world.ticks;
         match refusal {
             Some(CurseRefusal::Lowered) => foes.mark_lowered(slot, now),
             Some(CurseRefusal::Taken) | None => foes.ban(slot, now + TAKEN_BAN_TICKS),
-            Some(CurseRefusal::UnderAttack) => {}
+            Some(CurseRefusal::UnderAttack) => foes.under_attack(now),
         }
     };
     // Every foe already weakened or under attack while other players work
@@ -204,7 +238,7 @@ pub fn run_curse(bot: &mut Bot, args: &[String]) -> ScriptResult {
     wield_staff_for(bot, &load.runes)?;
     bot.log(&format!("curse {spell} on {} (magic {})", spot.key, learn_level(bot, MAGIC_STAT, 1)));
     let mut foes = CurseFoes::default();
-    let (done, stop) = run_casts(bot, &spec, &load, &keep, |cast_bot| curse_once(cast_bot, &spot, &spell, &mut foes))?;
+    let (done, stop) = run_cast_steps(bot, &spec, &load, &keep, |cast_bot| curse_once(cast_bot, &spot, &spell, &mut foes, &load))?;
     bot.log(&format!("ok {spell} x{done}"));
     stop.map_or(Ok(0), crate::kit::cycle::exit_code)
 }

@@ -708,3 +708,57 @@ cours) : le besoin nu suit la voie usuelle.
   même moins que voulu, ne sont plus un échec (`shop_bought_any` ; 197
   « run returned 1 », 43 nœuds abandonnés) ; le nœud se relance pour le
   reste. Rien acheté reste un échec typé.
+
+## Reprise après une livraison, malédictions, tours de la guilde (lot 8, 2026-11-19)
+
+- Livraison du marché en pause : depuis le 2026-11-19 elle laisse le bot
+  sur la place de Varrock, le sac banqué sauf les outils, et la tâche
+  reprend de là. Un script « une passe » (prendre la marchandise, marcher
+  au site, agir une fois) relit donc le compteur de pauses closes
+  (`Bot::pauses_done`) : `kit::site::pass_leg` (pur) donne l'étape
+  suivante — `Load` (première fois, ou une pause depuis la prise : le
+  sac est banqué), `Walk` (hors du site, `within_site`, rayon
+  `SITE_RADIUS`, une seule marche par charge : arrivé court du site —
+  case la plus proche, gardien à l'étage comme Scavvo — on agit de là
+  comme avant, jamais une marche sans fin), `Act` (sur place). Au plus
+  `PASS_PAUSE_RESTARTS` (2) reprises, comme les trajets du SDK ; une
+  charge qui a produit remet le compteur à zéro. Appliqué à :
+  - vente au marchand (`market cleanup --sale-shop`,
+    `market_shop_sell::run_shop_sale`) : lots repris à la banque (seules
+    les unités manquantes), retour au gardien ; une pause pendant la
+    vente elle-même reprend avec ce qui reste (un paquet coupé par une
+    pause ne compte rien, `kit::shop::batch_sold`) ; live alice_swift /
+    alice_knight « trade with noterazzo failed at (0, 3185, 3436) » ;
+  - achat au marchand (`market shopbuy`) : pièces (+ péage armé) puis
+    gardien ; live lara_lane « You don't have enough coins », « trade
+    gave no emerald » ;
+  - tannage (`kit::tan::run_tanning`), achat par dialogue
+    (`dialogue_buy`), vin de Zamorak (`telegrab_wine`) : une charge vidée
+    par une pause est reprise (`kit::site::reload_after_pause`) au lieu
+    d'un échec ou d'un `Blocked{coins}` pour des pièces banquées.
+  Vérifiés sans changement : quêtes (objets gardés en sac par
+  `hold_in_pack`, chaque étape marche jusqu'au PNJ par `go_to_npc`),
+  scripts à charges (`kit::cycle::run`, chaque charge repasse par la
+  banque et le site). Hors périmètre, constaté : des scripts à charges
+  échouent aussi juste après une reprise (pêche, minage, fonte, tonte :
+  la charge en cours est banquée), à traiter à part.
+- Malédiction (`curse`) : « I'm already under attack! » veut dire qu'un
+  monstre nous a frappés dans les 8 derniers ticks (`player_combat.rs2`
+  `player_in_combat_check`) ; si on ne le voit pas, aucun lancer pendant
+  `UNDER_ATTACK_HOLD_TICKS` (8), une attente qui ne coûte pas de
+  « pick » (avant : 12 refus en 12 ticks sur la même vache). Un agresseur
+  dont le lancer est resté sans réponse garde son exclusion comme les
+  autres (avant : 12 lancers muets sur la vache 405 de River Lum). Une
+  pause du marché, puis la marche de retour au camp qui la suit (elle
+  seule, jamais une poursuite dans le camp), relancent la borne de 270
+  ticks (`CastBudget::restart`) ; une pause pendant l'attente d'un sort
+  ne juge pas la cible. La pause banque les runes : sac sans lancer ⇒
+  le pas de sort rend `CastOutcome::Refill` (`kit::spell_load::
+  run_cast_steps`), aucune unité comptée, la boucle reprend les runes à
+  la banque (avant : « You do not have enough … Runes », vache exclue,
+  12 refus).
+- Poterie : les quatre tours de la guilde des artisans (2935..2938,
+  3289..3292, cruche comprise) sont dans la pièce fermée par la porte de la guilde
+  (artisanat 40 + tablier brun porté) : `gamedata::access` les déclare
+  derrière la porte, le planificateur choisit Barbarian Village sous
+  niveau 40 (avant : « shaping consumed nothing » à la porte, 65 fois).
