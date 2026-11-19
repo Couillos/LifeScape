@@ -991,16 +991,23 @@ s'entretenait. Désormais le poids d'un type = son BESOIN seul
 trait n'est pas un niveau). Besoin = part de la MASSE des offres d'achat
 ouvertes qu'il sert (0..1), + part du SURPLUS qu'il consomme (débouché,
 demande utilisateur 2026-11-19 « la prière, l'allumage de feux, la
-magie, le tir à distance font disparaître des objets » : `compress(Σ
-unités au repos sur les annonces des objets que son entraînement
-consomme)` ÷ somme de tous les types, `compress` = ln(1 + ln(1 + x)) ;
-objets consommés lus des méthodes d'entraînement du catalogue des guides,
-leurs flux du prior au niveau d'ouverture sous `work_rate::
-CONSUMED_CAUSES` : `ambition_catalog::consumed_by`, jamais une liste ;
-annonces des teneurs exclues, `market_demand::surplus_from` ; les jours
-de stock invendu du lot 0 ne sont pas lus : une lecture de 24 h du
-magasin par tirage, et la double compression ne garde que l'ordre de
-grandeur), le tout × (1 + part de gain : meilleur profit du guide ÷
+magie, le tir à distance font disparaître des objets » ; relecture
+tour 2 : en FENÊTRES D'ENTRAÎNEMENT, `ambition_catalog::outlet_windows` =
+Σ par objet consommé de (unités au repos sur les annonces ÷ unités que
+la méthode la plus rapide du type en brûle par 6000 ticks), puis ln(1 +
+fenêtres) ÷ somme de tous les types ; objets et cadences lus des
+méthodes d'entraînement du catalogue des guides, leurs flux du prior au
+niveau d'ouverture sous `work_rate::CONSUMED_CAUSES` :
+`ambition_catalog::consumption_of`, jamais une liste ; une méthode dominée par une autre voie (`dominated` : les 8 sorts de fonte, « ça coûte rien de faire fondre aux fours ») ne compte pas, le minerai en surplus appelle des forgerons, jamais des mages ; annonces des
+teneurs exclues, `market_demand::surplus_from`. Une seule compression,
+ln(1 + fenêtres), parce que les stocks couvrent quatre ordres de
+grandeur (live : 1 864 os = 0,7 fenêtre d'enterrement, 637 000 plumes =
+2 600 fenêtres de pêche à la mouche) : en linéaire un seul objet
+posséderait tout le signal ; additionner des unités brutes (plumes +
+plaques) n'avait pas de sens, des fenêtres de travail s'additionnent.
+Les jours de stock invendu du lot 0 ne sont pas lus (une lecture de
+24 h du magasin par tirage ; les fenêtres disent déjà combien de travail
+la pile représente), le tout × (1 + part de gain : meilleur profit du guide ÷
 somme des profits de la flotte, linéaire, lu une fois). Offres et
 surplus pèsent chacun 1 sur la flotte ; le gain n'INCLINE que ce qui est
 demandé ou en surplus (×1 à ×2) : un métier ni demandé ni nourri de

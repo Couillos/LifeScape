@@ -275,12 +275,13 @@ fn the_gain_tilts_the_need_but_never_creates_it() {
     assert!(need_of(&demanded, "crafter") > 0.0 && need_of(&demanded, "mage") == 0.0, "{demanded:?}");
     // Two kinds called for alike: the one that earns more leans ahead,
     // by its linear share of the gain (not flattened).
-    let both = crate::ambition_catalog::kind_weights_with(&[], &profits, &[("logs".to_string(), 5000.0), ("bones".to_string(), 5000.0)]);
+    let piles = [("logs".to_string(), 5000.0), ("bones".to_string(), 5000.0)];
+    let both = crate::ambition_catalog::kind_weights_with(&[], &profits, &piles);
     let (firemaker, priest) = (need_of(&both, "firemaker"), need_of(&both, "priest"));
-    assert!(firemaker > 0.0 && (firemaker - priest).abs() < 1e-9, "no gain for either: equal outlets: {both:?}");
+    assert!(firemaker > 0.0 && priest > 0.0, "no gain for either: their outlets alone: {both:?}");
     let earning = [("priest".to_string(), 9000.0), ("firemaker".to_string(), 1000.0)];
-    let tilted = crate::ambition_catalog::kind_weights_with(&[], &earning, &[("logs".to_string(), 5000.0), ("bones".to_string(), 5000.0)]);
-    let ratio = need_of(&tilted, "priest") / need_of(&tilted, "firemaker");
+    let tilted = crate::ambition_catalog::kind_weights_with(&[], &earning, &piles);
+    let ratio = (need_of(&tilted, "priest") / need_of(&tilted, "firemaker")) / (priest / firemaker);
     assert!((ratio - 1.9 / 1.1).abs() < 1e-9, "× (1 + 0.9) against × (1 + 0.1): {ratio}");
     let weight = |kind: &str| demanded.iter().find(|row| row.kind == kind).map(|row| row.weight).unwrap_or(0.0);
     assert!((weight("mage") - 2.0).abs() < 1e-9 && (weight("smith") - (1.0 + 10_419.0 / 268_593.0)).abs() < 1e-9, "level-led weight unchanged: {demanded:?}");
@@ -323,5 +324,42 @@ fn a_surplus_calls_for_the_kind_that_consumes_it() {
     assert!(need_of(&bones, "priest") > 0.0, "{bones:?}");
     assert_eq!(need_of(&bones, "firemaker"), 0.0, "nobody else burns bones");
     let both = crate::ambition_catalog::kind_weights_with(&[], &[], &[("bones".to_string(), 20.0), ("logs".to_string(), 200_000.0)]);
-    assert!(need_of(&both, "firemaker") > need_of(&both, "priest"), "more surplus, more need (compressed): {both:?}");
+    assert!(need_of(&both, "firemaker") > need_of(&both, "priest"), "more surplus, more need: {both:?}");
+}
+
+/// The user ruled (2026-11-19, « ça coûte rien de faire fondre aux
+/// fours ») that superheat is dominated by the furnace: a dominated
+/// method's inputs are no outlet of its kind (general rule, `dominated`).
+/// Ore piling up calls for smiths, never for mages.
+#[test]
+fn ore_in_surplus_calls_for_smiths_never_mages() {
+    let mage = crate::ambition_catalog::consumed_by("mage");
+    assert!(!mage.iter().any(|item| item.ends_with("_ore") || item == "coal"), "superheat is dominated: {mage:?}");
+    let ore = crate::ambition_catalog::kind_weights_with(&[], &[], &[("iron_ore".to_string(), 42_000.0)]);
+    assert!(need_of(&ore, "smith") > 0.0, "{ore:?}");
+    assert_eq!(need_of(&ore, "mage"), 0.0, "{ore:?}");
+    assert!(crate::ambition_catalog::consumed_by("smith").iter().any(|item| item == "iron_ore"), "the furnace keeps its ore");
+}
+
+/// Relecture tour 2 (2026-11-19): 1 256 bones read 0.094 and 639 000
+/// feathers 0.120, one compression of the RAW unit sum (plates and
+/// feathers added together). The outlet counts each object in TRAINING
+/// WINDOWS (units on the asks ÷ what the kind's fastest method burns per
+/// 6000 ticks, the same prior flows as `consumed_by`), summed per kind,
+/// then ln(1 + windows): 1 000 bones are under one window of burying,
+/// 600 000 feathers hundreds of windows of fly fishing.
+#[test]
+fn the_outlet_counts_training_windows_not_raw_units() {
+    let rate = |kind: &str, item: &str| {
+        crate::ambition_catalog::consumption_of(kind).into_iter().find(|(known, _)| known == item).map(|(_, per_6000)| per_6000).expect("a consumption rate")
+    };
+    let (bones_rate, feather_rate) = (rate("priest", "bones"), rate("fisher", "feather"));
+    assert!(bones_rate > 0.0 && feather_rate > 0.0);
+    let piles = [("bones".to_string(), 1000.0), ("feather".to_string(), 600_000.0)];
+    let demand = crate::ambition_catalog::kind_weights_with(&[], &[], &piles);
+    let (priest, fisher) = (need_of(&demand, "priest"), need_of(&demand, "fisher"));
+    let windows = (1.0 + 1000.0 / bones_rate).ln() / (1.0 + 600_000.0 / feather_rate).ln();
+    assert!((priest / fisher - windows).abs() < 1e-9, "shares follow the windows: {} vs {windows}", priest / fisher);
+    let raw = crate::ambition_catalog::compress(1000.0) / crate::ambition_catalog::compress(600_000.0);
+    assert!(priest / fisher < raw * 0.5, "never the raw-unit ratio {raw}: {}", priest / fisher);
 }

@@ -376,33 +376,69 @@ pub fn kind_weights(items: &[DemandItem], kind_profits: &[(String, f64)]) -> Vec
     kind_weights_with(items, kind_profits, &[])
 }
 
-/// Objects a kind's training consumes, read from the guide catalogue: every
-/// training method whose band skill falls to the kind (`activity::band_skill`,
-/// `kind_for_skill`), its game prior's flows at its gate level
-/// (`work_rate::prior_rate`) consumed under `work_rate::CONSUMED_CAUSES`
-/// (inputs, runes, ammunition, bait, supplies): logs for the firemaker,
-/// bones for the priest, runes and alched objects for the mage, arrows for
-/// the ranger, raw fish for the cook, ore and bars for the smith, essence
-/// for the runecrafter. Never a hand list; memoised (static game data).
-pub fn consumed_by(kind: &str) -> Vec<String> {
-    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<String>>>> = std::sync::OnceLock::new();
+/// What a kind's training consumes, with how fast: (object, units per
+/// 6000 ticks of the kind's FASTEST method burning it), read from the
+/// guide catalogue: every training method whose band skill falls to the
+/// kind (`activity::band_skill`, `kind_for_skill`) and that no other way
+/// dominates (`dominated_method`: superheat), its game prior's flows
+/// at its gate level (`work_rate::prior_rate`) consumed under
+/// `work_rate::CONSUMED_CAUSES` (inputs, runes, ammunition, bait,
+/// supplies): logs for the firemaker, bones for the priest, runes and
+/// alched objects for the mage, arrows for the ranger, raw fish for the
+/// cook, ore and bars for the smith, essence for the runecrafter, feathers
+/// and bait for the fisher. Never a hand list; memoised (static game
+/// data), sorted by object.
+pub fn consumption_of(kind: &str) -> Vec<(String, f64)> {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<(String, f64)>>>> = std::sync::OnceLock::new();
     crate::guide_methods::memo(&MEMO, kind.to_string(), || {
-        let mut out: Vec<String> = Vec::new();
+        let mut out: Vec<(String, f64)> = Vec::new();
         for entry in crate::guide_methods::catalogue() {
             let Some(skill) = crate::activity::band_skill(&entry.method, &entry.style) else { continue };
-            if kind_for_skill(&skill) != Some(kind) {
+            if kind_for_skill(&skill) != Some(kind) || dominated_method(&entry.method) {
                 continue;
             }
             let Some(rate) = crate::work_rate::prior_rate(&entry.method, crate::guide_methods::gate_level(&entry.method)) else { continue };
             for (item, cause, quantity) in &rate.flows_6000 {
-                if *quantity < 0.0 && item != "coins" && crate::work_rate::CONSUMED_CAUSES.contains(&cause.as_str()) && !out.contains(item) {
-                    out.push(item.clone());
+                if *quantity >= 0.0 || item == "coins" || !crate::work_rate::CONSUMED_CAUSES.contains(&cause.as_str()) {
+                    continue;
+                }
+                match out.iter_mut().find(|(known, _)| known == item) {
+                    Some(known) => known.1 = known.1.max(-quantity),
+                    None => out.push((item.clone(), -quantity)),
                 }
             }
         }
-        out.sort();
+        out.sort_by(|left, right| left.0.cmp(&right.0));
         out
     })
+}
+
+/// True when a training method is a production leg another way to the
+/// same object dominates (`dominated`: superheat by the furnace, user
+/// 2026-11-19 « ça coûte rien de faire fondre aux fours »): its inputs are
+/// no outlet of its kind (the ore piling up calls for smiths, never mages).
+fn dominated_method(method: &str) -> bool {
+    let Some((product, _)) = crate::method_way::method_way(method) else { return false };
+    let legs = crate::obtain_legs::production_legs(&product);
+    legs.iter().find(|leg| leg.method == method).is_some_and(|leg| dominated(leg, &legs))
+}
+
+/// Objects a kind's training consumes (`consumption_of`, names only).
+pub fn consumed_by(kind: &str) -> Vec<String> {
+    consumption_of(kind).into_iter().map(|(item, _)| item).collect()
+}
+
+/// Training windows of surplus a kind can burn: Σ over the objects its
+/// training consumes of (units resting on the asks ÷ units its fastest
+/// method burns per 6000 ticks). Windows of different objects add up (a
+/// window is a window of work); raw units never do (relecture tour 2:
+/// feathers and plates summed as units made no sense).
+pub fn outlet_windows(kind: &str, surplus: &[(String, f64)]) -> f64 {
+    consumption_of(kind)
+        .iter()
+        .filter(|(_, per_6000)| *per_6000 > 0.0)
+        .map(|(item, per_6000)| surplus.iter().filter(|(known, _)| known == item).map(|(_, units)| units.max(0.0)).sum::<f64>() / per_6000)
+        .sum()
 }
 
 /// Demand weight per drawable kind.
@@ -416,10 +452,11 @@ pub fn consumed_by(kind: &str) -> Vec<String> {
 /// - shortfall: the share of the open-bid MASS it serves (`need_mass`,
 ///   robust to one outlier, doubled without asks; a loss pulls nobody);
 /// - outlet (user 2026-11-19, « la prière, l'allumage de feux, la magie,
-///   le tir à distance font disparaître des objets »): the compressed
-///   abundance of what its training consumes, `compress(Σ units resting on
-///   the asks of consumed_by(kind))` over the sum of every kind's (`surplus`:
-///   (object, units on the asks), market makers' quotes left out);
+///   le tir à distance font disparaître des objets »): the surplus it can
+///   burn in TRAINING WINDOWS (`outlet_windows`: per object, units on the
+///   asks ÷ what its fastest method burns per 6000 ticks, summed),
+///   ln(1 + windows), over the sum of every kind's (`surplus`: (object,
+///   units on the asks), market makers' quotes left out);
 /// - gain share: its best guide profit over the fleet's summed profits,
 ///   linear, read once (the profits come bounded by what can really be
 ///   bought, `brain_d17::kind_profits`: no outlier left to compress).
@@ -436,10 +473,12 @@ pub fn kind_weights_with(items: &[DemandItem], kind_profits: &[(String, f64)], s
     let total_mass: f64 = wanted_items.iter().map(|wanted| need_mass(wanted)).sum();
     let kinds: Vec<&'static str> = specs().iter().filter(|entry| !crate::ambition::ladderless(entry.kind)).map(|entry| entry.kind).collect();
     let profit_of = |kind: &str| kind_profits.iter().filter(|(known, _)| known == kind).map(|(_, profit)| *profit).fold(0.0, f64::max);
-    let outlet_of = |kind: &str| {
-        let consumed = if surplus.is_empty() { Vec::new() } else { consumed_by(kind) };
-        compress(surplus.iter().filter(|(item, _)| consumed.contains(item)).map(|(_, units)| units.max(0.0)).sum())
-    };
+    // ONE compression, ln(1 + windows): live the backlogs span four
+    // orders of magnitude (1 256 bones under one window of burying,
+    // 639 000 feathers ~hundreds of fly fishing): linear, one object would
+    // own the whole outlet signal; ln keeps the order (more windows, more
+    // need) while every pile still counts.
+    let outlet_of = |kind: &str| if surplus.is_empty() { 0.0 } else { outlet_windows(kind, surplus).ln_1p() };
     let gains: Vec<f64> = kinds.iter().map(|kind| profit_of(kind).max(0.0)).collect();
     let outlets: Vec<f64> = kinds.iter().map(|kind| outlet_of(kind)).collect();
     let (total_gain, total_outlet) = (gains.iter().sum::<f64>(), outlets.iter().sum::<f64>());

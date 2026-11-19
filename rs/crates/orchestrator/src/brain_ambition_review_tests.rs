@@ -238,15 +238,19 @@ fn live_fleet_review_distribution() {
     let total_gain: f64 = profits.iter().map(|(_, profit)| profit.max(0.0)).sum();
     let gain_share = |kind: &str| if total_gain > 0.0 { profits.iter().filter(|(known, _)| known == kind).map(|(_, profit)| profit.max(0.0)).fold(0.0, f64::max) / total_gain } else { 0.0 };
     println!("need = (bids + outlet) x (1 + gain share)");
-    println!("{:<12} {:>7} {:>7} {:>7} {:>7}  driver / top surplus consumed", "kind", "need", "bids", "outlet", "gain");
+    println!("{:<12} {:>7} {:>7} {:>7} {:>7} {:>8}  driver / top surplus consumed (units, windows)", "kind", "need", "bids", "outlet", "gain", "windows");
     let mut rows = fleet_weights.clone();
     rows.sort_by(|left, right| right.need.total_cmp(&left.need));
     for row in &rows {
-        let consumed = lifescape_planner::ambition_catalog::consumed_by(&row.kind);
-        let mut piles: Vec<&(String, f64)> = surplus.iter().filter(|(item, _)| consumed.contains(item)).collect();
-        piles.sort_by(|left, right| right.1.total_cmp(&left.1));
-        let top: Vec<String> = piles.iter().take(3).map(|(item, units)| format!("{item} {units:.0}")).collect();
-        println!("{:<12} {:>7.3} {:>7.3} {:>7.3} {:>7.3}  {} / {}", row.kind, row.need, part(&offers, &row.kind), part(&outlets, &row.kind), gain_share(&row.kind), row.need_item.clone().unwrap_or_default(), top.join(", "));
+        let rates = lifescape_planner::ambition_catalog::consumption_of(&row.kind);
+        let mut piles: Vec<(String, f64, f64)> = rates
+            .iter()
+            .filter_map(|(item, per_6000)| surplus.iter().find(|(known, _)| known == item).map(|(_, units)| (item.clone(), *units, units / per_6000)))
+            .collect();
+        piles.sort_by(|left, right| right.2.total_cmp(&left.2));
+        let top: Vec<String> = piles.iter().take(3).map(|(item, units, windows)| format!("{item} {units:.0} u = {windows:.1} w")).collect();
+        let windows = lifescape_planner::ambition_catalog::outlet_windows(&row.kind, &surplus);
+        println!("{:<12} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>8.1}  {} / {}", row.kind, row.need, part(&offers, &row.kind), part(&outlets, &row.kind), gain_share(&row.kind), windows, row.need_item.clone().unwrap_or_default(), top.join(", "));
     }
     let mut lives: Vec<Life> = std::fs::read_dir(&lives_dir)
         .expect("lives copy")
