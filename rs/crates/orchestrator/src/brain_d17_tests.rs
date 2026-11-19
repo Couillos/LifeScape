@@ -200,6 +200,40 @@ fn kind_profits_aggregate_the_catalogue_by_kind() {
     }
 }
 
+/// Live 2026-11-19: `alch:rune_platebody` (36.2 M a window on 1 887
+/// plates of held stock nobody offers) was the mage's profit, 21 mages of
+/// 54 in the D3 review replay. A kind's profit is the row's gain over
+/// what the asks and the F2P shops really supply (`supplied_share`): 0
+/// with no plate offered, 3/1 887 of it with three on the asks.
+#[test]
+fn kind_profits_count_only_the_stock_really_offered() {
+    let casts = 1887.6;
+    let mut alch = row(Family::Recipe, "alch:rune_platebody", 36_214_820.0);
+    let line = |item: &str, cause: &str, per_6000: f64, unit_price: f64| lifescape_planner::guide_model::FlowLine {
+        item: item.to_string(),
+        cause: cause.to_string(),
+        per_6000,
+        unit_price,
+        value_6000: per_6000 * unit_price,
+        outlet: lifescape_planner::guide_model::Outlet::Market,
+        traded: true,
+        basis: lifescape_planner::guide_model::PriceBasis::Shop,
+    };
+    alch.flows = vec![line("rune_platebody", "input", -casts, 6500.0), line("coins", "product", 26_000.0 * casts, 1.0)];
+    let mut set = set_with(vec![alch], Vec::new());
+    let mage = |set: &GuideSet| kind_profits(set).into_iter().find(|(kind, _)| kind == "mage").map(|(_, profit)| profit).expect("mage");
+    // The F2P shop window of the game data (Oziach's, after Dragon
+    // Slayer: a handful a window), nothing on the asks.
+    let shop: f64 = crate::web_guides::shop_window("rune_platebody").iter().map(|(_, units, _)| *units).sum();
+    assert!(shop < 100.0, "a shop sells a handful at most: {shop}");
+    let alone = mage(&set);
+    assert!((alone - 36_214_820.0 * shop / casts).abs() < 1e-3, "only the shop's plates: {alone}");
+    set.quotes.insert("rune_platebody".to_string(), lifescape_planner::guide_model::Quote { asks: vec![(30_000.0, 3.0)], ..Default::default() });
+    let offered = mage(&set);
+    assert!((offered - 36_214_820.0 * (shop + 3.0) / casts).abs() < 1e-3, "three more on the asks: {offered}");
+    assert!(offered < 1_000_000.0, "never the 36 M window: {offered}");
+}
+
 /// One source of truth: no source file of the crate reads the old rates
 /// profit table any more.
 #[test]

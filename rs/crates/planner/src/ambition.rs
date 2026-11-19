@@ -186,6 +186,10 @@ pub struct Ambition {
     pub revisions: Vec<Revision>,
     /// Operator pin (`None`: drawn by the fleet, free to change).
     pub pin: Option<Pin>,
+    /// Rule the draw followed (`ambition_review`): `need` (decision D3),
+    /// `level` (the D3 exceptions); empty in lives drawn before the mark
+    /// (file key `draw_rule`, absent in older files).
+    pub draw_rule: String,
 }
 
 /// When a draw happens: daemon tick clock and unix seconds.
@@ -272,6 +276,7 @@ pub fn pinned_ambition(skill: &str, level: u8, now: &BotNow, seed: u64, demand: 
     }
     let mut ambition = new_ambition_extended(kind, &format!("{PIN_WHY}{skill}:{level}"), now, seed, demand, stamp)?;
     ambition.pin = Some(Pin { skill: skill.to_string(), level });
+    ambition.draw_rule = crate::ambition_review::OPERATOR_RULE.to_string();
     Ok(ambition)
 }
 
@@ -313,6 +318,7 @@ fn fresh_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[Dema
         rung: 0,
         revisions: Vec::new(),
         pin: None,
+        draw_rule: String::new(),
     };
     refresh(&mut ambition, now, seed, demand);
     Ok(ambition)
@@ -756,7 +762,10 @@ pub fn may_change(ambition: &Ambition, ticks_since: &dyn Fn(i64) -> u64) -> bool
 }
 
 /// Replace the ambition by `next`, keeping the revision trail (one entry
-/// `{tick, at, from, to, why}`) and dropping the stale goal link.
+/// `{tick, at, from, to, why}`) and dropping the stale milestone link (a
+/// side, bid or alchemy link stays: that goal runs on through the change;
+/// the brain replaces a goal the old ambition drew,
+/// `ambition_review::goal_from_earlier_ambition`).
 pub fn revise(life: &mut Life, mut next: Ambition, why: &str, stamp: Stamp) {
     let (from, mut revisions) = match life.ambition.take() {
         Some(old) => (old.kind, old.revisions),
@@ -765,7 +774,9 @@ pub fn revise(life: &mut Life, mut next: Ambition, why: &str, stamp: Stamp) {
     revisions.push(Revision { tick: stamp.tick, at_secs: stamp.secs, from, to: next.kind.clone(), why: why.to_string() });
     next.revisions = revisions;
     life.ambition = Some(next);
-    life.goal_origin = None;
+    if life.goal_origin.as_deref().is_some_and(crate::ambition_review::is_milestone_origin) {
+        life.goal_origin = None;
+    }
 }
 
 /// One-line summary for the daemon log.
@@ -821,6 +832,7 @@ pub fn ambition_to_value(ambition: &Ambition) -> Value {
                 None => Value::Null,
             },
         ),
+        ("draw_rule", str_value(&ambition.draw_rule)),
     ])
 }
 
@@ -880,6 +892,8 @@ pub fn ambition_from_value(value: &Value) -> Option<Ambition> {
             skill: skill.to_string(),
             level: value.get("pin").get("level").as_i64().unwrap_or(99).clamp(2, 99) as u8,
         }),
+        // Absent before the D3 mark (2026-11-19): drawn by the old rule.
+        draw_rule: text(value, "draw_rule"),
     })
 }
 

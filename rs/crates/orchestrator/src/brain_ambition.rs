@@ -13,8 +13,11 @@
 //! - `before_draw`: milestones read the live levels, coins and stock, a
 //!   demand milestone answers an open bid that pays (not already held);
 //!   a milestone closed here weighs an optional change; an achieved
-//!   ambition is redrawn past the throttle when another bot holds its
-//!   group, else its ladder extends.
+//!   ambition of a need-led bot is redrawn by need (D3, never extended);
+//!   an exception's or a pin's is redrawn past the throttle when another
+//!   bot holds its group, else its ladder extends.
+//! - `review_pass` (one-time D3 review) and `replace_stale_goal` (the
+//!   goal an earlier ambition drew is replaced): `ambition_review`.
 //! - `after_close`: a goal close folds into its milestone; blocked
 //!   `MILESTONE_MAX_BLOCKS` times redraws the ambition (approved policy,
 //!   logged), a market shortfall never counts a block (D3), a completed milestone may change it (optional, at most once
@@ -29,9 +32,10 @@ use std::sync::Mutex;
 use lifescape_json::Value;
 use lifescape_planner::ambition_catalog::{group_skills, primary_group, specs};
 use lifescape_planner::{
-    achieved, assign_fleet, coverage_gaps, coverage_repair, describe_ambition, draw_kind, extend_ambition, new_ambition, new_ambition_extended,
-    milestone_cool_key, on_goal_closed, on_goal_shortfall, optional_change, saturate, pinned, refresh, release_pin, revise, Ambition, BotNow, CloseOutcome, DemandItem, FleetBot, KindDemand, Life, Stamp, GROUPS,
-    MILESTONE_MAX_BLOCKS, MILESTONE_SHORTFALL_COOL_TICKS,
+    achieved, assign_fleet, coverage_gaps, coverage_repair, describe_ambition, draw_kind, extend_ambition, keeps_ladder_end, mark_rule, needs_review, new_ambition,
+    new_ambition_extended, milestone_cool_key, on_goal_closed, on_goal_shortfall, optional_change, review_slot_ticks, saturate, pinned, refresh, release_pin, revise,
+    Ambition, BotNow, CloseOutcome, DemandItem, FleetBot, KindDemand, Life, Stamp, GROUPS, MILESTONE_MAX_BLOCKS, MILESTONE_SHORTFALL_COOL_TICKS,
+    STALE_GOAL_CAUSE,
 };
 use lifescape_planner::cooldown::{cool_entry, COOL_NODE};
 
@@ -209,7 +213,12 @@ fn build(account: &str, bot: &FleetBot, now: &BotNow, first: (String, String), i
             new_ambition(&kind, &why, now, bot.seed, &inputs.items, stamp)
         };
         match made {
-            Ok(ambition) => return Some((ambition, why)),
+            Ok(mut ambition) => {
+                // The rule this draw followed (D3): `need`, or `level`
+                // for the exceptions; the one-time review reads it.
+                mark_rule(&mut ambition, bot);
+                return Some((ambition, why));
+            }
             Err(error) => {
                 crate::logln!("brain {account}: {error} ({why}), drawing again without it");
                 excluded.push(kind.clone());
@@ -287,6 +296,21 @@ fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str) {
     replace(life, live, &bot, first, &inputs, exclude, revision_why);
 }
 
+/// Redraw by need (D3 review, need-led ladder end), nothing excluded: the
+/// sole holder of its primary group keeps it (`redraw_gaps`: its group is
+/// its only gap), a redundant bot fills the fleet's open gaps first.
+fn redraw_by_need(life: &mut Life, live: &Value, revision_why: &str) {
+    let (_, _, held) = fleet_view(life);
+    let kind = life.ambition.as_ref().map(|ambition| ambition.kind.clone()).unwrap_or_default();
+    let others: Vec<&str> = held.iter().map(String::as_str).collect();
+    let gaps = lifescape_planner::redraw_gaps(&kind, &others);
+    let (items, weights) = need_demand(&life.account, &held);
+    let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
+    let first = draw_kind(&bot, &gaps, &weights, &[]);
+    let inputs = DrawInputs { items, weights, gaps };
+    replace(life, live, &bot, first, &inputs, &[], revision_why);
+}
+
 fn replace(life: &mut Life, live: &Value, bot: &FleetBot, first: (String, String), inputs: &DrawInputs, exclude: &[&str], revision_why: &str) {
     let stamp = stamp_now();
     let built = with_now(live, |now| build(&life.account, bot, now, first, inputs, exclude, stamp));
@@ -327,6 +351,15 @@ pub(crate) fn before_draw(life: &mut Life, live: &Value) {
 fn on_achieved(life: &mut Life, live: &Value) {
     let Some(ambition) = life.ambition.as_ref() else { return };
     let kind = ambition.kind.clone();
+    // D3 (user 2026-11-19): outside the exceptions and the operator pins,
+    // a ladder end never extends the same ambition (woodcutting 99 drawn
+    // past the need, « ladder done, extended (changed less than 72000
+    // ticks ago) »): it redraws by need, which may give the same kind.
+    if !keeps_ladder_end(ambition, &fleet_bot(life, Vec::new())) {
+        crate::logln!("brain {}: ambition {kind} ladder done, redrawn by need (D3: no extension outside the exceptions)", life.account);
+        redraw_by_need(life, live, "achieved");
+        return;
+    }
     let throttled = !lifescape_planner::may_change(ambition, &ticks_since);
     let (_, redundant, _) = fleet_view(life);
     // An operator pin never leaves its kind: it extends toward its level.
@@ -507,6 +540,90 @@ pub(crate) fn coverage_pass(life: &mut Life, live: &Value) -> bool {
     replace(life, live, &bot, (kind, why.clone()), &inputs, &[current.as_str()], &format!("repair:{why}"));
     life.ambition != before
 }
+
+/// Daemon clock of the one-time review: set at the first brain pass
+/// (seconds after the start), with its unix seconds: an ambition changed
+/// after it (an operator switch of the same pass, a fresh draw) is never
+/// reviewed.
+fn review_epoch() -> &'static (std::time::Instant, i64) {
+    static EPOCH: std::sync::OnceLock<(std::time::Instant, i64)> = std::sync::OnceLock::new();
+    EPOCH.get_or_init(|| (std::time::Instant::now(), now_secs()))
+}
+
+/// One-time D3 review (user 2026-11-19, « je t'avais demandé de revoir
+/// les ambitions »): an ambition a need-led bot holds without the `need`
+/// mark (drawn by the old level-led rule) and last changed before the
+/// daemon start is redrawn by need at the bot's first launch pass past its
+/// slot (`review_slot_ticks`, spread over `REVIEW_SPREAD_TICKS` after the
+/// start: never the whole fleet in one tick); a need draw made before the
+/// mark (`need`, `need:*`) is only marked. The exceptions and every
+/// operator ambition (`pinned`, `operator` mark) are never touched; the
+/// sole holder of a group keeps it (`redraw_by_need`). True when the life
+/// changed (save it).
+pub(crate) fn review_pass(life: &mut Life, live: &Value) -> bool {
+    let (epoch, started_secs) = review_epoch();
+    let elapsed = crate::brain_stuck::seconds_to_ticks(epoch.elapsed().as_secs() as i64);
+    review_at(life, live, elapsed, *started_secs)
+}
+
+fn review_at(life: &mut Life, live: &Value, elapsed_ticks: u64, started_secs: i64) -> bool {
+    let account = life.account.clone();
+    if let Some(ambition) = life.ambition.as_mut() {
+        if lifescape_planner::adopt_need_mark(ambition) {
+            crate::logln!("brain {account}: ambition {} ({}) drawn by need before the mark, marked need (D3)", ambition.kind, ambition.why);
+            return true;
+        }
+    }
+    let bot = fleet_bot(life, Vec::new());
+    let Some(ambition) = life.ambition.as_ref() else { return false };
+    let before_start = lifescape_planner::ambition::last_change_secs(ambition) < started_secs;
+    if !before_start || !needs_review(ambition, &bot) || elapsed_ticks < review_slot_ticks(&life.account) {
+        return false;
+    }
+    crate::logln!(
+        "brain {}: ambition {} ({}) drawn before the need rule (D3), redrawn by need",
+        life.account,
+        ambition.kind,
+        ambition.why
+    );
+    let before = life.ambition.clone();
+    redraw_by_need(life, live, "review:need");
+    life.ambition != before
+}
+
+/// A changed ambition replaces the goal an earlier one drew (D3,
+/// mila_wade and nina_rhodes 2026-11-19: woodcutter -> fisher at 18:24,
+/// « woodcutting 95 » still cut 2.5 h later): its nodes are abandoned
+/// (`abandon_goal_work`: the running node, market orders, gear steps and
+/// the janitor stay), the goal closes like a catalogue-dropped one
+/// (`sync_catalog`: done, no ban) and the next goal is drawn from the new
+/// ambition. Waits while a node runs (its report decides first); a side,
+/// bid or alchemy goal runs on. True when the life changed (save it).
+pub(crate) fn replace_stale_goal(life: &mut Life, live: &Value) -> bool {
+    if life.active.is_some() || !lifescape_planner::goal_from_earlier_ambition(life) {
+        return false;
+    }
+    let old = life.history.iter().rev().find(|entry| entry.node == "goal" && entry.outcome.starts_with(lifescape_planner::ambition_review::NEXT_TAG)).map(|entry| entry.outcome.clone()).unwrap_or_default();
+    let kind = life.ambition.as_ref().map(|ambition| ambition.kind.clone()).unwrap_or_default();
+    let abandoned = lifescape_planner::abandon_goal_work(life, STALE_GOAL_CAUSE);
+    lifescape_planner::normalize(life);
+    crate::logln!(
+        "brain {}: goal ({old}) drawn by an earlier ambition, replaced for the {kind} ambition; {} nodes abandoned: {}",
+        life.account,
+        abandoned.len(),
+        abandoned.join(",")
+    );
+    match crate::brain_succession::succeed_goal(life, live, false) {
+        Some(label) => crate::logln!("brain {}: next goal {label} ({kind})", life.account),
+        None => crate::logln!("brain {}: nothing drawable for the {kind} ambition yet (see the reason above)", life.account),
+    }
+    lifescape_planner::normalize(life);
+    true
+}
+
+#[cfg(test)]
+#[path = "brain_ambition_review_tests.rs"]
+mod review_tests;
 
 #[cfg(test)]
 mod tests {

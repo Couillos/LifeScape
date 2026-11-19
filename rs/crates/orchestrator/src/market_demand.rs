@@ -17,6 +17,9 @@
 //!   precomputed money guide (`brain_d17::kind_profits`: its catalogue
 //!   rows, chains included, under the kind of their band skill); none
 //!   before the first set.
+//! - `surplus_from()`: units resting on the asks per object (market
+//!   makers' quotes left out), the need's outlet signal
+//!   (`ambition_catalog::kind_weights_with`, user 2026-11-19).
 //! - `demand_items()` / `kind_demand()`: the planner inputs; each item
 //!   carries its per-unit `margin` at the best bid against its inputs at
 //!   their current market price (`planner::chain_profit`; median of the
@@ -26,7 +29,8 @@
 
 use std::collections::BTreeMap;
 
-use lifescape_planner::{kind_weights, DemandItem, KindDemand};
+use lifescape_planner::ambition_catalog::kind_weights_with;
+use lifescape_planner::{DemandItem, KindDemand};
 use lifescape_store::{Order, OrderSide};
 
 /// Ticks over which a bid's age doubles its pull (capped at ×6).
@@ -117,22 +121,52 @@ pub fn signals_for(account: &str) -> Vec<DemandSignal> {
 
 /// Both planner inputs as one bot sees them (own bids left out).
 pub fn kind_demand_for(account: &str) -> (Vec<DemandItem>, Vec<KindDemand>) {
-    let items = demand_items(&signals_for(account));
-    let weights = kind_weights(&items, &kind_profits());
+    kind_demand_seen_by(Some(account))
+}
+
+/// Both planner inputs from ONE read of the book: the bids `account`
+/// may answer (`None`: the fleet's) and the surplus on the asks (the
+/// outlet signal, `surplus_from`).
+fn kind_demand_seen_by(account: Option<&str>) -> (Vec<DemandItem>, Vec<KindDemand>) {
+    let orders = resting();
+    let surplus = surplus_from(&orders, &name_of);
+    let items = demand_items(&signals_seen_from(orders, account, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks));
+    let weights = kind_weights_with(&items, &kind_profits(), &surplus);
     (items, weights)
 }
 
-fn signals_seen_by(account: Option<&str>) -> Vec<DemandSignal> {
+/// Debug name of a book item.
+fn name_of(item_id: i64) -> Option<String> {
+    lifescape_gamedata::obj_by_id(item_id.max(0) as usize).and_then(|obj| obj.name).map(str::to_string)
+}
+
+/// Resting orders of the daemon's market (empty while it is down).
+fn resting() -> Vec<Order> {
     let Some(service) = crate::market_service::shared() else { return Vec::new() };
-    let orders = match service.lock_store().resting_orders() {
+    let read = service.lock_store().resting_orders();
+    match read {
         Ok(rows) => rows,
         Err(error) => {
             crate::logln!("market_demand: resting orders unreadable: {error}");
-            return Vec::new();
+            Vec::new()
         }
-    };
-    let name_of = |item_id: i64| lifescape_gamedata::obj_by_id(item_id.max(0) as usize).and_then(|obj| obj.name).map(str::to_string);
-    signals_seen_from(orders, account, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks)
+    }
+}
+
+/// Units resting on the asks per object (debug name), the outlet signal
+/// of the need (user 2026-11-19: what piles up unused calls for the
+/// skills that consume it). A market maker's ask is liquidity, not a
+/// surplus (like its bids, `signals_from`).
+pub fn surplus_from(orders: &[Order], name_of: &dyn Fn(i64) -> Option<String>) -> Vec<(String, f64)> {
+    let mut by_item: BTreeMap<i64, i64> = BTreeMap::new();
+    for order in orders.iter().filter(|order| order.side == OrderSide::Sell && order.remaining > 0 && order.motive != crate::market_lineage::MARKET_MAKE) {
+        *by_item.entry(order.item_id).or_default() += order.remaining;
+    }
+    by_item.into_iter().filter_map(|(item_id, units)| Some((name_of(item_id)?, units as f64))).collect()
+}
+
+fn signals_seen_by(account: Option<&str>) -> Vec<DemandSignal> {
+    signals_seen_from(resting(), account, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks)
 }
 
 /// Pure `signals_seen_by`: the bids of every account but `account` (a bot
@@ -206,9 +240,7 @@ pub fn kind_profits() -> Vec<(String, f64)> {
 
 /// Both planner inputs at once: demand items and kind weights.
 pub fn kind_demand() -> (Vec<DemandItem>, Vec<KindDemand>) {
-    let items = demand_items(&signals());
-    let weights = kind_weights(&items, &kind_profits());
-    (items, weights)
+    kind_demand_seen_by(None)
 }
 
 #[cfg(test)]
@@ -247,6 +279,18 @@ mod tests {
         let found = signals_from(&[walked], now, &name, &ticks);
         assert_eq!(found[0].oldest_age_secs, 6 * 3600);
         assert!((found[0].weight - 26.0 * 1.0 * 6.0).abs() < 1e-9, "age factor capped at x6: {}", found[0].weight);
+    }
+
+    /// The outlet signal: units on the asks per object, every seller but
+    /// a market maker (its quote is liquidity, not a surplus).
+    #[test]
+    fn surplus_counts_the_asks_but_never_a_makers_quote() {
+        let ask = |account: &str, item: i64, units: i64| Order { side: OrderSide::Sell, ..bid(account, item, units, 5, 0) };
+        let mut quote = ask("maker_one", 1, 500);
+        quote.motive = crate::market_lineage::MARKET_MAKE.to_string();
+        let orders = vec![ask("woodcutter", 1, 900), ask("other", 1, 100), quote, bid("firemaker", 1, 50, 4, 0), ask("priest", 2, 30)];
+        let name = |id: i64| Some(format!("item{id}"));
+        assert_eq!(super::surplus_from(&orders, &name), vec![("item1".to_string(), 1000.0), ("item2".to_string(), 30.0)]);
     }
 
     /// Q6: a maker's bid on every object never turns into demand.

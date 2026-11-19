@@ -423,6 +423,49 @@ pub fn abandon_for_role(life: &mut Life, cause: &str) -> Vec<String> {
     abandoned
 }
 
+/// Ambition change (decision D3, user 2026-11-19): the open nodes of the
+/// current goal (number at or past `memory.floor`) are abandoned with
+/// `cause`, except the running node, a market order really posted on the
+/// book (`market:` method parked, `awaiting_fill`), a gear step and the
+/// janitor.
+/// Returns the ids abandoned; the brain closes the goal and draws the
+/// next one from the new ambition.
+pub fn abandon_goal_work(life: &mut Life, cause: &str) -> Vec<String> {
+    let floor = life.memory.floor.unwrap_or(0);
+    let gear = crate::gear_ladder::gear_subtree(life);
+    let running = life.active.clone();
+    // A buy really posted on the book: its node's latest entry is
+    // `awaiting_fill` (`park_for_fill`); a `market:` node never posted
+    // leaves with the goal.
+    let posted: HashSet<String> = life
+        .nodes
+        .iter()
+        .filter(|node| node.method.as_deref().is_some_and(|method| method.starts_with("market:")))
+        .filter(|node| life.history.iter().rev().find(|entry| entry.node == node.id).is_some_and(|entry| entry.outcome == "awaiting_fill"))
+        .map(|node| node.id.clone())
+        .collect();
+    let mut abandoned = Vec::new();
+    for node in &mut life.nodes {
+        let of_goal = crate::lifecycle_retire::node_number(&node.id).is_some_and(|number| number >= floor);
+        let spared = is_terminal(&node.status)
+            || node.status == NodeStatus::Active
+            || running.as_deref() == Some(node.id.as_str())
+            || posted.contains(&node.id)
+            || matches!(node.kind, NodeKind::SpaceCleanup)
+            || gear.contains(&node.id);
+        if !of_goal || spared {
+            continue;
+        }
+        node.status = NodeStatus::Abandoned;
+        node.last_error = cause.to_string();
+        abandoned.push(node.id.clone());
+    }
+    if life.engagement.as_ref().is_some_and(|engaged| abandoned.contains(&engaged.node)) {
+        life.engagement = None;
+    }
+    abandoned
+}
+
 /// Mark `index` launched: the only way a node becomes active.
 pub fn mark_launched(life: &mut Life, index: usize) {
     life.nodes[index].status = NodeStatus::Active;

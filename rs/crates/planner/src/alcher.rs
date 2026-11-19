@@ -22,7 +22,9 @@ pub fn is_alcher(life: &Life) -> bool {
 /// role switch, `lifecycle::abandon_for_role`), the ambition replaced,
 /// the goal left for the brain's next draw. Returns the abandoned ids.
 pub fn become_alcher(life: &mut Life, now: &BotNow, stamp: Stamp) -> Result<Vec<String>, AmbitionError> {
-    let ambition = new_ambition(ALCHER, "operator:alcher", now, life.seed, &[], stamp)?;
+    let mut ambition = new_ambition(ALCHER, "operator:alcher", now, life.seed, &[], stamp)?;
+    // An operator's ambition: never undone by the D3 review.
+    ambition.draw_rule = crate::ambition_review::OPERATOR_RULE.to_string();
     let abandoned = crate::lifecycle::abandon_for_role(life, ALCHER_ROLE_CAUSE);
     life.ambition = Some(ambition);
     life.goal_origin = None;

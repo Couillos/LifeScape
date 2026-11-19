@@ -256,3 +256,72 @@ fn only_a_superset_of_inputs_is_dominated() {
     ground.skill = None;
     assert!(!dominated(&furnace, &[furnace.clone(), ground]), "a ground spawn or a drop farm makes nothing");
 }
+
+/// Review 2026-11-19 (« besoin aplati »): once the guide's gain is bounded
+/// by what can really be bought (`brain_d17::kind_profits`), it is read
+/// ONCE, linearly (share of the fleet's summed gain), and it only TILTS
+/// the need of a kind that buyers wait for or whose inputs pile up
+/// (× (1 + gain share)): a kind nobody calls for never comes out level
+/// with a demanded one, whatever it earns; the level-led `weight` of the
+/// D3 exceptions is unchanged.
+#[test]
+fn the_gain_tilts_the_need_but_never_creates_it() {
+    let profits = [("mage".to_string(), 268_593.0), ("smith".to_string(), 10_419.0), ("crafter".to_string(), 6_535.0), ("woodcutter".to_string(), 1270.0)];
+    let gain_only = kind_weights(&[], &profits);
+    assert!(gain_only.iter().all(|row| row.need == 0.0), "a gain alone is no need: {gain_only:?}");
+    // Crafting is wanted (a bid), the mage only earns: the crafter's need
+    // stands, the mage's stays 0.
+    let demanded = kind_weights(&[wanted("leather_gloves", 2000.0, true)], &profits);
+    assert!(need_of(&demanded, "crafter") > 0.0 && need_of(&demanded, "mage") == 0.0, "{demanded:?}");
+    // Two kinds called for alike: the one that earns more leans ahead,
+    // by its linear share of the gain (not flattened).
+    let both = crate::ambition_catalog::kind_weights_with(&[], &profits, &[("logs".to_string(), 5000.0), ("bones".to_string(), 5000.0)]);
+    let (firemaker, priest) = (need_of(&both, "firemaker"), need_of(&both, "priest"));
+    assert!(firemaker > 0.0 && (firemaker - priest).abs() < 1e-9, "no gain for either: equal outlets: {both:?}");
+    let earning = [("priest".to_string(), 9000.0), ("firemaker".to_string(), 1000.0)];
+    let tilted = crate::ambition_catalog::kind_weights_with(&[], &earning, &[("logs".to_string(), 5000.0), ("bones".to_string(), 5000.0)]);
+    let ratio = need_of(&tilted, "priest") / need_of(&tilted, "firemaker");
+    assert!((ratio - 1.9 / 1.1).abs() < 1e-9, "× (1 + 0.9) against × (1 + 0.1): {ratio}");
+    let weight = |kind: &str| demanded.iter().find(|row| row.kind == kind).map(|row| row.weight).unwrap_or(0.0);
+    assert!((weight("mage") - 2.0).abs() < 1e-9 && (weight("smith") - (1.0 + 10_419.0 / 268_593.0)).abs() < 1e-9, "level-led weight unchanged: {demanded:?}");
+}
+
+/// User 2026-11-19 (« la prière, l'allumage de feux, la magie, le tir à
+/// distance font disparaître des objets, c'est important pour
+/// l'économie »): what a kind's training consumes is read from the
+/// catalogue's training methods (their prior flows), never a hand list.
+#[test]
+fn every_sink_kind_reads_what_its_training_consumes() {
+    let consumed = |kind: &str| crate::ambition_catalog::consumed_by(kind);
+    assert!(consumed("firemaker").iter().any(|item| item == "logs"), "{:?}", consumed("firemaker"));
+    assert!(consumed("priest").iter().any(|item| item == "bones"), "{:?}", consumed("priest"));
+    assert!(consumed("ranger").iter().any(|item| item.ends_with("_arrow")), "{:?}", consumed("ranger"));
+    assert!(consumed("mage").iter().any(|item| item.ends_with("rune")), "{:?}", consumed("mage"));
+    assert!(consumed("cook").iter().any(|item| item.starts_with("raw_")), "{:?}", consumed("cook"));
+    assert!(consumed("runecrafter").iter().any(|item| item == "blankrune"), "{:?}", consumed("runecrafter"));
+    assert!(consumed("smith").iter().any(|item| item.ends_with("_ore") || item.ends_with("_bar")), "{:?}", consumed("smith"));
+    assert!(!consumed("crafter").is_empty(), "leather, gems, clay, wool…");
+    assert!(!consumed("firemaker").iter().any(|item| item == "coins"));
+}
+
+/// The need counts the OUTLET a kind offers: a massive surplus of logs
+/// on the asks calls for firemakers, a surplus of bones for priests,
+/// even with no bid and a 36 M guide outlier elsewhere (the three
+/// signals, bids, surplus and gain, each weigh 1 over the fleet: the gain
+/// never crushes the shortfalls nor the surpluses).
+#[test]
+fn a_surplus_calls_for_the_kind_that_consumes_it() {
+    let profits = [("mage".to_string(), 36_214_820.0), ("smith".to_string(), 4_596_917.0), ("crafter".to_string(), 978_728.0), ("woodcutter".to_string(), 1270.0)];
+    let logs = crate::ambition_catalog::kind_weights_with(&[], &profits, &[("logs".to_string(), 120_000.0)]);
+    let firemaker = need_of(&logs, "firemaker");
+    assert!(firemaker > 0.0, "logs piling up: firemakers wanted: {logs:?}");
+    for kind in ["mage", "smith", "crafter", "woodcutter"] {
+        assert!(firemaker > need_of(&logs, kind), "the surplus is not crushed by the gain of {kind}: {logs:?}");
+    }
+    assert_eq!(need_of(&logs, "warrior"), 0.0, "a melee fight consumes nothing");
+    let bones = crate::ambition_catalog::kind_weights_with(&[], &[], &[("bones".to_string(), 20_000.0)]);
+    assert!(need_of(&bones, "priest") > 0.0, "{bones:?}");
+    assert_eq!(need_of(&bones, "firemaker"), 0.0, "nobody else burns bones");
+    let both = crate::ambition_catalog::kind_weights_with(&[], &[], &[("bones".to_string(), 20.0), ("logs".to_string(), 200_000.0)]);
+    assert!(need_of(&both, "firemaker") > need_of(&both, "priest"), "more surplus, more need (compressed): {both:?}");
+}

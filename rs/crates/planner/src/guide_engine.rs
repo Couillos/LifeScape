@@ -559,6 +559,11 @@ impl<'a> Engine<'a> {
         walk(&steps, units, Side::Buy, quote.traded.then(|| traded_basis(&quote)), quote.traded.then(|| quote.price.max(1.0)))
     }
 
+    /// Units of `item` a bot can really buy now (`supply_of`).
+    pub fn supply_units(&self, item: &str) -> f64 {
+        supply_of(Some(&self.quote_shared(item)), &self.shop_steps_shared(item))
+    }
+
     /// The availability of an object a row buys (D22): `per_6000` units a
     /// window of the row, `per_lot` one lot; what the asks, the last
     /// fills and the F2P shops held at the build; `priced` as the walk
@@ -582,6 +587,15 @@ impl<'a> Engine<'a> {
             self.sale_at(item, -qty)
         }
     }
+}
+
+/// Units of an object a bot can really buy: what rests on the asks
+/// (`quote`, `None`: nothing known) plus what the F2P shops sell in one
+/// window (`shops`: (price, units, need) steps). The last fills are no
+/// supply (D21).
+pub fn supply_of(quote: Option<&Quote>, shops: &[(f64, f64, ShopNeed)]) -> f64 {
+    let asks = quote.map(|known| known.asks.iter().fold(0.0, |held, (_, depth)| held + depth.max(0.0))).unwrap_or(0.0);
+    asks + shops.iter().fold(0.0, |total, (_, units, _)| total + units.max(0.0))
 }
 
 /// True when an outgoing flow of `cause` is bought (a consumable, or a

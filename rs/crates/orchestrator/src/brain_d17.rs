@@ -77,17 +77,30 @@ pub fn method_profit_in(rows: &[&MoneyRow], method: &str) -> Option<f64> {
 }
 
 /// Best profit per ambition kind (module doc), one entry per kind, kinds
-/// in name order.
+/// in name order: each row's gain over what the asks and the F2P shops
+/// really supply (`guide_money::supplied_share`).
 pub fn kind_profits(set: &GuideSet) -> Vec<(String, f64)> {
     let mut out: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+    let supplies: std::cell::RefCell<std::collections::HashMap<String, f64>> = std::cell::RefCell::new(std::collections::HashMap::new());
     for row in set.money_catalog.rows.iter().filter(|row| row.priced && row.profit_6000.is_finite()) {
         if lifescape_planner::guide_feasible::conditions(&row.prereqs).iter().any(|condition| condition.impossible()) {
             continue;
         }
         let Some(skill) = lifescape_planner::activity::band_skill(&row.method, &row.style) else { continue };
         let Some(kind) = lifescape_planner::ambition_catalog::kind_for_skill(&skill) else { continue };
+        // The gain over what can really be bought (live 2026-11-19: 1 887
+        // rune platebodies alched a window, none offered: 36 M, 21 mages).
+        let supply = |item: &str| {
+            if let Some(known) = supplies.borrow().get(item) {
+                return *known;
+            }
+            let units = lifescape_planner::guide_engine::supply_of(set.quotes.get(item), &crate::web_guides::shop_window(item));
+            supplies.borrow_mut().insert(item.to_string(), units);
+            units
+        };
+        let gain = row.profit_6000 * lifescape_planner::guide_money::supplied_share(row, &supply);
         let best = out.entry(kind.to_string()).or_insert(f64::MIN);
-        *best = best.max(row.profit_6000);
+        *best = best.max(gain);
     }
     out.into_iter().collect()
 }

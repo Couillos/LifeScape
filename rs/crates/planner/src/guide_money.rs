@@ -299,6 +299,30 @@ pub fn method_rows(engine: &Engine, method: &str, style: &str, level: u8, held: 
     (rows, None)
 }
 
+/// Share (0..1) of a row's window that what can really be bought now
+/// supplies (coordinator 2026-11-19; live: `alch:rune_platebody` priced
+/// 1 887 plates of HELD stock a window, 36.2 M, with none offered
+/// anywhere). The row keeps its window economy (D5, D22: never blocked);
+/// a reader taking it as a real gain (`brain_d17::kind_profits`)
+/// multiplies by this share: for a recipe, each stock input's `supply`
+/// (asks + F2P shops, `guide_engine::supply_of`) over its units a
+/// window; for every row, each object it buys (`prereqs.market`: asks +
+/// shops over `per_6000`). What a row sells is already bounded by the
+/// bids and the shops' walk (`Engine::sale_at`). Farms and chains gather
+/// their stock: only their purchases count.
+pub fn supplied_share(row: &MoneyRow, supply: &dyn Fn(&str) -> f64) -> f64 {
+    let mut share: f64 = 1.0;
+    for need in row.prereqs.market.iter().filter(|need| need.per_6000 > 0.0) {
+        share = share.min((need.asks + need.shops).max(0.0) / need.per_6000);
+    }
+    if row.family == Family::Recipe {
+        for line in row.flows.iter().filter(|line| line.cause == "input" && line.per_6000 < 0.0 && line.item != "coins") {
+            share = share.min(supply(&line.item).max(0.0) / -line.per_6000);
+        }
+    }
+    share.clamp(0.0, 1.0)
+}
+
 /// The recipe row of a place re-evaluated on a bot's stock `held` (R7:
 /// `guide_read`, the view's other rows unchanged), at the view's level.
 pub fn recipe_row(engine: &Engine, ask: &RateAsk, answer: &RateAnswer, held: &[(String, f64)]) -> MoneyRow {

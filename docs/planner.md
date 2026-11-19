@@ -928,7 +928,9 @@ ou équipement fait ⇒ jalon `done` ; but bloqué ⇒ `blocked`,
 `blocked_count + 1` ; à `MILESTONE_MAX_BLOCKS` = 3 ⇒ nouveau tirage
 immédiat de l'ambition (politique approuvée, log `milestone mN blocked 3
 times, redrawing ambition`), jamais vers le même type. Échelle épuisée
-(`achieved`) : nouveau tirage seulement si un autre bot tient le groupe
+(`achieved`) d'un bot au besoin (D3) : nouveau tirage au besoin, jamais de
+prolongation (voir « D3 dans les vies ») ; pour les exceptions et les
+épingles : nouveau tirage seulement si un autre bot tient le groupe
 ET que 72 000 ticks sont passés depuis le dernier changement ; sinon
 l'échelle se prolonge (`ambition::extend`, origine `extend` : les 3
 derniers paliers tournent, niveau live + 5 plafonné à 99, quotas et
@@ -949,7 +951,8 @@ de lancement) : les trous de la flotte sont loggés à chaque changement
 (`fleet coverage gap: …` ; un bot fermé laisse son groupe) et un bot
 redondant dont le dernier changement a 72 000 ticks prend le trou tout de
 suite (`coverage_repair`, révision `repair:coverage:<groupe>` ; son but en
-cours continue, délié).
+cours, tiré par l'ancienne ambition, est remplacé : voir « D3 dans les
+vies » plus bas).
 
 Couverture de flotte (`assign_fleet`, pur) : au premier passage qui
 rencontre une vie sans ambition, toute la flotte est assignée (fichiers
@@ -986,8 +989,29 @@ du temps de la flotte contre 0,6 % d'artisanat) et la boucle
 s'entretenait. Désormais le poids d'un type = son BESOIN seul
 (`KindDemand::need`) × l'inclinaison du trait `market_affinity` (le
 trait n'est pas un niveau). Besoin = part de la MASSE des offres d'achat
-ouvertes qu'il sert (0..1) + part du meilleur profit du guide money
-(0..1), puis saturation. Masse d'un objet (`ambition_catalog::need_mass`,
+ouvertes qu'il sert (0..1), + part du SURPLUS qu'il consomme (débouché,
+demande utilisateur 2026-11-19 « la prière, l'allumage de feux, la
+magie, le tir à distance font disparaître des objets » : `compress(Σ
+unités au repos sur les annonces des objets que son entraînement
+consomme)` ÷ somme de tous les types, `compress` = ln(1 + ln(1 + x)) ;
+objets consommés lus des méthodes d'entraînement du catalogue des guides,
+leurs flux du prior au niveau d'ouverture sous `work_rate::
+CONSUMED_CAUSES` : `ambition_catalog::consumed_by`, jamais une liste ;
+annonces des teneurs exclues, `market_demand::surplus_from` ; les jours
+de stock invendu du lot 0 ne sont pas lus : une lecture de 24 h du
+magasin par tirage, et la double compression ne garde que l'ordre de
+grandeur), le tout × (1 + part de gain : meilleur profit du guide ÷
+somme des profits de la flotte, linéaire, lu une fois). Offres et
+surplus pèsent chacun 1 sur la flotte ; le gain n'INCLINE que ce qui est
+demandé ou en surplus (×1 à ×2) : un métier ni demandé ni nourri de
+surplus n'a aucun besoin, quel que soit son gain (relecture 2026-11-19 :
+ajouté seul, le gain donnait 0,6 à 1 à chaque type contre 0,14 au plus
+aux offres, un besoin aplati). `weight`, tirage au niveau des
+exceptions, garde la part de gain linéaire sur le max. Puis
+saturation. Le profit d'un type est celui que l'offre réelle permet
+(`brain_d17::kind_profits` × `guide_money::supplied_share`, voir
+§ guide money ; en live une ligne d'alchimie à 36 M tirait 21 mages sur
+54). Masse d'un objet (`ambition_catalog::need_mass`,
 revue du lot 6) = ln(1 + ln(1 + poids du signal)) : une offre aberrante
 ne possède plus le besoin (en live, un souhait d'amulettes de puissance
 à 1,3 M l'unité faisait 72 % de la valeur des offres ; une offre un
@@ -1023,6 +1047,57 @@ d'artisanat seule → artisan à chaque graine, demande de bûches seule →
 bûcheron, exceptions au niveau ; une offre de 78 M parmi 30 ordinaires
 ≤ 1,5/n de la part ; objet sans annonce > objet annoncé ; dix artisans
 abaissent le besoin d'artisan ; étiquette seulement pour un vrai moteur).
+
+D3 dans les vies (2026-11-19, « pourquoi on a toujours autant de cons qui
+coupent du yew », `planner/src/ambition_review.rs`, cerveau
+`brain_ambition::{review_pass, replace_stale_goal}`) :
+- Marque : chaque ambition tirée porte la règle suivie
+  (`ambition.draw_rule` = `need` ou `level`, posée par
+  `brain_ambition::build` via `mark_rule`) ; une vie écrite avant la
+  marque la lit vide (champ absent = ancienne règle).
+- Révision unique (`needs_review`) : une ambition sans marque `need` d'un
+  bot hors exceptions, dont le dernier changement précède le démarrage
+  du daemon, est retirée au besoin (révision `review:need`, log `drawn
+  before the need rule (D3), redrawn by need`). Jamais pour les comptes
+  d'exception ni une ambition d'opérateur : `pinned()` (épingle,
+  `overall`, `alcher`, `market_maker`) ou marque `operator` posée par
+  son constructeur (`become_alcher`, `pinned_ambition`, `overall_start`,
+  `maker_start`) : ryan_mason reste alchimiste, et un changement
+  d'opérateur appliqué au début du même passage n'est jamais défait. Un
+  `generalist` non opérateur est révisé. Les tirages au besoin d'avant la
+  marque (`why` `need` / `need:*`, depuis 03a27a2) sont seulement marqués
+  (`adopt_need_mark`). Le seul détenteur de son groupe primaire le garde
+  (`redraw_gaps` : son groupe est son seul trou ; un bot redondant voit
+  les trous de la flotte). Étalée : chaque compte a sa fente
+  (`review_slot_ticks`, hachage stable du nom) dans les
+  `REVIEW_SPREAD_TICKS` = 12 000 ticks qui suivent le premier passage du
+  cerveau (12 min à 60 ms) ; revue à son premier passage de lancement
+  après la fente, donc au plus une tranche de travail plus tard (~20 min
+  en dev) : toute la flotte dans l'heure du redémarrage.
+- Fin d'échelle (`keeps_ladder_end`) : hors exceptions et épingles, plus
+  de prolongation (`extend`) de la même ambition ; nouveau tirage au
+  besoin immédiat (révision `achieved`, sans exclure le type : le besoin
+  peut redonner le même métier s'il lui reste des jalons ; le seul
+  détenteur de son groupe le garde, `redraw_gaps`). Les exceptions
+  et les épingles gardent la règle d'avant (prolongation, seuil de
+  72 000 ticks).
+- But remplacé (`goal_from_earlier_ambition`) : `revise` ne délie plus
+  que les liens de jalon (`m<k>`) ; un but encore ouvert, sans lien vers
+  un jalon de l'ambition courante, dont l'entrée `next:` est antérieure au
+  dernier changement d'ambition et qui n'est pas un but `side:`, `bid:`
+  ou `alch:` vient d'une ambition précédente (mila_wade, nina_rhodes :
+  bûcheron → pêcheur à 18:24, « woodcutting 95 » encore coupé 2,5 h
+  après). Au passage de lancement suivant sans nœud actif (le rapport
+  d'abord), ses nœuds (numéro ≥ `memory.floor`) sont abandonnés
+  (`lifecycle::abandon_goal_work`, cause `ambition changed: …`) sauf le
+  nœud actif, un ordre de marché réellement posé au carnet (`market:*`
+  dont la dernière entrée est `awaiting_fill` ; un achat jamais posé part
+  avec le but), les marches d'équipement et le concierge ; le but se clôt
+  comme un jalon retiré du catalogue (`done`, aucun ban) et le suivant
+  est tiré de la nouvelle ambition. S'applique aussi après une réparation
+  de couverture, et pour une ambition sans échelle (bot retiré vers
+  `generalist`). Tests : `ambition_review::tests`,
+  `brain_ambition::review_tests` (dont le cas mila_wade).
 
 Voies dominées (décision utilisateur 2026-11-19, « pourtant ça coûte
 rien de faire fondre aux fours » ; `ambition_catalog::dominated`) : une
@@ -1080,7 +1155,14 @@ d'achat au repos ; poids = meilleure offre × quantité non servie × (1 +
 min(âge/6000 ticks, 5)), âge = celui de la LIGNÉE, t0 gardé par les
 amends), `kind_profits()` (meilleure ligne du guide money précalculé
 par type d'ambition, `brain_d17::kind_profits` : catalogue coté, sans
-condition impossible pour tous, chaînes comprises ; vide avant le premier
+condition impossible pour tous, chaînes comprises ; chaque ligne comptée
+pour le gain que l'offre réelle permet : profit × `guide_money::
+supplied_share` = min, sur les intrants de stock d'une recette (D5 : le
+guide général suppose le stock détenu) et sur tout objet acheté
+(`prereqs.market`), de (annonces au repos + fenêtre des boutiques F2P,
+`guide_engine::supply_of`) ÷ unités de la fenêtre ; la ligne elle-même
+garde son économie (D22) ; live 2026-11-19 : `alch:rune_platebody`
+36,2 M → 0,27 M, seules les ~14 plaques d'Oziach par fenêtre ; vide avant le premier
 jeu ; 2026-11-17 : plus `chain_profits` ni la table `rates_profit`),
 `kind_demand()` (entrées du planner :
 `DemandItem` (avec `asked` : une annonce de vente repose pour l'objet),

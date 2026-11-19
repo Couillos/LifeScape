@@ -127,8 +127,18 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if !quoting && crate::cpu_profile::timed("ambition.coverage", || crate::brain_ambition::coverage_pass(&mut life, &live)) {
         dirty = true;
     }
+    // One-time D3 review: an old-rule ambition of a need-led bot is
+    // redrawn by need (spread over the first ticks after the start).
+    if !quoting && crate::cpu_profile::timed("ambition.review", || crate::brain_ambition::review_pass(&mut life, &live)) {
+        dirty = true;
+    }
     // A revised catalogue ladder drops the stale quotas it no longer offers.
     if !quoting && crate::brain_ambition::sync_catalog(&mut life, &live) {
+        dirty = true;
+    }
+    // A changed ambition (review, coverage repair) replaces the goal the
+    // earlier one drew; side, bid and alchemy goals run on.
+    if !quoting && crate::brain_ambition::replace_stale_goal(&mut life, &live) {
         dirty = true;
     }
     // Space pressure (L8) precedes the terminal check: a full bank needs

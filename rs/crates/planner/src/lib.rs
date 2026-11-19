@@ -12,6 +12,7 @@ pub mod ambition;
 pub mod ambition_catalog;
 pub mod ambition_fleet;
 pub mod ambition_ladder;
+pub mod ambition_review;
 pub mod bans;
 pub mod alchemy;
 pub mod bid_response;
@@ -99,7 +100,7 @@ pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, ra
 pub use expand::{expand_goal, expand_goal_from, method_feasible, required_tool, resolve_ready};
 pub use lifecycle_retire::{retire_due, retire_finished, Retirement};
 pub use life_memory::{LifeMemory, Retired, RECENT_CAP};
-pub use lifecycle::{abandon_for_role, max_id_number, complete_node, end_engagement, graph_state, insert_gear_step, insert_ready, park_for_fill, withdraw_gear_step, mark_launched, reached_live, next_id, normalize, record_block, record_block_from, record_block_with, record_contract_error, retry_uncounted, wait_open, record_failure, record_failure_timed, record_progress, record_xp, retarget_market, retarget_produce, revive_stuck, FailureFold, GraphState, MAX_BLOCKS, MAX_FAILURES, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
+pub use lifecycle::{abandon_for_role, abandon_goal_work, max_id_number, complete_node, end_engagement, graph_state, insert_gear_step, insert_ready, park_for_fill, withdraw_gear_step, mark_launched, reached_live, next_id, normalize, record_block, record_block_from, record_block_with, record_contract_error, retry_uncounted, wait_open, record_failure, record_failure_timed, record_progress, record_xp, retarget_market, retarget_produce, revive_stuck, FailureFold, GraphState, MAX_BLOCKS, MAX_FAILURES, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
 pub use bans_scope::{banned_scope, market_failed, market_shortfall, market_route, market_unfilled_error, rescue_candidates, rescued_before, MARKET_RESCUE_TAG, PRODUCE_RESCUE_TAG};
 pub use bans::{ban_entry, ban_states, banned_skills, quest_lifted_bans, stuck_cause, unban_entry, BanState, StuckCause, SKILL_BAN_TICKS, UNBAN_TAG};
 pub use gear_ladder::{gear_move, next_gear_step, next_ready, next_ready_except, withdraw_dead_steps, withdraw_melee_set, GearMove, GearStep, GEAR_SHARE_PCT, TOOL_SHARE_PCT};
@@ -116,6 +117,7 @@ pub use ambition::{
 };
 pub use ambition_catalog::{kind_weights, DemandItem, KindDemand, GROUPS};
 pub use market_maker::{become_quoting, maker_post, maker_role, quoting, switch_due, MakerPhase, MakerRole, MAKER_POSTS, MAKE_METHOD, MARKET_MAKER_KIND, MAKER_ROLE_CAUSE};
+pub use ambition_review::{adopt_need_mark, redraw_gaps, OPERATOR_RULE, draw_rule_for, goal_from_earlier_ambition, is_milestone_origin, keeps_ladder_end, mark_rule, needs_review, review_slot_ticks, LEVEL_RULE, NEED_RULE, REVIEW_SPREAD_TICKS, STALE_GOAL_CAUSE};
 pub use ambition_fleet::{assign_fleet, coverage_gaps, coverage_repair, draw_kind, level_led, saturate, optional_change, Assignment, FleetBot, LEVEL_LED_ACCOUNTS};
 pub use mapping::map_method;
 pub use model::{

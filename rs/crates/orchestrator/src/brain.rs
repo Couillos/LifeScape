@@ -206,7 +206,9 @@ fn overall_start(seed: u64) -> Result<(lifescape_planner::Ambition, GoalKind), S
     let level_of = |name: &str| if name == "hitpoints" { 10 } else { 1 };
     let held = |_: &str| 0;
     let now = lifescape_planner::BotNow { level_of: &level_of, coins: 0, held: &held };
-    let ambition = lifescape_planner::new_ambition(lifescape_planner::OVERALL, "operator:overall", &now, seed, &[], crate::brain_ambition::stamp_now()).map_err(|error| error.to_string())?;
+    let mut ambition = lifescape_planner::new_ambition(lifescape_planner::OVERALL, "operator:overall", &now, seed, &[], crate::brain_ambition::stamp_now()).map_err(|error| error.to_string())?;
+    // An operator's ambition: never undone by the D3 review.
+    ambition.draw_rule = lifescape_planner::OPERATOR_RULE.to_string();
     let goal = lifescape_planner::lowest_skill_goal(lifescape_planner::OVERALL_SKILLS, &level_of, &[], seed, 0).ok_or("overall: no trainable skill")?;
     Ok((ambition, goal))
 }
@@ -270,7 +272,9 @@ fn maker_start(seed: u64, taken: &[u32]) -> Result<(Archetype, lifescape_planner
     let level_of = |name: &str| if name == "hitpoints" { 10 } else { 1 };
     let held = |_: &str| 0;
     let now = lifescape_planner::BotNow { level_of: &level_of, coins: 0, held: &held };
-    let ambition = lifescape_planner::new_ambition(lifescape_planner::MARKET_MAKER_KIND, "operator:market_maker", &now, seed, &[], crate::brain_ambition::stamp_now()).map_err(|error| error.to_string())?;
+    let mut ambition = lifescape_planner::new_ambition(lifescape_planner::MARKET_MAKER_KIND, "operator:market_maker", &now, seed, &[], crate::brain_ambition::stamp_now()).map_err(|error| error.to_string())?;
+    // An operator's ambition: never undone by the D3 review.
+    ambition.draw_rule = lifescape_planner::OPERATOR_RULE.to_string();
     let first = lifescape_planner::next_milestone(&ambition, &[]).ok_or("market maker ladder has no open milestone")?;
     let goal = lifescape_planner::goal_for_milestone(first);
     let origin = first.id.clone();

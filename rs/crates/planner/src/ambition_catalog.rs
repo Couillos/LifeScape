@@ -179,12 +179,11 @@ pub struct KindDemand {
     /// 1 + share of the open-bid VALUE it serves + share of the best guide
     /// profit.
     pub weight: f64,
-    /// The NEED alone (decision D3, user 2026-11-19): the scarcity of what
-    /// the kind produces = share of the open-bid MASS it serves (each
-    /// object's `need_mass`: compressed, doubled without asks; 0..1) +
-    /// share of the best guide profit (the prices its products fetch,
-    /// 0..1); 0 when nothing calls for it. `ambition_fleet::saturate`
-    /// divides it by 1 + the kind's holders.
+    /// The NEED alone (decision D3, user 2026-11-19) = (share of the
+    /// open-bid MASS it serves + share of the surplus its training
+    /// consumes) × (1 + its share of the fleet's guide gain)
+    /// (`kind_weights_with`); 0 when nothing calls for it.
+    /// `ambition_fleet::saturate` divides it by 1 + the kind's holders.
     pub need: f64,
     /// The object of the level-led `weight` (heaviest served bid share).
     pub top_item: Option<String>,
@@ -209,12 +208,18 @@ pub const NEED_LABEL_FLOOR: f64 = 0.05;
 /// × `UNASKED_FACTOR` when no sell offer rests for it. A plain
 /// ln(1 + weight) still gave a 78 M bid ~2.6 ordinary bids.
 pub fn need_mass(item: &DemandItem) -> f64 {
-    let compressed = (1.0 + (1.0 + item.weight.max(0.0)).ln()).ln();
+    let compressed = compress(item.weight);
     if item.asked {
         compressed
     } else {
         compressed * UNASKED_FACTOR
     }
+}
+
+/// ln(1 + ln(1 + value)) of a non-negative value (a bid's weight, a
+/// kind's guide profit): a million times more weighs ~1.5 times more.
+pub fn compress(value: f64) -> f64 {
+    (1.0 + (1.0 + value.max(0.0)).ln()).ln()
 }
 
 /// Every product a kind's ladder can make.
@@ -366,29 +371,86 @@ fn serves_at(skills: &[&str], item: &str, depth: u8) -> f64 {
     best
 }
 
-/// Demand weight per drawable kind: 1 + share of the open-bid value it
-/// answers (`serves`: its own products at any tier in full, the inputs
-/// its skill makes at half per step; 0..n) + its best profit relative to
-/// the fleet's best (0..1, chain evals and measured methods, `(kind,
-/// profit)`). A bid whose known margin is a loss pulls nobody. The
-/// level-led draw (`ambition_fleet::level_led`) reads that `weight`; the
-/// need-led draw (D3) reads `need`: the share of the bid MASS served
-/// (`need_mass`, robust to one outlier, doubled without asks) + the same
-/// profit share. Keeps the draw random, tilted toward what buyers wait
-/// for and what pays.
+/// Demand weight per drawable kind (no surplus known): `kind_weights_with`.
 pub fn kind_weights(items: &[DemandItem], kind_profits: &[(String, f64)]) -> Vec<KindDemand> {
+    kind_weights_with(items, kind_profits, &[])
+}
+
+/// Objects a kind's training consumes, read from the guide catalogue: every
+/// training method whose band skill falls to the kind (`activity::band_skill`,
+/// `kind_for_skill`), its game prior's flows at its gate level
+/// (`work_rate::prior_rate`) consumed under `work_rate::CONSUMED_CAUSES`
+/// (inputs, runes, ammunition, bait, supplies): logs for the firemaker,
+/// bones for the priest, runes and alched objects for the mage, arrows for
+/// the ranger, raw fish for the cook, ore and bars for the smith, essence
+/// for the runecrafter. Never a hand list; memoised (static game data).
+pub fn consumed_by(kind: &str) -> Vec<String> {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<String>>>> = std::sync::OnceLock::new();
+    crate::guide_methods::memo(&MEMO, kind.to_string(), || {
+        let mut out: Vec<String> = Vec::new();
+        for entry in crate::guide_methods::catalogue() {
+            let Some(skill) = crate::activity::band_skill(&entry.method, &entry.style) else { continue };
+            if kind_for_skill(&skill) != Some(kind) {
+                continue;
+            }
+            let Some(rate) = crate::work_rate::prior_rate(&entry.method, crate::guide_methods::gate_level(&entry.method)) else { continue };
+            for (item, cause, quantity) in &rate.flows_6000 {
+                if *quantity < 0.0 && item != "coins" && crate::work_rate::CONSUMED_CAUSES.contains(&cause.as_str()) && !out.contains(item) {
+                    out.push(item.clone());
+                }
+            }
+        }
+        out.sort();
+        out
+    })
+}
+
+/// Demand weight per drawable kind.
+///
+/// `weight` (the level-led draw of the D3 exceptions, unchanged): 1 +
+/// share of the open-bid value it answers (`serves`: its own products at
+/// any tier in full, the inputs its skill makes at half per step; 0..n) +
+/// its best profit relative to the fleet's best (0..1).
+///
+/// `need` (decision D3) = (shortfall + outlet) × (1 + gain share):
+/// - shortfall: the share of the open-bid MASS it serves (`need_mass`,
+///   robust to one outlier, doubled without asks; a loss pulls nobody);
+/// - outlet (user 2026-11-19, « la prière, l'allumage de feux, la magie,
+///   le tir à distance font disparaître des objets »): the compressed
+///   abundance of what its training consumes, `compress(Σ units resting on
+///   the asks of consumed_by(kind))` over the sum of every kind's (`surplus`:
+///   (object, units on the asks), market makers' quotes left out);
+/// - gain share: its best guide profit over the fleet's summed profits,
+///   linear, read once (the profits come bounded by what can really be
+///   bought, `brain_d17::kind_profits`: no outlier left to compress).
+/// Shortfall and outlet each weigh 1 over the whole fleet; the gain only
+/// TILTS them (×1..×2): a kind nobody calls for and whose inputs do not
+/// pile up has no need whatever it earns (review 2026-11-19: the gain
+/// added on its own gave 0.6..1 to every kind against bids of at most
+/// 0.14, a flat need). Keeps the draw random, tilted toward what buyers
+/// wait for, what piles up unused, and what pays.
+pub fn kind_weights_with(items: &[DemandItem], kind_profits: &[(String, f64)], surplus: &[(String, f64)]) -> Vec<KindDemand> {
     let wanted_items: Vec<&DemandItem> = items.iter().filter(|wanted| wanted.weight > 0.0 && wanted.margin.is_none_or(|margin| margin > 0.0)).collect();
     let top_weight = wanted_items.iter().map(|entry| entry.weight).fold(0.0, f64::max);
     let top_profit = kind_profits.iter().map(|(_, profit)| *profit).fold(0.0, f64::max);
     let total_mass: f64 = wanted_items.iter().map(|wanted| need_mass(wanted)).sum();
+    let kinds: Vec<&'static str> = specs().iter().filter(|entry| !crate::ambition::ladderless(entry.kind)).map(|entry| entry.kind).collect();
+    let profit_of = |kind: &str| kind_profits.iter().filter(|(known, _)| known == kind).map(|(_, profit)| *profit).fold(0.0, f64::max);
+    let outlet_of = |kind: &str| {
+        let consumed = if surplus.is_empty() { Vec::new() } else { consumed_by(kind) };
+        compress(surplus.iter().filter(|(item, _)| consumed.contains(item)).map(|(_, units)| units.max(0.0)).sum())
+    };
+    let gains: Vec<f64> = kinds.iter().map(|kind| profit_of(kind).max(0.0)).collect();
+    let outlets: Vec<f64> = kinds.iter().map(|kind| outlet_of(kind)).collect();
+    let (total_gain, total_outlet) = (gains.iter().sum::<f64>(), outlets.iter().sum::<f64>());
     let mut out = Vec::new();
-    for entry in specs().iter().filter(|entry| !crate::ambition::ladderless(entry.kind)) {
+    for (index, kind) in kinds.iter().enumerate() {
         let mut demand = 0.0;
         let mut top: Option<(&DemandItem, f64)> = None;
         let mut offer = 0.0;
         let mut driver: Option<(&DemandItem, f64)> = None;
         for wanted in &wanted_items {
-            let answer = serves(entry.kind, &wanted.item);
+            let answer = serves(kind, &wanted.item);
             if answer <= 0.0 {
                 continue;
             }
@@ -403,11 +465,13 @@ pub fn kind_weights(items: &[DemandItem], kind_profits: &[(String, f64)]) -> Vec
                 driver = Some((wanted, part));
             }
         }
-        let profit = kind_profits.iter().filter(|(kind, _)| kind == entry.kind).map(|(_, profit)| *profit).fold(0.0, f64::max);
+        let profit = profit_of(kind);
         let profit_share = if top_profit > 0.0 { profit.max(0.0) / top_profit } else { 0.0 };
-        let need = offer + profit_share;
+        let gain = if total_gain > 0.0 { gains[index] / total_gain } else { 0.0 };
+        let outlet = if total_outlet > 0.0 { outlets[index] / total_outlet } else { 0.0 };
+        let need = (offer + outlet) * (1.0 + gain);
         let need_item = driver.filter(|(_, part)| need > 0.0 && *part >= NEED_LABEL_FLOOR * need).map(|(wanted, _)| wanted.item.clone());
-        out.push(KindDemand { kind: entry.kind.to_string(), weight: 1.0 + demand + profit_share, need, top_item: top.map(|(wanted, _)| wanted.item.clone()), need_item });
+        out.push(KindDemand { kind: kind.to_string(), weight: 1.0 + demand + profit_share, need, top_item: top.map(|(wanted, _)| wanted.item.clone()), need_item });
     }
     out
 }

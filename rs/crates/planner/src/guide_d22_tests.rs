@@ -76,6 +76,43 @@ fn alchemy_is_feasible_for_the_bot_holding_runes_and_objects() {
     assert!(reachable(row(&rows, "alch:iron_platebody", Family::Recipe), &runeless));
 }
 
+/// Live 2026-11-19 (`alch:rune_platebody`, 36.2 M a window, 21 mages in
+/// the D3 review replay): the recipe row values 1 887 plates of HELD stock
+/// at the shop's 6 500 (D5) and alchs them for 26 000 each, though no
+/// plate rests on the asks nor in any F2P shop. The row keeps that economy
+/// (D22: never blocked), but what can really be bought bounds the gain a
+/// reader takes from it (`supplied_share`: asks + shops over the window's
+/// units, for its stock inputs and every object it buys): 0 here, 3/1 887
+/// with three plates offered.
+#[test]
+fn a_recipe_gain_is_bounded_by_the_stock_really_offered() {
+    let casts = 1887.6;
+    let plates = |asks: Vec<(f64, f64)>| {
+        let mut fixture = Fixture::new();
+        fixture.yields.insert(
+            "alch:rune_platebody",
+            answer(&[("coins", "product", 26_000.0 * casts), ("rune_platebody", "input", -casts), ("naturerune", "rune", -casts), ("firerune", "rune", -3.0 * casts)], &[("input", "rune_platebody", casts)]),
+        );
+        fixture.quotes.insert("naturerune", Quote { price: 311.8, traded: true, median: 311.8, fills: 5, fill_units: 400.0, asks: vec![(320.0, 100_000.0)], ..Quote::default() });
+        fixture.quotes.insert("firerune", Quote { price: 1.0, traded: true, median: 1.0, fills: 5, fill_units: 400.0, asks: vec![(1.0, 100_000.0)], ..Quote::default() });
+        fixture.npc.insert("rune_platebody", 6500.0);
+        if !asks.is_empty() {
+            fixture.books.insert("rune_platebody", (Vec::new(), asks));
+        }
+        fixture.run(|engine| {
+            let (rows, _) = money_guide(engine, &level(60));
+            let recipe = row(&rows, "alch:rune_platebody", Family::Recipe).clone();
+            let share = crate::guide_money::supplied_share(&recipe, &|item: &str| engine.supply_units(item));
+            (recipe, share)
+        })
+    };
+    let (recipe, share) = plates(Vec::new());
+    assert!(recipe.priced && recipe.profit_6000 > 30_000_000.0, "D22: the row keeps its window economy: {}", recipe.profit_6000);
+    assert_eq!(share, 0.0, "no plate offered anywhere: no real gain");
+    let (_, share) = plates(vec![(30_000.0, 3.0)]);
+    assert!((share - 3.0 / casts).abs() < 1e-9, "three plates offered: {share}");
+}
+
 /// smith:rune_axe as a chain: the runite is mined where no site has a bank
 /// in reach (`danger::NEVER`, game data): the row keeps its economy (no
 /// block) but carries the site condition, impossible today for every

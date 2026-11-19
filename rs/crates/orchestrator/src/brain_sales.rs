@@ -739,6 +739,7 @@ pub(crate) mod tests {
             rung: 0,
             revisions: Vec::new(),
             pin: None,
+            draw_rule: String::new(),
         });
         let keep = super::working_keep(&life, &[]);
         assert!(keep.contains(&"logs".to_string()), "a firemaker keeps its logs: {keep:?}");
