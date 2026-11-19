@@ -70,7 +70,7 @@ impl Bot {
         let (start_x, start_z, start_level) = (self.world.x, self.world.z, self.world.level);
         let outcome = match self.send_walk(leg, run, immediate) {
             Err(err) => Err(err),
-            Ok(()) => self.await_leg(leg, deadline),
+            Ok(()) => self.await_leg(leg, run, deadline),
         };
         // Refusal probe, read-only: a chunk ending on its start tile moved
         // nowhere, so the server refused the step (or nothing was sent) —
@@ -195,7 +195,7 @@ impl Bot {
         outcome
     }
 
-    pub(crate) fn await_leg(&mut self, leg: &[(i32, i32)], deadline: u64) -> Result<()> {
+    pub(crate) fn await_leg(&mut self, leg: &[(i32, i32)], run: bool, deadline: u64) -> Result<()> {
         let Some(target) = leg.last().copied() else {
             return Ok(());
         };
@@ -209,13 +209,27 @@ impl Bot {
         // Closed-pause counter: a market pause run by this wait's pump
         // walked us away and back, the leg we sent is gone server-side.
         let pause_mark = self.pause_ticks;
+        // Server cancels (`UNSET_MAP_FLAG`, `movement_cancel_tests`): the
+        // tick a new flag was noticed; a full tick without a step after
+        // it means the server dropped or stopped this walk.
+        let mut cancel_mark = self.walk_cancels;
+        let mut cancel_noticed: Option<u64> = None;
+        let mut resends = 0u32;
         loop {
             let position = (self.world.x, self.world.z);
             if position == target {
+                if resends > 0 {
+                    self.log(&format!("walk leg: server cancelled it {resends}x (UNSET_MAP_FLAG), resent, arrived"));
+                }
                 return Ok(());
+            }
+            if self.walk_cancels != cancel_mark {
+                cancel_mark = self.walk_cancels;
+                cancel_noticed.get_or_insert(self.world.ticks);
             }
             let distance = (position.0 - target.0).abs() + (position.1 - target.1).abs();
             let along = leg.iter().position(|tile| *tile == position);
+            let moved_from = last_move;
             // No early pass-through: a leg only ends on its target (the
             // postcondition §6.2 requires per leg). A transient detour
             // keeps walking until it lands; a truly lost leg trips the
@@ -229,6 +243,24 @@ impl Bot {
                 last_move = self.world.ticks;
             } else if self.world.ticks.saturating_sub(last_move) > STALL_TICKS {
                 return Err(Error::Timeout(format!("leg to {target:?} stalled at {:?}", self.position())));
+            }
+            // A step on a later tick than the flag: the walk goes on, the
+            // flag closed something else (no cancel of this leg).
+            if last_move != moved_from && cancel_noticed.is_some_and(|noticed| last_move > noticed) {
+                cancel_noticed = None;
+            }
+            if let Some(noticed) = cancel_noticed {
+                if self.world.ticks > noticed && self.world.ticks > last_move {
+                    if let Some(rest) = cancelled_rest(leg, along, furthest, position) {
+                        resends += 1;
+                        if resends == 1 {
+                            self.log(&format!("walk leg: server cancelled the walk at {position:?} (UNSET_MAP_FLAG), resending {} steps", rest.len()));
+                        }
+                        self.send_walk(&rest, run, false)?;
+                        cancel_noticed = None;
+                        last_move = self.world.ticks;
+                    }
+                }
             }
             if self.world.ticks > deadline {
                 return Err(Error::Timeout(format!("leg to {target:?} timed out at {:?}", self.position())));
@@ -362,6 +394,18 @@ impl Bot {
         lines.push(format!("live npcs within 8 of target: {near_npcs}"));
         DebugReport { lines }
     }
+}
+
+/// What to send again after a server cancel: the leg past the tile the
+/// bot stands on, or the whole leg from its start tile (beside `leg[0]`).
+/// Elsewhere (off the leg) nothing is resent: the stall watch decides.
+fn cancelled_rest(leg: &[(i32, i32)], along: Option<usize>, furthest: Option<usize>, position: (i32, i32)) -> Option<Vec<(i32, i32)>> {
+    if let Some(index) = along.or(furthest.filter(|seen| leg[*seen] == position)) {
+        let rest = leg[index + 1..].to_vec();
+        return (!rest.is_empty()).then_some(rest);
+    }
+    let first = *leg.first()?;
+    ((first.0 - position.0).abs() <= 1 && (first.1 - position.1).abs() <= 1).then(|| leg.to_vec())
 }
 
 #[cfg(test)]
@@ -681,3 +725,7 @@ mod tests {
         assert!(!text.contains("static=yes"), "no static half without the service, got:\n{text}");
     }
 }
+
+#[cfg(test)]
+#[path = "movement_cancel_tests.rs"]
+mod cancel_tests;

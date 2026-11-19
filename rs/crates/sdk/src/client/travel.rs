@@ -34,7 +34,7 @@ use lifescape_nav::tables::Tables;
 
 use super::travel_dossier::{TRAIL_TAKE, dossier_json, trail_mark, write_dossier_file};
 use super::travel_hook::{BetweenLegsHook, LegInfo, LegVerdict};
-use super::travel_pause::{TripRun, PAUSE_REPLANS};
+use super::travel_pause::TripRun;
 use crate::client::Bot;
 use crate::client::movement::STEP_CAP;
 use crate::error::{Error, Result, TravelError, TravelErrorKind};
@@ -190,14 +190,32 @@ impl Bot {
         let options_start = std::time::Instant::now();
         let options = self.nav_options_remote()?;
         let options_ms = options_start.elapsed().as_millis();
-        let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
+        let mut from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
         let plan_start = std::time::Instant::now();
-        let (plan, service_ms) = match self.plan_remote(&options, from, dest) {
-            RemoteOutcome::Ready(plan, ipc_ms) => (plan, Some(ipc_ms)),
-            RemoteOutcome::NoRoute(no) => return Err(self.fail_no_route(from, dest, &options, no)),
-            RemoteOutcome::Interrupted(message) => return Err(Error::Interrupted(message)),
-            RemoteOutcome::NavDown(reason) => return Err(Error::Travel(format!("nav-down: {reason}"))),
-            RemoteOutcome::Session(error) => return Err(error),
+        let mut replanned = false;
+        let (plan, service_ms) = loop {
+            let (plan, service_ms) = match self.plan_remote(&options, from, dest) {
+                RemoteOutcome::Ready(plan, ipc_ms) => (plan, Some(ipc_ms)),
+                RemoteOutcome::NoRoute(no) => return Err(self.fail_no_route(from, dest, &options, no)),
+                RemoteOutcome::Interrupted(message) => return Err(Error::Interrupted(message)),
+                RemoteOutcome::NavDown(reason) => return Err(Error::Travel(format!("nav-down: {reason}"))),
+                RemoteOutcome::Session(error) => return Err(error),
+            };
+            // A leg still running server-side moved the bot during the
+            // round trip (`travel_drift_tests`): the plan starts behind
+            // it. Planned again from the tile reached, once per request;
+            // past that the leg's own stall watch decides.
+            let here = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
+            if !replanned && super::travel_here::drifted(from, here) {
+                self.log(&format!(
+                    "nav plan: bot moved ({},{},{}) -> ({},{},{}) during the round trip, replanning once from here",
+                    from.x, from.z, from.level, here.x, here.z, here.level,
+                ));
+                replanned = true;
+                from = here;
+                continue;
+            }
+            break (plan, service_ms);
         };
         // A zero-step plan adjusted on place while the destination is far
         // is a disconnected region the planner reports as Found (blocked
@@ -781,7 +799,6 @@ impl Bot {
     ) -> Result<()> {
         // Counted from the server's tick: the plan just blocked us.
         let mut deadline = self.walk_deadline(timeout)?;
-        let mut pause_budget = PAUSE_REPLANS;
         self.log(&format!(
             "nav timing options={}ms plan={}ms{}",
             timings.options_ms,
@@ -794,7 +811,7 @@ impl Bot {
         // pause replans could not absorb still replans without a dossier
         // when a market pause ran during the trip.
         let pauses_before = self.pauses_done;
-        let outcome = match self.run_plan_through_pauses(&mut plan, dest, &options, &mut deadline, &mut pause_budget) {
+        let outcome = match self.run_plan_through_pauses(&mut plan, dest, &mut options, &mut deadline) {
             TripRun::Done => Ok(()),
             TripRun::Failed(failed, err) => Err((failed, err)),
             TripRun::Final(error) => return Err(error),
@@ -837,7 +854,10 @@ impl Bot {
                 // The replan goes through the service with the same ban,
                 // never a local search: a second service failure is
                 // `nav-down`, the original failure keeps its dossier.
-                let retry = match self.plan_remote(&options, from, dest) {
+                // After a pause the pack may have changed (coins traded or
+                // banked): `pause_replan` reads the live options again.
+                let replanned = if paused { self.pause_replan(&mut options, from, dest) } else { self.plan_remote(&options, from, dest) };
+                let retry = match replanned {
                     RemoteOutcome::Ready(retry, _) => retry,
                     RemoteOutcome::NoRoute(no) if no.reason == NoRouteReason::Aborted => {
                         return Err(Error::Interrupted(format!("replan aborted at {:?}", self.position())));
@@ -860,7 +880,7 @@ impl Bot {
                 ));
                 self.publish_plan(&retry, dest);
                 let mut retry = retry;
-                match self.run_plan_through_pauses(&mut retry, dest, &options, &mut deadline, &mut pause_budget) {
+                match self.run_plan_through_pauses(&mut retry, dest, &mut options, &mut deadline) {
                     TripRun::Done => {
                         self.route.clear();
                         self.route_target = None;

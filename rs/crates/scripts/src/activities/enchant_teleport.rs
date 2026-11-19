@@ -18,7 +18,7 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::magic::{cast_on_held, wield_staff_for, CastPacer};
+use crate::kit::magic::{wield_staff_for, CastPacer};
 use crate::kit::pack::{obj_id, pack_total};
 use crate::kit::spell_load::{run_casts, stock_for, SpellLoad};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
@@ -156,7 +156,7 @@ pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
             pacer.cast_button(cast_bot, |seen| pack_total(seen, target) < had)
         })?
     } else {
-        run_casts(bot, &spec, &load, &keep, |cast_bot| cast_one(cast_bot, &spell, target))?
+        run_casts(bot, &spec, &load, &keep, |cast_bot| cast_one(cast_bot, &mut pacer, target))?
     };
     bot.log(&format!("ok {spell} x{done}"));
     stop.map_or(Ok(0), crate::kit::cycle::exit_code)
@@ -168,27 +168,20 @@ fn cast_button(bot: &mut Bot, pacer: &mut CastPacer) -> Result<(), ScriptError> 
     pacer.cast_button(bot, |seen| magic_xp(seen) > before)
 }
 
-/// Ticks to wait out one cast (server delays plus the convert tick).
-pub const CAST_TICKS: u64 = 40;
-
-/// One enchant on the carried jewel: the input count moves. Anything
-/// quiet past the budget is loud.
-fn cast_one(bot: &mut Bot, spell: &str, obj: u16) -> Result<(), ScriptError> {
+/// One enchant on the carried jewel: landed when the input count moves.
+/// Paced like alchemy (`CastPacer`): `enchant.rs2` ends in `p_delay(1)`
+/// and `OpHeldTHandler` silently drops a cast decoded while the caster
+/// is delayed, so the next send waits out the delay and a swallowed send
+/// goes again (live 2026-11-19: "enchant_lvl2 never landed" on the 2nd
+/// amulet of every load, sent 1-3 ticks after the first landed).
+fn cast_one(bot: &mut Bot, pacer: &mut CastPacer, obj: u16) -> Result<(), ScriptError> {
     let had = pack_total(bot, obj);
-    cast_on_held(bot, spell, obj)?;
-    let deadline = bot.world.ticks + CAST_TICKS;
-    while bot.world.ticks < deadline {
-        bot.pump(2)?;
-        if pack_total(bot, obj) != had {
-            return Ok(());
-        }
-    }
-    Err(ScriptError::Failed(format!("{spell} never landed at {:?}", bot.position())))
+    pacer.cast_held(bot, obj, |seen| pack_total(seen, obj) != had)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{enchant_for, enchants, has_goal, run_enchant_teleport, spell_runes, teleport_level, teleports, BONES_TO_BANANAS, CAST_TICKS, MAGIC_STAT};
+    use super::{enchant_for, enchants, has_goal, run_enchant_teleport, spell_runes, teleport_level, teleports, BONES_TO_BANANAS, MAGIC_STAT};
     use crate::kit::pack::{obj_id, pack_total};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
@@ -262,7 +255,6 @@ mod tests {
             .expect_err("dead socket fails");
         assert!(matches!(error, crate::ScriptError::Sdk(_)), "send path, got {error}");
         assert_eq!(pack_total(&bot, input), 1, "nothing converted offline");
-        assert!(CAST_TICKS >= 3, "covers the server delays");
     }
 
     /// A funded teleport reaches the button press: dead socket fails
@@ -339,6 +331,28 @@ mod tests {
         fund_pack(&mut bot, &[(0, "bones", 1), (1, "earthrune", 2), (2, "waterrune", 2), (3, "naturerune", 1)]);
         let error = run_enchant_teleport(&mut bot, &[BONES_TO_BANANAS.to_string(), "1".to_string()]).expect_err("dead socket fails");
         assert!(matches!(error, crate::ScriptError::Sdk(_)), "send path, got {error}");
+    }
+
+    /// Live 2026-11-19 (daisy_hunt, ida_reed; tim_thorn since 11-18):
+    /// "enchant_lvl2 never landed" on the 2nd amulet of every load. The
+    /// cast step sent the next `OPHELDT` 1-3 ticks after the first landed,
+    /// while `enchant.rs2` held the caster in `p_delay(1)`;
+    /// `OpHeldTHandler` drops a cast decoded while delayed, without a
+    /// word, and the step waited 40 ticks for nothing. The next enchant
+    /// waits out the delay first (`CastPacer`): offline, the delayed caster
+    /// reads the socket (`no socket`) before any send (`not logged in`).
+    #[test]
+    fn the_next_enchant_waits_out_the_server_delay() {
+        let mut bot = offline_bot();
+        fund_pack(&mut bot, &[(0, "strung_emerald_amulet", 2), (1, "cosmicrune", 2), (2, "airrune", 6)]);
+        let target = obj_id(&bot, "strung_emerald_amulet").expect("input resolves");
+        bot.world.ticks = 100;
+        // No keepalive due: the offline pump reaches the socket read.
+        (bot.last_send_tick, bot.last_keepalive) = (100, Some(std::time::Instant::now()));
+        let mut pacer = crate::kit::magic::CastPacer::new("enchant_lvl2");
+        pacer.landed_at(100);
+        let error = super::cast_one(&mut bot, &mut pacer, target).expect_err("offline");
+        assert!(error.to_string().contains("no socket"), "waits before sending, got {error}");
     }
 
     /// Every enchant product exists in the object dump.

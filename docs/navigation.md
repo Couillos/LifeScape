@@ -159,8 +159,15 @@ pauses. Désormais : `await_leg` s'arrête dès qu'une pause s'est close
 (marqueur `paused-mid-trip`), et un échec de segment avec une pause close
 pendant le plan replanifie depuis la position, sans arête bannie, sans
 dossier, échéance repoussée de la durée de la pause
-(`run_plan_through_pauses`, au plus `PAUSE_REPLANS` = 2 par trajet,
-hors du replan normal). Un segment porte dont le bot est déjà sur
+(`run_plan_through_pauses`, hors du replan normal). Depuis le
+2026-11-19 : chaque pause close replanifie, sans plafond (chaque replan
+exige une NOUVELLE pause close, la boucle ne peut pas tourner à vide ;
+l'ancien plafond de 2 écrivait ~14 dossiers `paused-mid-trip`/h pour un
+bot de la place de Varrock servant quatre livraisons dans un trajet), et
+le replan relit les options vivantes (`pause_replan` : la pause a pu
+échanger ou déposer les pièces du péage ; seuls les bans du trajet
+restent — avant : péage 2882 planifié sans pièces, 3 `DoorDidNotOpen`
+« left us at (3267,3227) »). Un segment porte dont le bot est déjà sur
 `cross_to` tient (plan demandé pendant le dernier pas d'une traversée :
 3 « off stand »). `suspect_tile` ne lit plus un « pas » nul ou long
 (jambe renvoyée après pause) comme un mur fermé.
@@ -287,6 +294,32 @@ Arrêts (`Interrupted`) : fin de budget (`budget_exhausted`), unload ou
 stop du cerveau tombant en pleine marche écrivent encore leur dossier
 (rejouable) mais `errors_model::from_dossier` ne les ingère plus comme
 erreurs (26 lignes « run stopped » melee en 40 min, toutes légitimes).
+
+Marche annulée par le serveur (2026-11-19, `await_leg`, tests
+`client/movement_cancel_tests.rs`) : le serveur dit qu'il a jeté ou
+arrêté notre marche par `UNSET_MAP_FLAG` — MOVE reçu pendant un
+`p_delay` (`MoveClickHandler` : session de forge entière, dernier délai
+d'une boucle de fonte/minage/cuisson), ou `p_stopaction` du contenu
+(`wilderness_warning.rs2` : première traversée de z 3512..3515 par
+session, varp temporaire). Le SDK l'ignorait, attendait 13 ticks et
+écrivait un refus (première heure après le déploiement : ~26 arrêts à
+(3219,3513)/(3217,3514)/(3054,3513)…, ~15 clics jetés après « You hammer
+… », « You make a gold amulet », « You manage to mine »). Désormais
+(compteur `Bot::walk_cancels`) : un drapeau reçu puis un tick sans pas
+renvoie le reste de la jambe depuis la tuile atteinte (ou toute la jambe
+depuis son départ), borné par l'échéance ; sans drapeau, la veille de
+blocage décide comme avant ; un drapeau suivi d'un pas n'est pas une
+annulation.
+
+Plan revenu alors que le bot marche encore (2026-11-19,
+`Bot::plan_travel`, tests `client/travel_drift_tests.rs`) : la pause
+marché lance sa marche dans le pump d'une jambe en vol ; le serveur
+continue l'ancienne jambe pendant l'aller-retour (0,2-0,5 s) et le plan
+part 2 à 10 tuiles derrière le bot (frank_shaw-50111, ~6 refus/h). Si le
+bot s'est éloigné de plus d'une tuile du départ (ou a changé de niveau),
+le trajet est replanifié depuis la tuile atteinte, une seule fois par
+requête ; ensuite la veille de blocage décide. Jamais de clic sur sa
+propre tuile pour arrêter la marche.
 
 Veille de blocage d'une jambe (`await_leg`, SDK) : une tuile plus loin
 sur la jambe compte comme progrès, pas seulement un rapprochement de sa

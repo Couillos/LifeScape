@@ -48,3 +48,14 @@ mod tests {
         assert!(bot.plan_here(Tile { x: 3222, z: 3218, level: 1 }).is_none(), "another level is a trip");
     }
 }
+
+/// True when the bot left the plan's start by more than one tile (or
+/// changed level) while the plan was computed: a leg still running
+/// server-side (`travel_drift_tests`).
+pub(crate) fn drifted(from: Tile, here: Tile) -> bool {
+    from.level != here.level || (from.x - here.x).abs() > 1 || (from.z - here.z).abs() > 1
+}
+
+#[cfg(test)]
+#[path = "travel_drift_tests.rs"]
+mod drift_tests;

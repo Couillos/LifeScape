@@ -739,9 +739,22 @@ cours) : le besoin nu suit la voie usuelle.
   Vérifiés sans changement : quêtes (objets gardés en sac par
   `hold_in_pack`, chaque étape marche jusqu'au PNJ par `go_to_npc`),
   scripts à charges (`kit::cycle::run`, chaque charge repasse par la
-  banque et le site). Hors périmètre, constaté : des scripts à charges
-  échouent aussi juste après une reprise (pêche, minage, fonte, tonte :
-  la charge en cours est banquée), à traiter à part.
+  banque et le site).
+- Charge coupée par une livraison (2026-11-19, après le déploiement de
+  17:41) : un pas de `kit::cycle::run` qui échoue (`Failed`) alors qu'une
+  pause s'est close pendant ce pas est repris (`StepControl::Continue`,
+  le pas suivant repasse par la banque), au plus `PASS_PAUSE_RESTARTS`
+  (2) fois d'affilée (`kit::site::reload_after_pause`) ; `Usage`,
+  `Blocked` et un échec sans pause restent des échecs. Live : 22
+  « smelting consumed nothing » (ida_reed, tim_thorn, brook_daisy,
+  pia_brown…, la pause pendant la marche vers le fourneau avait banqué
+  le minerai), 3 « nothing smithed » (nina_87, Zezima : produits banqués
+  en pleine chaîne), « casting consumed nothing » (wolfe_jack, bijoux).
+- Enchantement (`enchant_teleport`) : chaque sort passe par `CastPacer`
+  comme l'alchimie (`enchant.rs2` finit par `p_delay(1)`,
+  `OpHeldTHandler` jette sans un mot un sort reçu pendant le délai).
+  Avant : le 2ᵉ bijou de chaque charge, lancé 1 à 3 ticks après le 1ᵉʳ,
+  « enchant_lvl2 never landed » (daisy_hunt, ida_reed, tim_thorn).
 - Malédiction (`curse`) : « I'm already under attack! » veut dire qu'un
   monstre nous a frappés dans les 8 derniers ticks (`player_combat.rs2`
   `player_in_combat_check`) ; si on ne le voit pas, aucun lancer pendant

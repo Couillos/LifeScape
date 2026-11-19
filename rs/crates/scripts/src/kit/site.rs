@@ -68,7 +68,8 @@ pub enum PassLeg {
 }
 
 /// Restarts from the bank one single pass may take after market pauses
-/// (the SDK trip's own bound, `travel_pause::PAUSE_REPLANS`).
+/// (the pass's own bound: since 2026-11-19 the SDK trip itself replans
+/// after every closed pause, `travel_pause::run_plan_through_pauses`).
 pub const PASS_PAUSE_RESTARTS: u32 = 2;
 
 /// Pure: a load-and-act loop (tanning, dialogue buys) whose act came

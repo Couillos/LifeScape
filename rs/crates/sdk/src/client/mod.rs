@@ -210,6 +210,10 @@ pub struct Bot {
     /// Market pauses finished so far (`note_pause`): a trip whose plan
     /// spans one replans from where the pause left the bot.
     pub pauses_done: u64,
+    /// `UNSET_MAP_FLAG` frames received: the server's word that it
+    /// dropped or stopped our walk (MOVE while delayed, `p_stopaction`,
+    /// walk done). `await_leg` reads it to resend a cancelled leg.
+    pub walk_cancels: u64,
     /// Zone label for log stamps (`zones::zone_name`), refreshed by the
     /// pump hook; "?" when unknown. Never a silent fallback: the "?" shows.
     pub zone_label: String,
@@ -274,6 +278,7 @@ impl Bot {
             pause_ticks: 0,
             pause_since: None,
             pauses_done: 0,
+            walk_cancels: 0,
             zone_label: "?".to_string(),
             run_latch: false,
             bank_opens: 0,
@@ -485,6 +490,9 @@ impl Bot {
             self.observe_ledgers();
         }
         self.world.feed(&frame.name, &frame.body)?;
+        if frame.name == "UNSET_MAP_FLAG" {
+            self.walk_cancels = self.walk_cancels.saturating_add(1);
+        }
         if frame.name == "REBUILD_NORMAL" {
             self.send_named("MAP_BUILD_COMPLETE", &[])?;
         }

@@ -602,7 +602,8 @@ pub fn blocked_access(area: &str) -> ScriptError {
 /// Drive one activity until its stop conditions: checks the spec, runs
 /// one unit, repeat. Goal and budget end the run with their exit codes;
 /// every other error propagates (blocked included, except a block once
-/// the `--use` stock is spent: the lot is done, `kit::stock_use`).
+/// the `--use` stock is spent: the lot is done, `kit::stock_use`; and a
+/// failure across a market pause, retaken `PASS_PAUSE_RESTARTS` times).
 pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut CycleState) -> Result<StepControl, ScriptError>) -> crate::ScriptResult {
     bot.assigned_site = spec.site;
     // A guild site: the uniform goes on before any step walks to the door.
@@ -613,12 +614,24 @@ pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut C
     // XP, no object above its high mark, bank churn) fails typed
     // `no progress: …` instead of looping to the budget (`kit::progress`).
     state.progress = crate::kit::progress::ProgressGuard::start(spec.activity, &crate::kit::progress::mark(bot));
+    let mut pause_reloads = 0u32;
     loop {
         if let Some(stop) = poll_stop(bot, &state, spec) {
             return exit_code(stop);
         }
+        let pauses_at_step = bot.pauses_done;
         let control = match step(bot, &mut state) {
-            Ok(control) => control,
+            Ok(control) => {
+                pause_reloads = 0;
+                control
+            }
+            // A delivery closed during the load banked the pack but the
+            // tools (`kit::site::paused_since`): take the load again.
+            Err(ScriptError::Failed(reason)) if crate::kit::site::reload_after_pause(pauses_at_step, bot.pauses_done, pause_reloads) => {
+                pause_reloads += 1;
+                bot.log(&format!("load cut by a market pause ({reason}): taking it again"));
+                StepControl::Continue
+            }
             // The lot's stock is spent (`kit::stock_use`): the order is done.
             Err(ScriptError::Blocked { missing }) if state.stock_spent(bot, spec) => {
                 bot.log(&format!("stock used up after {} loads (blocked on {}): lot done", state.units, missing.join(", ")));
@@ -639,18 +652,8 @@ pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut C
 }
 
 #[cfg(test)]
-mod spot_tests {
-    #[test]
-    fn combat_styles_take_spot_names() {
-        for activity in ["melee", "ranged", "magic"] {
-            let spec = super::parse_cli(activity, &["cows".to_string(), "--ticks".to_string(), "600".to_string()]).expect("spot parses");
-            assert_eq!(spec.resource, vec!["cows".to_string()], "{activity}");
-            assert_eq!(spec.budget_max_ticks, 600);
-        }
-        let counted = super::parse_cli("magic", &["25".to_string()]).expect("count parses");
-        assert_eq!(counted.targets.count, Some(25));
-    }
-}
+#[path = "cycle_run_tests.rs"]
+mod run_tests;
 
 #[cfg(test)]
 mod tests {
