@@ -1,15 +1,16 @@
-//! Live side of the melee ladder (`gamedata::melee_ladder`): reads the
-//! bot (base levels, worn bonuses, food and coins in pack and bank, the
-//! brass key, the toll flank), asks the ladder and turns its pick into
-//! a spot plus a `HuntPlan`. A foodless bot whose best rung bites gets
-//! the typed `Blocked` the brain turns into a food obtain.
+//! Live side of the combat ladder (`gamedata::melee_ladder`): reads the
+//! bot (base levels, worn bonuses, the run's style — melee, ranged with
+//! its bow and arrows, magic with its spell —, food and coins in pack and
+//! bank, the brass key, the toll flank), asks the ladder and turns its
+//! pick into a spot plus a `HuntPlan`. A foodless bot whose best rung
+//! bites gets the typed `Blocked` the brain turns into a food obtain.
 
 #![forbid(unsafe_code)]
 
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use knowledge::melee_ladder::{food_to_ask, Gate, Holdings, Pick, Rung, BRASS_KEY, TOLL_COINS};
+use knowledge::melee_ladder::{food_to_ask, Gate, Holdings, Pick, Rung, BOAT_COINS, BRASS_KEY, TOLL_COINS};
 use knowledge::melee_math::Fighter;
 
 use crate::kit::gear::WORN_COM_NAME;
@@ -36,12 +37,50 @@ fn worn_gear(bot: &Bot) -> Vec<knowledge::equipment::Wearable> {
         .collect()
 }
 
+/// Sum of one attack bonus (`range`, `magic`) over the worn gear.
+fn worn_attack(worn: &[knowledge::equipment::Wearable], kind: &str) -> i64 {
+    worn.iter().flat_map(|piece| piece.attack.iter()).filter(|(name, _)| name == kind).map(|(_, bonus)| *bonus).sum()
+}
+
+/// Ranged strength of the worn arrows (`BRONZE_ARROW_STRENGTH` when no
+/// arrow is worn: the gear plan wears them at the bank).
+pub fn arrow_strength(worn: &[knowledge::equipment::Wearable]) -> i64 {
+    worn.iter().map(|piece| piece.rangebonus).filter(|bonus| *bonus >= 0).max().unwrap_or(knowledge::melee_math::BRONZE_ARROW_STRENGTH)
+}
+
+/// Max hit and base xp of a cast of `spell` (the spell dump); wind
+/// strike's when the spell is unknown.
+pub fn cast_of(spell: Option<&str>) -> (i64, f64) {
+    let row = knowledge::spells::by_name(spell.unwrap_or("wind_strike")).into_iter().chain(knowledge::spells::by_name("wind_strike")).find(|row| row.maxhit.is_some());
+    row.map(|row| (row.maxhit.unwrap_or(0), row.xp as f64 / 10.0)).unwrap_or((0, 0.0))
+}
+
 /// The fighter as the ladder rates it: base levels, max hitpoints,
-/// combat level and the worn bonuses.
+/// combat level, the worn bonuses and the run's style (`combat_style`:
+/// ranged shoots with its level, bow and arrows; magic casts the run's
+/// spell, `combat_spell`; anything else swings).
 pub fn fighter(bot: &Bot) -> Fighter {
     let (attack, defence, strength, hitpoints) = (base_level(bot, 0, 1), base_level(bot, 1, 1), base_level(bot, 2, 1), base_level(bot, 3, 10));
     let combat = bot.combat_level().map(i64::from).unwrap_or(3);
-    Fighter::naked(attack, strength, defence, hitpoints, combat).wearing(&worn_gear(bot))
+    let worn = worn_gear(bot);
+    let melee = Fighter::naked(attack, strength, defence, hitpoints, combat).wearing(&worn);
+    match bot.combat_style.as_str() {
+        "ranged" => melee.shooting(base_level(bot, 4, 1), worn_attack(&worn, "range"), arrow_strength(&worn)),
+        "magic" => {
+            let (max_hit, cast_xp) = cast_of(bot.combat_spell.as_deref());
+            melee.casting(base_level(bot, 6, 1), worn_attack(&worn, "magic"), max_hit, cast_xp)
+        }
+        _ => melee,
+    }
+}
+
+/// Rungs the run's style cannot hunt: a magic run's spell must reach
+/// every NPC of the camp (`melee_ladder::unfit_for_spell`).
+pub fn style_unfit(bot: &Bot) -> Vec<&'static str> {
+    if bot.combat_style != "magic" {
+        return Vec::new();
+    }
+    knowledge::melee_ladder::unfit_for_spell(bot.combat_spell.as_deref().unwrap_or("wind_strike"))
 }
 
 /// Food a foodless bot asks the brain for: the biggest heal its max
@@ -90,6 +129,9 @@ pub fn gate_items(rung: &Rung, holdings: &Holdings) -> Vec<(String, u32)> {
         Gate::Open => Vec::new(),
         Gate::Toll if holdings.east_of_toll => Vec::new(),
         Gate::Toll => vec![("coins".to_string(), TOLL_COINS)],
+        // The sailors and the customs officer take the fare from the
+        // pack, out and back: every trip leaves the bank with both.
+        Gate::Boat => vec![("coins".to_string(), BOAT_COINS)],
     };
     if let Some(key) = rung.shortcut_key.filter(|key| *key == BRASS_KEY && holdings.brass_key) {
         out.push((key.to_string(), 1));
@@ -148,9 +190,12 @@ pub fn pick(bot: &mut Bot, excluded: &[&str]) -> Result<(knowledge::combat_spots
     let melee = fighter(bot);
     let owned = holdings(bot);
     let seed = knowledge::melee_ladder::seed_of(&bot.username);
-    let choice = knowledge::melee_ladder::choose_excluding(&melee, &owned, seed, excluded);
+    let mut left_out: Vec<&str> = excluded.to_vec();
+    left_out.extend(style_unfit(bot));
+    let choice = knowledge::melee_ladder::choose_excluding(&melee, &owned, seed, &left_out);
     bot.log(&format!(
-        "ladder: atk={} str={} def={} hp={} cb={} bonus atk={:?} str={} def={:?} food={}x{} coins={} key={} -> {choice:?}",
+        "ladder ({:?}): atk={} str={} def={} hp={} cb={} bonus atk={:?} str={} def={:?} food={}x{} coins={} key={} -> {choice:?}",
+        melee.offense,
         melee.attack,
         melee.strength,
         melee.defence,
@@ -171,6 +216,11 @@ pub fn pick(bot: &mut Bot, excluded: &[&str]) -> Result<(knowledge::combat_spots
             if rung.gate == Gate::Toll && !owned.east_of_toll {
                 bot.allow_paid = true;
                 bot.log(&format!("ladder: {} across the toll, paying the gate ({TOLL_COINS} coins kept)", rung.key));
+            }
+            if rung.gate == Gate::Boat {
+                // The boat is part of the map: the pack's coins are its
+                // only gate (`gate_items` keeps the fare out and back).
+                bot.log(&format!("ladder: {} behind the Port Sarim boat ({BOAT_COINS} coins kept)", rung.key));
             }
             Ok((spot, plan_of(&rung, &clusters, food, &owned)))
         }
@@ -249,5 +299,22 @@ mod tests {
         assert_eq!(gate_items(&warriors, &west), vec![("coins".to_string(), 10)]);
         let east = holdings_from((5, 3), (0, 0), 0, false, true);
         assert!(gate_items(&warriors, &east).is_empty(), "east of the fence: no toll");
+        // User 2026-11-20: the volcano demons ride the boat both ways,
+        // 30 coins each from the pack (`sailors.rs2`, `customs_officer.rs2`).
+        let demons = rung_by_key("lesser_demons").expect("demons");
+        assert_eq!(gate_items(&demons, &west), vec![("coins".to_string(), 60)]);
+    }
+
+    /// Archers shoot their worn arrows (bronze when none is worn); a
+    /// mage's cast reads the spell dump.
+    #[test]
+    fn styles_read_their_own_gear() {
+        let rune = lifescape_gamedata::equipment::by_name("rune_arrow").expect("rune arrow");
+        let bow = lifescape_gamedata::equipment::by_name("shortbow").expect("bow");
+        assert_eq!(super::arrow_strength(&[bow.clone(), rune.clone()]), rune.rangebonus);
+        assert_eq!(super::arrow_strength(&[bow]), lifescape_gamedata::melee_math::BRONZE_ARROW_STRENGTH);
+        let (blast, blast_xp) = super::cast_of(Some("fire_blast"));
+        let (strike, _) = super::cast_of(None);
+        assert!(blast > strike && strike > 0 && blast_xp > 0.0, "fire blast {blast} vs wind strike {strike}");
     }
 }

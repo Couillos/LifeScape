@@ -52,8 +52,12 @@ pub fn debuff_spells() -> Vec<String> {
 }
 
 /// True when `spell` affects every NPC of the combat spot `spot` (crumble
-/// undead: all undead; any other spell: any spot).
+/// undead: all undead; any other spell: any spot). The ladder takes the
+/// spells that need no target param: it climbs every camp.
 pub fn spell_fits_spot(spell: &str, spot: &str) -> bool {
+    if spot == crate::tranches::MELEE_LADDER {
+        return lifescape_gamedata::spells::target_param(spell).is_none();
+    }
     lifescape_gamedata::combat_spots::by_key(spot).is_some_and(|found| found.npc_names.iter().all(|npc| lifescape_gamedata::spells::affects(spell, npc)))
 }
 
@@ -148,11 +152,11 @@ pub fn cast_xp(method: &str) -> Option<f64> {
     (row.xp > 0).then_some(row.xp as f64 / 10.0)
 }
 
-/// Spot a debuff climb casts on at `level`: the magic tranche's own
-/// harmless camp (`tranches::tranche_resource`: chickens, then cows),
-/// whose retaliation never threatens the caster.
+/// Spot a debuff climb casts on at `level`: a harmless camp (chickens,
+/// then cows), whose retaliation never threatens the caster (the magic
+/// tranche itself climbs the ladder from 10).
 pub fn curse_spot(level: u8) -> String {
-    crate::tranches::tranche_resource("magic", level)
+    crate::tranches::starter_camp(level).to_string()
 }
 
 /// Curse method the planner prices at `level` for `spell`.

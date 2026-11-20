@@ -271,3 +271,105 @@ fn foodless_fights_ask_the_best_affordable_food() {
     assert_eq!(super::affordable_food("cabbage", 20, 10, &prices), "cabbage", "off the ladder: asked stays");
     assert_eq!(super::food_room(20), 10, "a 20-HP bot carries heals up to 10");
 }
+
+const ADAMANT: [&str; 5] = ["adamant_scimitar", "adamant_full_helm", "adamant_platebody", "adamant_platelegs", "adamant_kiteshield"];
+const RUNE: [&str; 5] = ["rune_scimitar", "rune_full_helm", "rune_platebody", "rune_platelegs", "rune_kiteshield"];
+
+/// Swordfish and the boat's round trip in hand.
+fn supplied() -> Holdings {
+    Holdings { food_count: 20, best_heal: 14, coins: 500, brass_key: false, east_of_toll: false }
+}
+
+fn rated_rung(melee: &Fighter, holdings: &Holdings, key: &str) -> super::Rated {
+    rate(melee, holdings).into_iter().find(|entry| entry.rung.key == key).unwrap_or_else(|| panic!("{key} rated"))
+}
+
+/// User 2026-11-20: 47 bots at combat 60 and up, nothing above the hill
+/// giants. The lesser demons of the Karamja volcano open from combat 80
+/// behind the boat (the 60-coin fare out and back), the greater demons
+/// of the deep Wilderness from 90.
+#[test]
+fn high_levels_reach_the_demons() {
+    let eighty = fighter(72, 72, &RUNE);
+    assert!((80..90).contains(&eighty.combat), "combat {}", eighty.combat);
+    let lesser = rated_rung(&eighty, &supplied(), "lesser_demons");
+    assert_eq!(lesser.refused, None, "combat {}: {:?}", eighty.combat, lesser.refused);
+    assert!(lesser.clusters.iter().all(|(x, z, _, _)| (2820..=2850).contains(x) && (9548..=9570).contains(z)), "the volcano only: {:?}", lesser.clusters);
+    let broke = rated_rung(&eighty, &Holdings { coins: 59, ..supplied() }, "lesser_demons");
+    assert!(broke.refused.as_deref().is_some_and(|why| why.contains("Boat")), "no round trip: {:?}", broke.refused);
+    let greater = rated_rung(&eighty, &supplied(), "greater_demons");
+    assert!(greater.refused.is_some(), "greater demons wait for 90: {:?}", greater.refused);
+    let ninety = fighter(80, 80, &RUNE);
+    assert!(ninety.combat >= 90, "combat {}", ninety.combat);
+    let greater = rated_rung(&ninety, &supplied(), "greater_demons");
+    assert_eq!(greater.refused, None, "combat {}: {:?}", ninety.combat, greater.refused);
+    let seventy = fighter(62, 62, &ADAMANT);
+    assert!(seventy.combat < 80);
+    assert!(rated_rung(&seventy, &supplied(), "lesser_demons").refused.is_some(), "combat {} stays off the demons", seventy.combat);
+    // The band of an 80+ fighter leaves the hill giants behind.
+    let mut picked = std::collections::BTreeSet::new();
+    for index in 0..24 {
+        picked.insert(picked_key(&choose(&eighty, &supplied(), seed_of(&format!("v{index:02}")))));
+    }
+    assert!(picked.contains("lesser_demons"), "the demons hold the band: {picked:?}");
+    assert!(!picked.contains("cows") && !picked.contains("guards"), "{picked:?}");
+}
+
+/// Combat 60 to 80: the ice camps (dungeon under Mudskipper Point,
+/// Draynor bank; the deep Wilderness camp, one trip).
+#[test]
+fn mid_high_levels_reach_the_ice_camps() {
+    let sixty = fighter(60, 60, &ADAMANT);
+    let dungeon = rated_rung(&sixty, &supplied(), "ice_dungeon");
+    assert_eq!(dungeon.refused, None, "combat {}: {:?}", sixty.combat, dungeon.refused);
+    assert!(dungeon.clusters.iter().all(|(_, z, _, _)| *z > 9500), "{:?}", dungeon.clusters);
+    let wild = rated_rung(&sixty, &supplied(), "wild_ice");
+    assert_eq!(wild.refused, None, "one trip in the Wilderness: {:?}", wild.refused);
+    let weak = fighter(35, 35, &STEEL);
+    assert!(rated_rung(&weak, &supplied(), "ice_dungeon").refused.is_some(), "combat {} stays off the ice", weak.combat);
+}
+
+/// Item 2 (user 2026-11-20): a camp with no bank within the trek limit
+/// is one trip until the food runs out, its danger still a combat
+/// requirement (the other hunters, the risk floor), never `NEVER`.
+#[test]
+fn a_camp_without_a_bank_is_one_trip() {
+    let greater = rung_by_key("greater_demons").expect("greater");
+    let clusters = rung_clusters(&greater);
+    assert!(!clusters.is_empty());
+    for (x, z, level, _) in &clusters {
+        assert!(!super::cluster_banked(&greater, (*x, *z, *level)), "no bank in reach of ({x},{z})");
+        let needed = super::cluster_requirement(&greater, (*x, *z, *level));
+        assert!((90..crate::danger::NEVER).contains(&needed), "({x},{z}) needs {needed}");
+    }
+    let lesser = rung_by_key("lesser_demons").expect("lesser");
+    let (x, z, level, _) = rung_clusters(&lesser)[0];
+    assert!(super::cluster_banked(&lesser, (x, z, level)), "the volcano banks at Draynor by the boat");
+    // The far trip costs fighting time: the same camp with a bank would
+    // be worth more.
+    let rated = rated_rung(&fighter(80, 80, &RUNE), &supplied(), "greater_demons");
+    assert!(rated.value < rated.estimate.xp_per_tick, "{rated:?}");
+}
+
+/// Item 4 (user 2026-11-20): archers and mages climb the same camps with
+/// their own levels and gear; their defence and hitpoints keep the same
+/// safety rules (the foe answers in melee).
+#[test]
+fn archers_and_mages_climb_the_ladder() {
+    let base = Fighter::naked(1, 1, 70, 80, 85).wearing(&gear(&["rune_full_helm", "rune_platebody", "rune_platelegs"]));
+    let archer = base.shooting(85, 70, crate::equipment::by_name("rune_arrow").expect("rune arrow").rangebonus);
+    let lesser = rated_rung(&archer, &supplied(), "lesser_demons");
+    assert_eq!(lesser.refused, None, "{:?}", lesser.refused);
+    let pick = picked_key(&choose(&archer, &supplied(), seed_of("archer")));
+    assert!(!matches!(pick, "cows" | "chickens"), "a ranged 85 leaves the cows: {pick}");
+    let mage = base.casting(85, 20, 16, 34.5);
+    let pick = picked_key(&choose(&mage, &supplied(), seed_of("mage")));
+    assert!(!matches!(pick, "cows" | "chickens"), "a magic 85 leaves the cows: {pick}");
+    // Untrained fists rate the same body far lower.
+    let fists = rated_rung(&base, &supplied(), "lesser_demons");
+    assert!(fists.estimate.xp_per_tick < lesser.estimate.xp_per_tick / 3.0);
+    // Crumble undead reaches no rung's foes but undead ones.
+    let unfit = super::unfit_for_spell("crumble_undead");
+    assert!(unfit.contains(&"lesser_demons") && unfit.contains(&"cows"), "{unfit:?}");
+    assert!(super::unfit_for_spell("fire_blast").is_empty());
+}

@@ -306,7 +306,7 @@ pub fn recipe_row(engine: &Engine, ask: &RateAsk, answer: &RateAnswer, held: &[(
 
 /// Activities of a build: the catalogue plus every measured activity it
 /// does not list (an alchemy of a gathered object, a style a fight
-/// was measured in), never the melee ladder (its rungs are listed).
+/// was measured in), never a ladder (melee's rungs are listed).
 pub fn entries<'e>(engine: &'e Engine) -> &'e [crate::guide_methods::GuideMethod] {
     engine.entries_memo(|| list_entries(engine))
 }
@@ -315,7 +315,7 @@ fn list_entries(engine: &Engine) -> Vec<crate::guide_methods::GuideMethod> {
     let mut out: Vec<crate::guide_methods::GuideMethod> = crate::guide_methods::catalogue().to_vec();
     let mut listed: std::collections::HashSet<(String, String)> = out.iter().map(|entry| (entry.method.clone(), entry.style.clone())).collect();
     for key in engine.world.measured {
-        if key.method == crate::guide_methods::LADDER || !listed.insert((key.method.clone(), key.style.clone())) {
+        if crate::tranches::is_ladder(&key.method) || !listed.insert((key.method.clone(), key.style.clone())) {
             continue;
         }
         out.push(crate::guide_methods::GuideMethod { method: key.method.clone(), style: key.style.clone() });

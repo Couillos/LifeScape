@@ -53,6 +53,13 @@ fn fights_burn_arrows_and_runes() {
     assert!((fire - 3 * mind).abs() <= 3 && (air - 2 * mind).abs() <= 2, "3:2:1 a cast: {runes:?}");
     assert!(mind > 0 && (mind as f64) < xp_between(13, 20) / 11.5, "every cast pays the base 11.5 XP at least: {runes:?}");
     assert!(tranche_consumption("fight:melee/cows", 1, 10).is_empty(), "melee burns nothing");
+    // The ranged and magic ladders (user 2026-11-20) size their ammo on
+    // the camp a fresh climb starts on (cows): arrows and runes stay
+    // budgeted, the measured rates take over once the ladder runs.
+    let ladder_arrows = tranche_need("fight:ranged/ladder", 10, 20, "bronze_arrow").expect("ladder arrows");
+    assert_eq!(Some(ladder_arrows), tranche_need("fight:ranged/cows", 10, 20, "bronze_arrow"));
+    let ladder_runes = tranche_consumption("fight:magic/fire_strike/ladder", 13, 20);
+    assert_eq!(ladder_runes, tranche_consumption("fight:magic/fire_strike/cows", 13, 20));
 }
 
 /// R3.3: XP per action, ticks and consumption come from the rate read,

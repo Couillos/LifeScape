@@ -2,9 +2,26 @@
 //! each tranche and the script-side method. Split out of `expand`
 //! (rule 4); API re-exported there.
 
-/// Spot keyword of the melee script's training ladder (`melee ladder`,
-/// `scripts::kit::ladder::LADDER_KEY`): no fixed spot.
+/// Spot keyword of the fight scripts' training ladder (`melee ladder`,
+/// `ranged ladder`, `magic ladder --spell <spell>`,
+/// `scripts::kit::ladder::LADDER_KEY`): no fixed spot, every style.
 pub const MELEE_LADDER: &str = "ladder";
+/// Camp a ranged or magic ladder's prior reads (`method_rate_fight`):
+/// the one a fresh climb starts on, so its arrows and runes size as the
+/// fixed camp did until the measured rates take over.
+pub const LADDER_PRIOR_SPOT: &str = "cows";
+
+/// Harmless camp at `level`: chickens, then cows from 10 (the curses'
+/// camp, the guides' fixed ranged and magic camps).
+pub fn starter_camp(level: u8) -> &'static str {
+    if level >= 10 { "cows" } else { "chickens" }
+}
+
+/// True when a fight method climbs the ladder (`fight:<style>/ladder`,
+/// magic with its spell).
+pub fn is_ladder(method: &str) -> bool {
+    method.starts_with("fight:") && method.rsplit('/').next() == Some(MELEE_LADDER)
+}
 
 /// D21 level tranches per skill: the brain fixes one resource per
 /// tranche, the script never changes tier mid-task. P1 tiers prefer the
@@ -174,11 +191,12 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
         // Bones (4.5 XP, every chicken and cow) to 20, big bones (15 XP)
         // after: the market or a giant spot feeds the climb.
         "prayer" => if level >= 20 { "big_bones" } else { "bones" }.to_string(),
-        // Melee from 10 trains on the ladder (`melee ladder`: the script
-        // picks the F2P spot from the live levels, gear, hitpoints and
-        // food; audit 2026-11-13: combat 50-59 bots still on cows). The
+        // Every style from 10 trains on the ladder (`melee ladder`: the
+        // script picks the F2P spot from the live levels, gear, hitpoints
+        // and food; audit 2026-11-13: combat 50-59 bots still on cows;
+        // user 2026-11-20: ranged and magic climb to the demons too). The
         // fresh tranche stays on chickens.
-        "attack" | "strength" | "defence" | "hitpoints" if level >= 10 => MELEE_LADDER.to_string(),
+        "attack" | "strength" | "defence" | "hitpoints" | "ranged" | "magic" if level >= 10 => MELEE_LADDER.to_string(),
         // Real `combat_spots` keys (the old `chicken_lumbridge` named no
         // spot: melee silently auto-picked goblins and cows and died).
         "attack" | "strength" | "defence" | "hitpoints" | "ranged" | "magic" => {

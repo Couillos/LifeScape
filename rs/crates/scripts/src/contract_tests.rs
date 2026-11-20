@@ -31,7 +31,7 @@ fn methods() -> Vec<String> {
         "tan:cow_hide", "craft:leather_gloves", "fire:willow_logs", "spin:ball_of_wool", "pottery:pot_empty", "pottery:piedish",
         "pottery:bowl_empty", "jewelry:gold_ring", "jewelry:unstrung_gold_amulet", "runecraft:airrune", "pick:grain", "mill:pot_flour",
         "milk:bucket_milk", "fill:jug_water", "essence:blankrune", "string:unstrung_gold_amulet", "alch:gold_ring", "superheat:iron_bar",
-        "superheat:steel_bar", "enchant:strung_sapphire_amulet", "fight:melee/cows", "fight:melee/ladder", "fight:ranged/cows",
+        "superheat:steel_bar", "enchant:strung_sapphire_amulet", "fight:melee/cows", "fight:melee/ladder", "fight:ranged/cows", "fight:ranged/ladder", "fight:magic/fire_blast/ladder",
         "fight:magic/cows", "fight:magic/fire_strike/cows", "fight:magic/earth_bolt/goblins", "cut:sapphire", "cut:ruby", "dye:yellowdye",
         "dye:reddye", "dye:bluedye", "ground:hammer", "ground:chisel", "telegrab:wine_of_zamorak", "bury:bones", "bury:big_bones",
         "market:buy", "market:sell", "shop:buy", "dialogue:buy", "market:make", "space:cleanup", "equip:melee", "equip:ranged", "equip:magic",

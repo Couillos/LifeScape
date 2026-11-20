@@ -91,8 +91,12 @@ fn every_skill_owns_its_reach_tiers() {
     assert_eq!(reach_method("runecraft", 9), "runecraft:earthrune");
     assert_eq!(reach_method("prayer", 1), "bury:bones");
     assert_eq!(reach_method("prayer", 20), "bury:big_bones");
-    assert_eq!(reach_method("ranged", 20), "fight:ranged/cows");
-    assert_eq!(reach_method("magic", 20), "fight:magic/wind_bolt/cows", "the best spell open at the start");
+    // User 2026-11-20: archers and mages climb the camps like melee (the
+    // ladder picks from the live levels, gear, hitpoints and food).
+    assert_eq!(reach_method("ranged", 20), "fight:ranged/ladder");
+    assert_eq!(reach_method("ranged", 9), "fight:ranged/chickens");
+    assert_eq!(reach_method("magic", 20), "fight:magic/wind_bolt/ladder", "the best spell open at the start");
+    assert_eq!(reach_method("magic", 60), "fight:magic/fire_blast/ladder");
     assert_eq!(reach_method("magic", 1), "fight:magic/wind_strike/chickens");
 }
 
@@ -395,7 +399,7 @@ fn combat_tranches_name_real_spots() {
         for level in [1u8, 9, 10, 20, 30, 40] {
             let method = reach_method(skill, level);
             let spot = method.rsplit('/').next().expect("spot part");
-            let ladder = spot == crate::tranches::MELEE_LADDER && level >= 10 && !matches!(skill, "ranged" | "magic");
+            let ladder = spot == crate::tranches::MELEE_LADDER && level >= 10;
             assert!(ladder || lifescape_gamedata::combat_spots::by_key(spot).is_some(), "{skill} {level}: {method} names no spot");
         }
     }

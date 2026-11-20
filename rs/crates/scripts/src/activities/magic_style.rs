@@ -102,15 +102,6 @@ pub fn spell_runes(spell: &str) -> Vec<(String, i64)> {
     required_runes(spell).iter().map(|(name, count)| (name.to_string(), *count)).collect()
 }
 
-/// Strongest damage spell the level unlocks whose runes the pack (or a
-/// worn staff) funds (PRD3 lot 6: the fight loop casts it on the target).
-pub fn castable_spell(bot: &Bot) -> Option<&'static str> {
-    let level = magic_level(bot);
-    DAMAGE_SPELLS.iter().rev().filter(|(_, need, _)| level >= *need).map(|(spell, _, _)| *spell).find(|spell| {
-        crate::kit::magic::spell_shortfall(bot, &spell_runes(spell)).is_empty()
-    })
-}
-
 /// The cast's runes somewhere in the pack or the bank (last known view:
 /// the bank is usually closed here), a worn staff's element excluded;
 /// else blocked on them by name (the brain files the obtain).
@@ -150,7 +141,7 @@ fn ordered_spell(bot: &Bot, spell: Option<&str>) -> Result<Option<String>, crate
     Ok(Some(name.to_string()))
 }
 
-/// Magic farmer: `magic [spot ...] [--kills N] [--ticks N] [--no-bank]`.
+/// Magic farmer: `magic [spot ...|ladder] [--spell S] [--kills N] [--ticks N] [--no-bank]`.
 pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("magic", args)?;
     let spots = spec.resource.clone();
@@ -168,14 +159,19 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
     bot.combat_style = "magic".to_string();
     bot.combat_spell = ordered_spell(bot, spec.spell.as_deref())?;
     let cast = bot.combat_spell.clone().unwrap_or_else(|| DAMAGE_SPELLS[0].0.to_string());
+    // Ladder mode (user 2026-11-20): the camp follows the magic level,
+    // the spell, the defence, hitpoints and food (`kit::ladder_hunt`);
+    // the ladder leaves out the camps the spell cannot affect.
+    let ladder = spots.len() == 1 && spots[0] == crate::kit::ladder::LADDER_KEY;
     // A spell with a target param (crumble undead) on a camp it cannot
     // affect is a contract bug: the server refuses every cast.
-    let unfit = unfit_spots(&cast, &crate::kit::fight::named_spots(&spots)?);
+    let unfit = if ladder { Vec::new() } else { unfit_spots(&cast, &crate::kit::fight::named_spots(&spots)?) };
     if !unfit.is_empty() {
         return Err(crate::ScriptError::Usage(format!("{cast} cannot affect the NPCs of {}", unfit.join(","))));
     }
     crate::kit::magic::wield_staff_for(bot, &spell_runes(&cast))?;
     require_combat_gear(bot, &cast)?;
+    if ladder { return crate::kit::ladder_hunt::run_ladder(bot, &spec, no_bank, "magic"); }
     let picked: Vec<knowledge::combat_spots::CombatSpot> = {
         let named = crate::kit::fight::named_spots(&spots)?;
         if named.is_empty() { vec![knowledge::combat_spots::best_spot(magic_level(bot))] } else { named }
@@ -232,10 +228,14 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if !died {
             continue;
         }
-        tally.note_death(spot.key);
+        tally.note_death(spot.key, bot.world.ticks);
         if tally.fatal() {
             return Err(crate::kit::survival::danger_error(spot.key, tally.deaths()));
         }
+        // A risk camp (ice camps, demons; user 2026-11-20): the death is
+        // its price, the bot re-gears at the bank and goes back, until the
+        // camp's guard trips (`DeathTally::note_death`).
+        if crate::kit::survival::takes_back(bot, &tally, spot.key) { queue.insert(0, spot); continue; }
         if queue.iter().any(|queued| !tally.excludes(queued.key)) {
             bot.log(&format!("{} killed us, re-picking without it", spot.key));
             continue;

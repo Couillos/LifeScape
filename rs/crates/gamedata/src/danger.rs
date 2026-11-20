@@ -130,6 +130,31 @@ pub fn site_requirement(x: i64, z: i64, level: i64) -> u8 {
     required_combat_at(x, z, level).max(required_combat_at(bank.x, bank.z, bank.level))
 }
 
+/// Combat a bot needs to FIGHT at this site (user 2026-11-20): with a
+/// bank in reach, the site and its bank (`site_requirement`); without
+/// one, the site alone: a fight is one trip that lasts until its food
+/// runs out, then the walk to the nearest bank (the deep Wilderness
+/// greater demons, 400 tiles from Edgeville). The danger stays a combat
+/// requirement, never a refused zone; a gather site still needs its bank
+/// (`site_requirement`: every load is banked).
+pub fn fight_site_requirement(x: i64, z: i64, level: i64) -> u8 {
+    let site = required_combat_at(x, z, level);
+    match site_bank(x, z, level) {
+        Some(bank) => site.max(required_combat_at(bank.x, bank.z, bank.level)),
+        None => site,
+    }
+}
+
+/// Requirement of a site worked by a method of `kind`: a fight reads
+/// `fight_site_requirement`, every other kind `site_requirement`.
+pub fn kind_site_requirement(kind: &str, x: i64, z: i64, level: i64) -> u8 {
+    if kind == "fight" {
+        fight_site_requirement(x, z, level)
+    } else {
+        site_requirement(x, z, level)
+    }
+}
+
 /// F2P sites (x, z, level) where one resource is worked: fishing spots of
 /// the tiers that yield it, rocks, trees, or a combat spot's NPCs.
 pub fn sites(kind: &str, resource: &str) -> Vec<(i64, i64, i64)> {
@@ -175,7 +200,7 @@ pub fn sites(kind: &str, resource: &str) -> Vec<(i64, i64, i64)> {
 /// Combat requirement of a method: its least demanding site. `None` when
 /// the data names no site (unknown resource): the caller decides.
 pub fn method_requirement(kind: &str, resource: &str) -> Option<u8> {
-    sites(kind, resource).into_iter().map(|(x, z, level)| site_requirement(x, z, level)).min()
+    sites(kind, resource).into_iter().map(|(x, z, level)| kind_site_requirement(kind, x, z, level)).min()
 }
 
 #[cfg(test)]
@@ -229,6 +254,21 @@ mod tests {
         assert!(site_requirement(3050, 3704, 0) < NEVER);
         assert_eq!(site_requirement(3079, 3767, 0), NEVER);
         assert_eq!(site_requirement(3054, 3852, 0), NEVER);
+    }
+
+    /// User 2026-11-20 (item 2): a fight site with no bank in reach is one
+    /// trip, its requirement the hunters covering it; a gather site there
+    /// still is `NEVER` (every load banked).
+    #[test]
+    fn a_fight_far_from_any_bank_is_one_trip() {
+        assert_eq!(site_requirement(3054, 3852, 0), NEVER, "no bank for a gather");
+        let fight = super::fight_site_requirement(3054, 3852, 0);
+        assert!(fight < NEVER, "a fight there is one trip: {fight}");
+        assert_eq!(fight, required_combat_at(3054, 3852, 0));
+        let greater = method_requirement("fight", "greater_demons").expect("greater demon sites");
+        assert!(greater < NEVER, "the Wilderness greater demons: {greater}");
+        // A site with a bank in reach reads the same either way.
+        assert_eq!(super::fight_site_requirement(3285, 3365, 0), site_requirement(3285, 3365, 0));
     }
 
     #[test]
