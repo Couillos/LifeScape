@@ -234,6 +234,23 @@ pub fn shops_at_likely_stock(item: &str, sales: &ShopSales) -> Vec<lifescape_gam
     shops
 }
 
+/// Pure: `shops` without the keeper sites behind the Karamja boat when
+/// `free_coins` (the wallet the bot's resting buys leave) cannot pay the
+/// boat out and back (2 x `BOAT_FARE_GP`); a shop left without a site
+/// drops. Live 2026-11-20 (frank_lane: every coin locked by open market
+/// orders, `market cleanup` to the Karamja general store failed 45 times
+/// across the fleet on the boat's fare).
+pub fn payable_sale_sites(shops: Vec<lifescape_gamedata::shop_sale::SaleShop>, free_coins: i64) -> Vec<lifescape_gamedata::shop_sale::SaleShop> {
+    let fare_free = free_coins >= 2 * lifescape_gamedata::services::BOAT_FARE_GP;
+    shops
+        .into_iter()
+        .filter_map(|mut shop| {
+            shop.sites.retain(|site| fare_free || !lifescape_gamedata::access::behind_boat(site.0, site.1, site.2));
+            (!shop.sites.is_empty()).then_some(shop)
+        })
+        .collect()
+}
+
 /// Best value an open shop likely pays for the next unit of `item`
 /// (`npc_sale_value` at the likely stock).
 pub fn likely_sale_value(item: &str, sales: &ShopSales) -> Option<i64> {
@@ -514,6 +531,22 @@ pub fn live_position(live: &lifescape_json::Value) -> Option<(i64, i64, i64)> {
 mod tests {
     use super::*;
     use lifescape_gamedata::shop_sale::SaleShop;
+
+    /// Live 2026-11-20 (frank_lane, shaw_sara, mila_wade, nina_rhodes:
+    /// `market cleanup --sale-shop generalshop7 --sale-site 2902,3150,0`
+    /// failed 45 times: `bank_withdraw 995: 432461 locked by open market
+    /// orders, nothing usable`, the boat refused without its fare): a
+    /// keeper behind the Karamja boat is no sale site while the free
+    /// wallet cannot pay the boat out and back; the mainland sites stay.
+    #[test]
+    fn a_sale_behind_the_boat_needs_its_fare_free() {
+        let shop = |name: &str, sites: Vec<(i64, i64, i64)>| SaleShop { shop: name.to_string(), value: 20, sites, quest: None, quest_points: 0 };
+        let shops = vec![shop("generalshop7", vec![(2902, 3150, 0)]), shop("generalshop1", vec![(3212, 3246, 0)])];
+        let kept: Vec<String> = payable_sale_sites(shops.clone(), 0).into_iter().map(|shop| shop.shop).collect();
+        assert_eq!(kept, vec!["generalshop1".to_string()], "coins all locked: Karamja drops");
+        let kept: Vec<String> = payable_sale_sites(shops, 2 * lifescape_gamedata::services::BOAT_FARE_GP).into_iter().map(|shop| shop.shop).collect();
+        assert_eq!(kept, vec!["generalshop7".to_string(), "generalshop1".to_string()], "the fare free: Karamja stays");
+    }
 
     fn shops(item: &str) -> Vec<SaleShop> {
         match item {

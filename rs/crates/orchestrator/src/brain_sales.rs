@@ -627,7 +627,10 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     // Q3: one shop trip when it pays more than its ticks at the bot's
     // time value (D1); the janitor node carries it (`brain_npc_sale`).
     let min_gain = (crate::brain_npc_sale::SHOP_TRIP_TICKS * costs.coins_per_tick).ceil() as i64;
-    match crate::brain_npc_sale::plan_shop_sale(&shop_candidates, crate::brain_npc_sale::live_position(&live), min_gain, &whole_units, &|item: &str| crate::brain_npc_sale::shops_at_likely_stock(item, fleet_sales())) {
+    // A keeper behind the boat only while the free wallet pays its fare.
+    let free_coins = crate::brain_gear::free_coins(job, None);
+    let shops_of = |item: &str| crate::brain_npc_sale::payable_sale_sites(crate::brain_npc_sale::shops_at_likely_stock(item, fleet_sales()), free_coins);
+    match crate::brain_npc_sale::plan_shop_sale(&shop_candidates, crate::brain_npc_sale::live_position(&live), min_gain, &whole_units, &shops_of) {
         Some(plan) => {
             crate::logln!("brain {}: npc shop sale planned at {} ({} lots, gain {} over the market, trip worth {min_gain})", job.account, plan.shop, plan.lines.len(), plan.gain());
             crate::brain_npc_sale::note(&job.account, plan);
