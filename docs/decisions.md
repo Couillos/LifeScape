@@ -2050,3 +2050,21 @@ propre métier, l'entraînement pour un lot reste permis. Live 19:37-20:37 CET :
 cinq cuisiniers mis de côté pour un achat d'anchois entraînaient la forge de
 1 à 62 pour quelques boucliers en mithril ; la cuisine restait à 0,3 % du
 temps de la flotte et 45 000 poulets crus à 1 pièce sans acheteur.
+
+## 2026-11-21 — Entraînement : une ligne très en avance passe devant le « faisable maintenant »
+
+Constat live 2026-11-20 22:09 -> 23:09 UTC : tous les artisans sans
+aiguille montaient l'artisanat à la poterie (1,1 XP/tick) alors que le
+cuir (6 à 8,5 XP/tick au guide) attendait en classe 2 (outil à obtenir) ;
+162 000 peaux en banque. R7 §1 tirait dans la première classe non vide :
+une ligne faisable battait toujours une ligne derrière une aiguille, un
+burin, un moule ou de la nourriture, quel que soit l'écart (déjà signalé
+hors périmètre le 2026-11-17 : forge derrière le marteau).
+Règle (`train_score::drawn_class`) : la classe tirée est la première de
+`class_order` dont la meilleure ligne est dans la bande D10 (15 %) de la
+meilleure ligne toutes classes confondues ; le faisable garde sa place
+tant qu'il reste proche, une ligne loin devant fait obtenir son outil
+(ou sa nourriture, ou les pièces du lot) d'abord. Le choix précédent
+(collant) se compare aussi à la meilleure ligne toutes classes
+(`brain_train`). Les montées en cours se revoient au prochain tirage.
+Hors périmètre : le choix d'argent (`money_pick`) garde l'ordre strict.

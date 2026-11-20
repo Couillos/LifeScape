@@ -248,3 +248,24 @@ fn a_training_fight_pays_its_runes_whatever_its_drops() {
     let scored = score_row(&alch, &bot(0.5, 0.5), Some(0.5)).expect("alchemy scored");
     assert_eq!(scored.coin_ticks_per_xp, 0.0, "alchemy earns: free at best: {scored:?}");
 }
+
+fn classed(row: &TrainingRow, score: f64, class: u8) -> super::Classed<'_> {
+    super::Classed { score: super::LineScore { own_ticks_per_xp: score, coin_ticks_per_xp: 0.0, score }, row, class }
+}
+
+/// Live 2026-11-20 22:09 -> 23:09 UTC: every crafter without a needle
+/// shaped bowls (1.1 XP/tick) while leather (6 to 8.5 XP/tick) waited a
+/// class behind, 162 000 cow hides banked. A line far ahead that needs a
+/// tool first is drawn; one only a little ahead leaves the feasible line.
+#[test]
+fn a_line_far_ahead_wins_over_its_tool_a_close_one_does_not() {
+    let bowls = line("pottery:bowl_empty", Supply::Market, 6_600.0, -100.0);
+    let leather = line("craft:leather_chaps", Supply::Market, 51_000.0, 1_500.0);
+    let far = vec![classed(&leather, 0.13, 2), classed(&bowls, 0.9, 0)];
+    assert_eq!(super::drawn_class(&far), Some(2));
+    let (index, _) = super::pick(&far, 7).expect("a pick");
+    assert_eq!(far[index].row.method, "craft:leather_chaps");
+    let close = vec![classed(&leather, 0.13, 2), classed(&bowls, 0.14, 0)];
+    assert_eq!(super::drawn_class(&close), Some(0), "within the band the feasible line keeps its place");
+    assert_eq!(super::drawn_class(&[]), None);
+}

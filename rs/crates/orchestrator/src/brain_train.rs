@@ -180,7 +180,9 @@ pub(crate) fn pick_from_guide(set: &GuideSet, climb: &Climb, life: &Life, bot: &
     // the best line feasible now (D10, 2026-11-20): a pick the score now
     // ranks far behind is drawn again (live: bronze bars smelted for
     // smithing 59 -> 66, kept by every re-resolve).
-    let best_now = ranked.iter().find(|line| line.class == 0).map(|line| line.score.score);
+    // The best line of all (a class behind included, `drawn_class`): a
+    // pick far behind a line that needs a needle first is drawn again.
+    let best_now = ranked.iter().map(|line| line.score.score).min_by(f64::total_cmp);
     let again = climb.previous.and_then(|method| {
         ranked.iter().position(|line| line.class == 0 && line.row.method == method && best_now.is_some_and(|best| lifescape_planner::guide_pick::in_band(-line.score.score, -best)))
     });

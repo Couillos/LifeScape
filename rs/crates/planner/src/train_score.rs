@@ -160,12 +160,13 @@ pub fn rank_classed<'a>(rows: &'a [TrainingRow], profile: &Profile, ticks_per_co
 }
 
 /// The line a bot trains with (R7): the draw of `guide_pick` over the
-/// first non-empty class of `ranked`, its score the line's (minus its
+/// first class of `ranked` whose best line stays within the band of the
+/// best line of all (`drawn_class`), its score the line's (minus its
 /// weighted ticks per XP), its weight `merit_training`, its runs the
 /// yield's measured runs; with the index of the line in `ranked`.
 pub fn pick(ranked: &[Classed], seed: u64) -> Option<(usize, crate::guide_pick::Drawn)> {
-    let classes: Vec<u8> = ranked.iter().map(|line| line.class).collect();
-    let (_, members) = crate::guide_pick::first_class(&classes);
+    let class = drawn_class(ranked)?;
+    let members: Vec<usize> = (0..ranked.len()).filter(|index| ranked[*index].class == class).collect();
     let candidates: Vec<crate::guide_pick::Candidate> = members
         .iter()
         .map(|index| {
@@ -175,6 +176,20 @@ pub fn pick(ranked: &[Classed], seed: u64) -> Option<(usize, crate::guide_pick::
         .collect();
     let drawn = crate::guide_pick::draw(&candidates, seed)?;
     Some((members[drawn.index], drawn))
+}
+
+/// The class a climb draws in: the first (`guide_pick::class_order`)
+/// whose best line is within the band of the best line of all classes.
+/// A line feasible now wins while it stays close; a line far ahead that
+/// needs a tool first (a needle, a chisel, a mould: one shop trip) or a
+/// lot's coins is taken instead. Live 2026-11-20 22:09 -> 23:09 UTC:
+/// every crafter without a needle shaped bowls at 1.1 XP/tick, leather
+/// (6 to 8.5 XP/tick) a class behind; 162 000 cow hides banked.
+pub fn drawn_class(ranked: &[Classed]) -> Option<u8> {
+    let best = ranked.iter().map(|line| line.score.score).min_by(f64::total_cmp)?;
+    crate::guide_pick::class_order().into_iter().find(|class| {
+        ranked.iter().filter(|line| line.class == *class).map(|line| line.score.score).min_by(f64::total_cmp).is_some_and(|own| crate::guide_pick::in_band(-own, -best))
+    })
 }
 
 #[cfg(test)]

@@ -259,20 +259,25 @@ fn combat_climbs_take_their_own_style_from_the_guide() {
     assert_eq!(found.scored, 1, "the strength-style row never trains an attack climb");
 }
 
-/// The bot works what it can NOW first: a feasible line beats a better
-/// one whose tool it must obtain; once it blocked on that tool for its
-/// previous pick, the previous pick comes back as soon as it is feasible
-/// and within the band of the best line (D10).
+/// The bot works what it can NOW first while that line stays within the
+/// band of the best one; a line far ahead whose tool it must obtain is
+/// drawn instead (`train_score::drawn_class`, live 2026-11-20: leather a
+/// class behind the bowls). Once it blocked on that tool for its previous
+/// pick, the previous pick comes back as soon as it is feasible and
+/// within the band of the best line (D10).
 #[test]
 fn feasible_lines_draw_first_and_a_blocked_pick_comes_back() {
     let mut harpoon = line("fishing", "gather:fishing/raw_swordfish", Supply::Autonomous, 90_000.0, 0.0);
     harpoon.prereqs.tools = vec!["harpoon".to_string()];
+    let close = set_with(vec![harpoon.clone(), line("fishing", "gather:fishing/raw_trout", Supply::Autonomous, 85_000.0, 0.0)]);
     let set = set_with(vec![harpoon, line("fishing", "gather:fishing/raw_trout", Supply::Autonomous, 50_000.0, 0.0)]);
     let life = life_with(0.5, 0.5);
     let none = |_: &str| 0;
     for seed in 0..40 {
-        let found = pick_seeded(&set, "fishing", 58, 60, &life, &[], &none, &[], seed, None).expect("a line");
-        assert_eq!((found.pick.method.as_str(), found.choice.class), ("gather:fishing/raw_trout", 0), "feasible now first");
+        let found = pick_seeded(&close, "fishing", 58, 60, &life, &[], &none, &[], seed, None).expect("a line");
+        assert_eq!((found.pick.method.as_str(), found.choice.class), ("gather:fishing/raw_trout", 0), "feasible now first within the band");
+        let far = pick_seeded(&set, "fishing", 58, 60, &life, &[], &none, &[], seed, None).expect("a line");
+        assert_eq!((far.pick.method.as_str(), far.choice.class), ("gather:fishing/raw_swordfish", 2), "far ahead: the harpoon first");
     }
     let harpoon_held = |item: &str| i64::from(item == "harpoon");
     let back = pick_seeded(&set, "fishing", 58, 60, &life, &[], &harpoon_held, &[], 3, Some("gather:fishing/raw_swordfish")).expect("a line");
@@ -318,13 +323,13 @@ fn training_reads_the_bots_own_stock() {
 }
 
 /// A fight on a spot that bites a bot without food works after its food:
-/// a line feasible now comes first; alone, the biting line is drawn with
-/// its food to obtain first (`food_gate`, like the money nodes).
+/// a line feasible now within the band comes first; alone or far ahead,
+/// the biting line is drawn with its food to obtain first (`food_gate`).
 #[test]
 fn a_biting_spot_waits_for_its_food() {
     let mut men = line("attack", "fight:melee/men", Supply::Autonomous, 90_000.0, 800.0);
     men.style = "melee:attack".to_string();
-    let mut cows = line("attack", "fight:melee/cows", Supply::Autonomous, 30_000.0, 100.0);
+    let mut cows = line("attack", "fight:melee/cows", Supply::Autonomous, 85_000.0, 100.0);
     cows.style = "melee:attack".to_string();
     let life = life_with(0.5, 0.5);
     let level_of = |_: &str| 58u8;
@@ -336,7 +341,12 @@ fn a_biting_spot_waits_for_its_food() {
     let climb = Climb { skill: "attack", level: 58, target: 60, previous: None, food: Some(&food), coin_rate: MONEY_LINE_RATE };
     let both = set_with(vec![men.clone(), cows]);
     let found = pick_from_guide(&both, &climb, &life, &bot, &[], 1, &never, &lifescape_planner::work_rate::prior_rate).expect("a line");
-    assert_eq!((found.pick.method.as_str(), found.choice.class), ("fight:melee/cows", 0), "fed lines first");
+    assert_eq!((found.pick.method.as_str(), found.choice.class), ("fight:melee/cows", 0), "fed lines first within the band");
+    let mut slow = line("attack", "fight:melee/cows", Supply::Autonomous, 30_000.0, 100.0);
+    slow.style = "melee:attack".to_string();
+    let far = set_with(vec![men.clone(), slow]);
+    let found = pick_from_guide(&far, &climb, &life, &bot, &[], 1, &never, &lifescape_planner::work_rate::prior_rate).expect("a line");
+    assert_eq!((found.pick.method.as_str(), found.choice.class), ("fight:melee/men", 1), "far ahead: the food first");
     let alone = set_with(vec![men]);
     let found = pick_from_guide(&alone, &climb, &life, &bot, &[], 1, &never, &lifescape_planner::work_rate::prior_rate).expect("a line");
     assert_eq!((found.pick.method.as_str(), found.choice.class), ("fight:melee/men", 1));
