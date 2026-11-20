@@ -190,7 +190,10 @@ pub fn weapon_fits_style(entry: &knowledge::equipment::Wearable, style: &str) ->
 /// attack (`gear::score` < 0 for the style). Melee wears any armour;
 /// weapons and ammunition are `weapon_fits_style`'s and the ammo rule's.
 pub fn armour_fits_style(entry: &knowledge::equipment::Wearable, style: &str) -> bool {
-    style == "melee" || !ARMOUR_SLOTS.contains(&entry.wearpos) || knowledge::gear::score(entry, knowledge::gear::Style::parse(style)) >= 0
+    // Arrows in the quiver cost a cast nothing (no magic bonus): taking
+    // them off only fills a pack slot (live 2026-11-20: "took off
+    // bronze_arrow: off style for magic").
+    style == "melee" || entry.wearpos == AMMO_SLOT || !ARMOUR_SLOTS.contains(&entry.wearpos) || knowledge::gear::score(entry, knowledge::gear::Style::parse(style)) >= 0
 }
 
 /// Worn armour the run must take off: every piece that lowers a magic or
@@ -601,9 +604,10 @@ mod tests {
         let body = id(&bot, "studded_body");
         let shield = id(&bot, "mithril_kiteshield");
         let hat = id(&bot, "bluewizhat");
-        bot.world.inv.insert(worn_com, std::collections::HashMap::from([(4u8, (body, 1)), (5u8, (shield, 1)), (0u8, (hat, 1))]));
+        let arrows = id(&bot, "bronze_arrow");
+        bot.world.inv.insert(worn_com, std::collections::HashMap::from([(4u8, (body, 1)), (5u8, (shield, 1)), (0u8, (hat, 1)), (super::AMMO_SLOT as u8, (arrows, 50))]));
         bot.combat_style = "magic".to_string();
-        assert_eq!(super::off_style_armour(&bot), vec![(4, "studded_body".to_string()), (5, "mithril_kiteshield".to_string())]);
+        assert_eq!(super::off_style_armour(&bot), vec![(4, "studded_body".to_string()), (5, "mithril_kiteshield".to_string())], "the arrows stay in the quiver");
         let available = std::collections::HashMap::from([(body, "studded_body".to_string()), (shield, "mithril_kiteshield".to_string()), (hat, "bluewizhat".to_string())]);
         let plan = super::gear_plan(&bot, &available, fight_weapon_style, style_damage_key);
         assert!(plan_names(&plan, 4).is_empty() && plan_names(&plan, 5).is_empty(), "no studded body, no kiteshield for magic: {plan:?}");
