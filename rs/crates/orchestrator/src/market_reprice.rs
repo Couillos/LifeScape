@@ -285,12 +285,13 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
         // A bid rises only as far as the free coins go (user 2026-11-19,
         // point 1): the walk never promises more coins than the wallet.
         let selling = window.sell;
+        let unsaid = window.ceiling >= UNSAID_CEILING;
         let afford = |price: i64| {
             if selling || price <= row.price {
                 return price;
             }
             let (_, free) = service.free_coverage(&row.account, lifescape_store::OrderSide::Buy, row.item_id);
-            crate::market_audit::affordable_raise(row.item_id, row.remaining, row.price, price, free)
+            crate::market_audit::affordable_raise(row.item_id, row.remaining, row.price, price, unsaid_room(unsaid, free, crate::market_units::deal_coins(row.item_id, row.remaining, row.price)))
         };
         let next = match decision {
             Step::Hold => None,
@@ -351,8 +352,24 @@ pub fn request_ceiling(request: &Value, sell: bool, lot: i64) -> Option<i64> {
 }
 
 /// Ceiling of an adopted bid that never stated one: what the buyer can
-/// pay, each raise capped by its free coins (`affordable_raise`).
+/// pay, each raise capped by its free coins (`affordable_raise`) and the
+/// whole order by `UNSAID_SHARE_PCT` of them (`unsaid_room`).
 pub const UNSAID_CEILING: i64 = i64::MAX / 4;
+/// Share of the buyer's coins (free plus this order's) an orphan bid
+/// may engage (live 2026-11-20: eva_dale's nature rune bid climbed to
+/// 1 853 a rune, 122 298 coins, her free coins 0, every other bid
+/// refused).
+pub const UNSAID_SHARE_PCT: i64 = 10;
+
+/// Coins a raise may add to an order: all the free coins for a bid with
+/// a ceiling; for an orphan bid (`unsaid`), what keeps the order within
+/// `UNSAID_SHARE_PCT` of the free coins plus its own.
+pub fn unsaid_room(unsaid: bool, free: i64, order_coins: i64) -> i64 {
+    if !unsaid {
+        return free;
+    }
+    ((free.max(0) + order_coins) * UNSAID_SHARE_PCT / 100 - order_coins).max(0)
+}
 /// Seconds after the daemon start before unwalked bids are adopted: the
 /// owners' passes (`keep_bid`: gear, stock, tools) re-register theirs
 /// first, with their live ceiling.
@@ -366,12 +383,17 @@ fn daemon_start() -> f64 {
 /// Resting bids nobody walks (user 2026-11-20, « il faut les faire
 /// monter les offres d'achat pour inciter les gens à vendre »: live,
 /// bids at 1 coin frozen 18 to 67 h, their walk lost at a daemon
-/// restart): `(order, ceiling)`, the stored ceiling or `UNSAID_CEILING`.
+/// restart): `(order, ceiling)`, the stored ceiling or, for an orphan
+/// bid (no motive), `UNSAID_CEILING`.
 /// The market makers' quotes climb in their own pass (`maker::quote`).
 pub fn bid_adoptions(rows: &[lifescape_store::Order], handled: &dyn Fn(i64) -> bool) -> Vec<(i64, i64)> {
     rows.iter()
         .filter(|row| row.side == lifescape_store::OrderSide::Buy && resting(row) && row.motive != crate::market_lineage::MARKET_MAKE)
         .filter(|row| !handled(row.order_id))
+        // A bid of a live motive (need, gear, stock, tool...) without a
+        // stored ceiling waits for its owner's pass (`keep_bid`: its real
+        // ceiling); only an orphan (no motive) walks to `UNSAID_CEILING`.
+        .filter(|row| row.ceiling.is_some() || row.motive.is_empty())
         .map(|row| (row.order_id, row.ceiling.unwrap_or(UNSAID_CEILING).max(row.price)))
         .collect()
 }

@@ -358,6 +358,19 @@ fn every_bid_nobody_walks_is_adopted_with_its_ceiling() {
     ];
     let walked = |order: i64| order == 5;
     assert_eq!(super::bid_adoptions(&rows, &walked), vec![(1, super::UNSAID_CEILING), (2, 80)]);
+    // A live motive without a stored ceiling waits for its owner's pass.
+    let stock = vec![row(6, OrderSide::Buy, "stock", None)];
+    assert!(super::bid_adoptions(&stock, &|_| false).is_empty());
+}
+
+/// Live 2026-11-20: eva_dale's orphan-walked nature rune bid reached
+/// 122 298 coins, her free coins 0. An orphan bid engages at most
+/// `UNSAID_SHARE_PCT` of the coins (free plus its own).
+#[test]
+fn an_orphan_bid_never_takes_the_wallet() {
+    assert_eq!(super::unsaid_room(false, 5_000, 100), 5_000, "a stated ceiling: the free coins");
+    assert_eq!(super::unsaid_room(true, 9_900, 100), 900, "10 % of 10 000, less its own 100");
+    assert_eq!(super::unsaid_room(true, 0, 122_298), 0, "already over its share: no raise");
 }
 
 #[test]

@@ -66,6 +66,10 @@ impl MarketService {
         }
         let item = row.item_id;
         let side = book_side(row.side);
+        // The walk's live ceiling (a buy's limit, following the wallet) is
+        // stored with the replacement: a lineage placed before schema 10
+        // gains one at its first amend (read before the store lock).
+        let walked_ceiling = crate::market_reprice::bounds_of(self, order_id).filter(|bounds| !bounds.sell && bounds.ceiling < crate::market_reprice::UNSAID_CEILING).map(|bounds| bounds.ceiling);
         // Plan prix lot D: per unit unless the caller says `per_lot`.
         let price = if request.get("per_lot").as_bool() == Some(true) { price } else { crate::market_units::to_lot(item, price) };
         if let Err(error) = check_price(price) {
@@ -109,7 +113,7 @@ impl MarketService {
                 clock,
                 replaces: Some(order_id),
                 motive: row.motive.clone(),
-                ceiling: row.ceiling,
+                ceiling: walked_ceiling.or(row.ceiling),
             });
             match placed {
                 Ok(id) => match store.cancel_order_because(order_id, clock, lifescape_store::AMENDED_REASON) {

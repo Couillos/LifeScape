@@ -88,8 +88,14 @@ plafonds de capital) ; le plafond d'une offre est gardé dans le carnet
 (schéma 10, colonne `ceiling`, transmis par chaque amend) et, 600 s
 après le démarrage du démon, toute offre que personne ne fait marcher
 est reprise par la marche (`market_reprice::adopt_bids`) avec son
-plafond, sinon jusqu'à ce que l'acheteur peut payer (chaque hausse
-bornée par ses pièces libres). Restent : recul ZIP de 5 % après un fill propre, tirage à
+plafond ; chaque amend écrit le plafond vivant de la marche (une lignée
+d'avant le schéma 10 en gagne un). Sans plafond gardé, une offre d'un
+motif vivant (besoin, équipement, stock, outil) attend la passe de son
+propriétaire (`keep_bid`, son vrai plafond) ; une offre orpheline (sans
+motif) monte jusqu'à ce que l'acheteur peut payer, l'ordre entier
+borné à `UNSAID_SHARE_PCT` = 10 % de ses pièces (libres plus les
+siennes) (constat 2026-11-20 : la rune de la nature d'eva_dale montée à
+1 853 pièces, 122 298 engagées, plus une pièce libre). Restent : recul ZIP de 5 % après un fill propre, tirage à
 mi-chemin vers un prix public, prise du meilleur prix opposé quand
 pressé ou quand la marche suivante l'atteint. La courbe ci-dessous ne
 fixe plus que le plafond de l'acheteur (sa limite) ; ouverture, β et
