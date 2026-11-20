@@ -48,6 +48,16 @@ fn read_json(name: &str) -> Value {
     lifescape_json::parse(&text).unwrap_or_else(|err| panic!("{name}: {err}"))
 }
 
+/// Produce stations the scripts search by debugname (`cook::STATIONS`,
+/// `fill_water`, `spin`, `smelt`, `pottery`). Live 2026-11-20: the Black
+/// Knights' banquet fireplace (3030,3514) was picked by cooks from
+/// Edgeville, "I can't reach that!" from every outside stand, NoRoute
+/// to the inside ones (108 "consumed nothing", 115 NoRoute in 24 h).
+const STATION_LOCS: [&str; 14] = [
+    "range", "fireplace", "grandfireplace", "grandfireplace_oldbrick", "fireplacecookingpot", "fountain", "sink", "sink2", "well",
+    "spinningwheel", "furnace1", "furnace2", "potterywheel", "potteryoven",
+];
+
 /// Loc names of every tree and rock tier (`trees.json`, `rocks.json`).
 fn work_loc_names() -> BTreeSet<String> {
     let mut names = BTreeSet::new();
@@ -83,7 +93,37 @@ fn work_spawns(world: &StaticWorld) -> Vec<(i32, i32, i32, u16, String)> {
             out.push((x, z, level, loc_id as u16, name.to_string()));
         }
     }
+    out.extend(station_spawns(world));
     out.sort();
+    out.dedup();
+    out
+}
+
+/// Every F2P placement of a `STATION_LOCS` loc, read from the map itself
+/// (the dump carries no spawn for stations): each tile of each F2P zone,
+/// every level, every draw layer.
+fn station_spawns(world: &StaticWorld) -> Vec<(i32, i32, i32, u16, String)> {
+    let mut ids: Vec<(u16, String)> = Vec::new();
+    for (loc_id, loc) in read_json("locs.json").as_arr().cloned().unwrap_or_default().iter().enumerate() {
+        if let Some(name) = loc.get("name").as_str().filter(|name| STATION_LOCS.contains(name)) {
+            ids.push((loc_id as u16, name.to_string()));
+        }
+    }
+    let zones = lifescape_nav::f2p::load_zones(&workspace_root().join("lostcity/content/maps/free2play.csv")).expect("f2p");
+    let mut out = Vec::new();
+    for (zone_x, zone_z) in zones {
+        for x in zone_x * 8..zone_x * 8 + 8 {
+            for z in zone_z * 8..zone_z * 8 + 8 {
+                for level in 0..4 {
+                    for (placed, _, _) in world.locs_at(x, z, level) {
+                        if let Some((_, name)) = ids.iter().find(|(id, _)| *id == placed) {
+                            out.push((x, z, level, placed, name.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
     out
 }
 
@@ -97,6 +137,7 @@ fn unreachable_work_sites_match_the_map() {
     let mut computed: Vec<String> = Vec::new();
     let spawns = work_spawns(&world);
     assert!(spawns.len() > 500, "F2P trees and rocks read: {}", spawns.len());
+    assert!(spawns.iter().any(|(x, z, level, _, name)| (*x, *z, *level, name.as_str()) == (3081, 3508, 1, "range")), "stations read from the map");
     let sites: Vec<(u16, Tile)> = spawns.iter().map(|(x, z, level, loc, _)| (*loc, Tile { x: *x, z: *z, level: *level })).collect();
     let verdicts = site_verdicts(&world, &tables, &sites).expect("edges");
     for ((x, z, level, loc, name), verdict) in spawns.iter().zip(verdicts) {
@@ -106,6 +147,8 @@ fn unreachable_work_sites_match_the_map() {
     }
     // The live NoRoute willow is out of the catalogue.
     assert!(computed.iter().any(|line| line.starts_with("{\"x\":3168,\"z\":3350,")), "the river willow (3168,3350) is unreachable");
+    // The fortress banquet fireplace is no cooking station.
+    assert!(computed.iter().any(|line| line.starts_with("{\"x\":3030,\"z\":3514,")), "the banquet fireplace (3030,3514) is unreachable");
     let table = format!("{{\"sites\":[\n{}\n]}}\n", computed.join(",\n"));
     let path = data_dir().join("unreachable_sites.json");
     if std::env::var("LIFESCAPE_WRITE_SITES").is_ok() {
@@ -114,3 +157,4 @@ fn unreachable_work_sites_match_the_map() {
     let shipped = std::fs::read_to_string(&path).unwrap_or_default();
     assert_eq!(shipped, table, "unreachable_sites.json drifted from the map; rerun with LIFESCAPE_WRITE_SITES=1 ({} of {} spawns unreachable)", computed.len(), spawns.len());
 }
+
