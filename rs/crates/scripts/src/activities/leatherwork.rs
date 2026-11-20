@@ -116,10 +116,17 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         let made = before.saturating_sub(pack_total(step_bot, leather));
         bank = nearest_bank(step_bot)?;
-        bank_trip(step_bot, &bank, &task_keep, 0)?;
+        bank_trip(step_bot, &bank, &load_end_keep(needle, thread, &task_keep), 0)?;
         Ok(state.load_done(step_bot, &format!("sewed {made} {product_name} (crafting={level})")))
     });
     outcome
+}
+
+/// Pack objects the load-end bank trip keeps: the needle (withdrawn once
+/// by `ensure_tool` at the start, never by the restock), the spare
+/// thread, and the task's own objects. The products go to the bank.
+fn load_end_keep(needle: u16, thread: u16, task_keep: &[u16]) -> Vec<u16> {
+    [needle, thread].into_iter().chain(task_keep.iter().copied()).collect()
 }
 
 /// Tan a pack of banked hides at Ellis, then come back and reload the
@@ -294,6 +301,19 @@ mod tests {
         assert!(leather_recipe("coif").is_none(), "members coif excluded");
         assert!(leather_recipe("LEATHER_GLOVES").is_some(), "case-insensitive");
         assert!(leather_recipe(DEFAULT_PRODUCT).is_some(), "default product resolves");
+    }
+
+    /// Live 2026-11-20 (shaw_sara, nina_rhodes: 15 « item 1733 is not in
+    /// the backpack »): the load-end bank trip kept the task's objects
+    /// only, banked the needle, and the next restock withdrew leather and
+    /// thread but never the needle. The needle and the spare thread ride
+    /// every load-end trip, with the task's own objects.
+    #[test]
+    fn the_needle_rides_the_load_end_bank_trip() {
+        let kept = super::load_end_keep(1733, 1734, &[995]);
+        assert!(kept.contains(&1733), "needle kept, got {kept:?}");
+        assert!(kept.contains(&1734), "spare thread kept, got {kept:?}");
+        assert!(kept.contains(&995), "task objects kept, got {kept:?}");
     }
 
     /// Tools, hide, leather and tanners all resolve through live tables.
