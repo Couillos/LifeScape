@@ -660,7 +660,20 @@ sans péage ni bateau = Draynor, chassée par les mages (niveau 7) jusqu'au
 combat 14 ⇒ `min_combat_for_method` = 15, le verrou de combat entraîne
 d'abord (poulets), puis le bot pêche et dépose tout en banque.
 Combat : clés de spot réelles (`chickens`, `cows`) ; un spot inconnu est
-une erreur `Usage` (avant : repli silencieux sur l'auto-pick). Ferme
+une erreur `Usage` (avant : repli silencieux sur l'auto-pick). Dès le
+niveau 10, CHAQUE style monte l'échelle (`tranches::tranche_resource` :
+`fight:melee/ladder`, `fight:ranged/ladder`, `fight:magic/<sort>/ladder`,
+utilisateur 2026-11-20 : archers et mages vont aussi aux démons) ; le
+sort d'une tranche magique est le meilleur sans paramètre de cible ; le
+prior d'une échelle distance/magie lit les vaches
+(`tranches::LADDER_PRIOR_SPOT` : flèches et runes dimensionnées comme
+avant, les taux mesurés prennent le relais) ; les malédictions et les
+guides gardent les camps fixes (`tranches::starter_camp`) ; une échelle
+n'est jamais une activité de guide ni une méthode d'argent
+(`tranches::is_ladder`). Danger d'un site de combat :
+`danger::fight_site_requirement` (sans banque à `BANK_TREK_LIMIT`, le
+site seul : un voyage qui dure jusqu'à la fin de la nourriture), une
+récolte garde `site_requirement` (`NEVER` sans banque). Ferme
 par drop (`farm:<objet>`, `mapping::spot_for_drop` →
 `gamedata::combat_spots::drop_spots`) : le spot NON GARDÉ le plus faible
 dont un PNJ lâche l'objet (os ⇒ poulets), un spot à péage seulement s'il
@@ -1139,8 +1152,8 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `farm:blankrune` | `essence_run` | — | `--want blankrune N` |
 | `farm:<drop>` | `melee` | `<spot>` (spot non gardé le plus faible qui lâche l'objet) | `--want`, `--site`, `toll` |
 | `fight:melee/<spot>` | `melee` | `<spot>` ou `ladder` | `--level <comp> N`, `--site`, `toll` |
-| `fight:ranged/<spot>` | `ranged` | `<spot>` | `--level ranged N`, `--site`, `toll` |
-| `fight:magic/<sort>/<spot>` (ancien `fight:magic/<spot>` = `wind_strike`) | `magic` | `<spot>` | `--spell <sort>` juste après le spot, `--level magic N`, `--site`, `toll` |
+| `fight:ranged/<spot>` | `ranged` | `<spot>` ou `ladder` | `--level ranged N`, `--site`, `toll` |
+| `fight:magic/<sort>/<spot>` (ancien `fight:magic/<spot>` = `wind_strike`) | `magic` | `<spot>` ou `ladder` | `--spell <sort>` juste après le spot, `--level magic N`, `--site`, `toll` |
 | `cook/<cru>` | `cook` | `<cru>` | `--level cooking N`, `--site` (fourneau), `--wear chefs_hat` en guilde |
 | `cook:<produit>` | `cook` | `<cru>` (résolu depuis la recette) | `--want`, `--site`, `--wear` |
 | `bake:bread` | `bake_bread` | — | `--want`, `--site` |

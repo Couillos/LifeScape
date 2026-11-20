@@ -66,7 +66,10 @@ en fer, jamais ramassables). Wilderness ouverte à tous, toujours
 de zone (`danger::site_requirement`, `melee_ladder`) ; ses chasseurs
 comptent comme les autres (`passive_from` = 2 × niveau + 1, ils attaquent
 toujours mais ce niveau les bat) ; seule la règle commune de distance à
-la banque (`BANK_TREK_LIMIT`) écarte le nord profond. Karamja :
+la banque (`BANK_TREK_LIMIT`) écarte le nord profond pour une récolte ;
+un combat y est un seul voyage (`danger::fight_site_requirement`,
+`melee_ladder::cluster_requirement`, utilisateur 2026-11-20 : le danger
+reste une exigence de combat, jamais une zone refusée). Karamja :
 boutiques accessibles au planner (`shop_site::pick_shop`, aller-retour
 du bateau budgété, `boat` au lancement, `market shopbuy … boat` arme les
 fares), en plus de la récolte et des combats déjà routés. Équipement : prérequis complets
