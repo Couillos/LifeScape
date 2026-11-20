@@ -76,8 +76,15 @@ fn stations_are_picked_sites() {
     }
     let cooks_guild = (3144, 3450, 1);
     let cook = Pass { levels: vec![("cooking".to_string(), 32)], held: vec!["chefs_hat".to_string()], quest_points: 0 };
+    // The guild range opens with the level and the hat; the fastest
+    // range (bank loads weighed, `bank_weight`) may still be another.
+    let guild = |site: (i64, i64, i64)| lifescape_gamedata::access::gates_at(site.0, site.1, site.2).iter().any(|gate| gate.area().contains("cook"));
     match pick_site_gated("cook/raw_trout", 3, Some(cooks_guild), broke(), &cook) {
-        SitePick::At(site) => assert!(!lifescape_gamedata::access::gates_at(site.0, site.1, site.2).is_empty(), "the guild range: {site:?}"),
+        SitePick::At(_) => {}
+        other => panic!("ranges exist, got {other:?}"),
+    }
+    match pick_site_gated("cook/raw_trout", 3, Some(cooks_guild), broke(), &Pass::default()) {
+        SitePick::At(site) => assert!(!guild(site), "no hat, no guild: {site:?}"),
         other => panic!("ranges exist, got {other:?}"),
     }
 }
@@ -191,11 +198,15 @@ fn a_slow_rock_field_holds_the_miners_its_respawns_feed() {
     let method = "gather:mining/coal";
     let barbarian = (3089, 3434, 0);
     assert_eq!(super::site_capacity(method, barbarian), Some(1), "four coal rocks, 100-tick respawn");
-    assert_eq!(super::pick_site_crowded(method, 40, Some(VARROCK_WEST), broke(), &miner(60), &[]), SitePick::At(barbarian), "the nearest coal");
-    let crowd = [(barbarian, 1u32)];
-    assert!(super::site_full(method, barbarian, &crowd), "one miner fills it");
+    assert!(super::site_full(method, barbarian, &[(barbarian, 1u32)]), "one miner fills it");
+    // The fastest coal (bank loads weighed): filled to its capacity, the
+    // next miner goes elsewhere.
+    let SitePick::At(field) = super::pick_site_crowded(method, 40, Some(VARROCK_WEST), broke(), &miner(60), &[]) else { panic!("coal is open") };
+    let seats = super::site_capacity(method, field).expect("a rock field") as u32;
+    let crowd = [(field, seats)];
+    assert!(super::site_full(method, field, &crowd), "{seats} miners fill {field:?}");
     match super::pick_site_crowded(method, 40, Some(VARROCK_WEST), broke(), &miner(60), &crowd) {
-        SitePick::At(other) | SitePick::Tolled(other) => assert!(super::crowd_bots(other, &crowd) == 0, "the second miner goes elsewhere: {other:?}"),
+        SitePick::At(other) | SitePick::Tolled(other) => assert!(other != field && !super::site_full(method, other, &crowd), "the next miner goes to a free seat: {other:?}"),
         other => panic!("other coal is open: {other:?}"),
     }
     let dwarven = (3028, 9737, 0);
@@ -228,11 +239,13 @@ fn a_crowd_of_another_method_never_fills_the_coal_seats() {
     ctx.combat = 40;
     ctx.position = Some((3185, 3436, 0));
     ctx.levels = vec![("mining".to_string(), 60)];
-    ctx.crowd = vec![(barbarian, 1)];
-    ctx.seats = vec![(barbarian, "fight:melee/barbarians".to_string(), 1)];
-    assert_eq!(super::pick_site_for(method, &ctx), SitePick::At(barbarian), "a fighter is no miner");
-    ctx.seats = vec![(barbarian, "farm:coal".to_string(), 1)];
-    assert!(super::pick_site_for(method, &ctx) != SitePick::At(barbarian), "a coal miner takes the seat");
+    let _ = barbarian;
+    let SitePick::At(field) = super::pick_site_for(method, &ctx) else { panic!("coal is open") };
+    let seats = super::site_capacity(method, field).expect("a rock field") as u32;
+    ctx.seats = vec![(field, "fight:melee/barbarians".to_string(), seats)];
+    assert_eq!(super::pick_site_for(method, &ctx), SitePick::At(field), "fighters are no miners");
+    ctx.seats = vec![(field, "farm:coal".to_string(), seats)];
+    assert!(super::pick_site_for(method, &ctx) != SitePick::At(field), "coal miners take the seats");
 }
 
 /// Tour 2 P2-3a red test: cooling one rock cools its site. lily_brook

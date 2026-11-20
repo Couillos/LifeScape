@@ -1,6 +1,7 @@
 //! Geography of the rates prior (`method_rate`, split for rule 4): the
 //! bank walk of a site, the resources sharing a site, the essence trip.
-//! - bank walk: Chebyshev at one tile a tick to the nearest F2P bank; an
+//! - bank walk: Chebyshev at one tile a tick to the nearest F2P bank
+//!   (through the toll gate across the Al Kharid fence); an
 //!   underground site (z ≥ 6400) climbs through the nearest link of
 //!   `gamedata::underground` (ladder, stairs, trapdoor), never across
 //!   the 6400-tile gap in a straight line;
@@ -31,9 +32,27 @@ fn chebyshev(from: (i64, i64, i64), to: (i64, i64, i64)) -> i64 {
     (from.0 - to.0).abs().max((from.1 - to.1).abs())
 }
 
+/// Walk from `site` to the nearest F2P bank of its level (any level
+/// when none, `nearest_free_bank`), through the toll gate when the Al
+/// Kharid fence stands between them (live 2026-11-20: the Lumbridge
+/// swamp read Al Kharid's bank 25 tiles away, straight through the
+/// fence).
 fn surface_bank_walk(site: (i64, i64, i64)) -> Option<i64> {
-    let bank = lifescape_gamedata::banks::nearest_free_bank(site.0, site.1, site.2)?;
-    Some((bank.x - site.0).abs().max((bank.z - site.1).abs()))
+    use lifescape_gamedata::toll::{across, GATE};
+    let walk = |bank: &lifescape_gamedata::banks::Bank| {
+        let target = (bank.x, bank.z, bank.level);
+        if site.2 == GATE.2 && bank.level == GATE.2 && across((site.0, site.1), (bank.x, bank.z)) {
+            chebyshev(site, GATE) + chebyshev(GATE, target)
+        } else {
+            chebyshev(site, target)
+        }
+    };
+    let free: Vec<_> = lifescape_gamedata::banks::all_banks().into_iter().filter(|bank| !bank.members && bank.level == site.2).collect();
+    if free.is_empty() {
+        let bank = lifescape_gamedata::banks::nearest_free_bank(site.0, site.1, site.2)?;
+        return Some(chebyshev(site, (bank.x, bank.z, site.2)));
+    }
+    free.iter().map(walk).min()
 }
 
 /// One-way walk in tiles from `site` to the nearest F2P bank, through

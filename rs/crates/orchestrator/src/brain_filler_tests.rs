@@ -313,11 +313,16 @@ fn a_crowded_site_is_never_drawn_by_a_second_filler() {
         let pick = super::pick_window(&mut node, &mut ctx, &mut publish, &[], &[]).expect("coal is workable");
         (pick, node.site)
     };
+    // The fastest coal (bank loads weighed, `combat::bank_weight`),
+    // whichever field it is; filled, the next filler goes elsewhere.
+    let _ = barbarian;
     let (first, first_site) = pick(Vec::new());
-    assert_eq!((first.method.as_str(), first_site), ("gather:mining/coal", Some(barbarian)), "the first filler mines the nearest coal");
-    let (second, second_site) = pick(vec![(barbarian, 1)]);
+    let field = first_site.expect("a coal site");
+    assert_eq!(first.method.as_str(), "gather:mining/coal");
+    let seats = lifescape_planner::combat::site_capacity("gather:mining/coal", field).expect("a rock field") as u32;
+    let (second, second_site) = pick(vec![(field, seats)]);
     let site = second_site.expect("a site");
-    assert!(lifescape_planner::combat::crowd_bots(site, &[(barbarian, 1)]) == 0, "second filler on the crowded rocks: {second:?} at {site:?}");
+    assert!(!lifescape_planner::combat::site_full("gather:mining/coal", site, &[(field, seats)]), "second filler on the crowded rocks: {second:?} at {site:?}");
 }
 
 /// Lot 3 review, CPU (filler.launch 27 → 212 ms CPU a call): the money

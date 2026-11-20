@@ -67,10 +67,12 @@ pub fn leg_site(method: &str, dest: (i64, i64, i64), combat: u8, free_pass: bool
 /// for the method (`cooldown::cooled_sites`: contended by players, failed
 /// there), skipped like the resolve skips them; all cooled is no site.
 pub fn leg_site_seated(method: &str, dest: (i64, i64, i64), combat: u8, free_pass: bool, seats: &[crate::bid_response::Seat], avoid: &[(i64, i64, i64)]) -> Option<LegSite> {
-    use crate::combat::{pick_site_seated, same_resource_seats, Fare, Pass, SitePick};
+    use crate::combat::{pick_site_weighed, same_resource_seats, Fare, Pass, SitePick};
     let fare = Fare { wallet: i64::MAX / 4, free_pass };
     let taken = same_resource_seats(method, seats);
-    let site = match pick_site_seated(method, combat, Some(dest), fare, &Pass::default(), &[], &taken, avoid) {
+    // One load seen from `dest` (a unit's leg): the bank walks weigh in
+    // the node's own pick (`expand`, `combat::bank_weight`).
+    let site = match pick_site_weighed(method, combat, Some(dest), fare, &Pass::default(), &[], &taken, avoid, 1) {
         SitePick::Anywhere => return Some(LegSite { site: dest, fare: 0.0 }),
         SitePick::At(site) => return Some(LegSite { site, fare: 0.0 }),
         SitePick::Tolled(site) | SitePick::Boat { site, .. } => site,

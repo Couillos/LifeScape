@@ -208,6 +208,9 @@ pub(crate) fn shop_gate(item: &str, ctx: &ReadyCtx) -> Option<&'static str> {
 /// Nested quest/guild expansions a skeleton files (a quest's climb may
 /// need a guild, whose climb may need a quest: bounded).
 pub const NESTED_DEPTH: u8 = 2;
+/// Units one bank load carries (a pack less a tool), for the site pick's
+/// bank weight (`combat::bank_weight`).
+pub const PACK_UNITS: i64 = 27;
 
 fn next_id(counter: &mut usize) -> String {
     *counter += 1;
@@ -577,8 +580,14 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
         }
         return;
     }
+    // Bank loads of the node (`combat::bank_weight`): an order's units
+    // over a pack, a level to reach or a quota of unknown size the most.
+    let loads = match &node.kind {
+        NodeKind::ObtainItems { count, .. } => ((*count - ctx.held).max(1) + PACK_UNITS - 1) / PACK_UNITS,
+        _ => crate::combat::BANK_LOADS,
+    };
     for method in &candidates {
-        match crate::combat::pick_site_for(method, ctx) {
+        match crate::combat::pick_site_for_loads(method, ctx, loads) {
             crate::combat::SitePick::Anywhere => {
                 node.method = Some(method.clone());
                 return;

@@ -295,6 +295,28 @@ fn method_site_list(method: &str) -> Option<Vec<(i64, i64, i64)>> {
     None
 }
 
+/// Loads a banking site is weighed over (user 2026-11-20: « les bots qui
+/// smelt utilisent la bank de Draynor et smelt à Lumbridge, ça fait
+/// beaucoup de route ; ils doivent utiliser le spot le plus rapide »):
+/// one run banks this many times, so the bank round trip counts this
+/// many times against the one walk to the site.
+pub const BANK_LOADS: i64 = 20;
+
+/// Tiles the bank walks of `site` weigh for `method` over `loads` loads
+/// (at most `BANK_LOADS`, the first one carried there): the stations (furnace, range,
+/// anvil...) and the gathering that banks its load; a fight, or a site
+/// with no bank found, weighs nothing.
+pub fn bank_weight(method: &str, site: (i64, i64, i64), loads: i64) -> i64 {
+    let inner = crate::trade_craft::inner(method);
+    let station = STATION_FAMILIES.iter().any(|family| inner.starts_with(family));
+    let gathers = method_sites(inner).is_some_and(|(kind, _)| kind != "fight");
+    if !(station || gathers) {
+        return 0;
+    }
+    // The first load rides in the pack: only the next ones walk back.
+    crate::method_rate_trip::bank_walk_tiles(site).map_or(0, |tiles| (loads.min(BANK_LOADS) - 1).max(0) * 2 * tiles)
+}
+
 /// Rows of one method, computed once from the data: each site's combat
 /// requirement (read at its surface tile for an underground guild) and
 /// its gates.
@@ -444,9 +466,15 @@ pub fn pick_site_crowded(method: &str, combat: u8, position: Option<(i64, i64, i
 /// gates and fleet crowd, never on a site this bot cooled for `method`
 /// (`cooldown`, plan P1/D4).
 pub fn pick_site_for(method: &str, ctx: &crate::expand::ReadyCtx) -> SitePick {
+    pick_site_for_loads(method, ctx, BANK_LOADS)
+}
+
+/// `pick_site_for` knowing the node's bank loads (`bank_weight`): a
+/// small order carried in one load never walks to a far bank's site.
+pub fn pick_site_for_loads(method: &str, ctx: &crate::expand::ReadyCtx, loads: i64) -> SitePick {
     let avoid = crate::cooldown::cooled_sites(&ctx.cooled, method);
     let seats = same_resource_seats(method, &ctx.seats);
-    pick_site_seated(method, ctx.combat, ctx.position, Fare::of(ctx), &Pass::of(ctx), &ctx.crowd, &seats, &avoid)
+    pick_site_weighed(method, ctx.combat, ctx.position, Fare::of(ctx), &Pass::of(ctx), &ctx.crowd, &seats, &avoid, loads)
 }
 
 /// True when `left` and `right` work the same resource (`method_sites`:
@@ -494,6 +522,22 @@ pub fn pick_site_seated(
     seats: &[((i64, i64, i64), u32)],
     avoid: &[(i64, i64, i64)],
 ) -> SitePick {
+    pick_site_weighed(method, combat, position, fare, pass, crowd, seats, avoid, BANK_LOADS)
+}
+
+/// `pick_site_seated` over `loads` bank loads (`bank_weight`).
+#[allow(clippy::too_many_arguments)]
+pub fn pick_site_weighed(
+    method: &str,
+    combat: u8,
+    position: Option<(i64, i64, i64)>,
+    fare: Fare,
+    pass: &Pass,
+    crowd: &[((i64, i64, i64), u32)],
+    seats: &[((i64, i64, i64), u32)],
+    avoid: &[(i64, i64, i64)],
+    loads: i64,
+) -> SitePick {
     let Some(table) = method_site_table(method) else {
         return SitePick::Anywhere;
     };
@@ -514,7 +558,7 @@ pub fn pick_site_seated(
             }
             None => 0,
         };
-        walk + crowd_penalty(*site, crowd)
+        walk + crowd_penalty(*site, crowd) + bank_weight(method, *site, loads)
     };
     let full = |site: &(i64, i64, i64)| site_full(method, *site, seats);
     let across = |site: &(i64, i64, i64)| position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, *site));
@@ -751,5 +795,27 @@ mod tests {
         assert_eq!(super::fight_style(&fiona), "magic", "the goal's own (magic)");
         fiona.goal = GoalKind::Produce { item: "amulet_of_power".to_string(), count: 1 };
         assert_eq!(super::fight_style(&fiona), "melee", "an earlier goal's node is no fight of this one");
+    }
+
+    /// Live 2026-11-20: smelters banked at Draynor and smelted at the
+    /// Lumbridge furnace (no bank beside it); Al Kharid's furnace stands
+    /// by its bank. Weighed over its bank loads, the fastest furnace wins
+    /// even from Draynor, the one walk there paid once.
+    #[test]
+    fn a_smelter_takes_the_furnace_beside_a_bank() {
+        use super::{bank_weight, pick_site_paid, Fare, SitePick, BANK_LOADS};
+        let tiles = |site| lifescape_gamedata::stations::stations_of("furnace").into_iter().find(|post| (post.x, post.z, post.level) == site).map(|_| bank_weight("smelt:iron_bar", site, BANK_LOADS));
+        let lumbridge = tiles((3225, 3256, 0)).expect("lumbridge furnace");
+        let al_kharid = tiles((3272, 3185, 0)).expect("al kharid furnace");
+        assert!(al_kharid < lumbridge, "al kharid {al_kharid} vs lumbridge {lumbridge}");
+        let draynor_bank = Some((3092, 3245, 0));
+        let pick = pick_site_paid("smelt:iron_bar", 60, draynor_bank, Fare { wallet: 10_000, free_pass: false });
+        let site = match pick {
+            SitePick::At(site) | SitePick::Tolled(site) => site,
+            other => panic!("a furnace: {other:?}"),
+        };
+        assert!((site.0 - 3272).abs() <= 2 && (site.1 - 3185).abs() <= 2, "al kharid's furnace, got {site:?}");
+        assert_eq!(bank_weight("fight:melee/cows", (3255, 3270, 0), BANK_LOADS), 0, "a fight weighs no bank");
+        assert_eq!(bank_weight("smelt:iron_bar", (3225, 3256, 0), 1), 0, "one load rides in the pack");
     }
 }
