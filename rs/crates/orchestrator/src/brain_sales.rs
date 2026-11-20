@@ -70,10 +70,15 @@ pub fn planned_methods_except(life: &Life, skip: Option<&str>) -> Vec<String> {
             continue;
         }
         methods.extend(node.method.iter().cloned().chain(node.alternatives.iter().map(|alt| alt.method.clone())));
-        // A 100 % market lot bought for (R5): its inputs wait for the craft.
-        methods.extend(node.blocked_by.iter().filter(|method| lifescape_planner::trade_craft::is_trade(method)).cloned());
+        // The method whose run blocked (its method cleared until the
+        // sub-tasks are done): the node returns to it, its inputs wait.
+        // A 100 % market lot bought for (R5) the same. Live 2026-11-20
+        // kai_ellis n932 (`craft:leather_armour` blocked on thread): the
+        // next cleanup listed his 133 leather, 57 hides and 12 threads,
+        // the relaunch blocked `missing:leather` and bid them back.
+        methods.extend(node.blocked_by.iter().cloned());
         if let NodeKind::ReachLevel { skill, level } = &node.kind {
-            if node.method.is_none() && node.alternatives.is_empty() {
+            if node.method.is_none() && node.alternatives.is_empty() && node.blocked_by.is_none() {
                 methods.push(lifescape_planner::tranches::reach_method(skill, level.saturating_sub(1).max(1)));
             }
         }
@@ -135,9 +140,23 @@ fn method_inputs(method: &str, keep: &mut Vec<String>) -> Option<String> {
     // water -> soft clay -> unfired -> fired): the inputs of those stages
     // are its inputs too (live will_field 2026-11-20: the climb's clay was
     // listed, the run blocked `locked:clay`).
-    let depth = if method.starts_with(POTTERY_PREFIX) { POTTERY_STAGES } else { 0 };
+    // The leatherwork script tans its own hides when no leather is banked
+    // (`activities/leatherwork.rs`, `tan_from_bank`): the hides of a
+    // leather climb are its inputs too.
+    let depth = if method.starts_with(POTTERY_PREFIX) {
+        POTTERY_STAGES
+    } else if sews_leather(named) {
+        1
+    } else {
+        0
+    };
     stage_inputs(named, depth, keep);
     product
+}
+
+/// True when `product` is sewn from (hard) leather.
+fn sews_leather(product: &str) -> bool {
+    lifescape_gamedata::obtain::ways(product).iter().any(|way| way.is_production() && way.inputs.iter().any(|(input, _)| input == "leather" || input == "hard_leather"))
 }
 
 /// Prefix of the pottery methods, whose script works the whole chain.
@@ -833,6 +852,22 @@ pub(crate) mod tests {
     /// clay -> unfired bowl -> bowl), but only the unfired bowl was kept:
     /// the 8 615 clay mined for the climb were listed, the run blocked
     /// `locked:clay` then `missing clay` (300 + 85 blocks in a day).
+    /// Live 2026-11-20 kai_ellis n932 (`craft:leather_armour` 16->20,
+    /// blocked on thread, its method cleared until the sub-task ends):
+    /// the cleanup listed his 133 leather, 57 hides and 12 threads, the
+    /// relaunch blocked `missing:leather` and bid them back.
+    #[test]
+    fn a_blocked_climb_keeps_the_inputs_of_the_method_it_returns_to() {
+        let mut crafter = life_training(&[("crafting", "craft:leather_armour")]);
+        crafter.nodes[0].blocked_by = crafter.nodes[0].method.take();
+        crafter.nodes[0].status = lifescape_planner::NodeStatus::Pending;
+        let keep = super::working_keep(&crafter, &[]);
+        for input in ["leather", "thread", "needle", "cow_hide"] {
+            assert!(keep.contains(&input.to_string()), "{input}: {keep:?}");
+        }
+        assert!(!keep.contains(&"leather_armour".to_string()), "the armour is sold: {keep:?}");
+    }
+
     #[test]
     fn a_potter_keeps_the_clay_of_its_chain() {
         let potter = super::working_keep(&life_training(&[("crafting", "pottery:bowl_empty")]), &[]);
