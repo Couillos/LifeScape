@@ -261,7 +261,8 @@ fn combat_climbs_take_their_own_style_from_the_guide() {
 
 /// The bot works what it can NOW first: a feasible line beats a better
 /// one whose tool it must obtain; once it blocked on that tool for its
-/// previous pick, the previous pick comes back as soon as it is feasible.
+/// previous pick, the previous pick comes back as soon as it is feasible
+/// and within the band of the best line (D10).
 #[test]
 fn feasible_lines_draw_first_and_a_blocked_pick_comes_back() {
     let mut harpoon = line("fishing", "gather:fishing/raw_swordfish", Supply::Autonomous, 90_000.0, 0.0);
@@ -274,8 +275,13 @@ fn feasible_lines_draw_first_and_a_blocked_pick_comes_back() {
         assert_eq!((found.pick.method.as_str(), found.choice.class), ("gather:fishing/raw_trout", 0), "feasible now first");
     }
     let harpoon_held = |item: &str| i64::from(item == "harpoon");
-    let back = pick_seeded(&set, "fishing", 58, 60, &life, &[], &harpoon_held, &[], 3, Some("gather:fishing/raw_trout")).expect("a line");
-    assert!(back.choice.sticky && back.pick.method == "gather:fishing/raw_trout", "the previous pick, feasible, comes back");
+    let back = pick_seeded(&set, "fishing", 58, 60, &life, &[], &harpoon_held, &[], 3, Some("gather:fishing/raw_swordfish")).expect("a line");
+    assert!(back.choice.sticky && back.pick.method == "gather:fishing/raw_swordfish", "the previous pick, feasible, comes back");
+    // A previous pick out of the band of the best line now (2026-11-20:
+    // bronze bars smelted for smithing 59 -> 66 kept by every re-resolve
+    // under the old score) is drawn again among the lines of the band.
+    let stale = pick_seeded(&set, "fishing", 58, 60, &life, &[], &harpoon_held, &[], 3, Some("gather:fishing/raw_trout")).expect("a line");
+    assert!(!stale.choice.sticky && stale.pick.method == "gather:fishing/raw_swordfish", "a previous pick out of the band is no longer taken again: {:?}", stale.choice);
     let only_tool = set_with(vec![{
         let mut row = line("fishing", "gather:fishing/raw_swordfish", Supply::Autonomous, 90_000.0, 0.0);
         row.prereqs.tools = vec!["harpoon".to_string()];

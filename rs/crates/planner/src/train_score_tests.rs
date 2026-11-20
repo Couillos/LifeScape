@@ -102,7 +102,7 @@ fn the_score_weighs_time_coins_and_supply() {
     let earning = line("smith:bronze_dagger", Supply::Market, 6000.0, 600_000.0);
     let fond = score_row(&earning, &bot(1.0, 0.5), per_coin).expect("scored").score;
     let wary = score_row(&earning, &bot(0.0, 0.5), per_coin).expect("scored").score;
-    assert!(fond < 0.0 && fond < wary, "a market bot still prefers the earning market line: {fond} vs {wary}");
+    assert!((fond - 0.25).abs() < 1e-12 && fond < wary, "earnings count zero, a market bot still prefers the market line: {fond} vs {wary}");
     let blind = score_row(&bought, &bot(0.5, 1.0), None).expect("scored");
     assert!((blind.score - 0.1).abs() < 1e-12, "no money line: time alone");
     assert!(ticks_per_coin(Some(-5.0)).is_none() && ticks_per_coin(None).is_none());
@@ -154,7 +154,9 @@ fn the_buy_weight_follows_the_trait_continuously() {
 /// XP). At the fleet's D17 (30 000 coins per 6000 ticks) a market
 /// profile (0.8) buys its bars, an autarkic one (0.1) works them up; a
 /// bot whose best money line earns little (D17 high: 300 coins per 6000
-/// ticks, 20 ticks a coin) works them up whatever its trait.
+/// ticks, 20 ticks a coin) works them up unless it is fast (thrift 0:
+/// its coins weigh half, the bars it buys go 2.6 times faster; the
+/// autonomous line's earnings count zero since 2026-11-20).
 #[test]
 fn a_market_profile_buys_its_bars_while_its_coins_allow_it() {
     let mut bought = line("smith:steel_platebody", Supply::Market, 4400.0, -2640.0);
@@ -169,6 +171,33 @@ fn a_market_profile_buys_its_bars_while_its_coins_allow_it() {
         let autarkic = choose(&rank_rows(&rows, &bot(0.1, thrift), fleet, &reach)).expect("a line");
         assert_eq!(autarkic.supply, Supply::Autonomous, "autarkic profile 0.1, thrift {thrift}");
         let poor = choose(&rank_rows(&rows, &bot(0.8, thrift), ticks_per_coin(Some(300.0)), &reach)).expect("a line");
-        assert_eq!(poor.supply, Supply::Autonomous, "D17 high: the autonomous line again, thrift {thrift}");
+        let expected = if thrift == 0.0 { Supply::Market } else { Supply::Autonomous };
+        assert_eq!(poor.supply, expected, "D17 high: the autonomous line again unless fast, thrift {thrift}");
+    }
+}
+
+/// Smithing 60-68 (live 2026-11-20, lara_lane n1628, bellarhodes n3350):
+/// copper and tin mined and smelted into bronze bars (autonomous, 0.09 XP
+/// per tick, the bars selling for 1.59 coins per tick) against steel
+/// platebodies of bought bars (market, 3.7 XP per tick, the plates
+/// earning a little too), at the bot's measured time value (D1: 0.67 coin
+/// per tick). The old score credited the bronze bars' coins at 1.49 ticks
+/// each: −5.5 per XP against −1.3, the climb took the line 40 times
+/// slower (40 060 copper ore filed for 59 -> 66). A climb is chosen for
+/// its XP: what a line earns makes it free at best, never better than a
+/// faster line; the fast line wins for every profile.
+#[test]
+fn earned_coins_never_make_a_slow_climb_win() {
+    let mut smelted = line("smelt:bronze_bar", Supply::Autonomous, 538.0, 9540.0);
+    smelted.skill = "smithing".to_string();
+    let mut plated = line("smith:steel_platebody", Supply::Market, 22_200.0, 2400.0);
+    plated.skill = "smithing".to_string();
+    let rows = vec![smelted, plated];
+    let per_coin = Some(1.0 / 0.67);
+    for (affinity, thrift) in [(0.52, 0.13), (0.68, 0.93), (0.1, 0.5), (0.0, 1.0), (1.0, 0.0)] {
+        let ranked = rank_rows(&rows, &bot(affinity, thrift), per_coin, &|_: &TrainingRow| true);
+        let picked = choose(&ranked).expect("a line");
+        assert_eq!(picked.method, "smith:steel_platebody", "affinity {affinity}, thrift {thrift}: {ranked:?}");
+        assert!(ranked.iter().all(|(score, _)| score.score >= 0.0), "earnings never push a score under zero: {ranked:?}");
     }
 }

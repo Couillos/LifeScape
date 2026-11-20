@@ -176,7 +176,14 @@ pub(crate) fn pick_from_guide(set: &GuideSet, climb: &Climb, life: &Life, bot: &
     let food_short = |method: &str| climb.food.and_then(|food| food(method));
     let per_coin = Some(1.0 / climb.coin_rate.max(lifescape_planner::market_fit::MIN_COIN_RATE));
     let ranked: Vec<Classed> = rank_classed(&lines, &life.profile, per_coin, &|row| class_for(row, bot).map(|class| if food_short(&row.method).is_some() { class.max(1) } else { class }));
-    let again = climb.previous.and_then(|method| ranked.iter().position(|line| line.class == 0 && line.row.method == method));
+    // The previous pick comes back only while it stays within the band of
+    // the best line feasible now (D10, 2026-11-20): a pick the score now
+    // ranks far behind is drawn again (live: bronze bars smelted for
+    // smithing 59 -> 66, kept by every re-resolve).
+    let best_now = ranked.iter().find(|line| line.class == 0).map(|line| line.score.score);
+    let again = climb.previous.and_then(|method| {
+        ranked.iter().position(|line| line.class == 0 && line.row.method == method && best_now.is_some_and(|best| lifescape_planner::guide_pick::in_band(-line.score.score, -best)))
+    });
     let (index, drawn, sticky) = match again {
         Some(index) => (index, lifescape_planner::guide_pick::Drawn { index: 0, band: 1, candidates: ranked.iter().filter(|line| line.class == 0).count(), explored: false }, true),
         None => {

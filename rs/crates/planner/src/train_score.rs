@@ -20,8 +20,14 @@
 //!   an autarkic one farms unless buying is far faster (a rune pickaxe
 //!   nobody can smith: every bot buys). The money guide's market lines
 //!   keep the linear `market_weight` (1.5 − affinity, not this lever);
-//! - a negative score (the line earns more than its time costs) keeps the
-//!   same order: the weight divides it instead of multiplying.
+//! - coins a line EARNS (sold products above its purchases) count zero
+//!   (2026-11-20, « le smithing avance si lentement »): a climb is chosen
+//!   for its XP; its earnings make it free at best, never cheaper than
+//!   its own time. Live: lara_lane smithing 60 -> 68 took bronze bars
+//!   mined and smelted (0.09 XP per tick, their coins credited at the
+//!   bot's 0.67 coin per tick: −5.5 per XP) over steel platebodies of
+//!   bought bars (3.7 XP per tick); every score is now ≥ 0. Money is the
+//!   money pick's business (`guide_pick::merit_money`).
 //!
 //! Lower score wins. An XP-less line has none; an Ironman never scores a
 //! market line. The choice among the scored lines is the draw of R7
@@ -82,13 +88,10 @@ pub fn score_row(row: &TrainingRow, profile: &Profile, ticks_per_coin: Option<f6
     }
     let own = WINDOW_TICKS / row.xp_6000;
     let coins = ticks_per_coin.map(|per_coin| row.coins_per_xp * per_coin).unwrap_or(0.0);
-    let total = own + coin_weight(profile.thrift) * coins;
-    let score = if row.supply == Supply::Market {
-        let weight = buy_weight(profile.market_affinity);
-        if total >= 0.0 { total * weight } else { total / weight }
-    } else {
-        total
-    };
+    // What the line earns makes the climb free at best (module doc,
+    // 2026-11-20): never a negative cost, never a slow line ahead.
+    let total = own + coin_weight(profile.thrift) * coins.max(0.0);
+    let score = if row.supply == Supply::Market { total * buy_weight(profile.market_affinity) } else { total };
     Some(LineScore { own_ticks_per_xp: own, coin_ticks_per_xp: coins, score })
 }
 
