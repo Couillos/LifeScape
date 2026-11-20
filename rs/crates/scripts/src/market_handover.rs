@@ -450,7 +450,8 @@ pub fn seller_offer(bot: &mut Bot, group: &DealGroup, trade: u16, deadline: u64)
 /// the nearest bank (Varrock west or east from the square) everything
 /// but the tools and the paused script's held objects goes in, the
 /// traded lots, the coins and the load carried before the pause alike.
-/// Nothing comes back out: the session ends the paused run and the brain
+/// Only a paid run's fare reserve comes back out (`toll::fare_back`).
+/// Nothing else comes back out: the session ends the paused run and the brain
 /// relaunches the activity from the square, so a woodcutter never walks
 /// a full pack back to its trees. Locked units stay banked (outside the
 /// trade procedure). Loud when it fails: a silent drop loses the lots
@@ -466,6 +467,16 @@ pub fn bank_after_trades(bot: &mut Bot) {
         match bot.bank_deposit_all(side_com, &keep, 300) {
             Ok(true) => {}
             other => bot.log(&format!("banking after the trades: {other:?}")),
+        }
+        // A paid run keeps its fares (the Karamja boat, the toll): the
+        // reserve comes back out, never a walk planned without it.
+        let short = crate::kit::toll::fare_back(bot);
+        if short > 0 {
+            if let Ok(coins) = crate::kit::pack::obj_id(bot, "coins") {
+                if let Err(error) = bot.bank_withdraw(coins, short, 40) {
+                    bot.log(&format!("banking after the trades: fare of {short} coins not taken back ({error})"));
+                }
+            }
         }
     }
     let _ = bot.close_modal();

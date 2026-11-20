@@ -174,6 +174,13 @@ fn carried_coins(bot: &Bot) -> u32 {
     obj_id(bot, "coins").map(|coins| pack_total(bot, coins)).unwrap_or(0)
 }
 
+/// Coins a paid run takes back out of the bank once a deposit-everything
+/// pass emptied its pack (the banking after the market trades): what the
+/// pack lacks of its route-priced reserve; 0 for any other run.
+pub fn fare_back(bot: &Bot) -> u32 {
+    reserve_short(bot, carried_coins(bot))
+}
+
 /// Coins to fetch so the pack carries `reserve` (0 when it does).
 pub fn fare_shortfall(reserve: u32, carried: u32) -> u32 {
     reserve.saturating_sub(carried)
@@ -326,6 +333,24 @@ mod tests {
         let full = [1265u16, 436, 438];
         assert_eq!(super::fare_keep(&full, &stays, 995, 0), vec![1265], "no slot: the load goes in, the tool stays");
         assert_eq!(super::fare_keep(&full, &stays, 995, 1), full.to_vec(), "a free slot: the pack is kept whole");
+    }
+
+    /// Live 2026-11-20 (brook_daisy t=16677: a delivery paused the paid
+    /// run, the banking after the trades put the 60 fare coins in, the
+    /// walk to Karamja planned `NeedsRequirement coins:60` and walked
+    /// back to a bank; ~350 of the day's 586 boat rows): the banking
+    /// after the trades takes the paid run's reserve back out.
+    #[test]
+    fn the_fare_comes_back_out_after_the_trades() {
+        let mut bot = live_bot();
+        assert_eq!(super::fare_back(&bot), 0, "an unpaid run takes nothing back");
+        bot.allow_paid = true;
+        bot.fare_reserve = 60;
+        assert_eq!(super::fare_back(&bot), 60, "everything banked: the whole reserve");
+        carry(&mut bot, 25);
+        assert_eq!(super::fare_back(&bot), 35);
+        carry(&mut bot, 60);
+        assert_eq!(super::fare_back(&bot), 0);
     }
 
     /// Same bank, same price: the reserve is priced once per bank (no
