@@ -88,10 +88,22 @@ pub fn style_ammo_ids(bot: &Bot, plan: &GearPlan) -> Vec<u16> {
 }
 
 /// Runes a magic run's bank leg withdraws (whole stacks): the ordered
-/// spell's (`--spell`), wind strike's without one.
+/// spell's (`--spell`), wind strike's without one; a combat-intent run
+/// (`Bot::combat_spell_best`) also every rune of the damage spells its
+/// level casts (`strike::combat_spells`), its fallbacks down the ladder.
 pub fn magic_ammo(bot: &Bot) -> Vec<String> {
     let spell = bot.combat_spell.as_deref().unwrap_or(crate::activities::magic_style::DAMAGE_SPELLS[0].0);
-    crate::activities::magic_style::spell_runes(spell).into_iter().map(|(name, _)| name).collect()
+    let mut runes: Vec<String> = crate::activities::magic_style::spell_runes(spell).into_iter().map(|(name, _)| name).collect();
+    if bot.combat_spell_best {
+        for fallback in crate::kit::strike::combat_spells(crate::activities::magic_style::magic_level(bot), None) {
+            for (rune, _) in crate::activities::magic_style::spell_runes(&fallback) {
+                if !runes.contains(&rune) {
+                    runes.push(rune);
+                }
+            }
+        }
+    }
+    runes
 }
 
 /// Liste gardée au dépôt (module doc) : munitions du style, objets de la

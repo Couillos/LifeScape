@@ -27,7 +27,17 @@
 //!   mined and smelted (0.09 XP per tick, their coins credited at the
 //!   bot's 0.67 coin per tick: −5.5 per XP) over steel platebodies of
 //!   bought bars (3.7 XP per tick); every score is now ≥ 0. Money is the
-//!   money pick's business (`guide_pick::merit_money`).
+//!   money pick's business (`guide_pick::merit_money`);
+//! - a training FIGHT pays its runes and arrows whatever its loot
+//!   (2026-11-20, user: « pour la magie, si le bot veut s'entraîner alors
+//!   il faut privilégier l'xp/coût »): the coins counted are the larger
+//!   of the line's net spending and what its weapon burns (`rune`,
+//!   `ammo` flows at the line's purchase price, `guide_engine::buy_at`:
+//!   what the asks or a stocked keeper sell now, `shop_drain`). Live:
+//!   crumble undead trained every mage, its skeletons' drops "paying" the
+//!   chaos runes the market sold at ~2 000; earth strike on cows burns
+//!   runes at 1 coin. Alchemy, superheat, enchants keep their balance:
+//!   their coins and products are the cast's own output.
 //!
 //! Lower score wins. An XP-less line has none; an Ironman never scores a
 //! market line. The choice among the scored lines is the draw of R7
@@ -62,7 +72,9 @@ pub fn buy_weight(affinity: f64) -> f64 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineScore {
     pub own_ticks_per_xp: f64,
-    /// Coins per XP converted at D17 (negative: the line earns).
+    /// Coins per XP converted to ticks as the score counts them (≥ 0:
+    /// earnings count zero; a training fight's runes and arrows whatever
+    /// its loot, `fight_consumables_per_xp`).
     pub coin_ticks_per_xp: f64,
     /// The weighted total (lower wins).
     pub score: f64,
@@ -87,12 +99,30 @@ pub fn score_row(row: &TrainingRow, profile: &Profile, ticks_per_coin: Option<f6
         return None;
     }
     let own = WINDOW_TICKS / row.xp_6000;
-    let coins = ticks_per_coin.map(|per_coin| row.coins_per_xp * per_coin).unwrap_or(0.0);
     // What the line earns makes the climb free at best (module doc,
-    // 2026-11-20): never a negative cost, never a slow line ahead.
-    let total = own + coin_weight(profile.thrift) * coins.max(0.0);
+    // 2026-11-20): never a negative cost, never a slow line ahead; a
+    // training fight pays its runes and arrows whatever its loot.
+    let spent_per_xp = (row.coins_per_xp.max(0.0)).max(fight_consumables_per_xp(row));
+    let coins = ticks_per_coin.map(|per_coin| spent_per_xp * per_coin).unwrap_or(0.0);
+    let total = own + coin_weight(profile.thrift) * coins;
     let score = if row.supply == Supply::Market { total * buy_weight(profile.market_affinity) } else { total };
     Some(LineScore { own_ticks_per_xp: own, coin_ticks_per_xp: coins, score })
+}
+
+/// Causes of the consumables a fight burns as its weapon's ammunition:
+/// a cast's runes, a shot's arrows (module doc).
+pub const FIGHT_CONSUMABLES: [&str; 2] = ["rune", "ammo"];
+
+/// Coins per XP a FIGHT line (`fight:`) spends on its runes and arrows
+/// (`FIGHT_CONSUMABLES`, their flows' value at the line's price), its
+/// loot never paying them (user 2026-11-20, module doc); 0 for any other
+/// line (alchemy, a curse, a recipe keep their balance).
+pub fn fight_consumables_per_xp(row: &TrainingRow) -> f64 {
+    if !row.method.starts_with("fight:") || row.xp_6000 <= 0.0 {
+        return 0.0;
+    }
+    let spent: f64 = row.flows.iter().filter(|line| FIGHT_CONSUMABLES.contains(&line.cause.as_str()) && line.value_6000 < 0.0).map(|line| -line.value_6000).sum();
+    spent / row.xp_6000
 }
 
 /// The scored lines of `rows` for `profile`, best (lowest) first; ties

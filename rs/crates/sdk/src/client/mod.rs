@@ -149,6 +149,12 @@ pub struct Bot {
     /// `None` = the strongest damage spell the pack funds. Script state,
     /// set by every magic run, never sent anywhere.
     pub combat_spell: Option<String>,
+    /// Combat intent of a magic run (`--best-spell`, user 2026-11-20):
+    /// the fight casts the strongest damage spell the level and the runes
+    /// allow, the next one down when they run out (`combat_spell` then
+    /// names the spell cast last); false: `combat_spell` exactly. Script
+    /// state, never sent anywhere.
+    pub combat_spell_best: bool,
     /// Opt-in to hunter zones (tree spots near aggressive NPCs). Default
     /// false: spots within range of something that would attack us are
     /// skipped.
@@ -258,6 +264,7 @@ impl Bot {
             allow_shop: true,
             combat_style: "melee".to_string(),
             combat_spell: None,
+            combat_spell_best: false,
             allow_wild: false,
             maps: None,
             nav_world: None,

@@ -201,3 +201,50 @@ fn earned_coins_never_make_a_slow_climb_win() {
         assert!(ranked.iter().all(|(score, _)| score.score >= 0.0), "earnings never push a score under zero: {ranked:?}");
     }
 }
+
+/// A fight line's flow of `value_6000` coins a window (negative: spent).
+fn flow(item: &str, cause: &str, value_6000: f64) -> crate::guide_model::FlowLine {
+    crate::guide_model::FlowLine {
+        item: item.to_string(),
+        cause: cause.to_string(),
+        per_6000: value_6000,
+        unit_price: 1.0,
+        value_6000,
+        outlet: crate::guide_model::Outlet::Market,
+        traded: true,
+        basis: crate::guide_model::PriceBasis::Traded,
+    }
+}
+
+/// User 2026-11-20 (« pour la magie, si le bot veut s'entraîner alors il
+/// faut privilégier l'xp/coût »): the runes a training fight casts are
+/// its cost, whatever its drops bring (the loot earns, counted zero like
+/// any earning, never paying the runes). Crumble undead whose skeletons
+/// drop more than its chaos runes cost no longer trains for free ahead
+/// of the earth strike on cows; a ranged fight's arrows the same.
+#[test]
+fn a_training_fight_pays_its_runes_whatever_its_drops() {
+    let mut crumble = line("fight:magic/crumble_undead/wild_skeletons", Supply::Market, 20_000.0, 10_000.0);
+    crumble.skill = "magic".to_string();
+    crumble.flows = vec![flow("chaosrune", "rune", -18_000.0), flow("airrune", "rune", -2000.0), flow("steel_platebody", "loot", 30_000.0)];
+    let mut strike = line("fight:magic/earth_strike/cows", Supply::Market, 15_000.0, -1000.0);
+    strike.skill = "magic".to_string();
+    strike.flows = vec![flow("earthrune", "rune", -1000.0)];
+    let rows = vec![crumble, strike];
+    let ranked = rank_rows(&rows, &bot(0.5, 0.5), Some(0.5), &|_: &TrainingRow| true);
+    assert_eq!(choose(&ranked).map(|row| row.method.as_str()), Some("fight:magic/earth_strike/cows"), "{ranked:?}");
+    let crumble_score = &ranked.iter().find(|(_, row)| row.method.contains("crumble")).expect("crumble scored").0;
+    assert!((crumble_score.coin_ticks_per_xp - 0.5).abs() < 1e-9, "20 000 coins of runes over 20 000 XP at 0.5 tick a coin: {crumble_score:?}");
+    let mut shot = line("fight:ranged/hill_giants", Supply::Market, 20_000.0, 10_000.0);
+    shot.flows = vec![flow("rune_arrow", "ammo", -20_000.0), flow("big_bones", "loot", 30_000.0)];
+    let mut cheap = line("fight:ranged/cows", Supply::Market, 15_000.0, -500.0);
+    cheap.flows = vec![flow("bronze_arrow", "ammo", -500.0)];
+    let rows = vec![shot, cheap];
+    let ranked = rank_rows(&rows, &bot(0.5, 0.5), Some(0.5), &|_: &TrainingRow| true);
+    assert_eq!(choose(&ranked).map(|row| row.method.as_str()), Some("fight:ranged/cows"), "{ranked:?}");
+    // Alchemy keeps its balance: the coins it makes are its product.
+    let mut alch = line("alch:iron_platebody", Supply::Market, 20_000.0, 5000.0);
+    alch.flows = vec![flow("naturerune", "rune", -18_000.0), flow("coins", "product", 30_000.0)];
+    let scored = score_row(&alch, &bot(0.5, 0.5), Some(0.5)).expect("alchemy scored");
+    assert_eq!(scored.coin_ticks_per_xp, 0.0, "alchemy earns: free at best: {scored:?}");
+}

@@ -48,6 +48,27 @@ pub(crate) fn attack_npc(bot: &mut Bot, slot: u16, no_bank: bool) -> Result<bool
         // short in the pack, the known bank refills them (a bank trip,
         // like an empty quiver); short there too (or `--no-bank`), the run
         // blocks on exactly those (worn staff element excluded).
+        if bot.combat_spell_best {
+            let target = target_npc_name(bot, slot);
+            let spell = match best_cast(bot, target.as_deref(), no_bank) {
+                BestCast::Cast(spell) => spell,
+                BestCast::BankTrip => {
+                    bot.log("out of runes in the pack for every spell, the bank funds one: bank trip");
+                    return Ok(false);
+                }
+                BestCast::Blocked(missing) => {
+                    bot.log(&format!("out of runes for any damage spell: {}", missing.join(", ")));
+                    return Err(ScriptError::Blocked { missing });
+                }
+            };
+            if bot.combat_spell.as_deref() != Some(spell.as_str()) {
+                bot.log(&format!("casting {spell} (was {}): the strongest spell the runes allow", bot.combat_spell.as_deref().unwrap_or("none")));
+                bot.combat_spell = Some(spell.clone());
+            }
+            let com = crate::kit::magic::spell_com(bot, &spell)?;
+            bot.op_npc_t(slot, com)?;
+            return Ok(true);
+        }
         let spell = match bot.combat_spell.clone() {
             Some(ordered) => {
                 let runes = crate::activities::magic_style::spell_runes(&ordered);
@@ -87,6 +108,69 @@ pub(crate) fn attack_npc(bot: &mut Bot, slot: u16, no_bank: bool) -> Result<bool
     }
     bot.op_npc(2, slot)?;
     Ok(true)
+}
+
+/// What a combat-intent magic run (`Bot::combat_spell_best`) does on
+/// its next attack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BestCast {
+    /// Cast this spell: the strongest the pack funds.
+    Cast(String),
+    /// The pack funds none, the known bank one: a bank trip (the bank
+    /// leg withdraws every combat rune, `combat_bank::magic_ammo`).
+    BankTrip,
+    /// Nothing anywhere funds one: blocked on the runes of the spell
+    /// cast last (the planner's at first), the brain obtains them.
+    Blocked(Vec<String>),
+}
+
+/// F2P damage spells the magic `level` casts on `target` (an NPC debug
+/// name; `None`: any NPC, so no spell with a target param), strongest
+/// first: highest max hit, then highest level (dump `spells`, server
+/// `undead` param for crumble undead).
+pub fn combat_spells(level: i64, target: Option<&str>) -> Vec<String> {
+    let mut rows: Vec<lifescape_gamedata::spells::Spell> = lifescape_gamedata::spells::all_spells()
+        .into_iter()
+        .filter(|row| !row.members && row.deals_damage() && row.level <= level)
+        .filter(|row| match target {
+            Some(npc) => lifescape_gamedata::spells::affects(&row.spell, npc),
+            None => lifescape_gamedata::spells::target_param(&row.spell).is_none(),
+        })
+        .collect();
+    rows.sort_by(|left, right| right.maxhit.cmp(&left.maxhit).then_with(|| right.level.cmp(&left.level)));
+    rows.into_iter().map(|row| row.spell).collect()
+}
+
+/// True when pack + known bank fund one cast of a damage spell the
+/// level casts on any NPC (a combat-intent run starts on it).
+pub fn any_spell_funded(bot: &Bot) -> bool {
+    use crate::activities::magic_style::{magic_level, spell_runes};
+    combat_spells(magic_level(bot), None).iter().any(|spell| crate::kit::magic::bank_shortfall(bot, &spell_runes(spell)).is_empty())
+}
+
+/// Debug name of the NPC in `slot`, if streamed and known.
+fn target_npc_name(bot: &Bot, slot: u16) -> Option<String> {
+    let npc = bot.world.npcs.get(&slot)?;
+    lifescape_gamedata::npc_by_id(usize::from(npc.npc_type)).and_then(|entry| entry.name).map(str::to_string)
+}
+
+/// The combat-intent cast (user 2026-11-20: « s'il veut combattre alors
+/// le meilleur sort dispo avec les runes dispo »): the strongest spell
+/// of `combat_spells` the pack funds (a worn staff's element paid); none
+/// in the pack: a bank trip when the known bank funds one (never with
+/// `no_bank`); none anywhere: blocked on the last spell's runes.
+pub(crate) fn best_cast(bot: &Bot, target: Option<&str>, no_bank: bool) -> BestCast {
+    use crate::activities::magic_style::{magic_level, spell_runes};
+    let spells = combat_spells(magic_level(bot), target);
+    if let Some(spell) = spells.iter().find(|spell| crate::kit::magic::spell_shortfall(bot, &spell_runes(spell)).is_empty()) {
+        return BestCast::Cast(spell.clone());
+    }
+    if !no_bank && spells.iter().any(|spell| crate::kit::magic::bank_shortfall(bot, &spell_runes(spell)).is_empty()) {
+        return BestCast::BankTrip;
+    }
+    let last = bot.combat_spell.clone().unwrap_or_else(|| crate::activities::magic_style::DAMAGE_SPELLS[0].0.to_string());
+    let runes = spell_runes(&last);
+    BestCast::Blocked(if no_bank { crate::kit::magic::spell_shortfall(bot, &runes) } else { crate::kit::magic::bank_shortfall(bot, &runes) })
 }
 
 /// Ticks between re-attacks while engaged: a manual cast never repeats
@@ -172,6 +256,68 @@ mod tests {
         match super::attack_npc(&mut bot, 1, false) {
             Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["airrune".to_string()], "only the air is nowhere"),
             other => panic!("air nowhere blocks, got {other:?}"),
+        }
+    }
+
+    /// A magic bot at `level` with `pack` and `banked`, fighting for
+    /// combat (`--best-spell`), ordered `spell`.
+    fn fighter(level: u8, spell: &str, pack: &[(&str, u32)], banked: &[(&str, u32)]) -> lifescape_sdk::Bot {
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(pack, banked);
+        bot.world.stats.insert(crate::activities::magic_style::MAGIC_STAT, (level, 0));
+        bot.combat_style = "magic".to_string();
+        bot.combat_spell = Some(spell.to_string());
+        bot.combat_spell_best = true;
+        bot
+    }
+
+    /// User 2026-11-20 (« s'il veut combattre alors le meilleur sort
+    /// dispo avec les runes dispo »): a fight for drops, coins or a kill
+    /// casts the strongest spell its runes allow and falls back down the
+    /// ladder when they run out, never blocked while a weaker spell is
+    /// funded (live 2026-11-20: "out of runes for crumble_undead …
+    /// chaosrune", 79 blocks a day, the earth runes still in the pack).
+    #[test]
+    fn a_combat_run_falls_back_to_the_best_spell_its_runes_fund() {
+        use super::{best_cast, combat_spells, BestCast};
+        assert_eq!(combat_spells(40, None).first().map(String::as_str), Some("fire_bolt"), "the strongest open at 40");
+        assert!(!combat_spells(60, None).contains(&"crumble_undead".to_string()), "crumble undead needs an undead target");
+        assert!(combat_spells(60, Some("skeleton_unarmed")).contains(&"crumble_undead".to_string()));
+        // The planner's fire bolt, no chaos rune left: earth strike, the
+        // strongest the pack funds.
+        let bot = fighter(40, "fire_bolt", &[("mindrune", 50), ("earthrune", 100), ("airrune", 50), ("firerune", 2)], &[]);
+        assert_eq!(best_cast(&bot, Some("cow"), false), BestCast::Cast("earth_strike".to_string()));
+        // The chaos runes held: the bolt again.
+        let bot = fighter(40, "fire_bolt", &[("chaosrune", 5), ("firerune", 40), ("airrune", 30)], &[]);
+        assert_eq!(best_cast(&bot, Some("cow"), false), BestCast::Cast("fire_bolt".to_string()));
+        // Crumble undead ordered on the skeletons, its chaos gone: a strike.
+        let bot = fighter(45, "crumble_undead", &[("airrune", 50), ("earthrune", 80), ("mindrune", 20)], &[]);
+        assert_eq!(best_cast(&bot, Some("skeleton_unarmed"), false), BestCast::Cast("earth_strike".to_string()));
+        // Nothing in the pack, a spell's runes banked: a bank trip.
+        let bot = fighter(40, "fire_bolt", &[], &[("mindrune", 50), ("waterrune", 50), ("airrune", 50)]);
+        assert_eq!(best_cast(&bot, None, false), BestCast::BankTrip);
+        let mut bot = bot;
+        assert!(matches!(super::attack_npc(&mut bot, 1, false), Ok(false)), "the fight goes banking, never blocked");
+        // Nothing anywhere: blocked on the last spell's runes.
+        let mut bot = fighter(40, "fire_bolt", &[], &[]);
+        match super::attack_npc(&mut bot, 1, false) {
+            Err(crate::ScriptError::Blocked { mut missing }) => {
+                missing.sort();
+                assert_eq!(missing, vec!["airrune".to_string(), "chaosrune".to_string(), "firerune".to_string()]);
+            }
+            other => panic!("nothing anywhere blocks, got {other:?}"),
+        }
+    }
+
+    /// A climb (no `--best-spell`) casts its ordered spell only: out of
+    /// chaos runes, it blocks on them even with strike runes in the pack
+    /// (XP per cost chose the spell; the brain obtains or re-picks).
+    #[test]
+    fn a_climb_never_swaps_its_spell() {
+        let mut bot = fighter(45, "crumble_undead", &[("airrune", 50), ("earthrune", 80), ("mindrune", 20)], &[]);
+        bot.combat_spell_best = false;
+        match super::attack_npc(&mut bot, 1, true) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["chaosrune".to_string()]),
+            other => panic!("the climb blocks on its own runes, got {other:?}"),
         }
     }
 }

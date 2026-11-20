@@ -195,7 +195,12 @@ pub fn attack_nearest(
             bot.log(&format!("npc {slot} at ({x},{z}) engaged by another player on arrival, next"));
             continue;
         }
-        bot.op_npc(2, slot)?;
+        // A magic run never opens with Attack: the server would swing the
+        // staff (live 2026-11-20, ida_reed: 92 attack XP and no magic
+        // under crumble undead, its runes banked); the fight loop casts.
+        if bot.combat_style != "magic" {
+            bot.op_npc(2, slot)?;
+        }
         return Ok(Some(slot));
     }
     Ok(None)
