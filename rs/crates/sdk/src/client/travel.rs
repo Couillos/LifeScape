@@ -76,8 +76,8 @@ const CROSS_WAIT: u64 = 7;
 const TRAVERSE_SETTLE: u64 = 4;
 /// Walk budget per planned cost unit: walking runs ~1 tile per 2 ticks,
 /// 4 per unit plus 347 base leaves stalls and door queues inside.
-const COST_PER_TICK: u64 = 4;
-const COST_BASE: u64 = 347;
+pub(crate) const COST_PER_TICK: u64 = 4;
+pub(crate) const COST_BASE: u64 = 347;
 
 /// Per-phase wall-clock of one plan: a trivial leg must cost
 /// milliseconds, so a seconds-long plan names its spinner here.
@@ -878,6 +878,11 @@ impl Bot {
                     retry.cost,
                     replan_start.elapsed().as_millis(),
                 ));
+                if paused {
+                    // The pause moved the bot: the walk back gets its own
+                    // travel budget, never just the caller's (`replan_deadline`).
+                    deadline = super::travel_pause::replan_deadline(deadline, self.world.ticks, retry.cost);
+                }
                 self.publish_plan(&retry, dest);
                 let mut retry = retry;
                 match self.run_plan_through_pauses(&mut retry, dest, &mut options, &mut deadline) {
@@ -1093,8 +1098,13 @@ impl Bot {
         // transient: drop the stale entry and fall through to the click
         // path below, which re-opens a shut door and otherwise clicks a
         // no-op before stepping again. One recovery only: a second
-        // refusal fails loud through the normal path.
-        if self.door_live_open(door) {
+        // refusal fails loud through the normal path. A teleport door in
+        // use (inviswall on its tile) is no open door: wait it out first
+        // (`travel_door_watch`), then click.
+        if self.door_in_use(door) {
+            self.wait_door_free(door, deadline.min(self.world.ticks + DOOR_SWING_WAIT))?;
+        }
+        if self.door_live_open(door) && !self.door_in_use(door) {
             if self.step_door_through(door, cross_to, deadline).is_ok() {
                 return Ok(());
             }
@@ -1122,18 +1132,32 @@ impl Bot {
         if door.toll && self.take_toll_option()? {
             return self.finish_door(door, cross_to, deadline);
         }
-        let watched = self.world.ticks + DOOR_SWING_WAIT;
+        let mut watched = self.world.ticks + DOOR_SWING_WAIT;
         let target = (cross_to.x, cross_to.z, cross_to.level);
+        // A traverse by someone else seen during the watch: our click found
+        // an invisible wall, not the door. One more click once it clears.
+        let mut saw_in_use = false;
+        let mut reclicked = false;
         while self.world.ticks < watched {
             self.pump(1)?;
             let at = (self.world.x, self.world.z, self.world.level);
-            match super::travel_door_watch::door_watch(at, door_tile, target, clicked_from_door, self.door_live_open(door)) {
+            let in_use = self.door_in_use(door);
+            match super::travel_door_watch::door_watch(at, door_tile, target, clicked_from_door, self.door_live_open(door), in_use) {
                 super::travel_door_watch::DoorWatch::Crossed => return Ok(()),
                 // Teleported onto the tile: one more click goes through.
                 super::travel_door_watch::DoorWatch::Teleported => return self.finish_teleport_door(door, open_op, cross_to, deadline),
+                // In use: never a step into the invisible wall (it also
+                // cancels our own queued click).
+                super::travel_door_watch::DoorWatch::InUse => saw_in_use = true,
                 // Swapped open: step through at once, before it re-closes.
                 super::travel_door_watch::DoorWatch::Swung => return self.step_door_through(door, cross_to, deadline),
-                super::travel_door_watch::DoorWatch::Wait => {}
+                super::travel_door_watch::DoorWatch::Wait => {
+                    if saw_in_use && !reclicked && !self.door_live_open(door) {
+                        self.op_loc(open_op, door.x, door.z, door.loc)?;
+                        reclicked = true;
+                        watched = self.world.ticks + DOOR_SWING_WAIT;
+                    }
+                }
             }
             if self.world.ticks > deadline {
                 return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
@@ -1142,7 +1166,8 @@ impl Bot {
         // Blind swing: live locs do not always stream, so the watch can
         // miss a real opening. The steps are server-truth — an open door
         // lets them through, a shut one refuses — so try once, bounded.
-        if self.step_door_through(door, cross_to, deadline).is_ok() {
+        // Never into a door in use.
+        if !self.door_in_use(door) && self.step_door_through(door, cross_to, deadline).is_ok() {
             return Ok(());
         }
         Err(Error::DoorDidNotOpen(format!(

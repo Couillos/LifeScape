@@ -98,6 +98,7 @@ fn work_spot(
     // never walks a diagonal stand to the rock ("I can't reach that!").
     let (width, length) = crate::kit::harvest::spot_footprint(bot, rock_x, rock_z);
     let stands = rock_stands(bot.world.x, bot.world.z, rock_x, rock_z, width, length);
+    let stands = crate::skill_walk::routed_stands(bot, stands);
     if !stands.is_empty() {
         let mut stood = false;
         for (stand_x, stand_z) in stands {

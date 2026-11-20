@@ -63,6 +63,41 @@ where
     ranked
 }
 
+/// Stands of a work loc a route reaches, cheapest walk first: one
+/// `walk_costs` batch (blocked and sealed tiles read `None`), then
+/// `keep_routed`. A side tile on another rock or in a sealed pocket is
+/// never walked: each such walk planned `Disconnected` and wrote a
+/// dossier before the next side worked (live 2026-11-20, south-east
+/// Varrock mine, 1 795 dossiers in 24 h). Fewer than two stands skip the
+/// batch: the walk itself judges a lone stand.
+pub fn routed_stands(bot: &mut Bot, stands: Vec<(i32, i32)>) -> Vec<(i32, i32)> {
+    if stands.len() < 2 {
+        return stands;
+    }
+    let level = bot.world.level;
+    let dests: Vec<lifescape_nav::plan::Tile> = stands.iter().map(|(x, z)| lifescape_nav::plan::Tile { x: *x, z: *z, level }).collect();
+    let costs = bot.walk_costs(&dests);
+    keep_routed(stands, &costs)
+}
+
+/// Pure filter of `routed_stands`: when the batch priced at least one
+/// candidate, only the priced ones stay, by ascending cost (ties keep the
+/// given order). A batch that priced nothing (service miss, everything
+/// unplannable) or does not answer every candidate keeps the given order.
+pub fn keep_routed<T>(cands: Vec<T>, costs: &[Option<u32>]) -> Vec<T> {
+    if costs.len() != cands.len() || costs.iter().all(Option::is_none) {
+        return cands;
+    }
+    let mut routed: Vec<(u32, usize, T)> = cands
+        .into_iter()
+        .zip(costs.iter())
+        .enumerate()
+        .filter_map(|(index, (cand, cost))| cost.map(|cost| (cost, index, cand)))
+        .collect();
+    routed.sort_by_key(|(cost, index, _)| (*cost, *index));
+    routed.into_iter().map(|(_, _, cand)| cand).collect()
+}
+
 /// One step toward the target through the 3x3 ring (nearest-first,
 /// `walk_to` 100 each): shared by the gather `work_spot` loops. Conn
 /// aborts propagate typed; other failures try the next tile. True when a
@@ -269,7 +304,26 @@ pub fn walk_checked_at(bot: &mut Bot, dest_x: i32, dest_z: i32, dest_level: i32,
 
 #[cfg(test)]
 mod tests {
-    use super::{hurt_aborts, rescue_then_retry, walk_checked};
+    use super::{hurt_aborts, keep_routed, rescue_then_retry, walk_checked};
+
+    /// Live 2026-11-20 (1 795 NoRoute dossiers in 24 h, 48 accounts, the
+    /// south-east Varrock mine): the tin rock (3283,3365) offers its south
+    /// side (3283,3364), an active floor decoration (`dugupsoil3_light`,
+    /// `FLOOR_DECORATION` blocks) walled by the rocks around it. Tried
+    /// first (Manhattan tie), it planned `Disconnected` before the east
+    /// side (3284,3365) worked. A batch with a route keeps only the
+    /// routed stands, cheapest walk first; a batch that answered nothing
+    /// (no service, all unplannable) keeps the order the walks then judge.
+    #[test]
+    fn unrouted_stands_are_never_walked() {
+        let stands = vec![(3283, 3364), (3284, 3365), (3282, 3365), (3283, 3366)];
+        let costs = vec![None, Some(1), None, None];
+        assert_eq!(keep_routed(stands.clone(), &costs), vec![(3284, 3365)]);
+        let costs = vec![Some(7), Some(2), None, Some(2)];
+        assert_eq!(keep_routed(stands.clone(), &costs), vec![(3284, 3365), (3283, 3366), (3283, 3364)], "cheapest first, ties keep the given order");
+        assert_eq!(keep_routed(stands.clone(), &[None, None, None, None]), stands, "nothing answered: order kept");
+        assert_eq!(keep_routed(stands.clone(), &[Some(1)]), stands, "a short answer never filters");
+    }
 
     /// Live 2026-11-13 (bct5rxpg, bd23dqpq, bxkchh6x, harry_page): the
     /// Draynor ↔ Lumbridge road passes the jail guards (aggressive,

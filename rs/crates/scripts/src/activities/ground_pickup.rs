@@ -97,6 +97,15 @@ pub fn after_sweep(load_done: bool) -> SweepNext {
     }
 }
 
+/// The brain's spawn site to walk to from `here`, `None` when the bot
+/// already sweeps it (same level, within `PICKUP_RADIUS`). Pure. The walk
+/// keeps the site's own level: from the Karamja boat deck (level 1) the
+/// bot's level asked for (2907,3146,1), `Disconnected` (live 2026-11-19).
+fn site_walk(here: (i32, i32, i32), site: (i32, i32, i32)) -> Option<(i32, i32, i32)> {
+    let on_site = here.2 == site.2 && (here.0 - site.0).abs().max((here.1 - site.1).abs()) <= PICKUP_RADIUS;
+    (!on_site).then_some(site)
+}
+
 /// Pick banked sweeps in the open session: `ground_pickup [item] [count]
 /// [--site x,z,level] [--want item N]`. With an item (the brain's
 /// `ground:` order) only that object is taken, at the brain's site.
@@ -129,11 +138,10 @@ pub fn run_ground_pickup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
         // The brain's spawn site first: never sweep wherever the bot stands.
-        if let Some((site_x, site_z, _)) = step_bot.assigned_site {
-            if (step_bot.world.x - site_x).abs().max((step_bot.world.z - site_z).abs()) > PICKUP_RADIUS
-                && !crate::skill_walk::walk_checked(step_bot, site_x, site_z, crate::kit::site::SITE_WALK_TICKS)?
-            {
-                return Err(ScriptError::Failed(format!("spawn site ({site_x},{site_z}) not reached from {:?}", step_bot.position())));
+        let here = (step_bot.world.x, step_bot.world.z, step_bot.world.level);
+        if let Some((site_x, site_z, site_level)) = step_bot.assigned_site.and_then(|site| site_walk(here, site)) {
+            if !crate::skill_walk::walk_checked_at(step_bot, site_x, site_z, site_level, crate::kit::site::SITE_WALK_TICKS)? {
+                return Err(ScriptError::Failed(format!("spawn site ({site_x},{site_z},{site_level}) not reached from {:?}", step_bot.position())));
             }
         }
         bank = nearest_bank(step_bot)?;
@@ -227,7 +235,7 @@ fn watch_floor(bot: &mut Bot, here: (i32, i32), wanted: &[u16], until: u64) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::{after_sweep, rank_pickups, respawn_watch_ticks, watch_over, SweepNext, PICKUP_RADIUS, RESPAWN_MARGIN_TICKS, WANTED};
+    use super::{after_sweep, rank_pickups, respawn_watch_ticks, site_walk, watch_over, SweepNext, PICKUP_RADIUS, RESPAWN_MARGIN_TICKS, WANTED};
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
     use lifescape_gamedata as knowledge;
@@ -258,6 +266,20 @@ mod tests {
             let row = knowledge::objs_by_name(name).into_iter().next().expect("dump row");
             assert_eq!(row.members, Some(false), "{name} is F2P, got {:?}", row.members);
         }
+    }
+
+    /// Live 2026-11-19 (shaw_sara, olivia_ellis, bananas at Karamja
+    /// (2907,3146,0)): the boat leaves the bot on the deck, level 1; the
+    /// site walk took the bot's level and asked for (2907,3146,1),
+    /// `Disconnected`, three failures and a skill ban. The walk goes to
+    /// the site's own level; a bot on another level always walks, even
+    /// right above the site.
+    #[test]
+    fn the_site_walk_keeps_the_site_level() {
+        assert_eq!(site_walk((2956, 3143, 1), (2907, 3146, 0)), Some((2907, 3146, 0)));
+        assert_eq!(site_walk((2907, 3146, 1), (2907, 3146, 0)), Some((2907, 3146, 0)), "upstairs is not on site");
+        assert_eq!(site_walk((2907 + PICKUP_RADIUS, 3146, 0), (2907, 3146, 0)), None, "inside the sweep radius");
+        assert_eq!(site_walk((2907 + PICKUP_RADIUS + 1, 3146, 0), (2907, 3146, 0)), Some((2907, 3146, 0)));
     }
 
     /// Order: coins first, then nearest (the loot policy).

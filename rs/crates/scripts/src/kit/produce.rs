@@ -14,7 +14,6 @@ use crate::kit::survival::death_resume;
 use crate::kit::harvest::{dismiss_modal, WorkOutcome};
 use crate::kit::pack::{obj_label, pack_total};
 use crate::kit::survival::{check_events, death_message_seen, hitpoints};
-use crate::skill_walk::walk_checked;
 use crate::kit::harvest::classify_message;
 use crate::ScriptError;
 
@@ -134,17 +133,21 @@ const STATION_SHORTLIST: usize = 8;
 /// 2026-11-17: 9 cooks from Edgeville sent to the Black Knights' banquet
 /// fireplace (3030,3514), sealed from outside: door loops, then
 /// "consumed nothing"). Nav unwired: Manhattan order, as before.
-fn reachable_station(bot: &mut Bot, name: &str, near: (i32, i32)) -> Option<(i32, i32, i32, u16)> {
-    let cands = site_tiles(bot, name, near);
+fn reachable_station(bot: &mut Bot, name: &str, near: (i32, i32), level: i32) -> Option<(i32, i32, i32, u16)> {
+    let cands = site_tiles(bot, name, near, level);
     let ranked = crate::skill_walk::refine_walking(bot, cands, STATION_SHORTLIST, name, |tile| lifescape_nav::plan::Tile { x: tile.0, z: tile.1, level: tile.2 });
     ranked.into_iter().next().map(|(_, tile)| tile)
 }
 
-fn site_tiles(bot: &mut Bot, name: &str, near: (i32, i32)) -> Vec<(i32, i32, i32, u16)> {
-    let level = bot.world.level;
+/// Stations on `level`: the brain's site level (an upstairs range), the
+/// bot's own without a site.
+fn site_tiles(bot: &mut Bot, name: &str, near: (i32, i32), level: i32) -> Vec<(i32, i32, i32, u16)> {
     let mut cands: Vec<(i64, (i32, i32, i32, u16))> = Vec::new();
     let mut consider = |x: i32, z: i32, tile_level: i32, loc: u16| {
-        if tile_level != level || station_debugname(loc) != name {
+        // A station the map proves sealed (nav `site_reach` dump) never
+        // runs: the Black Knights' banquet fireplace (3030,3514).
+        let sealed = knowledge::site_reach::unreachable(i64::from(x), i64::from(z), i64::from(tile_level)).is_some();
+        if tile_level != level || sealed || station_debugname(loc) != name {
             return;
         }
         let dist = i64::from((x - near.0).abs() + (z - near.1).abs());
@@ -401,8 +404,7 @@ fn stands_for(x: i32, z: i32, span: (i32, i32), from: (i32, i32), blocked: u32) 
 /// map keeps one loc per tile and a wall on the station's tile hides it
 /// (Barbarian Village wheels) — every side is then offered, the server's
 /// "I can't reach that!" moving on to the next.
-fn station_angle(bot: &mut Bot, x: i32, z: i32, loc: u16) -> Option<u8> {
-    let level = bot.world.level;
+fn station_angle(bot: &mut Bot, x: i32, z: i32, level: i32, loc: u16) -> Option<u8> {
     if let Some((_, _, angle)) = bot.world.loc_at(x, z, level).filter(|(placed, _, _)| *placed == loc) {
         return Some(angle);
     }
@@ -432,15 +434,15 @@ fn station_span(loc: u16, angle: u8) -> (i32, i32) {
     }
 }
 
-/// Side stands of the loc at (x, z) on the bot's level, nearest the bot
+/// Side stands of the loc at (x, z, level), nearest the bot
 /// first (live or static angle, rotated footprint and forceapproach).
 /// OPLOC carries no path: the server runs the op only from a tile that
 /// reaches the loc (`Player.processInteraction`), never a corner.
-pub(crate) fn loc_side_stands(bot: &mut Bot, x: i32, z: i32, loc: u16) -> Vec<(i32, i32)> {
-    let from = (bot.world.x, bot.world.z);
-    let angle = station_angle(bot, x, z, loc);
+/// `level` is the loc's own (a station upstairs read from the ground floor).
+pub(crate) fn loc_side_stands(bot: &mut Bot, x: i32, z: i32, level: i32, loc: u16) -> Vec<(i32, i32)> {
+    let angle = station_angle(bot, x, z, level, loc);
     let blocked = angle.map_or(0, |angle| station_blocked(loc, angle));
-    stands_for(x, z, station_span(loc, angle.unwrap_or(0)), from, blocked)
+    stands_for(x, z, station_span(loc, angle.unwrap_or(0)), (bot.world.x, bot.world.z), blocked)
 }
 
 /// True when the run died since `seen` (server line or flatlined hp).
@@ -584,13 +586,13 @@ enum SiteDone {
 
 /// Work one station tile: stands nearest-first, refusals move on. Stops
 /// at the first stand that consumes anything.
-fn work_loc(bot: &mut Bot, job: &ProduceJob<'_>, (x, z, loc): (i32, i32, u16), target: u32, goal: Option<crate::kit::cycle::WantGoal>) -> Result<ProduceBatch, ScriptError> {
+fn work_loc(bot: &mut Bot, job: &ProduceJob<'_>, (x, z, level, loc): (i32, i32, i32, u16), target: u32, goal: Option<crate::kit::cycle::WantGoal>) -> Result<ProduceBatch, ScriptError> {
     let made_before: u32 = job.products.iter().map(|id| pack_total(bot, *id)).sum();
-    for (stand_x, stand_z) in loc_side_stands(bot, x, z, loc) {
+    for (stand_x, stand_z) in loc_side_stands(bot, x, z, level, loc) {
         if pack_total(bot, job.input) == 0 {
             break;
         }
-        match walk_checked(bot, stand_x, stand_z, STAND_WALK_TICKS) {
+        match crate::skill_walk::walk_checked_at(bot, stand_x, stand_z, level, STAND_WALK_TICKS) {
             Ok(true) => {}
             Ok(false) => continue,
             Err(error) if crate::kit::survival::is_walk_abort(&error) => return Err(error),
@@ -623,6 +625,8 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
     // The brain's `--site` (set by `cycle::run`) wins over the script's
     // own anchor: the station is the one the brain picked.
     let near = bot.assigned_site.map_or(job.near, |(site_x, site_z, _)| (site_x, site_z));
+    // The site's level too: the Edgeville range is upstairs (level 1).
+    let level = bot.assigned_site.map_or(bot.world.level, |(_, _, site_level)| site_level);
     bot.log(&format!("{} {} near {:?}", job.spec.verb, job.input_name, near));
     bot.intend(&format!("{} {}", job.spec.verb, job.input_name));
     let (target, goal) = crate::kit::want::stage_bounds(if job.want == 0 { u32::MAX } else { job.want }, &job.products, job.until, bot);
@@ -637,16 +641,16 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
         ProduceSite::Loc(names) => {
             let mut picked: Option<(i32, i32, i32, u16)> = None;
             for name in *names {
-                if let Some(tile) = reachable_station(bot, name, near) {
+                if let Some(tile) = reachable_station(bot, name, near, level) {
                     bot.log(&format!("{} on {name} at ({},{})", job.spec.verb, tile.0, tile.1));
                     picked = Some(tile);
                     break;
                 }
             }
-            let Some((x, z, _, loc)) = picked else {
-                return Err(ScriptError::Failed(format!("no produce station {names:?} near {near:?}")));
+            let Some((x, z, station_level, loc)) = picked else {
+                return Err(ScriptError::Failed(format!("no produce station {names:?} near {near:?} on level {level}")));
             };
-            work_loc(bot, job, (x, z, loc), target, goal)?
+            work_loc(bot, job, (x, z, station_level, loc), target, goal)?
         }
         ProduceSite::Npc(names) => {
             let slot = crate::kit::npc_spawn::find_or_walk(bot, names, job.spec.verb)?;
@@ -760,9 +764,9 @@ mod tests {
             .find(|id| super::station_debugname(*id) == "range")
             .expect("a range loc exists");
         bot.world.locs.insert((3200, 3200, 0), Some((range_id, 0, 0)));
-        let found = site_tiles(&mut bot, "range", (3200, 3200));
+        let found = site_tiles(&mut bot, "range", (3200, 3200), 0);
         assert!(found.iter().any(|(x, z, _, _)| (*x, *z) == (3200, 3200)), "streamed range resolves, got: {found:?}");
-        assert!(site_tiles(&mut bot, "no_such_station", (3200, 3200)).is_empty(), "unknown station finds nothing");
+        assert!(site_tiles(&mut bot, "no_such_station", (3200, 3200), 0).is_empty(), "unknown station finds nothing");
     }
 
     /// Live 2026-11-14 (admin, `pottery --site 3087,3410,0`): the served
@@ -772,10 +776,39 @@ mod tests {
     fn wheels_under_walls_come_from_the_station_dump() {
         let mut bot = offline_bot();
         bot.world.level = 0;
-        let found = site_tiles(&mut bot, "potterywheel", (3087, 3410));
+        let found = site_tiles(&mut bot, "potterywheel", (3087, 3410), 0);
         assert!(found.iter().any(|(x, z, _, _)| (*x, *z) == (3087, 3409)), "{found:?}");
         assert!(found.iter().any(|(x, z, _, _)| (*x, *z) == (3087, 3410)), "{found:?}");
-        assert!(site_tiles(&mut bot, "potterywheel", (3200, 3200)).iter().all(|(x, _, _, _)| *x != 3087), "out of radius");
+        assert!(site_tiles(&mut bot, "potterywheel", (3200, 3200), 0).iter().all(|(x, _, _, _)| *x != 3087), "out of radius");
+    }
+
+    /// Live 2026-11-20 (ella_quill and 12 more, `cook --site 3081,3508,1`,
+    /// 115 NoRoute in 24 h): the brain names the Edgeville range upstairs
+    /// (level 1); the search kept the bot's level 0, missed it, and took
+    /// the only level-0 cooking loc in range, the Black Knights' banquet
+    /// fireplace (3030,3514), sealed in the fortress: "I can't reach
+    /// that!" on every outside stand, then `Disconnected` on the inside
+    /// ones. The search reads the site's level.
+    #[test]
+    fn the_station_search_reads_the_site_level() {
+        let mut bot = offline_bot();
+        bot.world.level = 0;
+        let found = site_tiles(&mut bot, "range", (3081, 3508), 1);
+        assert!(found.iter().any(|(x, z, level, _)| (*x, *z, *level) == (3081, 3508, 1)), "the upstairs range, got: {found:?}");
+        assert!(found.iter().all(|(_, _, level, _)| *level == 1), "site level only, got: {found:?}");
+    }
+
+    /// Same fireplace without a brain site (108 "cooking consumed
+    /// nothing", ray_79 20 of them): streamed or served, a station the
+    /// map proves sealed (`unreachable_sites.json`, nav `site_reach`) is
+    /// never a candidate.
+    #[test]
+    fn a_sealed_station_is_never_a_candidate() {
+        let mut bot = offline_bot();
+        bot.world.level = 0;
+        let fireplace = (0u16..).find(|id| super::station_debugname(*id) == "grandfireplace_oldbrick").expect("fireplace loc");
+        bot.world.locs.insert((3030, 3514, 0), Some((fireplace, 0, 0)));
+        assert!(site_tiles(&mut bot, "grandfireplace_oldbrick", (3060, 3500), 0).is_empty(), "the banquet fireplace is sealed");
     }
 
     /// Stands ring the station orthogonally, nearest first.

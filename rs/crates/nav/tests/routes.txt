@@ -342,3 +342,9 @@ forteresse_noire_banquet_sortie | 3029,3515,0 | 3094,3491,0 | f2p | reachable ; 
 # Dehors : la salle du banquet (et le corridor ouest) ne s'atteint pas.
 forteresse_noire_entree_refusee | 3031,3516,0 | 3029,3515,0 | f2p | unreachable=Disconnected
 forteresse_noire_corridor_refuse | 3094,3489,0 | 3016,3515,0 | f2p | unreachable=Disconnected
+# Mine sud-est de Varrock (live 2026-11-20, 1 795 dossiers NoRoute) : le
+# flanc sud (3283,3364) de l'etain (3283,3365) est un decor de sol actif
+# (dugupsoil3_light, FLOOR_DECORATION bloque) mure par les roches ; le
+# flanc est (3284,3365) marche. Les kits ne marchent que les flancs routes.
+mine_varrock_flanc_mure | 3285,3364,0 | 3283,3364,0 | - | unreachable=Disconnected
+mine_varrock_flanc_est | 3285,3364,0 | 3284,3365,0 | - | reachable ; walk_tiles<=2

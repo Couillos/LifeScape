@@ -95,6 +95,14 @@ pub fn sale_then_room(bot: &mut Bot, order: Option<&SaleOrder>) -> Result<bool, 
     Ok(room)
 }
 
+/// The sale site `(x, z, level)` in the spawn order `trade_to_keeper`
+/// reads, `(level, x, z)`. Handed over raw, the keeper walk asked for
+/// (z, level) as a tile: "walk to spawn (3511,0)" (live 2026-11-20).
+fn keeper_spawn(site: (i32, i32, i32)) -> (i32, i32, i32) {
+    let (x, z, level) = site;
+    (level, x, z)
+}
+
 /// The keeper of `shop` standing at `site` (an F2P opener of the shop).
 fn keeper_at(shop: &str, site: (i32, i32, i32)) -> Option<String> {
     let access = lifescape_gamedata::f2p::f2p_shop_access(shop)?;
@@ -186,7 +194,7 @@ pub fn run_shop_sale(bot: &mut Bot, order: &SaleOrder) -> Result<u32, ScriptErro
                 walked = true;
             }
             PassLeg::Act => {
-                let opened = crate::kit::shop::trade_to_keeper(bot, &keeper, order.site)?;
+                let opened = crate::kit::shop::trade_to_keeper(bot, &keeper, keeper_spawn(order.site))?;
                 if pauses_at_withdraw.is_some_and(|mark| paused_since(mark, bot.pauses_done)) {
                     // A pause during the trade wait banked the lots: the
                     // next leg takes them again (a shop open since waits).
@@ -222,6 +230,17 @@ pub fn run_shop_sale(bot: &mut Bot, order: &SaleOrder) -> Result<u32, ScriptErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Live 2026-11-20 (81 NoRoute in 24 h, "trade with generalassistant5
+    /// failed: walk to spawn (3511,0)", Edgeville and Falador general
+    /// stores): the sale site `x,z,level` went as is to `trade_to_keeper`,
+    /// whose spawn reads `(level, x, z)`; the keeper walk asked for
+    /// (3511,0,0). The site is handed over in the spawn order.
+    #[test]
+    fn the_sale_site_goes_to_the_keeper_as_a_spawn() {
+        assert_eq!(keeper_spawn((3080, 3511, 0)), (0, 3080, 3511));
+        assert_eq!(keeper_spawn((3081, 3508, 1)), (1, 3081, 3508));
+    }
 
     #[test]
     fn lots_and_sites_parse_strictly() {
