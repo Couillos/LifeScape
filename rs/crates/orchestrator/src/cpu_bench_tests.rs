@@ -80,7 +80,7 @@ fn cpu_bench() {
         timed("production_costs_for(15, as ironman)", 10, || crate::brain_bids::production_costs_for(&ironish, &live, &all).len());
         timed("live_count(logs)", 200, || crate::brain_ambition::live_count(&live, "logs"));
         timed("production_costs_for(iron_bar)", 20, || crate::brain_bids::production_costs_for(&life, &live, &[("iron_bar".to_string(), 28)]));
-        timed("bid_goal_for", 10, || crate::brain_bids::bid_goal_for(&life, &live));
+        timed("bid_goal_for", 10, || crate::brain_bids::bid_goal_in(&life, &live, false));
         let obtain = lifescape_planner::Node::new("bench", lifescape_planner::NodeKind::ObtainItems { item: "iron_bar".to_string(), count: 28 }, Vec::new(), 1);
         let money = lifescape_planner::Node::new("bench-money", lifescape_planner::NodeKind::MakeMoney, Vec::new(), 1);
         timed("ready_ctx(obtain iron_bar)", 5, || crate::brain_plan::ready_ctx(&life, &obtain, &lifescape_json::Value::Null));

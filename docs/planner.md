@@ -1737,3 +1737,6 @@ d'une récolte planifiée (plumes, appât de pêche :
   ambition) : tout le marché. `bid_trade::off_trade_answer` nomme un but
   `bid:` ouvert hors métier (état persisté avant la règle), rendu par
   `brain_bid_release::release_off_trade`.
+  Une réponse tirée pendant que l'ambition attend un achat
+  (`brain_wait_answer`, historique `bid_trade::WAIT_ANSWER_TAG`) pèse
+  tout le marché et n'est jamais rendue comme hors métier.

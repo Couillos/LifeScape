@@ -417,12 +417,19 @@ fn time_value_line(account: &str) -> String {
 /// Pure choice: the lot this life makes now, if any (planner rules), at
 /// the bot's coin rate `rate` (`bot_rate`).
 pub fn choose(life: &Life, reader: &MarketReader, rate: f64, state: &BotState) -> Option<(Opportunity, f64)> {
+    choose_in(life, reader, rate, state, false)
+}
+
+/// `choose` over the whole market when `whole` (an answer while the
+/// ambition waits on a buy, `planner::bid_trade` module doc), else the
+/// bot's own trade.
+pub fn choose_in(life: &Life, reader: &MarketReader, rate: f64, state: &BotState, whole: bool) -> Option<(Opportunity, f64)> {
     state.with_producer(life, rate, |producer| {
         let market = |item: &str| reader.view(item);
         let mut books = reader.value_books(producer.alch_net);
         // Its own trade only (`bid_trade`, 2026-11-20): the need-drawn
         // ambition runs, the consumers buy what they burn.
-        books.retain(|(item, _)| !state.shunned.contains(item) && lifescape_planner::bid_trade::answers_trade(life, item));
+        books.retain(|(item, _)| !state.shunned.contains(item) && (whole || lifescape_planner::bid_trade::answers_trade(life, item)));
         best_opportunity(&books, &market, producer).map(|found| (found, rate))
     })
 }
@@ -559,29 +566,52 @@ fn wall_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs()).unwrap_or(0)
 }
 
-/// The bid goal for this life on a draw (live book, rates, own state),
-/// logged with its numbers, its claim posted on the board; `None` when no
-/// lot beats the ambition.
-pub(crate) fn bid_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, String)> {
-    let _phase = crate::cpu_profile::phase("bids.goal_for");
+/// Cache key of a choice: the account, `#wait` for the whole market.
+fn choice_key(account: &str, whole: bool) -> String {
+    if whole {
+        format!("{account}#wait")
+    } else {
+        account.to_string()
+    }
+}
+
+/// The cached (or freshly weighed) choice of this life, own trade or
+/// whole market.
+fn cached_choice(life: &Life, live: &Value, whole: bool) -> Choice {
     if life.profile.ironman || crate::market_service::shared().is_none() {
         return None;
     }
     let window = crate::brain_ambition::stamp_now().tick / lifescape_planner::bid_response::BID_WINDOW_TICKS;
     let now = wall_secs();
-    let cached = choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&life.account).cloned();
-    let chosen = match cached {
+    let key = choice_key(&life.account, whole);
+    let cached = choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&key).cloned();
+    match cached {
         Some((at, seen_window, choice)) if now.saturating_sub(at) < CHOICE_TTL_SECS && seen_window == window => choice,
         _ => {
             let reader = MarketReader::live_answering(&life.account);
-            let choice = with_bot_state(life, live, |state| choose(life, &reader, bot_rate(life), state));
-            choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(life.account.clone(), (now, window, choice.clone()));
+            let choice = with_bot_state(life, live, |state| choose_in(life, &reader, bot_rate(life), state, whole));
+            choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(key, (now, window, choice.clone()));
             choice
         }
-    };
-    let (found, rate) = chosen?;
+    }
+}
+
+/// True when a lot of the whole market pays this bot now (the check
+/// before its ambition goal is set aside, `brain_wait_answer`); the
+/// choice is kept for the draw that follows.
+pub(crate) fn whole_market_lot(life: &Life, live: &Value) -> bool {
+    cached_choice(life, live, true).is_some()
+}
+
+/// The bid goal for this life on a draw (live book, rates, own state;
+/// its own trade, the whole market when `whole`), logged with its
+/// numbers, its claim posted on the board; `None` when no lot beats the
+/// ambition.
+pub(crate) fn bid_goal_in(life: &Life, live: &Value, whole: bool) -> Option<(GoalKind, String)> {
+    let _phase = crate::cpu_profile::phase("bids.goal_for");
+    let (found, rate) = cached_choice(life, live, whole)?;
     // Taken: the next draw weighs the market again.
-    choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&life.account);
+    choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&choice_key(&life.account, whole));
     let secs = crate::market_claims::claim_secs(found.ticks, crate::market_eta::live_tick_ms());
     crate::market_claims::claim(&life.account, &found.item, found.count, secs);
     // What the lot buys and the gathering seats it takes are no other

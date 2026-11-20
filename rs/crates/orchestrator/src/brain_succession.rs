@@ -163,6 +163,13 @@ fn last_wait() -> &'static std::sync::Mutex<std::collections::HashMap<String, St
 /// milestones refreshed first). Returns the new goal's label, or `None`
 /// while nothing is drawable (typed reason logged once per change).
 pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
+    draw_next_with(life, live, false)
+}
+
+/// `draw_next`, the answer weighed over the whole market when `whole`
+/// (the ambition goal set aside while it waits on a buy,
+/// `brain_wait_answer`).
+pub(crate) fn draw_next_with(life: &mut Life, live: &Value, whole: bool) -> Option<String> {
     // The previous lot's claim on the order board ends with its goal,
     // its purchases and its engaged seats too.
     crate::market_claims::release(&life.account);
@@ -182,7 +189,7 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     // The alchemist (operator, 2026-11-18) answers no bid: its alchemy
     // first, else the planner's money that funds its buys.
     let alcher = lifescape_planner::is_alcher(life);
-    let answered = (!quoting && !alcher).then(|| crate::brain_bids::bid_goal_for(life, live)).flatten()
+    let answered = (!quoting && !alcher).then(|| crate::brain_bids::bid_goal_in(life, live, whole)).flatten()
         // Alchemy (2026-11-14): a stock that alchs for more than it sells,
         // runes in hand, worth the bot's time like a bid.
         .or_else(|| crate::brain_alch::alch_goal_for(life, live))

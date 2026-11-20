@@ -638,7 +638,9 @@ fn milestone_workable(target: &Target, avoid: &[String], sick: &dyn Fn(&str) -> 
 pub fn goal_for_milestone(stone: &Milestone) -> GoalKind {
     match &stone.target {
         Target::Level { skill, level } => GoalKind::MaxSkills { skills: vec![skill.clone()], level: *level },
-        Target::Produce { item, count, .. } => GoalKind::Produce { item: item.clone(), count: *count },
+        // What a set-aside goal already made is credited
+        // (`bid_trade::credit_made`): the rest only.
+        Target::Produce { item, count, .. } => GoalKind::Produce { item: item.clone(), count: (*count - stone.progress.0).max(1) },
         Target::Equip { style } => GoalKind::EquipBest { style: style.clone() },
         Target::Coins { .. } => GoalKind::GetRich,
     }

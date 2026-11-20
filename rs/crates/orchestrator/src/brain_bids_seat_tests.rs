@@ -3,7 +3,7 @@
 //! mithril ore (123 `full:farm:mithril_ore` cooldowns in the hour), 14 on
 //! 51 amulet of power bids with 6 uncut diamonds on sale. Offline sims of
 //! the draw, bot after bot, on the real planner, each bot reading the
-//! board the previous ones posted (`brain_bids::bid_goal_for`): the lot's
+//! board the previous ones posted (`brain_bids::bid_goal_in`): the lot's
 //! claim, its purchases (`market_claims::claim_purchases`) and its seats
 //! (`site_crowd::engage`).
 

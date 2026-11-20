@@ -252,15 +252,31 @@ fn abandon_unresolvable(life: &mut Life, changes: &mut Vec<String>) {
     }
 }
 
-/// State of a normalized graph (call `normalize` first).
+/// A buy posted on the book by an EARLIER goal (its number under the
+/// current goal's floor, its latest entry `awaiting_fill`): the goal that
+/// posted it was set aside or given back (`abandon_goal_work` spares it,
+/// the fill lands in the bank), it is no work of the current goal.
+/// Review 2026-11-20: such a wait kept a finished answer open, the
+/// ambition never drawn back.
+pub fn earlier_wait(life: &Life, node: &crate::model::Node) -> bool {
+    let floor = life.memory.floor.unwrap_or(0);
+    node.status == NodeStatus::Ready
+        && node.method.as_deref().is_some_and(|method| method.starts_with("market:"))
+        && crate::lifecycle_retire::node_number(&node.id).is_some_and(|number| number < floor)
+        && life.history.iter().rev().find(|entry| entry.node == node.id).is_some_and(|entry| entry.outcome == "awaiting_fill")
+}
+
+/// State of a normalized graph (call `normalize` first). A buy left on
+/// the book by an earlier goal (`earlier_wait`) neither keeps the graph
+/// launchable nor unfinished.
 pub fn graph_state(life: &Life) -> GraphState {
     if let Some(active) = &life.active {
         return GraphState::Running(active.clone());
     }
-    if life.nodes.iter().any(|node| node.status == NodeStatus::Ready) {
+    if life.nodes.iter().any(|node| node.status == NodeStatus::Ready && !earlier_wait(life, node)) {
         return GraphState::Launchable;
     }
-    if life.nodes.iter().all(|node| node.status == NodeStatus::Done) {
+    if life.nodes.iter().all(|node| node.status == NodeStatus::Done || earlier_wait(life, node)) {
         return GraphState::Finished;
     }
     GraphState::Stuck {

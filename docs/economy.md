@@ -1658,6 +1658,29 @@ d'achat que ce bot sait fabriquer avec profit :
   ban ni mise à l'écart, historique `bid_off_trade:<origine>`, log
   `bid:<objet> given back: off the <sorte>'s trade`), le tirage suivant
   libère réclamation, achats et places et revient à l'ambition.
+- Pendant une attente, tout le marché (l'hybride, 2026-11-20, mesure
+  01:36-02:36 UTC après la règle du métier : les consommateurs achètent,
+  personne ne vend, remplissage 37 % au lieu de 16 %, transformation 5 %
+  au lieu de 29 %) : un but d'ambition (jalon) dont le seul travail prêt
+  est un achat posé qui attend depuis au moins une fenêtre de
+  remplissage (`FILLER_TICKS` = 1500 ticks), sans nœud en cours, est mis
+  de côté si un lot de N'IMPORTE QUEL métier paie maintenant
+  (`brain_wait_answer`, `brain_bids::whole_market_lot`) : travail du but
+  abandonné sauf les achats postés (ils restent au carnet), lien au jalon
+  retiré avant la clôture (jalon ni fait ni bloqué), tirage sur tout le
+  marché (`draw_next_with(.., true)`), réponse marquée
+  `wait_answer:<origine>` (jamais rendue comme hors métier,
+  `bid_trade::drawn_while_waiting`). Le tirage suivant revient à
+  l'ambition : l'achat laissé au carnet par le but mis de côté ne tient
+  pas le graphe ouvert (`lifecycle::earlier_wait` : nœud sous le plancher
+  du but courant, dernière entrée `awaiting_fill` ; `graph_state` le
+  compte comme fini), ni ne déclenche une nouvelle mise de côté (seuls
+  les achats du but courant comptent) ; un jalon de niveau reprend aux
+  niveaux vivants, un jalon de production est crédité de ce que son but
+  a fait depuis le tirage (`bid_trade::credit_made`, stock tenu au
+  tirage exclu) et ne redemande que le reste (`goal_for_milestone`). Aucun lot : le
+  remplissage comme avant. Log `milestone mX waits on a buy, set aside
+  for a market answer`.
 - Étalement (sans état d'un autre bot) : un bot ne répond à un objet que
   dans une fenêtre de 6000 ticks sur deux choisie par son mot
   (`answers_now`, rotation par fenêtre) ; avec la moitié de la

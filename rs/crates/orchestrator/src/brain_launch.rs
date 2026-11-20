@@ -390,6 +390,13 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // only ever starts through its gate. Parked market waits are skipped:
     // with nothing else ready, a short money window fills the wait.
     let Some(position) = crate::cpu_profile::timed("next_ready", || lifescape_planner::next_ready_except(&life, &waiting)) else {
+        // The hybrid (2026-11-20): an ambition goal waiting on a buy past
+        // one filler window sets itself aside for a market answer of any
+        // trade (`brain_wait_answer`); else the filler.
+        if !waiting.is_empty() && crate::cpu_profile::timed("wait_answer", || crate::brain_wait_answer::answer_while_waiting(&mut life, &live)) {
+            save_or_log(&life);
+            return;
+        }
         if !waiting.is_empty() && crate::cpu_profile::timed("filler.launch", || crate::brain_filler::launch_filler(orch, job, &mut life, &live, &waiting)) {
             return;
         }
