@@ -1977,6 +1977,40 @@ bloque sur le niveau (`missing:level:…`) et s'entraîne d'abord. Le
 plafond de la réserve vendeur (`production_cost`) reste sans
 entraînement.
 
+## Réponses au-delà de la montée (2026-11-20)
+
+Constat live (« le smithing avance si lentement », « le marché doit
+s'équilibrer ») : l'entraînement d'une réponse à une offre d'achat ne
+coûtait rien dès que l'ÉCHELLE de l'ambition montait la compétence un
+jour (`ladder_level` : paliers 10 à 90, donc toute la forge jusqu'à 90
+pour un forgeron). alice_knight, forge 73, répondait à 28 plastrons
+d'adamant (forge 88) comme à un « lot de 517 ticks, 132 pièces/tick » ;
+la montée 73 -> 88 (2,4 M d'XP) était déposée, ses achats dimensionnés
+dessus (29 004 charbons, 5 717 minerais d'adamantite en bids `need`)
+restaient sans vendeur, le but bloquait après trois jambes marché, les
+bids fermaient `need_gone`, la réponse suivante était la même ; 13 bots
+attendaient `level:smithing:66-88`, pendant que l'adamantite partait au
+marchand faute d'acheteur.
+
+Règle (`planner::bid_reach`) :
+- ce que l'ambition monte MAINTENANT = ses jalons niveau ouverts
+  (`planned_levels`), jamais le sommet de son échelle ; au-delà, la
+  réponse porte sa part de la montée comme tout bot (un lot sur 4, le
+  coût décide : décision « tout le temps » du 2026-11-19 gardée) ;
+- état persisté révisé : une réponse `bid:` tirée AVANT la règle
+  (aucune marque `bid_rule:planned_milestones` après son `next:` ;
+  `brain_succession::draw_next_with` la pose désormais à chaque tirage
+  d'une réponse) est rendue (`brain_bid_release::release_beyond_reach`,
+  appelée par `brain_launch` comme `release_off_trade`) quand (a) chaque
+  voie qui fabrique l'objet demande un niveau au-dessus du bot et de ses
+  jalons ouverts, ou (b) son graphe monte encore un niveau (nœud
+  `reach_level` ouvert : sa ligne choisie et ses intrants dimensionnés
+  sous l'ancien score d'entraînement, docs/planner.md § gain compté
+  zéro). Travail abandonné, aucune interdiction, aucune mise à l'écart :
+  le tirage suivant repèse l'objet sous les nouvelles règles. Journal :
+  `brain <compte>: bid:X given back (drawn under the old rule): …`,
+  historique `bid_beyond_reach:<origine>|<raison>`.
+
 ## Alchimie (2026-11-14)
 
 `planner/src/alchemy.rs` (pur) + `orchestrator/src/brain_alch.rs` :
@@ -2072,9 +2106,10 @@ d'alchimie du bot lanceur) qu'une jambe de production fabrique :
   montée (temps au taux du bot + intrants) moins la valeur des produits
   faits en montant (prix courant ou meilleur bid × saturation), puis une
   PART seulement : rien quand l'ambition du bot monte déjà cette
-  compétence (échelle du catalogue ou jalon niveau ouvert,
-  `brain_bids::planned_levels`), un lot sur `TRAINING_AMORTIZE_LOTS` (4)
-  sinon. Plus de plafond de niveaux (2026-11-19, décision utilisateur
+  compétence MAINTENANT (jalon niveau ouvert, `bid_reach::planned_levels`
+  ; plus le sommet de l'échelle du catalogue depuis le 2026-11-20, voir
+  § Réponses au-delà de la montée), un lot sur `TRAINING_AMORTIZE_LOTS`
+  (4) sinon. Plus de plafond de niveaux (2026-11-19, décision utilisateur
   « tout le temps ») : n'importe quel écart se chiffre, le coût de
   l'entraînement décide ; la magie s'entraîne pour une offre (`TRAINABLE`
   de `bid_response`). Constat live : 51 offres d'achat d'amulettes de

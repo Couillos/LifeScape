@@ -142,10 +142,20 @@ construction à la demande) :
   market du guide money et `cost::choose_market_or_farm`) : un profil
   marché achète ses intrants tant que leurs pièces au D17 ne rendent pas
   l'achat bien plus lent, un D17 élevé (meilleure ligne d'argent
-  pauvre) rend la ligne autonome (un score négatif, ligne qui rapporte
-  plus que son temps, est divisé par ce poids : même ordre) ; une ligne
+  pauvre) rend la ligne autonome ; une ligne
   bloquée, inaccessible, sans XP, ou marché pour un Iron, n'a pas de
   score ;
+- gain compté zéro (2026-11-20, « le smithing avance si lentement ») :
+  les pièces qu'une ligne RAPPORTE (produits vendus au-delà de ses
+  achats) ne baissent jamais son score sous son temps : terme pièces =
+  max(0, pièces par XP converties), tout score ≥ 0. Une montée se choisit
+  pour son XP ; l'argent est l'affaire du choix d'argent. Constat live :
+  lara_lane forge 60 -> 68 et bellarhodes 59 -> 66 prenaient le bronze
+  extrait et fondu (0,09 XP/tick, +1,6 pièce/tick créditées au taux
+  mesuré du bot, 0,67 pièce/tick : score −5,5) devant les plastrons
+  d'acier de barres achetées (3,7 XP/tick, −1,3) ; 40 060 minerais de
+  cuivre déposés pour une tranche. Mesure de la flotte : ~0,1 XP de forge
+  par tick d'un forgeron ;
 - choix : le tirage R7 (section suivante, `train_score::pick`) sur les
   mêmes lignes classées (`best` = tête de l'ordre du score seul) ;
   consommables dont le bot tient moins d'une action
@@ -203,7 +213,9 @@ décision datée dans `docs/decisions.md`.
 - Graine : `seed_for(profil.seed, nœud, LifeMemory::draws)` ; le
   compteur avance à chaque choix enregistré. Collant : le choix précédent
   d'un nœud bloqué sur son outil (`blocked_by`) revient dès qu'il est
-  faisable ; un lot trade acheté est crafté d'abord (`trade_craft::
+  faisable ET dans la bande du meilleur score faisable maintenant
+  (2026-11-20 : un choix que le score classe désormais loin derrière est
+  retiré au sort) ; un lot trade acheté est crafté d'abord (`trade_craft::
   sticky`).
 - Argent : `orchestrator::brain_money::publish` lit les lignes de la vue
   de chaque niveau du bot (compétence de bande de l'activité), recettes

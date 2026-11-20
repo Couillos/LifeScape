@@ -151,6 +151,12 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if !quoting && crate::brain_bid_release::release_off_trade(&mut life, &live) {
         dirty = true;
     }
+    // An answer whose level is above the bot's and its open milestones
+    // (drawn while the ladder's top counted the training free) is given
+    // back, the draw weighs it again (2026-11-20).
+    if !quoting && crate::brain_bid_release::release_beyond_reach(&mut life, &live) {
+        dirty = true;
+    }
     // After a daemon restart, an open bid answer holds its seats again.
     if !quoting {
         crate::brain_bid_release::reengage_after_restart(&life, &live);
