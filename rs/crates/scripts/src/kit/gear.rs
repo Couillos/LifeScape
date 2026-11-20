@@ -135,6 +135,12 @@ pub fn gear_plan(
         if !weapon_fits_style(&entry, &bot.combat_style) {
             continue;
         }
+        // Armour that lowers a magic or ranged run's own attack is never
+        // planned (user 2026-11-20: studded body, mithril kiteshield worn
+        // to cast; `gear::score` < 0): the slot stays empty.
+        if !armour_fits_style(&entry, &bot.combat_style) {
+            continue;
+        }
         // Primary slot only: a two-handed weapon also covers the shield
         // slot (wearpos2 5), and listing it there made equip_plan wield
         // the shortbow "as a shield" over the planned pickaxe.
@@ -180,6 +186,26 @@ pub fn weapon_fits_style(entry: &knowledge::equipment::Wearable, style: &str) ->
     entry.wearpos != WEAPON_SLOT || knowledge::gear::score(entry, knowledge::gear::Style::parse(style)) >= 0
 }
 
+/// True unless `entry` is armour that lowers a magic or ranged run's own
+/// attack (`gear::score` < 0 for the style). Melee wears any armour;
+/// weapons and ammunition are `weapon_fits_style`'s and the ammo rule's.
+pub fn armour_fits_style(entry: &knowledge::equipment::Wearable, style: &str) -> bool {
+    style == "melee" || !ARMOUR_SLOTS.contains(&entry.wearpos) || knowledge::gear::score(entry, knowledge::gear::Style::parse(style)) >= 0
+}
+
+/// Worn armour the run must take off: every piece that lowers a magic or
+/// ranged run's attack (`armour_fits_style`), by slot. Empty for melee.
+pub fn off_style_armour(bot: &Bot) -> Vec<(i64, String)> {
+    ARMOUR_SLOTS
+        .into_iter()
+        .filter_map(|slot| {
+            let name = worn_obj(bot, slot).and_then(|obj| knowledge::obj_by_id(usize::from(obj)).and_then(|row| row.name))?;
+            let entry = knowledge::equipment::by_name(name)?;
+            (!armour_fits_style(&entry, &bot.combat_style)).then(|| (slot, name.to_string()))
+        })
+        .collect()
+}
+
 /// Name of the wielded weapon when the run must not fight with it: a
 /// bow, crossbow, throwable or staff in melee, a melee weapon in ranged
 /// (live 2026-11-14, ryan_park « ranged chickens » à la dague de fer).
@@ -207,7 +233,7 @@ pub fn spare_stack(pack: &[(u16, String)]) -> Option<u16> {
         .map(|(obj, _)| *obj)
 }
 
-/// A full pack and an off-style weapon to take off (live 2026-11-17,
+/// A full pack and an off-style piece to take off (live 2026-11-17,
 /// wolfe_carl: "ranged run wields adamant_battleaxe and the pack is full",
 /// 25 failures): one spare stack goes to the nearest bank, everything
 /// else stays. Typed failure when no stack is spare.
@@ -218,39 +244,41 @@ fn free_one_slot(bot: &mut Bot, name: &str) -> Result<(), ScriptError> {
         .map(|(_, (obj, _))| (obj, knowledge::obj_by_id(usize::from(obj)).and_then(|row| row.name).unwrap_or_default().to_string()))
         .collect();
     let Some(spare) = spare_stack(&pack) else {
-        return Err(ScriptError::Failed(format!("{} run wields {name} and the pack holds only supplies: cannot unwield it", bot.combat_style)));
+        return Err(ScriptError::Failed(format!("{} run wears {name} and the pack holds only supplies: cannot take it off", bot.combat_style)));
     };
     let keep: Vec<u16> = pack.iter().map(|(obj, _)| *obj).filter(|obj| *obj != spare).collect();
     bot.log(&format!("pack full under {name}: banking {} to take it off", crate::kit::pack::obj_label(bot, spare)));
     let bank = crate::kit::bank::nearest_bank(bot)?;
     crate::kit::bank::bank_trip(bot, &bank, &keep, 0)?;
     if free_slots(bot) == 0 {
-        return Err(ScriptError::Failed(format!("{} run wields {name} and the pack is still full after the bank: cannot unwield it", bot.combat_style)));
+        return Err(ScriptError::Failed(format!("{} run wears {name} and the pack is still full after the bank: cannot take it off", bot.combat_style)));
     }
     Ok(())
 }
 
-/// Take the wielded weapon off (worn tab "Remove": equip.rs2
+/// Take a worn piece off (worn tab "Remove": equip.rs2
 /// `[inv_button1,wornitems:wear]` -> `~unequip`, refused with "You don't
 /// have enough free space to do that." on a full pack). Typed failure
-/// when it stays wielded: a run never fights with an off-style weapon.
-fn unwield_weapon(bot: &mut Bot, name: &str) -> Result<(), ScriptError> {
-    let Some(obj) = worn_obj(bot, WEAPON_SLOT) else { return Ok(()) };
+/// when it stays worn: a run never fights with an off-style weapon, nor
+/// casts or shoots in armour that lowers its attack.
+fn take_off(bot: &mut Bot, slot: i64, name: &str) -> Result<(), ScriptError> {
+    let Some(obj) = worn_obj(bot, slot) else { return Ok(()) };
     if free_slots(bot) == 0 {
         free_one_slot(bot, name)?;
     }
     let worn_com = (bot.tables.com_id)(WORN_COM_NAME)
         .ok_or_else(|| ScriptError::Usage(format!("{WORN_COM_NAME} missing from component table")))?;
-    bot.inv_button(1, obj, WEAPON_SLOT as u8, worn_com)?;
+    let worn_slot = u8::try_from(slot).map_err(|_| ScriptError::Usage(format!("worn slot {slot} out of range")))?;
+    bot.inv_button(1, obj, worn_slot, worn_com)?;
     let target = bot.world.ticks + 10;
     while bot.world.ticks < target {
         bot.pump(2)?;
-        if worn_obj(bot, WEAPON_SLOT).is_none() {
-            bot.log(&format!("unwielded {name}: no {} weapon wieldable", bot.combat_style));
+        if worn_obj(bot, slot).is_none() {
+            bot.log(&format!("took off {name}: off style for {}", bot.combat_style));
             return Ok(());
         }
     }
-    Err(ScriptError::Failed(format!("{} run still wields {name} after Remove", bot.combat_style)))
+    Err(ScriptError::Failed(format!("{} run still wears {name} after Remove", bot.combat_style)))
 }
 
 /// Gear score, slot by slot. Weapon: the style's own attack bonus plus
@@ -395,7 +423,12 @@ pub fn equip_plan(bot: &mut Bot, plan: &HashMap<i64, Vec<knowledge::equipment::W
     // No melee weapon owned (or none wearable): a leftover bow or staff
     // comes off, bare fists beat a refused click.
     if let Some(name) = off_style_weapon(bot) {
-        unwield_weapon(bot, &name)?;
+        take_off(bot, WEAPON_SLOT, &name)?;
+    }
+    // Armour that lowers the run's attack comes off: an empty slot beats
+    // the malus (magic, ranged).
+    for (slot, name) in off_style_armour(bot) {
+        take_off(bot, slot, &name)?;
     }
     Ok(equipped)
 }
@@ -554,6 +587,33 @@ mod tests {
         let plan = super::gear_plan(&bot, &both, fight_weapon_style, style_damage_key);
         assert_eq!(plan_names(&plan, WEAPON_SLOT), vec!["shortbow".to_string()], "ranged wields the bow only");
         assert!(plan_names(&plan, 5).is_empty(), "the bow is no shield candidate");
+    }
+
+    /// User 2026-11-20: magic runs cast in studded body and chaps, a
+    /// mithril kiteshield (live jonas_brown, kevin_ellis). A magic or
+    /// ranged run plans no armour that lowers its attack and takes off
+    /// the worn pieces that do; melee keeps them.
+    #[test]
+    fn a_magic_run_neither_plans_nor_keeps_armour_that_lowers_magic() {
+        let mut bot = stat_bot(40, 40, 40);
+        let worn_com = (bot.tables.com_id)(super::WORN_COM_NAME).expect("worn com");
+        let id = |bot: &Bot, name: &str| crate::kit::pack::obj_id(bot, name).unwrap_or_else(|_| panic!("{name} id"));
+        let body = id(&bot, "studded_body");
+        let shield = id(&bot, "mithril_kiteshield");
+        let hat = id(&bot, "bluewizhat");
+        bot.world.inv.insert(worn_com, std::collections::HashMap::from([(4u8, (body, 1)), (5u8, (shield, 1)), (0u8, (hat, 1))]));
+        bot.combat_style = "magic".to_string();
+        assert_eq!(super::off_style_armour(&bot), vec![(4, "studded_body".to_string()), (5, "mithril_kiteshield".to_string())]);
+        let available = std::collections::HashMap::from([(body, "studded_body".to_string()), (shield, "mithril_kiteshield".to_string()), (hat, "bluewizhat".to_string())]);
+        let plan = super::gear_plan(&bot, &available, fight_weapon_style, style_damage_key);
+        assert!(plan_names(&plan, 4).is_empty() && plan_names(&plan, 5).is_empty(), "no studded body, no kiteshield for magic: {plan:?}");
+        assert_eq!(plan_names(&plan, 0), vec!["bluewizhat".to_string()]);
+        bot.combat_style = "melee".to_string();
+        assert!(super::off_style_armour(&bot).is_empty(), "melee keeps its armour");
+        // Studded body needs ranged 20 (unmet here); the kiteshield
+        // (defence 20) is melee armour.
+        let plan = super::gear_plan(&bot, &available, fight_weapon_style, style_damage_key);
+        assert_eq!(plan_names(&plan, 5), vec!["mithril_kiteshield".to_string()]);
     }
 
     /// A wielded bow is off-style for melee only (the unwield trigger).

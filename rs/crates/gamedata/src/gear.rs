@@ -103,6 +103,18 @@ pub fn score(entry: &Wearable, style: Style) -> i64 {
     if entry.wearpos == AMMO {
         return if style == Style::Ranged && entry.rangebonus > 0 { entry.rangebonus } else { -1 };
     }
+    // A piece that lowers the style's own attack never scores for it
+    // (user 2026-11-20: studded body -4, mithril kiteshield -8 worn to
+    // cast, their melee defence outweighing the malus): an empty slot
+    // beats it. Melee keeps its plate.
+    let own_attack = match style {
+        Style::Melee => 0,
+        Style::Ranged => attack("range"),
+        Style::Magic => attack("magic"),
+    };
+    if own_attack < 0 {
+        return -1;
+    }
     match style {
         Style::Melee => melee_def + 2 * entry.strength + entry.prayer + attack("stab").max(attack("slash")).max(attack("crush")).max(0),
         // Ranged armour: range attack first, then the defences (d'hide,
@@ -276,6 +288,32 @@ mod tests {
         }
         let bow = crate::equipment::by_name("shortbow").expect("shortbow row");
         assert!(super::score(&bow, Style::Ranged) > 0, "the bow still scores for ranged");
+    }
+
+    /// User 2026-11-20 (« quand les bots font de la magie de combat ils ne
+    /// portent pas d'équipement de magie et ont donc de gros malus ») :
+    /// live jonas_brown cast in studded body (magic -4) and chaps (-5),
+    /// kevin_ellis with a mithril kiteshield (-8): the melee defence
+    /// outweighed the malus. A piece that lowers the style's own attack
+    /// never scores for magic or ranged (an empty slot beats it); melee
+    /// is untouched.
+    #[test]
+    fn a_piece_that_lowers_the_style_attack_never_scores_for_it() {
+        for name in ["studded_body", "studded_chaps", "mithril_kiteshield", "steel_platebody"] {
+            let entry = crate::equipment::by_name(name).unwrap_or_else(|| panic!("{name} row"));
+            assert!(super::score(&entry, Style::Magic) < 0, "{name} lowers magic");
+            assert!(super::score(&entry, Style::Melee) >= 0, "{name} still scores for melee");
+        }
+        for name in ["steel_platebody", "mithril_kiteshield"] {
+            let entry = crate::equipment::by_name(name).unwrap_or_else(|| panic!("{name} row"));
+            assert!(super::score(&entry, Style::Ranged) < 0, "{name} lowers ranged");
+        }
+        for name in ["wizards_robe", "leather_boots", "wooden_shield"] {
+            let entry = crate::equipment::by_name(name).unwrap_or_else(|| panic!("{name} row"));
+            assert!(super::score(&entry, Style::Magic) >= 0, "{name} costs no magic");
+        }
+        let leather = crate::equipment::by_name("leather_armour").expect("leather armour");
+        assert!(super::score(&leather, Style::Ranged) >= 0, "leather is ranged armour");
     }
 
     #[test]

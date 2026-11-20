@@ -1873,6 +1873,14 @@ passe par compte toutes les 60 s, tout style de but, jamais Iron) :
   bonus + 2 × force, distance = arc et cuir, magie = bâton et robes) ;
   mêlée et magie à une main (bouclier), distance à l'arc (pas de
   bouclier) ; munitions et runes restent des consommables des tranches.
+  Une pièce qui baisse l'attaque du style (magie, distance) ne score
+  jamais pour lui (−1, utilisateur 2026-11-20 : sorts lancés en corps et
+  jambières cloutés, bouclier de mithril ; la défense de mêlée masquait
+  le malus) : un emplacement vide vaut mieux. Côté script, une course de
+  magie ou de distance ne prévoit pas ces pièces (`kit::gear::
+  armour_fits_style`) et retire celles qui sont portées
+  (`off_style_armour`, `take_off`, log `took off <pièce>: off style`) ;
+  la mêlée garde son armure.
 - Le bot veut, par emplacement, la meilleure pièce que ses niveaux
   ouvrent et qui bat ce qu'il possède (sac, banque, porté). Le choix de
   l'arme suit le score (hache de bataille, cimeterre ou épée longue).
