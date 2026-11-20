@@ -18,7 +18,9 @@
 //!   runes of an altar out of reach...) stay purchases; the line names
 //!   the way of each (`routes`);
 //! - market: stock inputs bought (current price, or a shop's, Q7), a
-//!   square round trip and the measured wait per PURCHASE, one purchase
+//!   square round trip and the measured wait per PURCHASE (the wait only
+//!   when the asks and the shops do not hold the purchase: one they hold
+//!   fills at once, live 2026-11-20), one purchase
 //!   carrying the band's inputs (`band_slots`, at least a pack; user lever
 //!   2026-11-17: the climb buys its tranche at once through need bids at
 //!   its volume, never a pack per market visit); what the
