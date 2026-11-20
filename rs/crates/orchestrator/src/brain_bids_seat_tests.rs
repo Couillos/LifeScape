@@ -24,7 +24,7 @@ fn live(levels: &[(&str, i64)]) -> Value {
     object(vec![("skills", Value::Arr(skills))])
 }
 
-fn life_of(seed: u64) -> Life {
+fn life_of(kind: &str, seed: u64) -> Life {
     let now = BotNow { level_of: &|_| 30, coins: 500, held: &|_| 0 };
     Life {
         schema: 1,
@@ -37,7 +37,7 @@ fn life_of(seed: u64) -> Life {
         engagement: None,
         active: None,
         history: Vec::new(),
-        ambition: new_ambition("priest", "need", &now, seed, &[], Stamp { tick: 0, secs: 0 }).ok(),
+        ambition: new_ambition(kind, "need", &now, seed, &[], Stamp { tick: 0, secs: 0 }).ok(),
         goal_origin: None,
         memory: Default::default(),
     }
@@ -80,17 +80,17 @@ impl Board {
 }
 
 /// One draw per bot, in turn, each on the board of those before.
-fn draw_in_turn(seeds: &[u64], views: &HashMap<String, BookView>, levels: &[(&str, i64)], held: &dyn Fn(&str) -> i64, board: Board) -> (Vec<Opportunity>, Board) {
-    draw_own(seeds, views, levels, held, board, &[], &[])
+fn draw_in_turn(kind: &str, seeds: &[u64], views: &HashMap<String, BookView>, levels: &[(&str, i64)], held: &dyn Fn(&str) -> i64, board: Board) -> (Vec<Opportunity>, Board) {
+    draw_own(kind, seeds, views, levels, held, board, &[], &[])
 }
 
 /// `draw_in_turn` with each bot's own cooldown keys and shunned objects.
-fn draw_own(seeds: &[u64], views: &HashMap<String, BookView>, levels: &[(&str, i64)], held: &dyn Fn(&str) -> i64, mut board: Board, cooled: &[String], shunned: &[String]) -> (Vec<Opportunity>, Board) {
+fn draw_own(kind: &str, seeds: &[u64], views: &HashMap<String, BookView>, levels: &[(&str, i64)], held: &dyn Fn(&str) -> i64, mut board: Board, cooled: &[String], shunned: &[String]) -> (Vec<Opportunity>, Board) {
     let snapshot = live(levels);
     let level_of = |skill: &str| crate::brain_succession::live_level(&snapshot, skill);
     let mut answers = Vec::new();
     for seed in seeds {
-        let life = life_of(*seed);
+        let life = life_of(kind, *seed);
         let reader = MarketReader::fixed(views.clone()).with_board(board.claims.clone(), board.purchases.clone());
         let state = BotState {
             level_of: &level_of,
@@ -129,12 +129,12 @@ fn only_the_miners_with_a_free_seat_answer_the_mithril_bid() {
     let held = |item: &str| i64::from(item == "rune_pickaxe");
     let miners = seeds("mithril_ore", 7);
     // The seats every miner could take, the free board first.
-    let (alone, _) = draw_in_turn(&miners[..1], &views, &levels, &held, Board::default());
+    let (alone, _) = draw_in_turn("miner", &miners[..1], &views, &levels, &held, Board::default());
     let first = alone.first().expect("a lone miner answers");
     let (method, taken) = crate::brain_bids::engaged_seats(first).into_iter().next().expect("the lot takes a mithril seat");
     assert_eq!(lifescape_planner::combat::site_capacity(&method, taken), Some(1), "one miner per mithril field");
     let board = Board { seats: vec![(taken, "gather:mining/mithril_ore".to_string(), 1)], ..Board::default() };
-    let (answers, board) = draw_in_turn(&miners, &views, &levels, &held, board);
+    let (answers, board) = draw_in_turn("miner", &miners, &views, &levels, &held, board);
     let mithril: Vec<&Opportunity> = answers.iter().filter(|found| found.item == "mithril_ore").collect();
     let free = free_fields("farm:mithril_ore", 90, taken);
     assert!(free >= 1, "a free mithril field outside the occupied one");
@@ -149,7 +149,7 @@ fn only_the_miners_with_a_free_seat_answer_the_mithril_bid() {
         fields.push(site);
     }
     // Every field taken: the next miner finds none.
-    let (late, _) = draw_in_turn(&seeds("mithril_ore", 8)[7..], &views, &levels, &held, board);
+    let (late, _) = draw_in_turn("miner", &seeds("mithril_ore", 8)[7..], &views, &levels, &held, board);
     assert!(late.iter().all(|found| found.item != "mithril_ore"), "no seat left: {late:?}");
 }
 
@@ -179,20 +179,20 @@ fn cooled_sites_and_a_recent_give_back_keep_the_answer_away() {
     let levels = [("mining", 60), ("attack", 60), ("strength", 60), ("defence", 60), ("hitpoints", 60)];
     let held = |item: &str| i64::from(item == "rune_pickaxe");
     let miner = seeds("mithril_ore", 1);
-    let (alone, _) = draw_in_turn(&miner, &views, &levels, &held, Board::default());
+    let (alone, _) = draw_in_turn("miner", &miner, &views, &levels, &held, Board::default());
     let (_, first) = crate::brain_bids::engaged_seats(alone.first().expect("a lone miner answers")).into_iter().next().expect("a seat");
     // Its first field cooled for it (players there): another field.
     let cool_first = vec![lifescape_planner::cooldown::cool_key("farm:mithril_ore", Some(first))];
-    let (moved, _) = draw_own(&miner, &views, &levels, &held, Board::default(), &cool_first, &[]);
+    let (moved, _) = draw_own("miner", &miner, &views, &levels, &held, Board::default(), &cool_first, &[]);
     let (_, second) = crate::brain_bids::engaged_seats(moved.first().expect("another field")).into_iter().next().expect("a seat");
     assert!(!lifescape_planner::cooldown::same_area(first, second), "the cooled field is skipped: {first:?} / {second:?}");
     // Every free field cooled or taken: no answer.
     let cool_both = vec![cool_first[0].clone(), lifescape_planner::cooldown::cool_key("farm:mithril_ore", Some(second))];
     let others = Board { seats: free_seats_but(first, second), ..Board::default() };
-    let (none, _) = draw_own(&miner, &views, &levels, &held, others, &cool_both, &[]);
+    let (none, _) = draw_own("miner", &miner, &views, &levels, &held, others, &cool_both, &[]);
     assert!(none.iter().all(|found| found.item != "mithril_ore"), "{none:?}");
     // Given back lately: left alone, whatever the seats.
-    let (shunned, _) = draw_own(&miner, &views, &levels, &held, Board::default(), &[], &["mithril_ore".to_string()]);
+    let (shunned, _) = draw_own("miner", &miner, &views, &levels, &held, Board::default(), &[], &["mithril_ore".to_string()]);
     assert!(shunned.iter().all(|found| found.item != "mithril_ore"), "{shunned:?}");
 }
 
@@ -227,18 +227,38 @@ fn amulet_views() -> HashMap<String, BookView> {
     views
 }
 
-/// Test 3: fourteen crafters weigh the 51 amulet of power bids; 6 uncut
+/// Test 3: fourteen mages (magic enchants the amulet: their trade,
+/// `bid_trade`) weigh the 51 amulet of power bids; 6 uncut
 /// diamonds rest on the market. Each answer reserves the diamonds it
 /// buys: at most 6 amulets are answered in all, by at most 6 bots.
 #[test]
 fn the_amulet_answers_stop_at_the_diamonds_on_sale() {
     let levels = [("crafting", 99), ("magic", 99), ("attack", 40), ("strength", 40), ("defence", 40), ("hitpoints", 40)];
     let held = |item: &str| i64::from(matches!(item, "amulet_mould" | "chisel" | "hammer"));
-    let crafters = seeds("amulet_of_power", 14);
-    let (answers, board) = draw_in_turn(&crafters, &amulet_views(), &levels, &held, Board::default());
+    let mages = seeds("amulet_of_power", 14);
+    let (answers, board) = draw_in_turn("mage", &mages, &amulet_views(), &levels, &held, Board::default());
     let amulets: Vec<&Opportunity> = answers.iter().filter(|found| found.item == "amulet_of_power").collect();
     let made: i64 = amulets.iter().map(|found| found.count).sum();
     assert!(!amulets.is_empty(), "the diamonds on sale are answered");
     assert!(made <= 6 && amulets.len() <= 6, "{} bots for {made} amulets with 6 diamonds: {:?}", amulets.len(), amulets.iter().map(|found| found.count).collect::<Vec<_>>());
     assert_eq!(board.purchases.get("uncut_diamond").copied().unwrap_or(0), made, "each amulet reserved its diamond");
+}
+
+/// `bid_trade` (live 2026-11-20 00:15 -> 01:15 UTC: priests on mithril
+/// battleaxes, runecrafters on mithril bars): the same mithril ore bid,
+/// the same levels and free fields, drawn by kinds whose primary skill
+/// makes no ore: none answers; the miners do.
+#[test]
+fn only_the_trade_that_makes_the_object_answers_it() {
+    let mut views = HashMap::new();
+    views.insert("mithril_ore".to_string(), BookView { bids: vec![(339, 93)], ..BookView::default() });
+    let levels = [("mining", 60), ("smithing", 60), ("runecraft", 60), ("attack", 60), ("strength", 60), ("defence", 60), ("hitpoints", 60)];
+    let held = |item: &str| i64::from(item == "rune_pickaxe");
+    let bots = seeds("mithril_ore", 3);
+    for kind in ["priest", "runecrafter", "smith", "firemaker", "cook"] {
+        let (answers, _) = draw_in_turn(kind, &bots, &views, &levels, &held, Board::default());
+        assert!(answers.iter().all(|found| found.item != "mithril_ore"), "a {kind} answers no ore: {answers:?}");
+    }
+    let (miners, _) = draw_in_turn("miner", &bots, &views, &levels, &held, Board::default());
+    assert!(miners.iter().any(|found| found.item == "mithril_ore"), "the miners do");
 }

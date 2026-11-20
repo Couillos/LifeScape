@@ -9,7 +9,9 @@
 //! claims of the order board), the bot's coin rate (what its work really
 //! earns per tick, D1: `brain_d17::coin_rate`) and the bot's own state,
 //! then hands the draw a production quota (`bid:<item>`) when a
-//! lot beats the ambition, and posts the claim on the board, with the
+//! lot in the bot's own trade beats the ambition (`planner::bid_trade`:
+//! the primary skill of a need-drawn ambition makes the object; the D3
+//! exceptions weigh the whole market), and posts the claim on the board, with the
 //! units the lot buys from the resting asks (`market_claims::
 //! claim_purchases`) and the gathering seats it takes (`site_crowd::
 //! engage`): the next bots read them gone (2026-11-20). An answer whose
@@ -367,6 +369,10 @@ pub(crate) fn explain_for(account: &str, item: &str) -> Result<Vec<String>, Stri
             if state.shunned.iter().any(|known| known == item) {
                 lines.push(format!("its answer was given back less than {} ticks ago: not answered again yet", lifescape_planner::bid_release::BID_SHUN_TICKS));
             }
+            if !lifescape_planner::bid_trade::answers_trade(&life, item) {
+                let kind = life.ambition.as_ref().map(|held| held.kind.as_str()).unwrap_or("?");
+                lines.push(format!("off the {kind}'s trade (bid_trade): its primary skill does not make it, never answered"));
+            }
             if view.bids.is_empty() {
                 lines.extend(crate::bid_why::related_bid_lines(item, &market));
             }
@@ -414,7 +420,9 @@ pub fn choose(life: &Life, reader: &MarketReader, rate: f64, state: &BotState) -
     state.with_producer(life, rate, |producer| {
         let market = |item: &str| reader.view(item);
         let mut books = reader.value_books(producer.alch_net);
-        books.retain(|(item, _)| !state.shunned.contains(item));
+        // Its own trade only (`bid_trade`, 2026-11-20): the need-drawn
+        // ambition runs, the consumers buy what they burn.
+        books.retain(|(item, _)| !state.shunned.contains(item) && lifescape_planner::bid_trade::answers_trade(life, item));
         best_opportunity(&books, &market, producer).map(|found| (found, rate))
     })
 }

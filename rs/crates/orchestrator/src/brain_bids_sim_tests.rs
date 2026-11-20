@@ -64,8 +64,9 @@ fn sim_units(method: &str, _item: &str) -> f64 {
     if method.starts_with("farm:") { 200.0 } else { 600.0 }
 }
 
-/// Point 7, end to end: the live bids pay ~300× the bars; a warrior with
+/// Point 7, end to end: the live bids pay ~300× the bars; a bot with
 /// smithing 20 and mining 20 answers them on its draw (ambition kept),
+/// a smith since `bid_trade` (a warrior answers no smithing lot),
 /// the quota resolves to smithing with a standing bid on the bars at 5, and the default
 /// listing (opening at the best bid, 5 % steps per window) fills exactly
 /// the 9 bids it counted, at their prices.
@@ -75,7 +76,7 @@ fn a_smith_answers_the_scimitar_bids_and_fills_them() {
     let snapshot = live(&levels, &[("hammer", 1)]);
     let level_of = |skill: &str| crate::brain_succession::live_level(&snapshot, skill);
     let seed = (1..200).find(|seed| answers_now(*seed, "bronze_scimitar", 0)).expect("a seed answers window 0");
-    let mut life = life_of("warrior", seed, &level_of);
+    let mut life = life_of("smith", seed, &level_of);
     let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
     let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &sim_units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None, rate: &lifescape_planner::work_rate::prior_rate, seats: Vec::new(), cooled: Vec::new(), shunned: Vec::new() };
     let reader = scimitar_market();

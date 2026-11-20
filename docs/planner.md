@@ -1730,3 +1730,10 @@ d'une récolte planifiée (plumes, appât de pêche :
   retour à l'ambition (`planner::bid_release`, `brain_bid_release` ;
   voir `economy.md` § Producteurs qui répondent aux offres). Un but de
   jalon attend toujours ouvert.
+- Réponse dans le métier (2026-11-20, `bid_trade::answers_trade`) : une
+  ambition tirée au besoin ne répond qu'aux objets que sa compétence
+  principale fabrique (`ambition_catalog::serves` = 1) ; exceptions D3
+  (`LEVEL_LED_ACCOUNTS`, sortes sans groupe principal, vie sans
+  ambition) : tout le marché. `bid_trade::off_trade_answer` nomme un but
+  `bid:` ouvert hors métier (état persisté avant la règle), rendu par
+  `brain_bid_release::release_off_trade`.

@@ -1637,6 +1637,27 @@ d'achat que ce bot sait fabriquer avec profit :
   marge : `BID_PREEMPT` retiré le 2026-11-18) et si le net après le temps ≥ 50 pièces
   (`BID_MIN_PROFIT`). Entre plusieurs, le meilleur taux, incliné de
   ±15 % par un mot propre au bot et à l'objet.
+- Son métier seulement (2026-11-20, `planner::bid_trade`, mesure
+  00:15-01:15 UTC : 60 bots sur 63 hors teneurs sur une réponse, le gain
+  mesuré de chacun (D1, 0,1 à 1 pièce/tick) battu par presque tout lot ;
+  runiers sur des barres de mithril, prêtres sur des haches de mithril,
+  cuisiniers sur des runes d'eau ; cuisine, prière, feu 0 % du temps ;
+  minage, fonte, forge 51 %) : un bot dont l'ambition suit le besoin ne
+  répond qu'aux objets que la compétence PRINCIPALE de son ambition
+  fabrique (`ambition_catalog::serves` = 1 : son échelle les liste ou sa
+  compétence principale les fait en une étape) : forgeron barres et
+  armures, mineur minerai, cuisinier plats cuits, runier runes, artisan
+  bijoux et poterie, mage enchantements. Prêtre, allumeur, archer,
+  guerrier ne fabriquent rien : aucune réponse, ils s'entraînent et
+  ACHÈTENT ce qu'ils brûlent. Exceptions (D3) : Zezima, N0valyfe,
+  Yogosun, les sortes sans métier (teneur, overall, généraliste,
+  alchimiste), une vie sans ambition : tout le marché. L'arbitrage
+  marchand (D2) est une autre voie, ouverte à tous. État existant : un but
+  `bid:` ouvert hors du métier est rendu au passage suivant
+  (`brain_bid_release::release_off_trade`, après le nœud en cours, sans
+  ban ni mise à l'écart, historique `bid_off_trade:<origine>`, log
+  `bid:<objet> given back: off the <sorte>'s trade`), le tirage suivant
+  libère réclamation, achats et places et revient à l'ambition.
 - Étalement (sans état d'un autre bot) : un bot ne répond à un objet que
   dans une fenêtre de 6000 ticks sur deux choisie par son mot
   (`answers_now`, rotation par fenêtre) ; avec la moitié de la

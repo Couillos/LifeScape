@@ -51,6 +51,37 @@ pub(crate) fn release_blocked_bid(life: &mut Life, live: &Value) -> bool {
     true
 }
 
+/// Last error of the nodes an answer off the bot's trade abandons.
+pub const OFF_TRADE_CAUSE: &str = "bid answer off the bot's trade: its ambition follows the need (bid_trade)";
+
+/// History outcome (node `goal`) of an answer given back as off the
+/// trade: `bid_off_trade:<origin>`.
+pub const OFF_TRADE_TAG: &str = "bid_off_trade:";
+
+/// Gives back a `bid:` goal whose object is off the bot's trade
+/// (`lifescape_planner::bid_trade`, 2026-11-20): the answers drawn before
+/// the rule (60 of 63 bots live). Waits while a node runs. Same close as
+/// a blocked answer: work abandoned, no ban, the draw frees the claims
+/// and returns to the ambition; no shun (the draw no longer offers the
+/// object). True when the life changed (save it).
+pub(crate) fn release_off_trade(life: &mut Life, live: &Value) -> bool {
+    if life.active.is_some() {
+        return false;
+    }
+    let Some(origin) = lifescape_planner::bid_trade::off_trade_answer(life) else { return false };
+    let kind = life.ambition.as_ref().map(|held| held.kind.clone()).unwrap_or_default();
+    let abandoned = lifescape_planner::abandon_goal_work(life, OFF_TRADE_CAUSE);
+    lifescape_planner::normalize(life);
+    crate::logln!("brain {}: {origin} given back: off the {kind}'s trade, no ban; {} nodes abandoned: {}", life.account, abandoned.len(), abandoned.join(","));
+    crate::brain::push_history(life, "goal", &format!("{OFF_TRADE_TAG}{origin}"));
+    match crate::brain_succession::succeed_goal(life, live, false) {
+        Some(label) => crate::logln!("brain {}: next goal {label} (after giving back {origin})", life.account),
+        None => crate::logln!("brain {}: nothing drawable after giving back {origin} (see the reason above)", life.account),
+    }
+    lifescape_planner::normalize(life);
+    true
+}
+
 /// Everything `account`'s bid answer posted ends: the lot's claim and
 /// its runs' claims, its purchases, its engaged seats and its launch
 /// seat (review 2026-11-20: a role switch to market maker, an operator

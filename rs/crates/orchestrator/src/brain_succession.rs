@@ -177,7 +177,8 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     let level_of = |skill: &str| live_level(live, skill);
     // Producers respond to bids (point 7): a public bid this bot can make
     // at a profit worth twice its time preempts the milestone, the
-    // ambition untouched (`brain_bids`, `planner::bid_response`).
+    // ambition untouched (`brain_bids`, `planner::bid_response`); only in
+    // the bot's own trade (`planner::bid_trade`, 2026-11-20).
     // The alchemist (operator, 2026-11-18) answers no bid: its alchemy
     // first, else the planner's money that funds its buys.
     let alcher = lifescape_planner::is_alcher(life);

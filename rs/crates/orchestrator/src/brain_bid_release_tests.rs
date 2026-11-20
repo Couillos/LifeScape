@@ -122,3 +122,30 @@ fn a_restart_re_engages_and_a_freed_board_holds_nothing() {
     milestone.goal_origin = Some("m1".to_string());
     assert!(!super::reengage_with(&milestone, &swamp), "only a bid goal holds seats");
 }
+
+/// `bid_trade` on the persisted state (live 2026-11-20: 60 of 63 bots
+/// on answers drawn before the rule): the priest's mithril ore answer is
+/// off its trade, given back at once (no wait), no ban, back on the
+/// priest's milestones; a running node decides first; a miner keeps it.
+#[test]
+fn an_answer_off_the_trade_is_given_back_to_the_ambition() {
+    let account = "offtrade_lily_north";
+    let mut life = lily(account, now_secs() - 5);
+    crate::market_claims::claim(account, "offtrade_mithril_ore", 93, 3_600);
+    let mut running = life.clone();
+    running.active = Some("n1401".to_string());
+    assert!(!super::release_off_trade(&mut running, &live()), "a run's report decides first");
+    assert!(super::release_off_trade(&mut life, &live()), "off the priest's trade");
+    let status = life.nodes.iter().find(|node| node.id == "n1401").map(|node| node.status.clone());
+    assert_eq!(status, Some(NodeStatus::Abandoned), "its work stops");
+    let origin = life.goal_origin.clone().expect("a new goal");
+    assert!(life.ambition.as_ref().is_some_and(|held| held.milestones.iter().any(|stone| stone.id == origin)), "back on the priest's milestones: {origin}");
+    assert!(!life.history.iter().any(|entry| entry.outcome.starts_with("ban:") || entry.outcome.starts_with("stuck:")), "nothing banned: {:?}", life.history);
+    assert!(life.history.iter().any(|entry| entry.outcome == format!("{}bid:mithril_ore", super::OFF_TRADE_TAG)), "recorded");
+    assert_eq!(crate::market_claims::claimed_by_others("someone_else").get("offtrade_mithril_ore"), None, "the lot's claim is freed");
+    assert!(!super::release_off_trade(&mut life, &live()), "once");
+    let mut miner = lily("offtrade_miner", now_secs() - 5);
+    miner.ambition = new_ambition("miner", "need", &BotNow { level_of: &|_| 30, coins: 0, held: &|_| 0 }, 7, &[], Stamp { tick: 0, secs: now_secs() - 400_000 }).ok();
+    assert!(!super::release_off_trade(&mut miner, &live()), "ore is the miner's trade");
+    assert_eq!(miner.goal_origin.as_deref(), Some("bid:mithril_ore"));
+}

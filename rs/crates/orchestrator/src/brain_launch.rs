@@ -146,6 +146,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if !quoting && crate::brain_bid_release::release_blocked_bid(&mut life, &live) {
         dirty = true;
     }
+    // An answer off the bot's trade (drawn before `bid_trade`) is given
+    // back, the need-drawn ambition drawn again (2026-11-20).
+    if !quoting && crate::brain_bid_release::release_off_trade(&mut life, &live) {
+        dirty = true;
+    }
     // After a daemon restart, an open bid answer holds its seats again.
     if !quoting {
         crate::brain_bid_release::reengage_after_restart(&life, &live);

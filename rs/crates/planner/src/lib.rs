@@ -16,6 +16,7 @@ pub mod ambition_review;
 pub mod bans;
 pub mod alchemy;
 pub mod bid_release;
+pub mod bid_trade;
 pub mod bid_response;
 pub mod bans_scope;
 pub mod catalog;
