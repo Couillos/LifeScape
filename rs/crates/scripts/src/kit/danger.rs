@@ -27,14 +27,15 @@ pub struct Threat {
 }
 
 /// Server rule (engine `Npc.ts` hunt check): a hunter turns passive only
-/// when `player.combatLevel > vislevel * 2`, and never in the Wilderness.
+/// when `player.combatLevel > vislevel * 2`, and never in the Wilderness
+/// (where the same line is the brain's site requirement instead).
 fn threatens(our_combat: Option<u8>, vislevel: i64) -> bool {
     our_combat.is_none_or(|ours| i64::from(ours) <= vislevel * 2)
 }
 
 /// Wilderness, the engine's own line (`gamedata::danger::in_wilderness`:
 /// the surface from z 3520 and the dungeons from z 9920): hunters there
-/// attack every combat level. The rest of the underground band (the
+/// attack every combat level (counted up to the site requirement). The rest of the underground band (the
 /// Edgeville dungeon on the way to the giants) follows the passive rule.
 pub(crate) fn in_wilderness(spawn_x: i64, spawn_z: i64, level: i64) -> bool {
     knowledge::danger::in_wilderness(spawn_x, spawn_z, level)
@@ -70,7 +71,15 @@ pub fn threats_for(our_combat: Option<u8>, level: i64) -> Vec<Threat> {
         let name = entry.name.unwrap_or("?");
         let radius = entry.huntrange + knowledge::npc_ranges::wander_range(name) + DANGER_MARGIN;
         for spawn in entry.spawns {
-            let aggressive = if in_wilderness(spawn.x, spawn.z, spawn.level) { entry.vislevel >= LETHAL_LEVEL } else { dangerous(our_combat, entry.vislevel) };
+            // Wilderness: the hunter attacks every level (engine), yet the
+            // zone is never refused (user 2026-11-16): a lethal hunter
+            // counts until the bot reaches the brain's requirement
+            // (`gamedata::danger::passive_from`, twice its level plus one).
+            let aggressive = if in_wilderness(spawn.x, spawn.z, spawn.level) {
+                entry.vislevel >= LETHAL_LEVEL && threatens(our_combat, entry.vislevel)
+            } else {
+                dangerous(our_combat, entry.vislevel)
+            };
             if spawn.level == level && aggressive {
                 out.push(Threat { x: spawn.x, z: spawn.z, radius, name });
             }
@@ -166,23 +175,37 @@ mod tests {
         assert!(covering(&threats_for(Some(15), 0), 3085, 3230).is_none(), "combat 15 is ignored (15 > 2 x 7)");
     }
 
-    /// In the Wilderness the passive rule does not apply: a combat-30 bot
-    /// is still a target for the level-7 dark wizards up there.
+    /// The Wilderness is no refused zone (user 2026-11-16): its hunters
+    /// count up to the combat the brain requires for the site
+    /// (`gamedata::danger::passive_from`, twice their level plus one),
+    /// like the surface ones. Live 2026-11-20: 981 « no coal mined » on
+    /// the Edgeville wild coal (3103,3565) and the Dark Warriors coal: a
+    /// combat-54 bot sent there by `site_requirement` saw every rock
+    /// under the level-22 armed skeletons' square, « no rock spot » until
+    /// the stall bound. A combat-30 bot stays a target of the level-22
+    /// skeletons; at the site's requirement, no rock is covered.
     #[test]
-    fn wilderness_hunters_ignore_the_two_times_rule() {
-        let strong = threats_for(Some(30), 0);
-        assert!(strong.iter().any(|threat| threat.z >= 3520), "wilderness hunters stay dangerous for combat 30");
+    fn wilderness_hunters_count_up_to_the_site_requirement() {
+        assert!(covering(&threats_for(Some(30), 0), 3103, 3565).is_some_and(|threat| threat.name == "skeleton_armed"));
+        for (x, z) in [(3103, 3565), (3104, 3567), (3105, 3569), (3104, 3570), (3018, 3586), (3021, 3587), (3015, 3591)] {
+            let requirement = lifescape_gamedata::danger::required_combat_at(i64::from(x), i64::from(z), 0);
+            assert!(requirement < lifescape_gamedata::danger::NEVER, "({x},{z}) has a requirement");
+            let threat = covering(&threats_for(Some(requirement), 0), x, z);
+            assert!(threat.is_none(), "combat {requirement} meets ({x},{z}) yet {threat:?} covers it");
+            assert!(covering(&threats_for(Some(requirement - 1), 0), x, z).is_some(), "combat {} is under ({x},{z})'s requirement", requirement - 1);
+        }
     }
 
     /// The Edgeville dungeon below z 9920 is no Wilderness (engine line):
     /// its level-22 skeletons on the trapdoor walk to the giants hunt a
     /// combat-44 bot, ignore a combat-46 one; past the wild gate the
-    /// chaos druids hunt everyone.
+    /// chaos druids (level 13) hunt up to the Wilderness requirement.
     #[test]
     fn dungeon_hunters_follow_the_passive_rule() {
         assert!(covering(&threats_for(Some(44), 0), 3121, 9908).is_some_and(|threat| threat.name == "skeleton_armed"));
         assert!(covering(&threats_for(Some(46), 0), 3121, 9908).is_none_or(|threat| threat.name != "skeleton_armed"));
-        assert!(covering(&threats_for(Some(90), 0), 3109, 9931).is_some_and(|threat| threat.name == "chaos_druid"));
+        assert!(covering(&threats_for(Some(26), 0), 3109, 9931).is_some_and(|threat| threat.name == "chaos_druid"));
+        assert!(covering(&threats_for(Some(90), 0), 3109, 9931).is_none_or(|threat| threat.name != "chaos_druid"));
     }
 
     /// A high-level bot is not a target: vislevel 7 wizards ignore
