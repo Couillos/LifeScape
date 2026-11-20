@@ -740,17 +740,21 @@ la méthode.
 - Cerveau (`brain_cool::on_depleted`, nœud comme filler) : méthode@site
   refroidi pour ce bot pendant `<ticks>` (jamais doublé : les nœuds
   reviennent après), aucun échec, blocage ni ban ; la résolution suivante
-  choisit l'autre site. La règle de foule (au moins autant de joueurs que
-  de roches ⇒ `contended:`) passe avant.
+  choisit l'autre site. La foule allonge l'attente (`deplete::queued_wait`) :
+  chaque repousse sert autant de joueurs qu'il y a de rochers, les autres
+  joueurs autour passent devant ; l'attente totale est comparée à la marche.
 
 ## Sites encombrés, enclumes, camps (2026-11-19)
 
-- Minage : tous les rochers du palier épuisés avec au moins autant
-  d'autres joueurs autour que de rochers (`kit::mine::crowded`,
-  `site::players_near`) : `Blocked{contended:…}` tout de suite, le
-  cerveau refroidit le site et en choisit un autre (décision
-  utilisateur : « si y'a trop de joueurs il faut changer de spot » ;
-  live : 17 mineurs sur les 4 rochers d'adamantite ouverts).
+- Minage : tous les rochers du palier épuisés au milieu d'autres
+  joueurs (`site::players_near`) : l'attente compte un tour de repousse
+  par groupe de joueurs aussi nombreux que les rochers
+  (`deplete::queued_wait`), puis la règle « attendre ou changer de
+  site » décide (décisions utilisateur : « si y'a trop de joueurs il
+  faut changer de spot », 2026-11-19, et la marche contre l'attente,
+  2026-11-20). Live 2026-11-20 17:43-18:43 CET : l'ancien renvoi
+  immédiat (`contended:` dès autant de joueurs que de rochers) faisait
+  431 renvois par heure contre 148, sur des sites de charbon tous pleins.
 - Enclume : les cases d'accès sont classées par vrai coût de marche
   (`skill_walk::refine_walking`), celles que la navigation déclare
   injoignables écartées dès qu'une autre l'est (`kit::anvil::

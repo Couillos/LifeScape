@@ -199,28 +199,25 @@ impl crate::kit::load::LoopOps for MineOps<'_> {
         }
     }
 
-    /// Every rock of the tier mined out: a crowd moves on (user
-    /// 2026-11-19), else the soonest respawn against the walk to the
-    /// brain's other site plus its own wait (user 2026-11-20).
+    /// Every rock of the tier mined out: the soonest respawn, lengthened
+    /// by the players around (`deplete::queued_wait`, user 2026-11-19: a
+    /// crowd moves on), against the walk to the brain's other site plus
+    /// its own wait (user 2026-11-20).
     fn on_no_spot(&mut self, bot: &mut Bot, state: &mut crate::kit::load::LoopState) -> Result<crate::kit::load::NoSpot, ScriptError> {
         use crate::kit::deplete::DepletedChoice;
         use crate::kit::load::NoSpot;
         let Some((tier, rocks)) = self.depleted.take() else { return Ok(NoSpot::Idle) };
-        // Too many players for the rocks (user 2026-11-19): the brain
-        // moves the bot to another site, never a long respawn wait in a
-        // crowd.
-        if crowded(crate::kit::site::players_near(bot), rocks.len()) {
-            if let Some(contended) = crate::kit::site::contended_error(bot) {
-                bot.log(&format!("{} {} rocks mined out among {} players: changing spot", rocks.len(), tier.product, crate::kit::site::players_near(bot)));
-                return Err(contended);
-            }
-        }
         let now = bot.world.ticks;
         let rate = rock_rate(&tier);
         for rock in &rocks {
             self.clock.observe(*rock, true, now);
         }
-        let Some(wait_here) = self.clock.soonest(&rocks, rate, now) else { return Ok(NoSpot::Idle) };
+        let Some(soonest) = self.clock.soonest(&rocks, rate, now) else { return Ok(NoSpot::Idle) };
+        let others = crate::kit::site::players_near(bot);
+        let wait_here = crate::kit::deplete::queued_wait(soonest, rate, others, rocks.len());
+        if wait_here > soonest {
+            bot.log(&format!("{} {} rocks mined out among {others} players: respawn {soonest}t, my turn in {wait_here}t", rocks.len(), tier.product));
+        }
         let (clock, bank) = (&mut *self.clock, self.bank);
         let choice = crate::kit::deplete::decide(bot, &tier.product, rocks.len(), wait_here, |bot, site| site_rocks_wait(bot, &tier, bank, site, clock));
         if let (DepletedChoice::Move(_), Some(site)) = (choice, bot.assigned_site) {
@@ -358,13 +355,6 @@ fn site_rocks_wait(bot: &mut Bot, tier: &knowledge::rocks::RockTier, bank: &know
     clock.soonest(&rocks, rock_rate(tier), now).unwrap_or(0)
 }
 
-/// True when the other players around (`players`) are at least as many
-/// as the site's rocks of the tier (`rocks`): a crowd, the bot changes
-/// spot instead of waiting a respawn (user 2026-11-19).
-fn crowded(players: usize, rocks: usize) -> bool {
-    players >= rocks.max(1)
-}
-
 pub fn mine_load(
     bot: &mut Bot,
     tiers: &[knowledge::rocks::RockTier],
@@ -402,20 +392,6 @@ pub fn mine_load(
 
 #[cfg(test)]
 mod tests {
-    /// User 2026-11-19 (« si y'a trop de joueurs il faut changer de
-    /// spot »): 17 miners on the 4 open adamantite rocks waited out the
-    /// long respawns. Rocks mined out with as many other players as rocks
-    /// around: the site is crowded, the bot moves on; fewer players than
-    /// rocks, the respawn is worth the wait.
-    #[test]
-    fn as_many_players_as_rocks_is_a_crowd() {
-        assert!(super::crowded(2, 2));
-        assert!(super::crowded(5, 2));
-        assert!(!super::crowded(1, 2));
-        assert!(!super::crowded(0, 1));
-        assert!(super::crowded(1, 0), "no rock left at all");
-    }
-
     use super::rock_stands;
     use crate::kit::harvest::operable_stand;
 

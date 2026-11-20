@@ -104,6 +104,19 @@ pub enum DepletedChoice {
     Move(OtherSite),
 }
 
+/// Pure: the wait for a free rock among `others` players on the same
+/// depleted rocks (live 2026-11-20 17:43 -> 18:43 CET: the crowd rule
+/// sent every miner on, contended blocks 148 -> 431 an hour). Each
+/// respawn round serves `nodes` players, the others take the first
+/// rounds: the soonest respawn plus one full rate per round ahead. The
+/// crowd lengthens the wait, the walk to the other site decides (user
+/// 2026-11-19 « trop de joueurs, changer de spot », 2026-11-20 « si la
+/// marche est plus longue que l'attente, on attend »).
+pub fn queued_wait(soonest: u64, rate: u64, others: usize, nodes: usize) -> u64 {
+    let rounds = (others / nodes.max(1)) as u64;
+    soonest.saturating_add(rate.saturating_mul(rounds))
+}
+
 /// Pure: wait `wait_here` ticks on the spot when it is shorter than or
 /// equal to the walk to the other site plus that site's own wait; move
 /// otherwise. No other site (none open, or no route to it): wait.
@@ -156,7 +169,7 @@ pub fn decide(bot: &mut Bot, resource: &str, nodes: usize, wait_here: u64, wait_
 
 #[cfg(test)]
 mod tests {
-    use super::{depleted_choice, depleted_error, DepletedChoice, DepletionClock, OtherSite};
+    use super::{depleted_choice, depleted_error, queued_wait, DepletedChoice, DepletionClock, OtherSite};
     use crate::ScriptError;
 
     /// User 2026-11-20 (adamantite): two rocks mined out on arrival (the
@@ -195,6 +208,22 @@ mod tests {
         assert_eq!(clock.remaining((2, 2), 800, 1_300), 0, "due now");
         assert_eq!(clock.remaining((2, 2), 800, 2_000), 800, "overdue: mined again unseen, the full rate");
         assert_eq!(clock.soonest(&[], 800, 0), None);
+    }
+
+    /// Eight coal rocks (100-tick respawn) mined out: alone or with fewer
+    /// players than rocks, the soonest respawn; eight others, one round
+    /// more; seventeen, two. The other site 142 walk ticks away: eight
+    /// others wait (100 + 0), seventeen move (200 + 0 > 142).
+    #[test]
+    fn a_crowd_lengthens_the_wait_and_the_walk_decides() {
+        assert_eq!(queued_wait(0, 100, 0, 8), 0);
+        assert_eq!(queued_wait(30, 100, 7, 8), 30);
+        assert_eq!(queued_wait(0, 100, 8, 8), 100);
+        assert_eq!(queued_wait(0, 100, 17, 8), 200);
+        assert_eq!(queued_wait(0, 800, 3, 0), 2_400, "no rock counted: one per round");
+        let other = OtherSite { site: (3044, 9737, 0), walk_ticks: 142, wait_there: 0 };
+        assert_eq!(depleted_choice(queued_wait(0, 100, 8, 8), Some(other)), DepletedChoice::Wait(100));
+        assert_eq!(depleted_choice(queued_wait(0, 100, 17, 8), Some(other)), DepletedChoice::Move(other));
     }
 
     #[test]
