@@ -135,6 +135,13 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         let mut head = fight_head(spot, node);
         head.insert(1, "--spell".to_string());
         head.insert(2, spell);
+        // User 2026-11-20: a climb casts the spell its XP per cost chose;
+        // a fight for anything else (drops, coins, a kill) the strongest
+        // spell its runes allow, the next one down when they run out
+        // (`scripts::kit::strike`).
+        if !matches!(node.kind, NodeKind::ReachLevel { .. } | NodeKind::ReachCombat { .. }) {
+            head.insert(3, "--best-spell".to_string());
+        }
         ("magic".to_string(), head)
     } else if let Some(gem) = method.strip_prefix("cut:") {
         // The script eats the uncut stone (`gem` recipe input).
@@ -609,6 +616,27 @@ mod tests {
         assert!(!args.contains(&"--level".to_string()), "combat level is no skill, got {args:?}");
         let (_, args) = map_method("fight:melee/chickens", &obtain(), None).expect("farm maps");
         assert!(!args.contains(&"--level".to_string()));
+    }
+
+    /// User 2026-11-20 (« s'il veut combattre alors le meilleur sort
+    /// dispo avec les runes dispo »): a magic fight that climbs a level
+    /// (a level or a combat climb: XP per cost chose its spell) casts that
+    /// spell exactly; any other (a drop, coins, a quest's kill) carries
+    /// `--best-spell`: the strongest spell its runes allow, the next one
+    /// down when they run out.
+    #[test]
+    fn a_magic_fight_for_combat_casts_its_best_spell_a_climb_its_own() {
+        let climb = Node::new("n4", NodeKind::ReachLevel { skill: "magic".to_string(), level: 50 }, Vec::new(), 50);
+        let (_, args) = map_method("fight:magic/earth_strike/cows", &climb, None).expect("climb maps");
+        assert!(args.windows(2).any(|window| window == ["--spell", "earth_strike"]) && !args.contains(&"--best-spell".to_string()), "{args:?}");
+        let combat = Node::new("n6", NodeKind::ReachCombat { level: 40 }, Vec::new(), 40);
+        let (_, args) = map_method("fight:magic/earth_strike/cows", &combat, None).expect("combat climb maps");
+        assert!(!args.contains(&"--best-spell".to_string()), "{args:?}");
+        let money = Node::new("n7", NodeKind::MakeMoney, Vec::new(), 1);
+        let (_, args) = map_method("fight:magic/fire_bolt/hill_giants", &money, None).expect("money maps");
+        assert!(args.windows(2).any(|window| window == ["--spell", "fire_bolt"]) && args.contains(&"--best-spell".to_string()), "{args:?}");
+        let (_, args) = map_method("fight:magic/fire_bolt/hill_giants", &obtain(), None).expect("drop maps");
+        assert!(args.contains(&"--best-spell".to_string()), "{args:?}");
     }
 
     /// b8jxrdd2 (live 2026-11-13): a trout quota launched a bare

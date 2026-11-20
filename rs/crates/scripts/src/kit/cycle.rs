@@ -124,9 +124,12 @@ pub struct TaskSpec {
     pub allow_boat: bool,
     /// Hunter zones allowed (`wild`, woodcut only today).
     pub allow_wild: bool,
-    /// Spell the brain sized the runes for (`--spell`, magic): cast
-    /// exactly this one, never the strongest the level unlocks.
+    /// Spell the brain sized the runes for (`--spell`, magic): a climb
+    /// casts exactly this one.
     pub spell: Option<String>,
+    /// Combat intent (`--best-spell`): the strongest spell the runes
+    /// allow, the next one down when they run out (`kit::strike`).
+    pub best_spell: bool,
     /// Uniform the guild door checks (`--wear`, repeatable): worn before
     /// the run walks to its site (`kit::uniform`).
     pub wear: Vec<String>,
@@ -153,6 +156,7 @@ impl TaskSpec {
             allow_boat: false,
             allow_wild: false,
             spell: None,
+            best_spell: false,
             wear: Vec::new(),
         }
     }
@@ -195,7 +199,7 @@ pub fn parse_order(script: &'static str, args: &[String]) -> Result<TaskSpec, Sc
 pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, ScriptError> {
     let usage = || {
         ScriptError::Usage(format!(
-            "{activity} [count|spot...] [toll] [boat] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--alt-site X,Z,LEVEL] [--want ITEM N] [--use ITEM N]... [--spell SPELL] [--wear ITEM]... [--skip-loot NAME]... [--allow-market] [--no-shop]"
+            "{activity} [count|spot...] [toll] [boat] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--alt-site X,Z,LEVEL] [--want ITEM N] [--use ITEM N]... [--spell SPELL] [--best-spell] [--wear ITEM]... [--skip-loot NAME]... [--allow-market] [--no-shop]"
         ))
     };
     let mut spec = TaskSpec::named(activity);
@@ -325,6 +329,7 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
                 spec.spell = Some(args.get(index + 1).cloned().filter(|spell| !spell.is_empty() && !spell.starts_with("--")).ok_or_else(usage)?);
                 index += 2;
             }
+            "--best-spell" => (spec.best_spell, index) = (true, index + 1),
             "--wear" => {
                 spec.wear.push(args.get(index + 1).cloned().filter(|item| !item.is_empty() && !item.starts_with("--")).ok_or_else(usage)?);
                 index += 2;

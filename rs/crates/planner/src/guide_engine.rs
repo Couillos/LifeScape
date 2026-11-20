@@ -424,7 +424,8 @@ impl<'a> Engine<'a> {
     }
 
     /// The F2P shops' window of an object (`GuideWorld::shop_buy`), read
-    /// once per build.
+    /// once per build; empty when the market proves the keepers sold out
+    /// (`shop_drain::keepers_sold_out`).
     pub fn shop_steps(&self, item: &str) -> Vec<(f64, f64, ShopNeed)> {
         self.shop_steps_shared(item).to_vec()
     }
@@ -434,7 +435,13 @@ impl<'a> Engine<'a> {
         if let Some(known) = self.shops.borrow().get(item) {
             return known.clone();
         }
-        let found = std::rc::Rc::new((self.world.shop_buy)(item));
+        let window = (self.world.shop_buy)(item);
+        // Keepers the market proves sold out sell nothing (`shop_drain`).
+        let quote = self.quote_shared(item);
+        let prices: Vec<f64> = window.iter().map(|(price, _, _)| *price).collect();
+        // A window without end (no stock bound) never empties.
+        let finite = window.iter().all(|(_, units, _)| units.is_finite());
+        let found = std::rc::Rc::new(if finite && crate::shop_drain::keepers_sold_out(quote.price, quote.traded, &prices) { Vec::new() } else { window });
         self.shops.borrow_mut().insert(item.to_string(), found.clone());
         found
     }

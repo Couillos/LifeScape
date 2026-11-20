@@ -156,6 +156,40 @@ construction à la demande) :
   d'acier de barres achetées (3,7 XP/tick, −1,3) ; 40 060 minerais de
   cuivre déposés pour une tranche. Mesure de la flotte : ~0,1 XP de forge
   par tick d'un forgeron ;
+- magie et distance : xp/coût à l'entraînement (utilisateur 2026-11-20,
+  « si le bot veut s'entraîner alors il faut privilégier l'xp/coût et
+  s'il veut combattre alors le meilleur sort dispo avec les runes
+  dispo ») : un COMBAT d'entraînement (`fight:`) paie ses runes et ses
+  flèches quoi que rapporte son butin (terme pièces = max(dépense nette,
+  runes + flèches au prix d'achat de la ligne),
+  `train_score::fight_consumables_per_xp`) ; alchimie, superheat,
+  enchantements gardent leur bilan (leurs pièces sont leur produit). Le
+  prix d'achat d'une rune est ce qu'elle coûte MAINTENANT : asks, puis
+  marchand en stock, puis prix courant ; un marchand que le marché
+  prouve vide (objet échangé au-dessus de son prix le plus cher,
+  `planner::shop_drain::keepers_sold_out`) ne compte aucune unité dans
+  les guides (achat et disponibilité) ; l'obtention, elle, essaie encore
+  le marchand (le script voit la vraie étagère : un marché cher n'y
+  prouve rien, live : 179 flèches d'acier achetées chez Lowe quand le
+  marché les échangeait à ~300). Une rune que personne ne vend (asks + marchands + tenue <
+  lot) rend la ligne infaisable, jamais gratuite. Constat live : chaque
+  mage montait par crumble undead sur les squelettes de la Wilderness
+  (2,3 XP/tick, butin > runes au prix d'Aubury 15) quand les runes du
+  chaos s'échangeaient ~2 000 (2 sur les asks, Aubury et Betty vidés) :
+  « out of runes for crumble_undead … chaosrune » 79 fois par jour, temps
+  de magie de la flotte ~6 % → 0,3 %. Le combat (drops, argent, kill,
+  tout nœud autre que `reach_level`/`reach_combat`) lance `magic … --spell
+  <sort> --best-spell` : le script lance le sort le plus fort que ses
+  runes paient (dégât max puis niveau, cible morte-vivante pour crumble),
+  descend l'échelle quand elles manquent, banque si seule la banque en
+  paie un, bloqué sur les runes du dernier sort sinon
+  (`scripts::kit::strike::best_cast`) ; une montée lance son sort exact.
+  Un run de magie n'ouvre plus jamais par le clic Attaque (`kit::foes::
+  attack_nearest`) : il lance son sort (live : ida_reed, 92 XP d'attaque
+  et 0 de magie sous crumble undead, runes restées en banque). Distance :
+  le kit tire déjà les meilleures flèches que l'arc accepte et passe aux
+  suivantes (`kit::gear::refill_quiver`) ; le choix de la flèche à
+  l'entraînement reste celui du kit ;
 - choix : le tirage R7 (section suivante, `train_score::pick`) sur les
   mêmes lignes classées (`best` = tête de l'ordre du score seul) ;
   consommables dont le bot tient moins d'une action

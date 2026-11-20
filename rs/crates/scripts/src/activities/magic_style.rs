@@ -158,6 +158,10 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // its element wielded first.
     bot.combat_style = "magic".to_string();
     bot.combat_spell = ordered_spell(bot, spec.spell.as_deref())?;
+    // Combat intent (`--best-spell`, user 2026-11-20): the strongest spell
+    // the runes allow, the next one down when they run out (`kit::strike`);
+    // a climb casts the ordered spell exactly.
+    bot.combat_spell_best = spec.best_spell;
     let cast = bot.combat_spell.clone().unwrap_or_else(|| DAMAGE_SPELLS[0].0.to_string());
     // Ladder mode (user 2026-11-20): the camp follows the magic level,
     // the spell, the defence, hitpoints and food (`kit::ladder_hunt`);
@@ -170,7 +174,8 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
         return Err(crate::ScriptError::Usage(format!("{cast} cannot affect the NPCs of {}", unfit.join(","))));
     }
     crate::kit::magic::wield_staff_for(bot, &spell_runes(&cast))?;
-    require_combat_gear(bot, &cast)?;
+    // A combat-intent run starts on any spell pack + bank fund.
+    if !(bot.combat_spell_best && crate::kit::strike::any_spell_funded(bot)) { require_combat_gear(bot, &cast)?; }
     if ladder { return crate::kit::ladder_hunt::run_ladder(bot, &spec, no_bank, "magic"); }
     let picked: Vec<knowledge::combat_spots::CombatSpot> = {
         let named = crate::kit::fight::named_spots(&spots)?;

@@ -73,6 +73,7 @@ pub mod quests;
 pub mod rare_items;
 pub mod replan;
 pub mod resolve_obtain;
+pub mod shop_drain;
 pub mod shop_site;
 pub mod side_goal;
 pub mod skeleton_deps;

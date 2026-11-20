@@ -466,7 +466,12 @@ pub fn fight(
             engaged_at = bot.world.ticks;
             attempts = 0;
             cold_clicks = 0;
-            let _ = slot;
+            // Magic opens with its cast (`attack_nearest` clicks no
+            // Attack): runes short, the bank trip or the block comes
+            // before the foe is touched.
+            if bot.combat_style == "magic" && !attack_npc(bot, slot, no_bank)? {
+                return Ok((kills, true, false));
+            }
         } else if (bot.world.x - target.0).abs() + (bot.world.z - target.1).abs() > 8 {
             // Dead socket, not an empty field: typed instead of pacing.
             if let Err(error) = bot.approach(target.0, target.1, bot.world.level, 1, 1500) {

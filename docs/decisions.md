@@ -1981,3 +1981,34 @@ repoussent (roches de tous les minerais, arbres).
 Rejeté : plafond fixe de l'attente (300 ticks, l'ancien guet) ; échec
 compté quand le site est vide au lancement ; refroidissement doublé comme
 la contention (les nœuds reviennent d'eux-mêmes).
+
+## 2026-11-20 — Magie : xp/coût à l'entraînement, meilleur sort au combat
+
+Décision (utilisateur 2026-11-20) : « pour la magie, si le bot veut
+s'entraîner alors il faut privilégier l'xp/coût et s'il veut combattre
+alors le meilleur sort dispo avec les runes dispo » ; étendue à la
+distance (flèches).
+1. Entraînement (`reach_level`, `reach_combat`) : un combat paie ses
+   runes et flèches quel que soit son butin
+   (`train_score::fight_consumables_per_xp`), au prix d'achat actuel.
+2. Marchand vidé : un objet échangé au-dessus du prix le plus cher de
+   tous ses marchands prouve leurs étagères vides (un bot achète au
+   marchand dès que les asks coûtent plus, `resolve_obtain` règle 0) ;
+   ils ne comptent alors aucune unité dans les guides
+   (`shop_drain::keepers_sold_out`, `Engine::shop_steps`). Les données
+   serveur ne donnent que le stock de base, jamais ce que la flotte a
+   laissé. L'obtention garde le marchand : son script lit l'étagère
+   réelle (179 flèches d'acier achetées chez Lowe alors que le marché
+   les échangeait à ~300 : l'indice n'y est pas une preuve).
+3. Combat (tout autre nœud) : `--best-spell`, sort le plus fort payé par
+   les runes, repli vers le suivant, banque, puis blocage typé.
+4. Un run de magie ne clique jamais Attaque (le serveur frapperait au
+   bâton) ; il lance son sort dès l'approche.
+Rejeté : relire le stock live des marchands (aucune lecture serveur hors
+d'une boutique ouverte, et l'état partagé changerait à chaque achat) ;
+liste de sorts « chers » écrite à la main.
+Tests : `guide_money::tests::magic::*`, `train_score::tests::a_training_
+fight_pays_its_runes_whatever_its_drops`, `shop_drain::tests`,
+`mapping::tests::a_magic_fight_for_combat_casts_its_best_spell_a_climb_
+its_own`, `kit::strike::tests::{a_combat_run_falls_back_to_the_best_
+spell_its_runes_fund, a_climb_never_swaps_its_spell}`.
