@@ -23,11 +23,14 @@ pub struct Observe {
     pub refusals: HashMap<(i32, i32), u8>,
     /// Consecutive gainless stump visits per spot.
     pub dudded: HashMap<(i32, i32), u8>,
+    /// Depletion stamps of the site's trees (`kit::deplete`): a felled
+    /// site waits its soonest regrow or moves.
+    pub clock: crate::kit::deplete::DepletionClock,
 }
 
 impl Observe {
     pub fn fresh() -> Observe {
-        Observe { respawn: HashMap::new(), stumped: HashMap::new(), refusals: HashMap::new(), dudded: HashMap::new() }
+        Observe { respawn: HashMap::new(), stumped: HashMap::new(), refusals: HashMap::new(), dudded: HashMap::new(), clock: crate::kit::deplete::DepletionClock::new() }
     }
 
     /// Fold one observed regrow wait into the product ETA. Observations

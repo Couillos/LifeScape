@@ -163,7 +163,7 @@ pub(crate) fn pick_rock_tier(tiers: &[knowledge::rocks::RockTier], level: i64) -
 /// Rock spawns for the tier's loc names around the anchor: the brain's
 /// site when it fixed one (any distance from the bank: the site IS the
 /// order), else within range of the bank.
-fn rock_tier_spawns(tier: &knowledge::rocks::RockTier, bank: &knowledge::banks::Bank, site: Option<(i32, i32, i32)>) -> Vec<(i32, i32)> {
+pub(crate) fn rock_tier_spawns(tier: &knowledge::rocks::RockTier, bank: &knowledge::banks::Bank, site: Option<(i32, i32, i32)>) -> Vec<(i32, i32)> {
     let (anchor_x, anchor_z, anchor_level, reach) = match site {
         Some((x, z, level)) => (i64::from(x), i64::from(z), i64::from(level), i64::from(SITE_RADIUS) * 2),
         None => (bank.x, bank.z, bank.level, NEAR_BANK_TILES),
@@ -189,7 +189,7 @@ fn rock_tier_spawns(tier: &knowledge::rocks::RockTier, bank: &knowledge::banks::
 /// rocks to watch when waiting out a respawn beats every walk.
 pub(crate) enum RockPick {
     Go(knowledge::rocks::RockTier, i32, i32),
-    Wait(knowledge::rocks::RockTier, Vec<(i32, i32)>, u64),
+    Wait(knowledge::rocks::RockTier, Vec<(i32, i32)>),
 }
 
 /// One rock of the pool: tile, Manhattan distance from the bot, and
@@ -277,7 +277,7 @@ pub(crate) fn pick_rock_spot(
         let respawn = knowledge::action_odds::rock_respawn(&tier.product).unwrap_or(0).max(0) as u64;
         match choose_rock(&pool, respawn) {
             RockChoice::Go((spot_x, spot_z)) => return Some(RockPick::Go(tier.clone(), spot_x, spot_z)),
-            RockChoice::Wait => return Some(RockPick::Wait(tier.clone(), depleted.iter().map(|cand| cand.pos).collect(), respawn)),
+            RockChoice::Wait => return Some(RockPick::Wait(tier.clone(), depleted.iter().map(|cand| cand.pos).collect())),
             RockChoice::Empty => {}
         }
     }

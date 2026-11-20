@@ -72,7 +72,7 @@ pub fn fight_spot(method: &str) -> Option<String> {
 
 /// Site family and resource a method works (`None`: no site in the data,
 /// e.g. smithing at any anvil).
-fn method_sites(method: &str) -> Option<(&'static str, String)> {
+pub(crate) fn method_sites(method: &str) -> Option<(&'static str, String)> {
     let (kind, resource) = if let Some(fish) = method.strip_prefix("gather:fishing/") {
         ("fishing", fish)
     } else if let Some(ore) = method.strip_prefix("gather:mining/") {

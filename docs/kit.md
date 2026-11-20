@@ -386,9 +386,8 @@ Site, stands et trajets (2026-11-13, erreurs du lot de 21h19) :
   Rimmington perdait ~200 ticks de « no rock spot » par tour de six
   roches) : le bot passe à la roche debout la plus proche du site, sauf
   si la repousse (`action_odds::rock_respawn`, borne haute) bat la marche
-  vers elle ; tout vidé ⇒ il regarde le flux jusqu'à la première repousse
-  (`mine::wait_rock_respawn`, ≤ repousse + 10, plafond 300), jamais un
-  clic sur une roche vide. Un « no ore » que le flux ne confirme pas
+  vers elle ; tout vidé ⇒ règle du site épuisé ci-dessous (attente sur
+  place ou changement de site), jamais un clic sur une roche vide. Un « no ore » que le flux ne confirme pas
   garde le ban (jamais de boucle de clics). Mesure `admin`
   `farm:iron_ore 20` (Rimmington) : 43,7 → 11,5 ticks par minerai au site,
   rapport 1029 → 491 ticks, sans alerte.
@@ -705,6 +704,44 @@ le meilleur membre verrouillé ; intrant : l'objet). Le cerveau
 famille (raison `need_held`) et relance le nœud sans bloc compté
 (`locked_released`) ; aucune annonce retirée (verrou d'un échange en
 cours) : le besoin nu suit la voie usuelle.
+
+## Site épuisé : attendre ou changer de site (2026-11-20)
+
+Décision utilisateur : « pour l'adamantite, ça dépend du temps de marche
+pour accéder à un autre site, si c'est plus long que l'attente, alors on
+attend » — étendue à toute ressource dont les nœuds se vident et
+repoussent (roches de tous les minerais, arbres). Live : ~82 échecs par
+jour sur l'adamantite (3242,3165 et 3300,3318) ; un lancement sur des
+roches vides lisait la repousse (800 ticks) comme « no rock spot » le
+temps des 16 reprises (~250 ticks), échouait, et le cerveau refroidissait
+la méthode.
+
+- Le cerveau joint au lancement son site suivant pour la même ressource
+  (`--alt-site x,z,niv`, `planner::alt_site::alternative_site`) : le même
+  choix que sa résolution (sûr pour le niveau de combat, portes passées,
+  pas plein, pas refroidi), lu depuis le site, le site lui-même évité ;
+  site ouvert, péage ou bateau seulement si le prix est couvert (le
+  lancement suivant porte `toll`/`boat`), jamais pour l'eau,
+  l'essence ni un combat (`alt_site::depletes`).
+- Tous les nœuds du site vidés (`LoopOps::on_no_spot`, `kit::deplete`) :
+  attente ici = repousse restante du nœud le plus proche de revenir :
+  taux du serveur (`rock_respawnrate` ; arbre `respawnrate`, arbre normal
+  120 + random(80) ⇒ 199 au plus, `action_odds::tree_respawn_max`) moins
+  les ticks depuis que le bot l'a vu vidé (`DepletionClock`, mémoire du
+  run ; vidé sans l'avoir vu : le taux entier ; encore vide passé le taux
+  + 10 : horloge repartie). Autre site = marche planifiée jusqu'à lui
+  (`walk_costs`, ticks) + sa propre attente si le bot le voit vidé aussi
+  (sinon 0) ; aucune route : pas d'autre site.
+- Attente ≤ autre site (égalité comprise) : le bot attend sur place en
+  regardant le flux (≤ attente + 10 ticks, sans plafond, événements
+  traités, un coup reçu termine la charge pour les règles de blessure),
+  attente non comptée dans le budget de stagnation ; un arbre revenu perd
+  son ban court de souche. Sinon : `Blocked{depleted:<x>,<z>,<niv>,<ticks>}`.
+- Cerveau (`brain_cool::on_depleted`, nœud comme filler) : méthode@site
+  refroidi pour ce bot pendant `<ticks>` (jamais doublé : les nœuds
+  reviennent après), aucun échec, blocage ni ban ; la résolution suivante
+  choisit l'autre site. La règle de foule (au moins autant de joueurs que
+  de roches ⇒ `contended:`) passe avant.
 
 ## Sites encombrés, enclumes, camps (2026-11-19)
 

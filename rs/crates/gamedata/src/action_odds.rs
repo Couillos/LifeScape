@@ -125,6 +125,17 @@ pub fn tree_felling(product: &str) -> Option<(f64, f64)> {
     Some(if respawn == 0 { (1.0, NORMAL_TREE_RESPAWN_MEAN) } else { (1.0 / TREE_DEPLETE_ONE_IN, respawn as f64) })
 }
 
+/// Longest a felled tree yielding `product` stays a stump
+/// (`woodcutting.rs2`): its `respawnrate`, a normal tree's (rate 0)
+/// 120 + random(80) at most 199. `None` for no such tree.
+pub fn tree_respawn_max(product: &str) -> Option<i64> {
+    let respawn = *tables().tree_respawn.get(product)?;
+    Some(if respawn == 0 { NORMAL_TREE_RESPAWN_MAX } else { respawn })
+}
+
+/// Longest stump of a normal tree: 120 + random(80), random(80) < 80.
+pub const NORMAL_TREE_RESPAWN_MAX: i64 = 120 + 79;
+
 /// Mean stump ticks of a normal tree: 120 + random(80).
 pub const NORMAL_TREE_RESPAWN_MEAN: f64 = 120.0 + 79.0 / 2.0;
 /// A non-normal tree falls with one log in 8 (`$deplete_chance = 8`).
@@ -195,6 +206,8 @@ mod tests {
         assert_eq!(super::rock_respawn("blankrune"), None, "essence never depletes");
         assert_eq!(super::tree_felling("logs"), Some((1.0, 159.5)));
         assert_eq!(super::tree_felling("yew_logs"), Some((0.125, 200.0)));
+        assert_eq!(super::tree_respawn_max("logs"), Some(199));
+        assert_eq!(super::tree_respawn_max("yew_logs"), Some(200));
     }
 
     /// The dumped gem table is the server's (`mining.rs2`, read here

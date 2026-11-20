@@ -91,6 +91,18 @@ impl LoopState {
     }
 }
 
+/// What a failed pick does next (`LoopOps::on_no_spot`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoSpot {
+    /// Nothing known: the plain repick wait.
+    Idle,
+    /// Waited on the spot for a respawn: pick again at once.
+    Repick,
+    /// The wait broke on a hit: the load ends, the caller's hurt rules
+    /// take over.
+    EndLoad,
+}
+
 /// Pure outcome verdict: continue, load done, or abort.
 pub enum LoadExit {
     Continue,
@@ -199,6 +211,14 @@ pub trait LoopOps {
     /// the run cannot get, say): returned at once instead of 16 repicks.
     fn no_spot_error(&mut self, _bot: &mut Bot, _state: &LoopState) -> Option<ScriptError> {
         None
+    }
+    /// Nothing to pick: every node of the site may be depleted
+    /// (`kit::deplete`, user 2026-11-20): wait on the spot for the
+    /// soonest respawn (`Repick`, `EndLoad` on a hit), or a typed
+    /// `depleted:` block when the brain's other site is sooner. Default:
+    /// `Idle`, the plain repick wait.
+    fn on_no_spot(&mut self, _bot: &mut Bot, _state: &mut LoopState) -> Result<NoSpot, ScriptError> {
+        Ok(NoSpot::Idle)
     }
     /// Keep the current spot: tier upgrade switches and liveness re-probes
     /// drop it (banning when the old loop banned); default never drops.
@@ -333,6 +353,13 @@ pub fn run_load<Ops: LoopOps>(
                 if let Some(found) = ops.pick(bot, state) {
                     picked = Some(found);
                     break;
+                }
+                // Every node of the site depleted: the respawn against
+                // the walk to the brain's other site (`kit::deplete`).
+                match ops.on_no_spot(bot, state)? {
+                    NoSpot::Repick => continue,
+                    NoSpot::EndLoad => return Ok(false),
+                    NoSpot::Idle => {}
                 }
                 // Nothing to pick: a typed gap first (bait the run cannot
                 // get), then the brain's site, never an idle wait where

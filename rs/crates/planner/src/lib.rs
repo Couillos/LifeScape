@@ -8,6 +8,7 @@
 
 pub mod activity;
 pub mod alcher;
+pub mod alt_site;
 pub mod ambition;
 pub mod ambition_catalog;
 pub mod ambition_fleet;

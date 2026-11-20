@@ -189,6 +189,11 @@ pub struct Node {
     /// Site the brain sends the bot to (x, z, level), chosen at resolve
     /// from the game data for the bot's combat level (`pick_site`).
     pub site: Option<(i64, i64, i64)>,
+    /// The brain's next site for the same resource when `site`'s nodes
+    /// deplete and respawn (rocks, trees; `alt_site`, user 2026-11-20):
+    /// the launch carries it (`--alt-site`), the script weighs the walk
+    /// there against the respawn wait. Reset at every resolve.
+    pub alt_site: Option<(i64, i64, i64)>,
     /// The chosen site lies across the Al Kharid toll fence: the fare is
     /// budgeted (or Prince Ali Rescue makes it free) and the launch
     /// carries `toll` (`place_on_site`, `gamedata::toll`).
@@ -233,6 +238,7 @@ impl Node {
             revives: 0,
             last_error: String::new(),
             site: None,
+            alt_site: None,
             toll: false,
             boat: false,
             batch: 0,
@@ -470,6 +476,13 @@ fn node_to_value(node: &Node) -> Value {
                 None => Value::Null,
             },
         ),
+        (
+            "alt_site",
+            match node.alt_site {
+                Some((x, z, level)) => Value::Arr(vec![Value::Int(x), Value::Int(z), Value::Int(level)]),
+                None => Value::Null,
+            },
+        ),
         ("toll", Value::Bool(node.toll)),
         ("boat", Value::Bool(node.boat)),
         ("batch", Value::Int(node.batch)),
@@ -517,6 +530,11 @@ fn node_from_value(value: &Value) -> Option<Node> {
         revives: value.get("revives").as_i64().unwrap_or(0).clamp(0, i64::from(u32::MAX)) as u32,
         last_error: value.get("last_error").as_str().unwrap_or("").to_string(),
         site: value.get("site").as_arr().and_then(|cells| {
+            let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
+            Some((part(0)?, part(1)?, part(2)?))
+        }),
+        // Absent in files written before the depletion rule: none.
+        alt_site: value.get("alt_site").as_arr().and_then(|cells| {
             let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
             Some((part(0)?, part(1)?, part(2)?))
         }),

@@ -390,6 +390,13 @@ impl crate::kit::load::LoopOps for WoodOps<'_> {
         }
     }
 
+    /// Every tree of the brain's site felled: the soonest regrow against
+    /// the walk to its other site (`kit::tree_deplete`).
+    fn on_no_spot(&mut self, bot: &mut Bot, state: &mut crate::kit::load::LoopState) -> Result<crate::kit::load::NoSpot, ScriptError> {
+        self.level = learn_level(bot, WC_STAT, self.level);
+        crate::kit::tree_deplete::on_felled_site(bot, state, self.tiers, self.level, self.observe)
+    }
+
     fn keep_spot(
         &mut self,
         bot: &mut Bot,

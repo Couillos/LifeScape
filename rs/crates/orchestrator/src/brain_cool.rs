@@ -86,6 +86,33 @@ pub(crate) fn on_contended(life: &mut Life, method: &str, site: (i64, i64, i64))
     push_history(life, COOL_NODE, &cool_entry(&key, ticks, "contended: other players work every node"));
 }
 
+/// Tag a gatherer blocks with when every node of its site is depleted
+/// and the brain's other site is sooner than the respawn
+/// (`kit::deplete::DEPLETED_TAG`, user 2026-11-20).
+pub(crate) const DEPLETED_TAG: &str = "depleted:";
+
+/// The depleted site a block names and the ticks before its soonest
+/// respawn (`depleted:<x>,<z>,<level>,<ticks>`).
+pub(crate) fn depleted_site(needs: &[String]) -> Option<((i64, i64, i64), u64)> {
+    needs.iter().find_map(|need| {
+        let parts: Vec<i64> = need.strip_prefix(DEPLETED_TAG)?.split(',').filter_map(|part| part.trim().parse::<i64>().ok()).collect();
+        match parts.as_slice() {
+            [x, z, level, ticks] if *ticks >= 0 => Some(((*x, *z, *level), *ticks as u64)),
+            _ => None,
+        }
+    })
+}
+
+/// Cool a depleted site of `method` for the ticks its nodes need to
+/// respawn (user 2026-11-20): no failure, no ban, never longer each time
+/// (the rocks are back after the wait); the next resolve sends the bot
+/// to the other site the launch carried (`planner::alt_site`).
+pub(crate) fn on_depleted(life: &mut Life, method: &str, site: (i64, i64, i64), ticks: u64) {
+    let key = lifescape_planner::cooldown::cool_key(method, Some(site));
+    crate::logln!("brain {}: {key} depleted, site cooled {ticks} ticks for this bot (another site is sooner; no ban, no failure)", life.account);
+    push_history(life, COOL_NODE, &cool_entry(&key, ticks, "depleted: every node respawning, another site is sooner"));
+}
+
 /// Nodes waiting out a cooled method (tour 3 point 1): skipped by the
 /// launch pick like a parked buy, a filler works meanwhile.
 pub(crate) fn waiting(life: &Life) -> Vec<String> {
@@ -194,6 +221,23 @@ mod tests {
         super::on_contended(&mut life, "gather:mining/coal", (3298, 3317, 0));
         let last = life.history.last().map(|entry| entry.outcome.clone()).unwrap_or_default();
         assert!(last.starts_with(&format!("cool:gather:mining/coal@3298,3317,0|{}|", 2 * COOL_TICKS)), "{last}");
+    }
+
+    /// User 2026-11-20: a site whose every node respawns while another
+    /// site is sooner cools for the respawn only (never doubled), the
+    /// node stays open with no failure.
+    #[test]
+    fn a_depleted_site_cools_for_its_respawn() {
+        assert_eq!(super::depleted_site(&["depleted:3300,3318,0,800".to_string()]), Some(((3300, 3318, 0), 800)));
+        assert_eq!(super::depleted_site(&["contended:3300,3318,0".to_string()]), None);
+        assert_eq!(super::depleted_site(&["depleted:3300,3318,0".to_string()]), None, "the wait is part of the tag");
+        let mut life = life_with_blocked("missing:adamantite_ore");
+        super::on_depleted(&mut life, "gather:mining/adamantite_ore", (3300, 3318, 0), 800);
+        super::on_depleted(&mut life, "gather:mining/adamantite_ore", (3300, 3318, 0), 800);
+        let last = life.history.last().map(|entry| entry.outcome.clone()).unwrap_or_default();
+        assert!(last.starts_with("cool:gather:mining/adamantite_ore@3300,3318,0|800|depleted"), "{last}");
+        assert!(super::active(&life).iter().any(|key| key == "gather:mining/adamantite_ore@3300,3318,0"), "the site cooled");
+        assert_eq!(life.nodes[0].failures, 0);
     }
 
     #[test]

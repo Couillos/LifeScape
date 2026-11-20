@@ -103,10 +103,14 @@ pub(crate) fn fold_filler_report(life: &mut Life, node_id: &str, report: &Value)
             // filler sent back to the Wilderness big bones every ~8 min).
             let missing: Vec<String> = report.get("missing").as_arr().map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()).unwrap_or_default();
             let contended = crate::brain_cool::contended_site(&missing);
-            match contended {
+            let depleted = crate::brain_cool::depleted_site(&missing);
+            match (contended, depleted) {
                 _ if method == "?" => {}
-                Some(contended) => crate::brain_cool::on_contended(life, &method, site.unwrap_or(contended)),
-                None => {
+                // Every node respawning, another site sooner (user
+                // 2026-11-20): the site cools for the respawn only.
+                (_, Some((depleted, ticks))) => crate::brain_cool::on_depleted(life, &method, site.unwrap_or(depleted), ticks),
+                (Some(contended), None) => crate::brain_cool::on_contended(life, &method, site.unwrap_or(contended)),
+                (None, None) => {
                     crate::brain_cool::on_abandon(life, &method, site, &cause);
                 }
             }
