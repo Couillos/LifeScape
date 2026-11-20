@@ -222,6 +222,8 @@ fn work_spot(
     }
     let mut ring = operable_ring(tree_x, tree_z, foot_w, foot_l);
     ring.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
+    // Same rule as the rocks: a ring tile no route reaches is never walked.
+    let ring = crate::skill_walk::routed_stands(bot, ring);
     for tile in ring {
         if !stands.iter().any(|(known, _)| *known == tile) {
             stands.push((tile, true));
