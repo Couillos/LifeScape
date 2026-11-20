@@ -325,23 +325,12 @@ impl BotState<'_> {
     }
 }
 
-/// Highest level the life's ambition climbs each skill to: its ladder
-/// (`ambition_catalog::ladder_level`) and its open level milestones.
+/// Highest level the life's ambition climbs each skill to NOW: its open
+/// level milestones, never its ladder's top (`bid_reach::planned_levels`,
+/// 2026-11-20: a smith at 73 answered adamant platebodies, smithing 88,
+/// its training counted free because the ladder climbs to 90).
 pub fn planned_levels(life: &Life) -> Vec<(String, u8)> {
-    let Some(ambition) = life.ambition.as_ref() else { return Vec::new() };
-    let mut out: Vec<(String, u8)> = Vec::new();
-    for skill in lifescape_planner::GROUPS.iter().flat_map(|group| lifescape_planner::ambition_catalog::group_skills(group)) {
-        let level = lifescape_planner::ambition_catalog::ladder_level(&ambition.kind, skill);
-        if level > 0 {
-            out.push((skill.to_string(), level));
-        }
-    }
-    for stone in ambition.milestones.iter().filter(|stone| stone.status != lifescape_planner::MilestoneStatus::Done) {
-        if let lifescape_planner::Target::Level { skill, level } = &stone.target {
-            out.push((skill.clone(), *level));
-        }
-    }
-    out
+    lifescape_planner::bid_reach::planned_levels(life)
 }
 
 /// `orchestrator bid-why <account> <item>`: every stage of the bid

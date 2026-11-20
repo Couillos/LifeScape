@@ -254,6 +254,11 @@ pub(crate) fn draw_next_with(life: &mut Life, live: &Value, whole: bool) -> Opti
     // Opens the new goal in the history (`goal_closed` reads false), so
     // a goal met at once is closed before the next draw.
     push_history(life, "goal", &format!("{NEXT_TAG}{label}"));
+    // A bid answer weighed with the ambition's open milestones only
+    // (`bid_reach`, 2026-11-20): never given back as an old-rule answer.
+    if origin.as_deref().is_some_and(|side| side.starts_with(lifescape_planner::bid_response::BID_PREFIX)) {
+        push_history(life, "goal", lifescape_planner::bid_reach::PLANNED_RULE_TAG);
+    }
     Some(label)
 }
 

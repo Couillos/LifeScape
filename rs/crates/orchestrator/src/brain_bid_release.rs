@@ -82,6 +82,47 @@ pub(crate) fn release_off_trade(life: &mut Life, live: &Value) -> bool {
     true
 }
 
+/// Last error of the nodes an answer beyond the climb of now abandons.
+pub const BEYOND_REACH_CAUSE: &str = "bid answer drawn under the old rule: its level beyond the climb of now or its climb chosen by the old training score (bid_reach)";
+
+/// History outcome (node `goal`) of an answer given back as beyond the
+/// climb of now: `bid_beyond_reach:<origin>|<why>`.
+pub const BEYOND_REACH_TAG: &str = "bid_beyond_reach:";
+
+/// Gives back a `bid:` goal drawn under the old rule whose object needs a
+/// level above the bot's and above its open level milestones, or whose
+/// graph still climbs a level (`lifescape_planner::bid_reach`,
+/// 2026-11-20): the answers drawn while the ladder's top counted the
+/// training free and the training score credited earnings. Waits while a
+/// node runs. Same close as an answer off the
+/// trade: work abandoned (its posted buys left to the need release), no
+/// ban, no shun (the draw weighs the object again under the new rule).
+/// True when the life changed (save it).
+pub(crate) fn release_beyond_reach(life: &mut Life, live: &Value) -> bool {
+    if life.active.is_some() {
+        return false;
+    }
+    let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
+    let Some(found) = lifescape_planner::bid_reach::beyond_reach_answer(life, &level_of) else { return false };
+    let abandoned = lifescape_planner::abandon_goal_work(life, BEYOND_REACH_CAUSE);
+    lifescape_planner::normalize(life);
+    crate::logln!(
+        "brain {}: {} given back (drawn under the old rule): {}; no ban; {} nodes abandoned: {}",
+        life.account,
+        found.origin,
+        found.why,
+        abandoned.len(),
+        abandoned.join(",")
+    );
+    crate::brain::push_history(life, "goal", &format!("{BEYOND_REACH_TAG}{}|{}", found.origin, found.why));
+    match crate::brain_succession::succeed_goal(life, live, false) {
+        Some(label) => crate::logln!("brain {}: next goal {label} (after giving back {})", life.account, found.origin),
+        None => crate::logln!("brain {}: nothing drawable after giving back {} (see the reason above)", life.account, found.origin),
+    }
+    lifescape_planner::normalize(life);
+    true
+}
+
 /// Everything `account`'s bid answer posted ends: the lot's claim and
 /// its runs' claims, its purchases, its engaged seats and its launch
 /// seat (review 2026-11-20: a role switch to market maker, an operator
