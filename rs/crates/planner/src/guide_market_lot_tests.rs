@@ -18,7 +18,7 @@ use crate::guide_training::{band_xp, training_guide};
 /// A traded object at `price` whose asks hold `depth` units only: a
 /// purchase past them waits for a seller.
 fn thin(fixture: &mut Fixture, item: &'static str, price: f64, depth: f64) {
-    fixture.quotes.insert(item, Quote { price, traded: true, median: price, fills: 5, fill_units: 1e9, bids: Vec::new(), asks: vec![(price, depth)] });
+    fixture.quotes.insert(item, Quote { price, traded: true, median: price, fills: 5, fill_units: 1e9, bids: Vec::new(), asks: vec![(price, depth)], claimed: 0.0 });
 }
 
 /// Extra ticks per 6000 a line pays beyond its own work: 6000 × (raw XP

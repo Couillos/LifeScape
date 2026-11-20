@@ -180,7 +180,7 @@ fn full_market_counts_trips_waits_and_capital() {
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let covered = row(&rows, "smelt:steel_bar", Family::Market).extra_ticks_per_6000;
     assert!((covered - lots * trip).abs() < 1e-6, "covered: {covered} vs {}", lots * trip);
-    fixture.quotes.insert("iron_ore", Quote { price: 10.0, traded: true, median: 10.0, fills: 5, fill_units: 1e9, bids: Vec::new(), asks: vec![(10.0, 5.0)] });
+    fixture.quotes.insert("iron_ore", Quote { price: 10.0, traded: true, median: 10.0, fills: 5, fill_units: 1e9, bids: Vec::new(), asks: vec![(10.0, 5.0)], claimed: 0.0 });
     let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let market = row(&rows, "smelt:steel_bar", Family::Market);
     let extra = lots * (trip + 100.0);
