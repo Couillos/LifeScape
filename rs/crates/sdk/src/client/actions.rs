@@ -202,6 +202,11 @@ impl Bot {
     }
 
     pub fn op_held_u(&mut self, obj: u16, slot: u8, com: u16, use_obj: u16, use_slot: u8, use_com: u16) -> Result<()> {
+        // Any click closes an open count dialog (Client.ts `doAction`:
+        // `dialogInputOpen = false`); `P_COUNTDIALOG` only ever opens it.
+        // Live 2026-11-20 unastorm/jim_ford: a flag left by an earlier
+        // make-X failed the next clay mix the tick it was sent (78 in 2 h).
+        self.world.count_dialog = false;
         self.act(format!("op_held_u {} + {}", (self.tables.obj_name)(obj).unwrap_or_default(), (self.tables.obj_name)(use_obj).unwrap_or_default()));
         let mut body = Writer::new();
         body.u16(obj);
@@ -847,6 +852,8 @@ impl Bot {
 
     pub fn resume_pcount(&mut self, value: i32) -> Result<()> {
         self.act(format!("resume_pcount {value}"));
+        // The answer closes the dialog (Client.ts: `dialogInputOpen = false`).
+        self.world.count_dialog = false;
         let mut body = Writer::new();
         body.i32(value);
         self.send_named("RESUME_P_COUNTDIALOG", &body.bytes())
