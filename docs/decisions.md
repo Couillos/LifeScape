@@ -2012,3 +2012,29 @@ fight_pays_its_runes_whatever_its_drops`, `shop_drain::tests`,
 `mapping::tests::a_magic_fight_for_combat_casts_its_best_spell_a_climb_
 its_own`, `kit::strike::tests::{a_combat_run_falls_back_to_the_best_
 spell_its_runes_fund, a_climb_never_swaps_its_spell}`.
+
+## 2026-11-20 — Ligne marché : un achat que le carnet couvre n'attend pas
+
+Constat live : 44 568 poulets crus, 6 737 bœufs crus, 2 910 peaux de vache
+offerts à 1 pièce sans acheteur ; la cuisine fait 0,3 % du temps de la
+flotte. arthur_hart, cuisine 11->20 : toutes les lignes marché de cuisine
+du guide valaient 4 231 XP/6000 (1,42 tick/XP : poulet, anchois,
+crevette à égalité ; recette sur stock 32 458), le tirage a pris les
+anchois (53 offerts, bid de 144 jamais rempli, mise de côté au bout de
+90 s). Cause : `guide_money::market_row_with` faisait payer à CHAQUE
+achat l'attente mesurée du marché (1 213 ticks, la livraison d'un fill
+arrivé plus tard), que les offres couvrent l'achat ou non. Correctif : un
+achat dont chaque intrant de stock est tenu par les offres et les
+boutiques (`Engine::buy_at(...).available` à son volume) se remplit à
+l'instant et ne paie que l'aller-retour à la place ; un achat que le
+carnet ne tient pas garde l'attente. Même règle pour la ligne 100 %
+marché du guide money (par sac). Mesuré hors ligne (copie de la base et
+des taux, profil affinité 0,41, économe 0,9, 300 tirages) : cuisine
+11-20 1,42 → 0,49-0,54 tick/XP ; 31-40 saumon/truite/hareng (65/63/174
+offerts) → bœuf 107, tourte 92, poulet 89 ; prière os de géant 1-10
+2,52 → 0,15 ; feu bûches 1-10 1,45 → 0,37, 11-20 1,14 → 0,27 ; artisanat
+cuir 11-20 1,02 → 0,14. Les consommables empilables (plumes, runes) ne
+formaient aucun sac : jamais touchés. Tests :
+`guide_money::tests::market_lot::a_purchase_the_asks_cover_pays_no_wait`,
+`full_market_counts_trips_waits_and_capital` (carnet mince : l'attente
+reste). Rejeté : plancher de prix, liste d'objets abondants à la main.

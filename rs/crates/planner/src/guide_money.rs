@@ -170,10 +170,23 @@ fn own_row(engine: &Engine, place: &Place, family: Family, band: i64, held: &[(S
 }
 
 /// 100 % market line (D15): inputs bought, a square round trip and the
-/// measured wait per lot (a pack of non-stackable inputs). What the asks
+/// measured wait per lot (a pack of non-stackable inputs), the wait only
+/// when the asks and the shops do not hold the lot (`purchase_waits`,
+/// live 2026-11-20). What the asks
 /// and the shops hold of each input is a condition (D22), never a block.
 pub fn market_row(engine: &Engine, place: &Place, band: i64) -> MoneyRow {
     market_row_with(engine, place, band, None)
+}
+
+/// True when one purchase of a market line waits for a seller (live
+/// 2026-11-20): some stock input's units per purchase (a window's units
+/// over its `purchases`) run past what the asks and the shops hold
+/// (`Engine::buy_at` not `available`). A purchase they cover fills at
+/// once, at the square: its line pays the round trip only, never the
+/// measured wait (the delivery of a fill that comes later; 44 568 raw
+/// chicken asked at 1 coin paid it like a scarce fish).
+fn purchase_waits(engine: &Engine, answer: &crate::guide_model::RateAnswer, purchases: f64) -> bool {
+    purchases > 0.0 && crate::guide_engine::stock_inputs(answer).iter().any(|(item, units)| !engine.buy_at(item, units / purchases).available)
 }
 
 /// `market_row` whose purchases carry `per_purchase` slots of inputs each
@@ -190,7 +203,7 @@ pub fn market_row_with(engine: &Engine, place: &Place, band: i64, per_purchase: 
         _ => lots,
     };
     let trip = workshop(place).and_then(|site| round_trip_ticks(VARROCK_SQUARE, site)).unwrap_or(0.0);
-    let wait = engine.world.market_wait_ticks.unwrap_or(0.0);
+    let wait = if purchase_waits(engine, answer, purchases) { engine.world.market_wait_ticks.unwrap_or(0.0) } else { 0.0 };
     let extra = answer.pause_per_6000.max(0.0) + purchases * (trip + wait);
     let scale = work_share(extra);
     let own = crate::guide_methods::own_product(&place.ask.method);

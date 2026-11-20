@@ -166,17 +166,23 @@ fn recipe_on_stock_prices_inputs_at_their_sale_price() {
 }
 
 /// D15: 100 % market buys the inputs (a shop's price when cheaper, Q7),
-/// counts a square round trip and the measured wait per lot, ties a
-/// lot's capital, excludes Ironmen.
+/// counts a square round trip and, when the asks do not hold a lot (iron
+/// ore 5 units deep), the measured wait per lot; a lot the asks and the
+/// shops hold pays the trip only (live 2026-11-20). Ties a lot's
+/// capital, excludes Ironmen.
 #[test]
 fn full_market_counts_trips_waits_and_capital() {
     let mut fixture = Fixture::new();
     fixture.shop.insert("coal", 12.0);
-    let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
-    let market = row(&rows, "smelt:steel_bar", Family::Market);
     let site = crate::method_rate::best_site(&crate::method_rate::PriorQuery { method: "smelt:steel_bar".to_string(), level: 30, tool: String::new(), site: None }).expect("furnace");
     let trip = round_trip_ticks(VARROCK_SQUARE, site).expect("same plane");
     let lots = 300.0 / 28.0;
+    let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
+    let covered = row(&rows, "smelt:steel_bar", Family::Market).extra_ticks_per_6000;
+    assert!((covered - lots * trip).abs() < 1e-6, "covered: {covered} vs {}", lots * trip);
+    fixture.quotes.insert("iron_ore", Quote { price: 10.0, traded: true, median: 10.0, fills: 5, fill_units: 1e9, bids: Vec::new(), asks: vec![(10.0, 5.0)] });
+    let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
+    let market = row(&rows, "smelt:steel_bar", Family::Market);
     let extra = lots * (trip + 100.0);
     assert!((market.extra_ticks_per_6000 - extra).abs() < 1e-6, "{} vs {extra}", market.extra_ticks_per_6000);
     let raw = 5000.0 - 1000.0 - 200.0 * 12.0;
