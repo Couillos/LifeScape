@@ -236,7 +236,13 @@ impl std::fmt::Display for AmbitionError {
 /// past are skipped, coin targets it holds too). A ladder that leaves no
 /// open milestone is refused (`NoMilestone`), except the generalist's.
 pub fn new_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[DemandItem], stamp: Stamp) -> Result<Ambition, AmbitionError> {
-    let ambition = fresh_ambition(kind, why, now, seed, demand, stamp)?;
+    new_ambition_supplied(kind, why, now, seed, (demand, &[]), stamp)
+}
+
+/// `new_ambition` with the fleet's surplus (`ambition_supply`: the rung
+/// products eat the piles, never a tool nobody can get).
+pub fn new_ambition_supplied(kind: &str, why: &str, now: &BotNow, seed: u64, market: Market, stamp: Stamp) -> Result<Ambition, AmbitionError> {
+    let ambition = fresh_ambition(kind, why, now, seed, market, stamp)?;
     if !ladderless(&ambition.kind) && open_count(&ambition) == 0 {
         return Err(AmbitionError::NoMilestone(kind.to_string()));
     }
@@ -247,7 +253,12 @@ pub fn new_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[De
 /// bot is past extends beyond the catalogue (`extend`) instead of being
 /// refused; `NoMilestone` only when even the extension is empty.
 pub fn new_ambition_extended(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[DemandItem], stamp: Stamp) -> Result<Ambition, AmbitionError> {
-    let mut ambition = fresh_ambition(kind, why, now, seed, demand, stamp)?;
+    new_ambition_extended_supplied(kind, why, now, seed, (demand, &[]), stamp)
+}
+
+/// `new_ambition_extended` with the fleet's surplus (`ambition_supply`).
+pub fn new_ambition_extended_supplied(kind: &str, why: &str, now: &BotNow, seed: u64, market: Market, stamp: Stamp) -> Result<Ambition, AmbitionError> {
+    let mut ambition = fresh_ambition(kind, why, now, seed, market, stamp)?;
     if !ladderless(&ambition.kind) && open_count(&ambition) == 0 {
         extend(&mut ambition, now, seed);
         if open_count(&ambition) == 0 {
@@ -305,7 +316,7 @@ pub fn release_pin(ambition: &mut Ambition, level_of: &dyn Fn(&str) -> u8) -> Op
     }
 }
 
-fn fresh_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[DemandItem], stamp: Stamp) -> Result<Ambition, AmbitionError> {
+fn fresh_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, market: Market, stamp: Stamp) -> Result<Ambition, AmbitionError> {
     let found = spec(kind).ok_or_else(|| AmbitionError::UnknownKind(kind.to_string()))?;
     let mut ambition = Ambition {
         kind: found.kind.to_string(),
@@ -320,13 +331,22 @@ fn fresh_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[Dema
         pin: None,
         draw_rule: String::new(),
     };
-    refresh(&mut ambition, now, seed, demand);
+    refresh_supplied(&mut ambition, now, seed, market);
     Ok(ambition)
 }
 
 fn next_milestone_id(ambition: &Ambition) -> String {
     let top = ambition.milestones.iter().filter_map(|stone| stone.id.strip_prefix('m')?.parse::<usize>().ok()).max().unwrap_or(0);
     format!("m{}", top + 1)
+}
+
+/// Replace the milestone at `index` by a fresh one (new id, same place):
+/// the old id leaves the ambition (`ambition_supply::revise_supplied`).
+pub(crate) fn swap_milestone(ambition: &mut Ambition, index: usize, target: Target, origin: &str) {
+    push_milestone(ambition, target, origin);
+    if let Some(fresh) = ambition.milestones.pop() {
+        ambition.milestones[index] = fresh;
+    }
 }
 
 fn push_milestone(ambition: &mut Ambition, target: Target, origin: &str) {
@@ -386,6 +406,18 @@ fn prune_done(ambition: &mut Ambition) {
 /// the ids of the milestones this call closed (the brain weighs an
 /// optional change on them, as on a closed goal).
 pub fn refresh(ambition: &mut Ambition, now: &BotNow, seed: u64, demand: &[DemandItem]) -> Vec<String> {
+    refresh_supplied(ambition, now, seed, (demand, &[]))
+}
+
+/// The open bids and the fleet's surplus (object, units held beyond the
+/// bids; empty: unknown) a refresh reads.
+pub type Market<'a> = (&'a [DemandItem], &'a [(String, f64)]);
+
+/// `refresh` reading the fleet's surplus too (`ambition_supply`): a rung
+/// product eats a pile when one covers its quota, never needs a tool
+/// nobody can get; a bid needing such a tool makes no demand milestone.
+pub fn refresh_supplied(ambition: &mut Ambition, now: &BotNow, seed: u64, market: Market) -> Vec<String> {
+    let (demand, surplus) = market;
     let Some(found) = spec(&ambition.kind) else { return Vec::new() };
     let level_of = now.level_of;
     let coins = now.coins;
@@ -412,7 +444,7 @@ pub fn refresh(ambition: &mut Ambition, now: &BotNow, seed: u64, demand: &[Deman
             closed.push(stone.id.clone());
         }
     }
-    insert_demand_milestone(ambition, now, demand);
+    insert_demand_milestone(ambition, now, market);
     while open_count(ambition) < OPEN_MILESTONES && ambition.rung < found.ladder.len() {
         let index = ambition.rung;
         let rung = &found.ladder[index];
@@ -427,8 +459,10 @@ pub fn refresh(ambition: &mut Ambition, now: &BotNow, seed: u64, demand: &[Deman
         match rung.then {
             Then::Nothing => {}
             Then::Produce(items, count, skill) => {
-                let item = pick_product(items, seed ^ (index as u64).wrapping_mul(0x9E37_79B9), demand);
-                push_milestone(ambition, Target::Produce { item: item.to_string(), count, skill: skill.to_string() }, "ladder");
+                let seeded = seed ^ (index as u64).wrapping_mul(0x9E37_79B9);
+                if let Some(pick) = crate::ambition_supply::pick_supplied(items, count, skill, rung.level, seeded, demand, surplus, now.held) {
+                    push_milestone(ambition, Target::Produce { item: pick.item, count: pick.count, skill: skill.to_string() }, "ladder");
+                }
             }
             Then::Equip(style) => push_milestone(ambition, Target::Equip { style: style.to_string() }, "ladder"),
             Then::Coins(amount) => {
@@ -536,7 +570,11 @@ pub fn extend(ambition: &mut Ambition, now: &BotNow, seed: u64) -> usize {
 /// quantity (stock held or listed answers the bid without producing: a
 /// cook holding 100 shrimp looped done/reinsert forever, review
 /// 2026-11-13).
-fn insert_demand_milestone(ambition: &mut Ambition, now: &BotNow, demand: &[DemandItem]) {
+fn insert_demand_milestone(ambition: &mut Ambition, now: &BotNow, market: Market) {
+    let (demand, surplus) = market;
+    // A bid whose leg needs a tool nobody can get serves nobody
+    // (`ambition_supply::product_workable`: the water talisman).
+    let workable = |item: &str, skill: &str| crate::ambition_supply::product_workable(item, skill, now.held, surplus);
     let level_of = now.level_of;
     let open_demand = ambition.milestones.iter().any(|stone| stone.status != MilestoneStatus::Done && stone.origin.starts_with("demand:"));
     if open_demand {
@@ -562,7 +600,7 @@ fn insert_demand_milestone(ambition: &mut Ambition, now: &BotNow, demand: &[Dema
             }) else {
                 continue;
             };
-            if (now.held)(&product.item) >= demand_quota(wanted.unmet) {
+            if (now.held)(&product.item) >= demand_quota(wanted.unmet) || !workable(&product.item, skill) {
                 continue;
             }
             if best.is_none_or(|(known, _, _)| wanted.weight > known.weight) {
@@ -575,7 +613,7 @@ fn insert_demand_milestone(ambition: &mut Ambition, now: &BotNow, demand: &[Dema
     if best.is_none() {
         for wanted in demand.iter().filter(|entry| entry.unmet > 0 && entry.weight > 0.0 && entry.margin.is_some_and(|margin| margin > 0.0)) {
             let Some((skill, level)) = crate::ambition_catalog::servable(&ambition.kind, &wanted.item) else { continue };
-            if level > level_of(&skill).max(1) || (now.held)(&wanted.item) >= demand_quota(wanted.unmet) {
+            if level > level_of(&skill).max(1) || (now.held)(&wanted.item) >= demand_quota(wanted.unmet) || !workable(&wanted.item, &skill) {
                 continue;
             }
             if best.is_none_or(|(known, _, _)| wanted.weight > known.weight) {

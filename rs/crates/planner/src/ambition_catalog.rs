@@ -517,7 +517,7 @@ pub fn kind_weights_with(items: &[DemandItem], kind_profits: &[(String, f64)], s
 
 /// Product of one rung: the candidate with the heaviest open demand,
 /// else a seeded pick (bots of one kind spread over the candidates).
-pub fn pick_product(items: &'static [&'static str], seed: u64, demand: &[DemandItem]) -> &'static str {
+pub fn pick_product(items: &[&'static str], seed: u64, demand: &[DemandItem]) -> &'static str {
     let wanted = items
         .iter()
         .filter_map(|item| demand.iter().find(|entry| entry.item == *item && entry.weight > 0.0).map(|entry| (*item, entry.weight)))
