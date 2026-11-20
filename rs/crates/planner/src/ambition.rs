@@ -491,11 +491,12 @@ pub fn drop_stale_products(ambition: &mut Ambition) -> Vec<String> {
     let mut dropped = Vec::new();
     ambition.milestones.retain(|stone| {
         // A demand quota stays while the kind still serves the item (its
-        // ladder or its own one-step production, `insert_demand_milestone`).
+        // ladder, its own one-step production or any product of its
+        // ladder's skills: what `insert_demand_milestone` draws among).
         let stale = stone.status != MilestoneStatus::Done
             && match (&stone.target, stone.origin.as_str()) {
                 (Target::Produce { item, .. }, "ladder") => !offered(item),
-                (Target::Produce { item, .. }, origin) if origin.starts_with("demand:") => !offered(item) && !servable(item),
+                (Target::Produce { item, .. }, origin) if origin.starts_with("demand:") => !offered(item) && !servable(item) && !crate::ambition_catalog::ladder_skill_makes(&kind, item),
                 _ => false,
             };
         if stale {

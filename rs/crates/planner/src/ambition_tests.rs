@@ -428,6 +428,15 @@ fn a_revised_ladder_drops_its_stale_quotas() {
     assert!(mage.milestones.iter().any(|stone| stone.id == "m91"), "done quotas stay");
     let mut miner = new_ambition("miner", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], ZERO).expect("miner");
     assert!(super::drop_stale_products(&mut miner).is_empty(), "a current ladder keeps its quotas");
+    // Live 2026-11-20 noah_hill: a crafter's demand quota of strung
+    // diamond amulets (a crafting product off its ladder, inserted by the
+    // demand draw) stays: dropped, it was inserted again every pass.
+    let mut crafter = new_ambition("crafter", "random", &BotNow { level_of: &|_| 60, coins: 0, held: &|_| 0 }, 3, &[], ZERO).expect("crafter");
+    assert!(!crate::ambition_catalog::ladder_offers("crafter", "strung_diamond_amulet"));
+    let mut amulets = stale("m6", MilestoneStatus::Active, "demand:strung_diamond_amulet");
+    amulets.target = Target::Produce { item: "strung_diamond_amulet".to_string(), count: 5, skill: "crafting".to_string() };
+    crafter.milestones.push(amulets);
+    assert!(super::drop_stale_products(&mut crafter).is_empty(), "a product of the ladder's skills stays");
 }
 
 /// Open bids beyond the ladder: a smith serves steel bars (mined ore and

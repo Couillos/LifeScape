@@ -137,6 +137,25 @@ pub fn ladder_offers(kind: &str, item: &str) -> bool {
     spec(kind).is_some_and(|found| found.ladder.iter().any(|rung| matches!(rung.then, Then::Produce(items, _, _) if items.contains(&item))))
 }
 
+/// True when a skill of the kind's production rungs makes `item` at any
+/// level (`ambition_ladder::products_of`): the reach of a demand quota
+/// (`ambition::insert_demand_milestone` draws among these products). The
+/// catalogue sync keeps what the draw may insert: live 2026-11-20
+/// noah_hill (crafter) had a strung diamond amulet quota inserted then
+/// dropped every pass, 103 stringing launches in 30 minutes.
+pub fn ladder_skill_makes(kind: &str, item: &str) -> bool {
+    let Some(found) = spec(kind) else { return false };
+    let mut skills: Vec<&str> = Vec::new();
+    for rung in found.ladder {
+        if let Then::Produce(_, _, skill) = rung.then {
+            if !skills.contains(&skill) {
+                skills.push(skill);
+            }
+        }
+    }
+    skills.into_iter().any(|skill| crate::ambition_ladder::products_of(skill).iter().any(|product| product.item == item))
+}
+
 /// Skill-fit of a kind for a bot (read only by the level-led draw and
 /// coverage of the D3 exceptions, `ambition_fleet::level_led`): (1 + lead / 5)², where lead is how far
 /// the best skill of its primary group stands above the bot's mean over
