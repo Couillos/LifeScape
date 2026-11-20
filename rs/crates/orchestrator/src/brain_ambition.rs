@@ -334,6 +334,16 @@ pub(crate) fn redraw_neediest(life: &mut Life, live: &Value, revision_why: &str)
     replace(life, live, &bot, first, &inputs, &[], revision_why);
 }
 
+/// An operator's trade for this life (`brain_operator`): `kind` built
+/// like a redraw over the fleet's demand and surplus.
+pub(crate) fn assign_kind(life: &mut Life, live: &Value, kind: &str, revision_why: &str) {
+    let (gaps, _, held) = fleet_view(life);
+    let demand = need_demand(&life.account, &held);
+    let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
+    let inputs = DrawInputs::from_demand(demand, gaps);
+    replace(life, live, &bot, (kind.to_string(), revision_why.to_string()), &inputs, &[], revision_why);
+}
+
 fn replace(life: &mut Life, live: &Value, bot: &FleetBot, first: (String, String), inputs: &DrawInputs, exclude: &[&str], revision_why: &str) {
     let stamp = stamp_now();
     let built = with_now(live, |now| build(&life.account, bot, now, first, inputs, exclude, stamp));
