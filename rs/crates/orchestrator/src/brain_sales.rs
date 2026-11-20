@@ -131,13 +131,36 @@ fn method_inputs(method: &str, keep: &mut Vec<String>) -> Option<String> {
     } else {
         Some(named.to_string())
     };
-    for way in lifescape_gamedata::obtain::ways(named) {
-        if way.is_production() {
-            keep.extend(way.inputs.iter().map(|(input, _)| input.clone()));
-            keep.extend(way.tools.iter().cloned());
+    // The pottery script works every stage of its chain itself (clay and
+    // water -> soft clay -> unfired -> fired): the inputs of those stages
+    // are its inputs too (live will_field 2026-11-20: the climb's clay was
+    // listed, the run blocked `locked:clay`).
+    let depth = if method.starts_with(POTTERY_PREFIX) { POTTERY_STAGES } else { 0 };
+    stage_inputs(named, depth, keep);
+    product
+}
+
+/// Prefix of the pottery methods, whose script works the whole chain.
+const POTTERY_PREFIX: &str = "pottery:";
+/// Stages under a pottery product its script works (unfired, soft clay;
+/// the planner sizes the same chain, `replan::nested_per_unit`).
+const POTTERY_STAGES: u8 = 2;
+
+/// Pushes into `keep` the inputs and tools of every production way of
+/// `product`, then those of its inputs down `depth` more stages.
+fn stage_inputs(product: &str, depth: u8, keep: &mut Vec<String>) {
+    for way in lifescape_gamedata::obtain::ways(product) {
+        if !way.is_production() {
+            continue;
+        }
+        keep.extend(way.tools.iter().cloned());
+        for (input, _) in &way.inputs {
+            keep.push(input.clone());
+            if depth > 0 && input != product {
+                stage_inputs(input, depth - 1, keep);
+            }
         }
     }
-    product
 }
 
 /// What the unfinished graph still needs on hand, beyond the cleanup
@@ -800,6 +823,22 @@ pub(crate) mod tests {
         assert!(fisher.contains(&"feather".to_string()), "{fisher:?}");
         let woodcutter = super::working_keep(&life_training(&[("woodcutting", "gather:woodcut/oak_logs")]), &[]);
         assert!(!woodcutter.contains(&"feather".to_string()), "{woodcutter:?}");
+    }
+
+    /// Live 2026-11-20 (will_field n3033, `pottery:bowl_empty` 44->56):
+    /// the pottery script works the whole chain (clay + water -> soft
+    /// clay -> unfired bowl -> bowl), but only the unfired bowl was kept:
+    /// the 8 615 clay mined for the climb were listed, the run blocked
+    /// `locked:clay` then `missing clay` (300 + 85 blocks in a day).
+    #[test]
+    fn a_potter_keeps_the_clay_of_its_chain() {
+        let potter = super::working_keep(&life_training(&[("crafting", "pottery:bowl_empty")]), &[]);
+        for input in ["clay", "softclay", "bowl_unfired"] {
+            assert!(potter.contains(&input.to_string()), "{input}: {potter:?}");
+        }
+        assert!(!potter.contains(&"bowl_empty".to_string()), "the fired bowl is sold: {potter:?}");
+        let smith = super::working_keep(&life_training(&[("smithing", "smith:iron_platebody")]), &[]);
+        assert!(!smith.contains(&"iron_ore".to_string()), "an anvil climb keeps its bars, never the ore of another stage: {smith:?}");
     }
 
     #[test]
