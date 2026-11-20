@@ -76,6 +76,23 @@ impl BookView {
         }
         (left == 0).then_some(coins)
     }
+
+    /// The asks left once other producers bought `units` of them,
+    /// cheapest first (they take the best asks): their bid answers'
+    /// purchases (`market_claims::purchases_by_others`, 2026-11-20).
+    pub fn without_bought(&mut self, units: i64) {
+        self.asks.sort_by_key(|(price, _)| *price);
+        let mut left = units.max(0);
+        for ask in &mut self.asks {
+            if left == 0 {
+                break;
+            }
+            let take = ask.1.max(0).min(left);
+            ask.1 -= take;
+            left -= take;
+        }
+        self.asks.retain(|(_, qty)| *qty > 0);
+    }
 }
 
 /// Share in [0, 1] of a batch of `adding` units the market absorbs:

@@ -9,7 +9,11 @@
 //! claims of the order board), the bot's coin rate (what its work really
 //! earns per tick, D1: `brain_d17::coin_rate`) and the bot's own state,
 //! then hands the draw a production quota (`bid:<item>`) when a
-//! lot beats the ambition, and posts the claim on the board.
+//! lot beats the ambition, and posts the claim on the board, with the
+//! units the lot buys from the resting asks (`market_claims::
+//! claim_purchases`) and the gathering seats it takes (`site_crowd::
+//! engage`): the next bots read them gone (2026-11-20). An answer whose
+//! production every site refuses is given back (`brain_bid_release`).
 //!
 //! Called on EVERY goal draw (`brain_succession::draw_next`), before the
 //! ambition's milestone: the ambition and its milestones are untouched,
@@ -124,6 +128,9 @@ pub struct MarketReader {
     volumes: RefCell<HashMap<String, i64>>,
     currents: RefCell<HashMap<String, Option<i64>>>,
     claims: HashMap<String, i64>,
+    /// Units of each object other producers' bid answers will buy from
+    /// the resting asks (`market_claims::purchases_by_others`).
+    purchases: HashMap<String, i64>,
     live: bool,
 }
 
@@ -131,13 +138,30 @@ impl MarketReader {
     /// Offline reader (tests, sims): views as given (volume, current
     /// price and claims included).
     pub fn fixed(views: HashMap<String, BookView>) -> Self {
-        MarketReader { views, ids: HashMap::new(), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims: HashMap::new(), live: false }
+        MarketReader { views, ids: HashMap::new(), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims: HashMap::new(), purchases: HashMap::new(), live: false }
+    }
+
+    /// The board other producers posted (sims): units claimed per object
+    /// (supply on its way) and units their answers buy per object.
+    pub fn with_board(mut self, claims: HashMap<String, i64>, purchases: HashMap<String, i64>) -> Self {
+        self.claims = claims;
+        self.purchases = purchases;
+        self
     }
 
     pub fn live(account: &str) -> Self {
         let (views, ids) = live_views(account);
         let claims = crate::market_claims::claimed_by_others(account);
-        MarketReader { views, ids, volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims, live: true }
+        MarketReader { views, ids, volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims, purchases: HashMap::new(), live: true }
+    }
+
+    /// `live` for a bid answer (the draw, `bid-why`): the asks other
+    /// answers will buy are left out too (2026-11-20). Price caps (seller
+    /// reserve, a buy's worth) read the plain `live` book.
+    pub fn live_answering(account: &str) -> Self {
+        let mut reader = MarketReader::live(account);
+        reader.purchases = crate::market_claims::purchases_by_others(account);
+        reader
     }
 
     fn current(&self, item: &str) -> Option<i64> {
@@ -164,9 +188,14 @@ impl MarketReader {
             if let Some(price) = self.current(item) {
                 view.get_or_insert_with(BookView::default).current = Some(price);
             }
-            if let Some(claimed) = self.claims.get(item).filter(|units| **units > 0) {
-                view.get_or_insert_with(BookView::default).claimed = *claimed;
-            }
+        }
+        if let Some(claimed) = self.claims.get(item).filter(|units| **units > 0) {
+            view.get_or_insert_with(BookView::default).claimed = *claimed;
+        }
+        // Asks other producers' bid answers will buy are not this bot's
+        // to buy (2026-11-20: 14 answers counted the same 6 diamonds).
+        if let (Some(bought), Some(book)) = (self.purchases.get(item).filter(|units| **units > 0), view.as_mut()) {
+            book.without_bought(*bought);
         }
         view
     }
@@ -247,12 +276,28 @@ pub struct BotState<'a> {
     /// measured_rate`, memoised for the pass): the training a lot carries
     /// is sized on it (`bid_response::Producer::rate`).
     pub rate: lifescape_planner::work_rate::RateReader<'a>,
+    /// Seats the other bots hold on gathering sites: working there now
+    /// or engaged by a bid answer (`site_crowd::seats`, 2026-11-20).
+    pub seats: Vec<lifescape_planner::bid_response::Seat>,
+    /// Cooldown keys active for this bot (`brain_cool::active`): its
+    /// cooled sites are no site for a lot.
+    pub cooled: Vec<String>,
+    /// Objects whose answer it gave back lately
+    /// (`bid_release::shunned_items`): never answered again before the
+    /// window ends.
+    pub shunned: Vec<String>,
 }
 
 impl BotState<'_> {
     /// The planner's view of this bot at `rate` coins per tick; `use_it`
     /// runs with it (the closures live on this frame).
     pub fn with_producer<R>(&self, life: &Life, rate: f64, use_it: impl FnOnce(&Producer) -> R) -> R {
+        self.with_producer_on(life, rate, &self.seats, use_it)
+    }
+
+    /// `with_producer` reading `seats` as the fleet's (none: a price cap
+    /// asks what making costs, never whether a seat is free now).
+    pub fn with_producer_on<R>(&self, life: &Life, rate: f64, seats: &[lifescape_planner::bid_response::Seat], use_it: impl FnOnce(&Producer) -> R) -> R {
         let planned = |skill: &str| self.planned.iter().filter(|(name, _)| name == skill).map(|(_, level)| *level).max().unwrap_or(0);
         let alch = |item: &str| self.caster.as_ref().and_then(|mage| mage.net(item));
         let producer = Producer {
@@ -271,6 +316,8 @@ impl BotState<'_> {
             planned_level: &planned,
             alch_net: &alch,
             rate: self.rate,
+            seats,
+            cooled: &self.cooled,
         };
         use_it(&producer)
     }
@@ -307,7 +354,7 @@ pub(crate) fn explain_for(account: &str, item: &str) -> Result<Vec<String>, Stri
     if crate::market_service::shared().is_none() {
         return Err("market service down".to_string());
     }
-    let reader = MarketReader::live(account);
+    let reader = MarketReader::live_answering(account);
     let guides = crate::guides_store::current();
     Ok(with_bot_state(&life, &live, |state| {
         let key = key_of(&life, state);
@@ -317,6 +364,9 @@ pub(crate) fn explain_for(account: &str, item: &str) -> Result<Vec<String>, Stri
             let market = |name: &str| reader.view(name);
             let view = reader.view(item).unwrap_or_default();
             let mut lines = vec![crate::bid_why::identity_line(item), format!("{account}: coin rate {rate:.2} coins/tick")];
+            if state.shunned.iter().any(|known| known == item) {
+                lines.push(format!("its answer was given back less than {} ticks ago: not answered again yet", lifescape_planner::bid_release::BID_SHUN_TICKS));
+            }
             if view.bids.is_empty() {
                 lines.extend(crate::bid_why::related_bid_lines(item, &market));
             }
@@ -363,7 +413,8 @@ fn time_value_line(account: &str) -> String {
 pub fn choose(life: &Life, reader: &MarketReader, rate: f64, state: &BotState) -> Option<(Opportunity, f64)> {
     state.with_producer(life, rate, |producer| {
         let market = |item: &str| reader.view(item);
-        let books = reader.value_books(producer.alch_net);
+        let mut books = reader.value_books(producer.alch_net);
+        books.retain(|(item, _)| !state.shunned.contains(item));
         best_opportunity(&books, &market, producer).map(|found| (found, rate))
     })
 }
@@ -428,6 +479,9 @@ pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnc
         planned: planned_levels(life),
         caster: if life.profile.ironman { None } else { crate::brain_alch::caster_for(live) },
         rate: &rate,
+        seats: crate::site_crowd::seats(&life.account),
+        cooled: cooled.clone(),
+        shunned: lifescape_planner::bid_release::shunned_items(&life.history, &ticks_since),
     };
     use_state(&state)
 }
@@ -446,7 +500,9 @@ pub(crate) fn production_costs_for(life: &Life, live: &Value, items: &[(String, 
     let reader = MarketReader::live(&life.account);
     with_bot_state(life, live, |state| {
         let rate = bot_rate(life);
-        state.with_producer(life, rate, |producer| {
+        // A cap (seller reserve, a buy's worth) prices the make path
+        // whatever the seats now: the fleet's seats only gate a bid answer.
+        state.with_producer_on(life, rate, &[], |producer| {
             let market = |name: &str| reader.view(name);
             items
                 .iter()
@@ -455,6 +511,29 @@ pub(crate) fn production_costs_for(life: &Life, live: &Value, items: &[(String, 
                     Some((item.clone(), unit.total_for(*units, rate)))
                 })
                 .collect()
+        })
+    })
+}
+
+/// Gathering seats a chosen lot takes: (method, site) of each made leg
+/// whose site holds a limited number of workers
+/// (`bid_response::UnitCost::seats`), posted on `site_crowd` so the
+/// other bots read them taken.
+pub fn engaged_seats(found: &Opportunity) -> Vec<(String, (i64, i64, i64))> {
+    found.unit.seats.clone()
+}
+
+/// The gathering seats a lot of `count` `item` takes for this bot now
+/// (the draw's make path, `bid_response::feasible_lot`, the others' seats
+/// read): the engagement a bid goal restores after a daemon restart
+/// (`brain_bid_release::reengage_after_restart`). Empty when no make path
+/// has a free seat.
+pub(crate) fn lot_seats(life: &Life, live: &Value, item: &str, count: i64) -> Vec<(String, (i64, i64, i64))> {
+    let reader = MarketReader::live_answering(&life.account);
+    with_bot_state(life, live, |state| {
+        state.with_producer(life, bot_rate(life), |producer| {
+            let market = |name: &str| reader.view(name);
+            lifescape_planner::bid_response::feasible_lot(item, count.max(1), &market, producer).map(|(_, unit)| unit.seats).unwrap_or_default()
         })
     })
 }
@@ -486,7 +565,7 @@ pub(crate) fn bid_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, Strin
     let chosen = match cached {
         Some((at, seen_window, choice)) if now.saturating_sub(at) < CHOICE_TTL_SECS && seen_window == window => choice,
         _ => {
-            let reader = MarketReader::live(&life.account);
+            let reader = MarketReader::live_answering(&life.account);
             let choice = with_bot_state(life, live, |state| choose(life, &reader, bot_rate(life), state));
             choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(life.account.clone(), (now, window, choice.clone()));
             choice
@@ -497,6 +576,17 @@ pub(crate) fn bid_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, Strin
     choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&life.account);
     let secs = crate::market_claims::claim_secs(found.ticks, crate::market_eta::live_tick_ms());
     crate::market_claims::claim(&life.account, &found.item, found.count, secs);
+    // What the lot buys and the gathering seats it takes are no other
+    // producer's to count (2026-11-20).
+    let purchases = found.purchases();
+    crate::market_claims::claim_purchases(&life.account, &purchases, secs);
+    let seats = engaged_seats(&found);
+    crate::site_crowd::engage(&life.account, &seats, secs);
+    if !purchases.is_empty() || !seats.is_empty() {
+        let bought: Vec<String> = purchases.iter().map(|(item, units)| format!("{units} {item}")).collect();
+        let held: Vec<String> = seats.iter().map(|(method, site)| format!("{method}@{},{},{}", site.0, site.1, site.2)).collect();
+        crate::logln!("brain {}: bid answer reserves: buys [{}], seats [{}]", life.account, bought.join(", "), held.join(", "));
+    }
     crate::logln!(
         "brain {}: answers the market: produce {} {} ({} to bids, best {}; {} at the current price; {} alched; revenue {:.0}, unit {:.0} coins + {:.0} ticks, lot {:.0} ticks, {:.1} coins/tick vs own {:.2}, net {:.0}, train {:?}; {})",
         life.account,

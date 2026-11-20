@@ -163,8 +163,10 @@ fn last_wait() -> &'static std::sync::Mutex<std::collections::HashMap<String, St
 /// milestones refreshed first). Returns the new goal's label, or `None`
 /// while nothing is drawable (typed reason logged once per change).
 pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
-    // The previous lot's claim on the order board ends with its goal.
+    // The previous lot's claim on the order board ends with its goal,
+    // its purchases and its engaged seats too.
     crate::market_claims::release(&life.account);
+    crate::site_crowd::disengage(&life.account);
     note_expired_bans(life);
     // A quoting market maker keeps its post (plan Q6): no ambition pass,
     // no bid answered, no alchemy, the draw returns `MakeMarket`.

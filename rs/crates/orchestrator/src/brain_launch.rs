@@ -141,6 +141,15 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if !quoting && crate::brain_ambition::replace_stale_goal(&mut life, &live) {
         dirty = true;
     }
+    // A bid answer whose production every site refused past one cooldown
+    // is given back, the ambition drawn again (2026-11-20).
+    if !quoting && crate::brain_bid_release::release_blocked_bid(&mut life, &live) {
+        dirty = true;
+    }
+    // After a daemon restart, an open bid answer holds its seats again.
+    if !quoting {
+        crate::brain_bid_release::reengage_after_restart(&life, &live);
+    }
     // Space pressure (L8) precedes the terminal check: a full bank needs
     // its janitor even when the graph is done.
     if crate::cpu_profile::timed("cleanup_check", || maybe_insert_cleanup(&mut life, bank_types(job))) {

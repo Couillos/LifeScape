@@ -164,6 +164,9 @@ fn live_check() {
             planned: crate::brain_bids::planned_levels(&life),
             caster,
             rate: &lifescape_planner::work_rate::prior_rate,
+            seats: Vec::new(),
+            cooled: Vec::new(),
+            shunned: Vec::new(),
         };
         let rate = time_values.rate(&account);
         // Every valued lot (spread ignored), best rate first; `*` preempts.

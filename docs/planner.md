@@ -913,7 +913,11 @@ voir `docs/economy.md` § Producteurs qui répondent aux offres) : à chaque
 tirage, AVANT le jalon, une offre d'achat publique que le bot fabrique
 maintenant à un taux ≥ 2 × la valeur de son temps devient un quota
 `Produce` d'origine `bid:<objet>` (ambition intacte, comme un but
-d'appoint) ; sinon le tirage ci-dessous.
+d'appoint) ; sinon le tirage ci-dessous. Depuis le 2026-11-20 : seulement
+avec une place libre sur un site de récolte à places limitées et les
+intrants que les autres réponses n'ont pas déjà réservés ; une réponse
+bloquée (toutes méthodes refusées) plus de 6000 ticks est rendue (voir
+§ Contention).
 
 Tirage (`goals::draw_goal_origin`, toujours l'unique point d'entrée) :
 premier jalon ouvert dont les compétences ne sont pas bannies (`bans.rs`
@@ -1716,3 +1720,13 @@ d'une récolte planifiée (plumes, appât de pêche :
   refroidissement.
 - Scripts : pêche (« fish failed ») et sort de malédiction (« no foe took
   … ») rendent `contended:<site>` quand d'autres joueurs travaillent le site.
+- Places engagées (2026-11-20) : les places d'un site comptent aussi les
+  bots qu'une réponse à une offre y a engagés (`site_crowd::engage` au
+  tirage, `disengage` au tirage suivant ; un bot dont le dernier
+  lancement travaille déjà la ressource compte une fois) ; une réponse ne
+  se choisit que sur un site à place libre (`bid_response`,
+  `market_value::leg_site_seated`). Un but `bid:` dont un nœud attend
+  ouvert plus de `BID_WAIT_RELEASE_TICKS` (6000) est rendu, sans ban,
+  retour à l'ambition (`planner::bid_release`, `brain_bid_release` ;
+  voir `economy.md` § Producteurs qui répondent aux offres). Un but de
+  jalon attend toujours ouvert.

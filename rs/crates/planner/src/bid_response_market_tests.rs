@@ -49,6 +49,8 @@ fn bot<'a>(level_of: &'a dyn Fn(&str) -> u8, held: &'a dyn Fn(&str) -> i64, coin
         planned_level: &super::no_plan,
         alch_net: &super::no_alch,
         rate: &crate::work_rate::prior_rate,
+        seats: &[],
+        cooled: &[],
     }
 }
 

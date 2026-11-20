@@ -58,6 +58,8 @@ fn smith<'a>(level_of: &'a dyn Fn(&str) -> u8, held: &'a dyn Fn(&str) -> i64, av
         planned_level: &super::no_plan,
         alch_net: &super::no_alch,
         rate: &crate::work_rate::prior_rate,
+        seats: &[],
+        cooled: &[],
     }
 }
 
@@ -248,7 +250,7 @@ fn a_bids_training_reads_the_measured_yields() {
 /// air rune bids, 4.05 coins/tick, refused under 1.25 × 4.34).
 #[test]
 fn a_lot_beating_the_own_rate_preempts_without_margin() {
-    let unit = super::UnitCost { coins: 0.0, ticks: 1.0, plan: Vec::new(), train: Vec::new(), fixed_coins: 0.0, fixed_ticks: 0.0, buy_trip: 0.0, start: None };
+    let unit = super::UnitCost { coins: 0.0, ticks: 1.0, plan: Vec::new(), train: Vec::new(), fixed_coins: 0.0, fixed_ticks: 0.0, buy_trip: 0.0, start: None, seats: Vec::new(), bought: Vec::new(), bought_once: Vec::new() };
     let ticks = 1000.0;
     let coin_rate = 4.0;
     let rate = 4.4;
@@ -270,4 +272,21 @@ fn a_lot_beating_the_own_rate_preempts_without_margin() {
     assert!(preempts(&found, coin_rate), "10 % over the own rate, 400 coins net: answered");
     let short = super::Opportunity { rate: 3.9, profit: -100.0, ..found };
     assert!(!preempts(&short, coin_rate), "under the own rate: the ambition goes first");
+}
+
+/// Review 2026-11-20 point 8: a tool the lot buys on the market (the
+/// hammer at 12) is reserved like an input, once per lot, beside the
+/// bars it buys per unit.
+#[test]
+fn a_tool_bought_on_the_market_is_reserved_once() {
+    let avoid: Vec<String> = Vec::new();
+    let nothing = |_: &str| 0;
+    let bot = smith(&smith_levels, &nothing, &avoid, answering_seed("bronze_scimitar"));
+    let found = opportunity("bronze_scimitar", &scimitar_bids(), &market, &bot).expect("a lot");
+    let purchases = found.purchases();
+    assert!(purchases.contains(&("hammer".to_string(), 1)), "{purchases:?}");
+    assert!(purchases.iter().any(|(item, units)| item == "bronze_bar" && *units >= found.count), "{purchases:?}");
+    let held = smith(&smith_levels, &hammer_only, &avoid, answering_seed("bronze_scimitar"));
+    let kept = opportunity("bronze_scimitar", &scimitar_bids(), &market, &held).expect("a lot");
+    assert!(!kept.purchases().iter().any(|(item, _)| item == "hammer"), "its own hammer is no purchase");
 }

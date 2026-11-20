@@ -77,7 +77,7 @@ fn a_smith_answers_the_scimitar_bids_and_fills_them() {
     let seed = (1..200).find(|seed| answers_now(*seed, "bronze_scimitar", 0)).expect("a seed answers window 0");
     let mut life = life_of("warrior", seed, &level_of);
     let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
-    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &sim_units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None, rate: &lifescape_planner::work_rate::prior_rate };
+    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &sim_units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None, rate: &lifescape_planner::work_rate::prior_rate, seats: Vec::new(), cooled: Vec::new(), shunned: Vec::new() };
     let reader = scimitar_market();
     let (found, rate) = choose(&life, &reader, crate::brain_bids::bot_rate(&life), &state).expect("the bids pay");
     assert!((rate - lifescape_planner::market_fit::MIN_COIN_RATE).abs() < 1e-9, "no money guide published: time at the floor");
@@ -192,7 +192,7 @@ fn smiths_weigh_the_whole_market_and_claims_share_it() {
         let reader = book(claimed);
         (0..400u64).find_map(|seed| {
             let life = life_of("smith", seed, &level_of);
-            let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &sim_units, tick: 0, combat: 30, position: Some((3185, 3436, 0)), planned: Vec::new(), caster: None, rate: &lifescape_planner::work_rate::prior_rate };
+            let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &sim_units, tick: 0, combat: 30, position: Some((3185, 3436, 0)), planned: Vec::new(), caster: None, rate: &lifescape_planner::work_rate::prior_rate, seats: Vec::new(), cooled: Vec::new(), shunned: Vec::new() };
             choose(&life, &reader, lifescape_planner::market_fit::MIN_COIN_RATE, &state).filter(|(found, _)| found.item == "iron_full_helm").map(|(found, _)| found)
         })
     };

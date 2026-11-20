@@ -31,9 +31,12 @@ pub mod brain_cool;
 pub mod brain_idle;
 pub mod brain_inflight;
 pub mod brain_stranded;
+pub mod brain_bid_release;
 pub mod brain_bids;
 #[cfg(test)]
 mod brain_bids_sim_tests;
+#[cfg(test)]
+mod brain_bids_seat_tests;
 #[cfg(test)]
 mod live_check_tests;
 #[cfg(test)]

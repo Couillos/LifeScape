@@ -90,3 +90,15 @@ fn a_stock_lot_never_makes_past_what_the_market_absorbs() {
     assert_eq!(absorbable_actions(&bars, 300, 1), 550, "its own 300 sell first");
     assert_eq!(absorbable_actions(&bars, 0, 5), 170, "five units per action");
 }
+
+/// 2026-11-20: the purchases other bid answers posted take the cheapest
+/// asks first; what is left is what this bot can still buy.
+#[test]
+fn others_purchases_take_the_cheapest_asks() {
+    let mut diamonds = BookView { asks: vec![(170, 3), (1, 1), (140, 1), (146, 1)], ..BookView::default() };
+    diamonds.without_bought(2);
+    assert_eq!(diamonds.asks, vec![(146, 1), (170, 3)]);
+    assert_eq!(diamonds.buy_cost(4), Some(146.0 + 3.0 * 170.0));
+    diamonds.without_bought(10);
+    assert!(diamonds.asks.is_empty() && diamonds.buy_cost(1).is_none(), "every ask bought by others");
+}

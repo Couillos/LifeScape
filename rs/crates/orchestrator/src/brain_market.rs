@@ -348,6 +348,8 @@ pub fn buy_closed(account: &str, item: &str) -> bool {
 /// landed obtain closes its standing bid (reason `need_met`). An expired
 /// fill wait keeps its bid (plan marché M2).
 pub fn cancel_open_buys(account: &str, item: &str) -> usize {
+    // The need is met: a bid answer's reservation of these asks ends.
+    crate::market_claims::purchase_done(account, item);
     let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return 0 };
     service.cancel_open_because(account, id, lifescape_store::OrderSide::Buy, "need_met")
 }

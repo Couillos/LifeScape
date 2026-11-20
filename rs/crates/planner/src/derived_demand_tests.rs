@@ -129,6 +129,8 @@ fn helm_lot(helm_book: &BookView) -> Option<crate::bid_response::Opportunity> {
         planned_level: &crate::bid_response::no_plan,
         alch_net: &crate::bid_response::no_alch,
         rate: &crate::work_rate::prior_rate,
+        seats: &[],
+        cooled: &[],
     };
     crate::bid_response::opportunity("iron_full_helm", helm_book, &market, &smith).filter(|found| crate::bid_response::preempts(found, smith.coin_rate))
 }

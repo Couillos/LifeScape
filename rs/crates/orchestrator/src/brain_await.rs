@@ -48,7 +48,14 @@ impl FillMarket for LiveMarket<'_> {
 pub(crate) fn settle_fill(job: &Job, life: &mut Life, position: usize, item: &str, count: i64, waited: i64) -> bool {
     let held = holdings_count(job, item);
     let deadline = (AWAIT_FILL_TICKS * crate::market_eta::live_tick_ms() / 1000) as i64;
+    let baseline = life.nodes[position].progress_current;
     let outcome = settle_with(life, position, item, count, held, waited, deadline, &LiveMarket { account: &job.account });
+    // A partial fill landed: the reservation shrinks by it (a full one
+    // ends with the need, `cancel_open_buys`).
+    let landed = life.nodes.get(position).map(|node| node.progress_current - baseline).unwrap_or(0);
+    if landed > 0 {
+        crate::market_claims::purchase_landed(&job.account, item, landed);
+    }
     if let Some(line) = outcome.log {
         crate::logln!("brain {}: {line}", job.account);
     }

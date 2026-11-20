@@ -16,7 +16,10 @@
 //! - make it: a production leg the bot can work NOW (skill level met and
 //!   not banned, quest done, every tool held or buyable — resting ask, or
 //!   an NPC shop when D-A allows it —, a site safe and open for its
-//!   combat level, not a guild-only one), its own ticks (6000 / units per
+//!   combat level, not a guild-only one, with a free seat when the site
+//!   holds a limited number of gatherers: `Producer::seats`, the bots
+//!   working there or engaged by another answer, 2026-11-20), its own
+//!   ticks (6000 / units per
 //!   6000: learned rates, else the prior), each input at ITS unit cost;
 //!   one-off for the lot: the walk from its site to where the output goes
 //!   (the next step, the fountain for the product), toll and boat fares,
@@ -41,6 +44,12 @@
 //! (`feasible_lot`), never to nothing (6 uncut diamonds for 51 amulet of
 //! power bids: 6 amulets).
 //!
+//! Board (2026-11-20, live: 7 answers on one-seat mithril fields, 14 on
+//! 51 amulet bids with 6 diamonds on sale): an answer posts the seats its
+//! plan takes (`UnitCost::seats`) and the units it buys from the resting
+//! asks (`Opportunity::purchases`); the next bots read those seats taken
+//! and those asks gone (the brain's `site_crowd` and `market_claims`).
+//!
 //! Opportunity (`opportunity`): the lot the market absorbs at the unit
 //! cost (`market_value::absorbed_lot`: bids above cost, sales at the
 //! current price over a day, the bot's alchemy floor; minus supply on its
@@ -58,7 +67,7 @@
 //! (`BID_WINDOW_TICKS`) its word selects (one in `PRODUCER_SPREAD`).
 
 use crate::market_fit::BookView;
-use crate::market_value::{absorbed_lot_within, leg_site, training_share, walk_ticks, HANDOVER_TICKS, VARROCK_FOUNTAIN};
+use crate::market_value::{absorbed_lot_within, leg_site, leg_site_seated, training_share, walk_ticks, HANDOVER_TICKS, VARROCK_FOUNTAIN};
 use crate::model::GoalKind;
 
 /// Prefix of a bid goal's origin (`life.goal_origin`, `bid:<item>`).
@@ -118,7 +127,19 @@ pub struct Producer<'a> {
     /// the prior), `work_rate::prior_rate` offline. The training a lot
     /// carries is sized on it (actions, inputs burnt).
     pub rate: crate::work_rate::RateReader<'a>,
+    /// Seats the OTHER bots hold on gathering sites (site, method, head
+    /// count): the ones working there now and the ones a bid answer
+    /// engaged (2026-11-20). A leg whose every open site is full
+    /// (`combat::site_full`) is no leg for this bot.
+    pub seats: &'a [Seat],
+    /// Cooldown keys active for this bot (`cooldown::cooled_keys`): its
+    /// cooled sites of a method are no site for a lot (contended by
+    /// players, failed there), like at resolve.
+    pub cooled: &'a [String],
 }
+
+/// One fleet seat on a gathering site: (site, method, head count).
+pub type Seat = ((i64, i64, i64), String, u32);
 
 /// No plan: the default of a bot whose ambition climbs nothing.
 pub fn no_plan(_: &str) -> u8 {
@@ -151,11 +172,20 @@ pub struct UnitCost {
     pub buy_trip: f64,
     /// Where the work of the lot starts (the deepest made step).
     pub start: Option<(i64, i64, i64)>,
+    /// Gathering seats the plan takes: (method, site) of every made leg
+    /// whose site holds a limited number of workers
+    /// (`combat::site_capacity`: rocks, trees, fishing spots).
+    pub seats: Vec<(String, (i64, i64, i64))>,
+    /// Units of each object the plan BUYS per unit made (resting asks
+    /// it takes): what a bid answer reserves on the board.
+    pub bought: Vec<(String, f64)>,
+    /// Units the lot buys once whatever its size (a tool on sale).
+    pub bought_once: Vec<(String, i64)>,
 }
 
 impl UnitCost {
     fn bare(coins: f64, plan: String) -> Self {
-        UnitCost { coins, ticks: 0.0, plan: vec![plan], train: Vec::new(), fixed_coins: 0.0, fixed_ticks: 0.0, buy_trip: 0.0, start: None }
+        UnitCost { coins, ticks: 0.0, plan: vec![plan], train: Vec::new(), fixed_coins: 0.0, fixed_ticks: 0.0, buy_trip: 0.0, start: None, seats: Vec::new(), bought: Vec::new(), bought_once: Vec::new() }
     }
 
     /// Coins plus the bot's time at its coin rate, per unit.
@@ -200,6 +230,26 @@ pub struct Opportunity {
     pub profit: f64,
     /// `rate` tilted by the per-bot word (ranking only).
     pub score: f64,
+}
+
+impl Opportunity {
+    /// Units of each object the lot buys from the resting asks (whole
+    /// units, one entry per object): the purchases a bid answer reserves
+    /// on the public board so no other producer counts the same asks.
+    pub fn purchases(&self) -> Vec<(String, i64)> {
+        let mut out: Vec<(String, i64)> = Vec::new();
+        let per_lot = self.unit.bought.iter().map(|(item, per_unit)| (item, (per_unit * self.count as f64).ceil() as i64));
+        for (item, units) in per_lot.chain(self.unit.bought_once.iter().map(|(item, units)| (item, *units))) {
+            if units <= 0 {
+                continue;
+            }
+            match out.iter_mut().find(|(known, _)| known == item) {
+                Some(entry) => entry.1 += units,
+                None => out.push((item.clone(), units)),
+            }
+        }
+        out
+    }
 }
 
 /// Seeded word (FNV-1a of the salt, splitmix64 finalizer).
@@ -280,6 +330,7 @@ fn cost_at(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView>, bo
     let bought = (!bot.ironman).then(|| view.as_ref().and_then(|book| book.buy_cost(units))).flatten().map(|coins| {
         let mut unit = UnitCost::bare(coins / units as f64, format!("buy {item}"));
         unit.buy_trip = walk_ticks(VARROCK_FOUNTAIN, step.dest);
+        unit.bought.push((item.to_string(), 1.0));
         unit
     });
     let made = if step.depth < MAX_DEPTH { make_cost(item, units, market, bot, step) } else { None };
@@ -316,8 +367,11 @@ fn make_cost(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView>, 
         if !rate.is_finite() || rate <= 0.0 {
             continue;
         }
-        // Where the bot works it, seen from where the output goes.
-        let Some(site) = leg_site(&leg.method, step.dest, bot.combat, bot.free_pass) else { continue };
+        // Where the bot works it, seen from where the output goes: a site
+        // with a free seat (the bots there now and the ones a bid answer
+        // engaged), none when every open site is full.
+        let cooled_sites = crate::cooldown::cooled_sites(bot.cooled, &leg.method);
+        let Some(site) = leg_site_seated(&leg.method, step.dest, bot.combat, bot.free_pass, bot.seats, &cooled_sites) else { continue };
         let mut candidate = UnitCost {
             coins: 0.0,
             ticks: 6000.0 / rate,
@@ -327,7 +381,13 @@ fn make_cost(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView>, 
             fixed_ticks: walk_ticks(site.site, step.dest),
             buy_trip: 0.0,
             start: None,
+            seats: Vec::new(),
+            bought: Vec::new(),
+            bought_once: Vec::new(),
         };
+        if crate::combat::site_capacity(&leg.method, site.site).is_some() {
+            candidate.seats.push((leg.method.clone(), site.site));
+        }
         let mut feasible = true;
         for tool in &leg.tools {
             if crate::tools::family_held(tool, 1, bot.held) > 0 {
@@ -338,6 +398,10 @@ fn make_cost(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView>, 
                 Some(price) => {
                     candidate.fixed_coins += price;
                     candidate.buy_trip = candidate.buy_trip.max(walk_ticks(VARROCK_FOUNTAIN, site.site));
+                    // Bought on the market: reserved like an input.
+                    if market(tool).and_then(|view| view.best_ask()).is_some() {
+                        candidate.bought_once.push((tool.clone(), 1));
+                    }
                 }
                 None => {
                     feasible = false;
@@ -362,6 +426,9 @@ fn make_cost(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView>, 
             candidate.buy_trip = candidate.buy_trip.max(sub.buy_trip);
             candidate.start = candidate.start.or(sub.start);
             candidate.plan.extend(sub.plan);
+            candidate.seats.extend(sub.seats);
+            candidate.bought.extend(sub.bought.into_iter().map(|(name, units)| (name, units * per_unit)));
+            candidate.bought_once.extend(sub.bought_once);
             training.extend(sub.train);
         }
         if !feasible {
@@ -657,6 +724,9 @@ fn explain_make(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView
             _ if crate::skeleton_deps::guild_only(&leg.method).is_some() => Some("guild only".to_string()),
             _ if !(bot.units_per_6000)(&leg.method, item).is_finite() || (bot.units_per_6000)(&leg.method, item) <= 0.0 => Some("no rate".to_string()),
             _ if leg_site(&leg.method, step.dest, bot.combat, bot.free_pass).is_none() => Some(format!("no site at combat {}", bot.combat)),
+            _ if leg_site_seated(&leg.method, step.dest, bot.combat, bot.free_pass, bot.seats, &crate::cooldown::cooled_sites(bot.cooled, &leg.method)).is_none() => {
+                Some("every open site full (seats taken by the fleet) or cooled for this bot".to_string())
+            }
             _ => {
                 let missing: Vec<String> = per_unit_inputs(&leg.method, &leg.inputs)
                     .into_iter()

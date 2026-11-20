@@ -1642,6 +1642,71 @@ d'achat que ce bot sait fabriquer avec profit :
   (`answers_now`, rotation par fenêtre) ; avec la moitié de la
   profondeur par producteur, les bots capables ne se ruent pas tous sur
   le même carnet.
+- Places et achats réservés (2026-11-20, mesure 22:20-23:20 UTC après
+  ce3dfdf : 59 bots sur 74 sur une réponse, 7 sur le mithril à une place
+  par champ, 14 sur 51 amulettes de pouvoir pour 6 diamants bruts en
+  vente, 41 % du temps en remplissage) : une jambe de récolte sur un site
+  à places limitées (`combat::site_capacity` : rocs, arbres, pêche) ne
+  compte que si un site ouvert a une place libre, places prises = les
+  bots qui y travaillent (dernier lancement) ET ceux qu'une autre réponse
+  y a engagés (`Producer::seats`, `market_value::leg_site_seated`) ; tous
+  pleins : pas de jambe, pas de réponse. La réponse choisie publie ses
+  places (`site_crowd::engage`, comptées aussi par les choix de site de
+  la résolution, une fois par bot) et ce qu'elle ACHÈTE aux asks au repos
+  (`market_claims::claim_purchases`, `Opportunity::purchases` : unités
+  achetées par unité × lot) ; les réponses suivantes lisent ces asks
+  retirés, les moins chers d'abord (`MarketReader::live_answering`,
+  `BookView::without_bought`). Même vie que la réclamation du lot :
+  tirage suivant ou expiration. Les plafonds de prix (réserve vendeur,
+  valeur d'un achat) lisent le carnet sans ces réservations et le coût de
+  fabrication sans les places. Les outils achetés au marché pour le lot
+  (hache, pioche, marteau sur un ask) sont réservés aussi, une fois par
+  lot (`UnitCost::bought_once`). Un achat qui arrive rend sa part : un
+  remplissage partiel réduit la réservation (`purchase_landed`), le
+  besoin atteint la clôt (`purchase_done` depuis
+  `brain_market::cancel_open_buys`) : les asks achetés ont quitté le
+  carnet, jamais comptés deux fois.
+- Sites refroidis et réponses rendues : les sites que CE bot a
+  refroidis pour la méthode (joueurs sur place `contended:`, échecs) ne
+  servent pas une réponse (`leg_site_seated(…, avoid)`, comme à la
+  résolution) ; un objet dont le bot a rendu la réponse depuis moins de
+  `BID_SHUN_TICKS` = 3 × 6000 ticks n'est pas repris
+  (`bid_release::shunned_items`, historique `bid_released:`) : un bot
+  bloqué à chaque fois sur un blocage que les places de la flotte ne
+  montrent pas (vrais joueurs) n'y perd au plus que 6000 / (6000 +
+  18 000) = 25 % de son temps, sous la part de remplissage de référence
+  (26 %).
+- Redémarrage et fin de rôle : places, réclamations et achats vivent en
+  mémoire. Au premier passage après un redémarrage, un but `bid:` ouvert
+  sans place engagée réengage les places que son lot prend maintenant
+  (`brain_bid_release::reengage_after_restart`, une fois par compte, log
+  `re-engages its seats after a restart`). Le passage en teneur de
+  marché (`market_maker::maybe_switch`) libère tout
+  (`brain_bid_release::free_board`) ; `close` et `unload` ne libèrent
+  rien (le but `bid:` continue à la reprise, les réservations expirent
+  sinon d'elles-mêmes).
+- Réponse rendue (`brain_bid_release`, règle pure
+  `planner::bid_release`) : un nœud du but `bid:` qui attend toutes ses
+  méthodes refusées (`cool_wait:`, `full:`/`cooled:`) depuis
+  `BID_WAIT_RELEASE_TICKS` = `COOL_TICKS` (6000 ticks : un
+  refroidissement complet, puis la relecture des places à son terme les
+  a trouvées encore pleines), sans travail entre-temps (seulement
+  attentes, lancements `contended`), rend la réponse : travail du but
+  abandonné (`abandon_goal_work`), but clos sans ban (`succeed_goal`
+  non bloqué), historique `bid_released:<origine>|<nœud>|<ticks>`, le
+  tirage suivant libère réclamation, achats et places et revient à
+  l'ambition (méthode refroidie : la même réponse n'est pas reprise). Log
+  `brain <compte>: bid:<objet> given back: nX waited N ticks on refused
+  sites (>= 6000), no ban; …`. Un but de jalon attend toujours. Lot à
+  plusieurs nœuds (un intrant récolté et une fabrication, ou deux
+  récoltes) : UN nœud qui attend au-delà du délai rend toute la réponse,
+  même si un autre nœud du but a déjà avancé ou travaille encore : un
+  nœud en cours d'exécution est attendu (son rapport d'abord), puis la
+  réponse est rendue au passage suivant ; les achats déjà postés, les
+  étapes d'équipement et le concierge restent ; le stock déjà produit
+  part par la vente par défaut. Sans l'intrant bloqué le lot ne se livre
+  pas, et attendre garderait sa réclamation contre les autres
+  producteurs.
 - But : `GoalKind::Produce{objet, N}` (jambes de production seules,
   intrants par les sous-tâches, marché d'abord), origine `bid:<objet>` :
   aucun jalon, ambition intacte, le tirage suivant la repèse. Log

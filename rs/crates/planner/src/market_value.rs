@@ -55,9 +55,22 @@ pub struct LegSite {
 /// a method that works anywhere happens at `dest`. `None`: no site is
 /// safe or open for this bot (guild door, key, combat level).
 pub fn leg_site(method: &str, dest: (i64, i64, i64), combat: u8, free_pass: bool) -> Option<LegSite> {
-    use crate::combat::{pick_site_gated, Fare, Pass, SitePick};
+    leg_site_seated(method, dest, combat, free_pass, &[], &[])
+}
+
+/// `leg_site` reading the fleet's seats (site, method, head count: the
+/// bots working a site now or engaged on it by a bid answer): only the
+/// bots on the method's resource fill a site (`combat::same_resource_seats`),
+/// a full site is skipped, and every open site full is no site
+/// (2026-11-20: seven bots answered a mithril bid with one seat per
+/// field and filled for an hour). `avoid`: the sites this bot cooled
+/// for the method (`cooldown::cooled_sites`: contended by players, failed
+/// there), skipped like the resolve skips them; all cooled is no site.
+pub fn leg_site_seated(method: &str, dest: (i64, i64, i64), combat: u8, free_pass: bool, seats: &[crate::bid_response::Seat], avoid: &[(i64, i64, i64)]) -> Option<LegSite> {
+    use crate::combat::{pick_site_seated, same_resource_seats, Fare, Pass, SitePick};
     let fare = Fare { wallet: i64::MAX / 4, free_pass };
-    let site = match pick_site_gated(method, combat, Some(dest), fare, &Pass::default()) {
+    let taken = same_resource_seats(method, seats);
+    let site = match pick_site_seated(method, combat, Some(dest), fare, &Pass::default(), &[], &taken, avoid) {
         SitePick::Anywhere => return Some(LegSite { site: dest, fare: 0.0 }),
         SitePick::At(site) => return Some(LegSite { site, fare: 0.0 }),
         SitePick::Tolled(site) | SitePick::Boat { site, .. } => site,

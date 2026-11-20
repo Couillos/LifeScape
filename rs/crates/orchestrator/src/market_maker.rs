@@ -312,6 +312,9 @@ pub(crate) fn maybe_switch(job: &Job, life: &mut Life) -> bool {
     }
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
     let abandoned = lifescape_planner::become_quoting(life, coins, now);
+    // Its bid answer, if any, ends with its old role: claims, purchases
+    // and seats freed (review 2026-11-20).
+    crate::brain_bid_release::free_board(&job.account);
     crate::brain::push_history(life, "goal", &format!("role:market_maker quoting slice {}/{} ({coins} coins >= {})", role.slice, role.slices, role.capital_target));
     crate::logln!(
         "brain {}: market maker slice {}/{}: capital {coins} >= target {}, quoting for good ({} nodes abandoned)",
