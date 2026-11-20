@@ -419,7 +419,13 @@ pub fn choose_in(life: &Life, reader: &MarketReader, rate: f64, state: &BotState
         // Its own trade only (`bid_trade`, 2026-11-20): the need-drawn
         // ambition runs, the consumers buy what they burn.
         books.retain(|(item, _)| !state.shunned.contains(item) && (whole || lifescape_planner::bid_trade::answers_trade(life, item)));
-        best_opportunity(&books, &market, producer).map(|found| (found, rate))
+        if !whole {
+            return best_opportunity(&books, &market, producer).map(|found| (found, rate));
+        }
+        lifescape_planner::bid_response::ranked_opportunities(&books, &market, producer)
+            .into_iter()
+            .find(|found| lifescape_planner::bid_trade::waiting_answer_fits(life, &found.item, &found.unit.train))
+            .map(|found| (found, rate))
     })
 }
 

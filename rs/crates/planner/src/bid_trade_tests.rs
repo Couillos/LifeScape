@@ -175,3 +175,31 @@ fn a_buy_of_an_earlier_goal_keeps_no_graph_open() {
     lily.history = vec![HistoryEntry { node: "n1501".to_string(), started: 1, ended: 1, outcome: "awaiting_fill".to_string() }];
     assert_eq!(graph_state(&lily), GraphState::Launchable);
 }
+
+/// Live 2026-11-20: cooks set aside for an anchovy buy answered mithril
+/// kiteshields by training smithing 1 -> 62 (cooking 0.3 % of the fleet's
+/// time). An answer while waiting is made with the levels held: off the
+/// trade, a lot that trains never fits; its own trade trains as before.
+/// A held answer still climbing a level is given back.
+#[test]
+fn an_answer_while_waiting_trains_no_other_trade() {
+    use crate::model::{Node, NodeKind, NodeStatus};
+    let goal = |outcome: &str| HistoryEntry { node: "goal".to_string(), started: 1, ended: 1, outcome: outcome.to_string() };
+    let smithing = vec![("smithing".to_string(), 1u8, 62u8)];
+    let cook = life("hill_eric", Some("cook"), Some("bid:mithril_kiteshield"));
+    assert!(!super::waiting_answer_fits(&cook, "mithril_kiteshield", &smithing));
+    assert!(super::waiting_answer_fits(&cook, "mithril_kiteshield", &[]), "made with the levels held");
+    let smith = life("eva_dale", Some("smith"), None);
+    assert!(super::waiting_answer_fits(&smith, "mithril_kiteshield", &smithing), "its own trade trains");
+    let mut held = cook.clone();
+    held.history = vec![goal(&format!("{}produce mithril_kiteshield 6 (bid:mithril_kiteshield)", crate::ambition_review::NEXT_TAG)), goal(&format!("{WAIT_ANSWER_TAG}bid:mithril_kiteshield"))];
+    held.memory.floor = Some(800);
+    assert_eq!(off_trade_answer(&held), None, "no climb: kept while waiting");
+    let mut climb = Node::new("n846", NodeKind::ReachLevel { skill: "smithing".to_string(), level: 62 }, Vec::new(), 62);
+    climb.status = NodeStatus::Active;
+    held.nodes.push(climb.clone());
+    assert_eq!(off_trade_answer(&held), Some("bid:mithril_kiteshield".to_string()), "a climb left: given back");
+    climb.status = NodeStatus::Done;
+    held.nodes = vec![climb];
+    assert_eq!(off_trade_answer(&held), None, "the climb done: kept");
+}

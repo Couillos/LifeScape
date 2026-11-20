@@ -91,14 +91,40 @@ pub fn credit_made(life: &mut Life, milestone: &str) -> i64 {
 
 /// The origin of the current `bid:` goal when its object is off this
 /// life's trade and the goal is still open (the state persisted before
-/// the rule: the brain gives it back).
+/// the rule: the brain gives it back). An answer drawn while the
+/// ambition waits stays, unless it still trains a level (an answer
+/// meanwhile is made with the levels held, `waiting_answer_fits`).
 pub fn off_trade_answer(life: &Life) -> Option<String> {
     let origin = life.goal_origin.as_deref()?;
     let item = origin.strip_prefix(crate::bid_response::BID_PREFIX)?;
-    if crate::goals::goal_closed(&life.history) || drawn_while_waiting(&life.history) || answers_trade(life, item) {
+    if crate::goals::goal_closed(&life.history) || answers_trade(life, item) {
+        return None;
+    }
+    if drawn_while_waiting(&life.history) && !trains_a_level(life) {
         return None;
     }
     Some(origin.to_string())
+}
+
+/// True when the current goal (nodes from the floor) holds an open
+/// level climb.
+fn trains_a_level(life: &Life) -> bool {
+    let floor = life.memory.floor.unwrap_or(0);
+    life.nodes.iter().any(|node| {
+        matches!(node.kind, crate::model::NodeKind::ReachLevel { .. })
+            && !matches!(node.status, crate::model::NodeStatus::Done | crate::model::NodeStatus::Abandoned)
+            && crate::lifecycle_retire::node_number(&node.id).is_some_and(|number| number >= floor)
+    })
+}
+
+/// An answer drawn while the ambition waits on a buy (whole market,
+/// `brain_wait_answer`) is made with the levels the bot holds: off its
+/// trade, a lot that trains a level first never fits (live 2026-11-20:
+/// cooks set aside for an anchovy buy trained smithing 1 -> 62 for six
+/// mithril kiteshields, cooking 0.3 % of the fleet's time). Its own
+/// trade trains as before.
+pub fn waiting_answer_fits(life: &Life, item: &str, train: &[(String, u8, u8)]) -> bool {
+    train.is_empty() || answers_trade(life, item)
 }
 
 #[cfg(test)]

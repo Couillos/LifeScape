@@ -2038,3 +2038,15 @@ formaient aucun sac : jamais touchés. Tests :
 `guide_money::tests::market_lot::a_purchase_the_asks_cover_pays_no_wait`,
 `full_market_counts_trips_waits_and_capital` (carnet mince : l'attente
 reste). Rejeté : plancher de prix, liste d'objets abondants à la main.
+
+## 2026-11-20 — Une réponse « en attendant » se fait avec les niveaux acquis
+
+Une réponse tirée sur tout le marché pendant que l'ambition attend un achat
+(`brain_wait_answer`) ne doit pas entraîner un niveau hors du métier du bot
+(`bid_trade::waiting_answer_fits`) : le choix prend le meilleur lot qui se fait
+avec les niveaux tenus. Une réponse déjà tenue qui grimpe encore un niveau
+hors métier est rendue (`off_trade_answer`), l'ambition reprend. Dans son
+propre métier, l'entraînement pour un lot reste permis. Live 19:37-20:37 CET :
+cinq cuisiniers mis de côté pour un achat d'anchois entraînaient la forge de
+1 à 62 pour quelques boucliers en mithril ; la cuisine restait à 0,3 % du
+temps de la flotte et 45 000 poulets crus à 1 pièce sans acheteur.
