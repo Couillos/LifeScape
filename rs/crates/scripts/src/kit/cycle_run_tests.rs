@@ -38,6 +38,36 @@ fn a_load_failed_across_a_pause_is_taken_again() {
     assert_eq!(calls, 2, "one reload after the pause");
 }
 
+/// Live 2026-11-20 (68 smiths `item 2353 is not in the backpack` at
+/// the Port Sarim anvil, 20 potters on clay): the delivery banked the
+/// bars during the walk to the anvil, and the anvil's use read the
+/// missing bar as an SDK state error, which the reload rule skipped. A
+/// state error across a pause is the pause's doing: the load is taken
+/// again; without a pause, or any other SDK error, it stands.
+#[test]
+fn a_state_error_across_a_pause_is_taken_again() {
+    let mut bot = offline_bot();
+    let spec = parse_cli("smith", &[]).expect("smith parses");
+    let mut calls = 0u32;
+    let outcome = run(&mut bot, &spec, |step_bot, _| {
+        calls += 1;
+        if calls == 1 {
+            step_bot.pauses_done += 1;
+            return Err(ScriptError::Sdk(lifescape_sdk::Error::State("item 2353 is not in the backpack at (0, 2998, 3144)".to_string())));
+        }
+        Ok(StepControl::GoalReached)
+    });
+    assert_eq!(outcome.expect("the load is taken again"), 0);
+    assert_eq!(calls, 2, "one reload after the pause");
+    let unpaused = run(&mut bot, &spec, |_, _| Err(ScriptError::Sdk(lifescape_sdk::Error::State("item 2353 is not in the backpack".to_string()))));
+    assert!(matches!(unpaused, Err(ScriptError::Sdk(_))), "no pause: the state error stands, got {unpaused:?}");
+    let io = run(&mut bot, &spec, |step_bot, _| {
+        step_bot.pauses_done += 1;
+        Err(ScriptError::Sdk(lifescape_sdk::Error::Io("socket closed".to_string())))
+    });
+    assert!(matches!(io, Err(ScriptError::Sdk(_))), "a dead socket is never retried, got {io:?}");
+}
+
 /// Without a pause during the step, a failure ends the run as before.
 #[test]
 fn a_failure_without_a_pause_still_fails() {

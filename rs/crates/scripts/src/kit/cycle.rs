@@ -627,9 +627,9 @@ pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut C
             }
             // A delivery closed during the load banked the pack but the
             // tools (`kit::site::paused_since`): take the load again.
-            Err(ScriptError::Failed(reason)) if crate::kit::site::reload_after_pause(pauses_at_step, bot.pauses_done, pause_reloads) => {
+            Err(error) if crate::kit::site::pause_can_explain(&error) && crate::kit::site::reload_after_pause(pauses_at_step, bot.pauses_done, pause_reloads) => {
                 pause_reloads += 1;
-                bot.log(&format!("load cut by a market pause ({reason}): taking it again"));
+                bot.log(&format!("load cut by a market pause ({error}): taking it again"));
                 StepControl::Continue
             }
             // The lot's stock is spent (`kit::stock_use`): the order is done.

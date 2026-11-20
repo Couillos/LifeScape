@@ -80,6 +80,15 @@ pub fn reload_after_pause(pauses_mark: u64, pauses_now: u64, restarts: u32) -> b
     paused_since(pauses_mark, pauses_now) && restarts < PASS_PAUSE_RESTARTS
 }
 
+/// Pure: an error a closed pause can explain (the pack banked but the
+/// tools): a runtime failure, or an SDK state error such as `inv_slot`'s
+/// "item 2353 is not in the backpack" (live 2026-11-20: 68 smiths at the
+/// anvil, potters on their clay). Never a contract error, a block, nor a
+/// dead socket or an operator stop.
+pub fn pause_can_explain(error: &crate::ScriptError) -> bool {
+    matches!(error, crate::ScriptError::Failed(_) | crate::ScriptError::Sdk(lifescape_sdk::Error::State(_)))
+}
+
 /// Pure: the leg a single pass runs next. `pauses_at_load` is the
 /// closed-pause count when the goods were taken (`None`: not yet),
 /// `pauses_now` the count now. A pause closed since then left the bot at
