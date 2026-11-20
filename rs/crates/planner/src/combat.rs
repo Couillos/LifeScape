@@ -168,6 +168,35 @@ pub fn goal_combat_style(goal: &crate::model::GoalKind) -> &str {
     }
 }
 
+/// Combat style the bot fights NOW (user 2026-11-20: « pourquoi ils ne
+/// cherchent pas à obtenir du matériel qui augmente les bonus de magie,
+/// comme les staffs ? »; live: fiona_swift, a mage whose bid goal
+/// (amulet of power) trains magic for its enchant, cast earth strike
+/// with an adamant battleaxe: a production goal reads melee). The
+/// current goal's open fight wins: the running node, else a ready one
+/// (`fight:<style>/..` method, or a magic / ranged level to reach);
+/// none, the goal's own style (`goal_combat_style`).
+pub fn fight_style(life: &crate::model::Life) -> &str {
+    use crate::model::{NodeKind, NodeStatus};
+    let floor = life.memory.floor.unwrap_or(0);
+    let style_of = |node: &crate::model::Node| -> Option<&'static str> {
+        let method = node.method.as_deref().unwrap_or("");
+        for style in ["magic", "ranged", "melee"] {
+            if method.strip_prefix("fight:").is_some_and(|rest| rest.starts_with(style) && rest[style.len()..].starts_with('/')) {
+                return Some(style);
+            }
+        }
+        match &node.kind {
+            NodeKind::ReachLevel { skill, .. } if method.is_empty() && skill == "magic" => Some("magic"),
+            NodeKind::ReachLevel { skill, .. } if method.is_empty() && skill == "ranged" => Some("ranged"),
+            _ => None,
+        }
+    };
+    let current = |node: &&crate::model::Node| crate::lifecycle_retire::node_number(&node.id).is_some_and(|number| number >= floor);
+    let open = |status: &NodeStatus| life.nodes.iter().filter(current).filter(|node| &node.status == status).find_map(style_of);
+    open(&NodeStatus::Active).or_else(|| open(&NodeStatus::Ready)).unwrap_or_else(|| goal_combat_style(&life.goal))
+}
+
 /// Where the brain sends one method for a bot: a workable site, the
 /// combat level the least demanding site needs (a sub-task to train),
 /// or nothing to choose (the method works anywhere).
@@ -677,4 +706,50 @@ mod tests {
         }
     }
 
+    /// Live 2026-11-20: fiona_swift (mage, bid goal amulet of power)
+    /// cast earth strike with an adamant battleaxe; kevin_ellis (ranger,
+    /// equip best ranged) cast in leather. The open fight sets the gear.
+    #[test]
+    fn the_open_fight_sets_the_gear_style_before_the_goal() {
+        use crate::model::{Archetype, Life, Node, NodeKind, NodeStatus, Profile};
+        let node = |id: &str, kind: NodeKind, method: Option<&str>, status: NodeStatus| {
+            let mut node = Node::new(id, kind, Vec::new(), 1);
+            node.method = method.map(str::to_string);
+            node.status = status;
+            node
+        };
+        let level = |skill: &str| NodeKind::ReachLevel { skill: skill.to_string(), level: 50 };
+        let mut fiona = Life {
+            schema: 1,
+            account: "style_fiona".to_string(),
+            created_at: 0,
+            seed: 1,
+            profile: Profile::new(false, 0.5, 0.5, 1, Archetype::Producer),
+            goal: GoalKind::Produce { item: "amulet_of_power".to_string(), count: 1 },
+            nodes: vec![node("n1995", level("magic"), Some("fight:magic/earth_strike/cows"), NodeStatus::Active)],
+            engagement: None,
+            active: None,
+            history: Vec::new(),
+            ambition: None,
+            goal_origin: None,
+            memory: Default::default(),
+        };
+        fiona.memory.floor = Some(1990);
+        assert_eq!(super::fight_style(&fiona), "magic", "the running cast");
+        // Between two runs: the next magic level, its method not chosen yet.
+        fiona.nodes = vec![node("n1995", level("magic"), Some("fight:magic/earth_strike/cows"), NodeStatus::Done), node("n1996", level("magic"), None, NodeStatus::Ready)];
+        assert_eq!(super::fight_style(&fiona), "magic", "the ready level");
+        // A ranged goal fighting magic now wears for magic.
+        fiona.goal = GoalKind::EquipBest { style: "ranged".to_string() };
+        assert_eq!(super::fight_style(&fiona), "magic");
+        // A melee fight within a magic goal: melee.
+        fiona.goal = GoalKind::MaxSkills { skills: vec!["magic".to_string()], level: 70 };
+        fiona.nodes = vec![node("n1997", level("attack"), Some("fight:melee/cows"), NodeStatus::Ready)];
+        assert_eq!(super::fight_style(&fiona), "melee");
+        // No fight open, or only an earlier goal's: the goal's style.
+        fiona.nodes = vec![node("n1500", level("magic"), Some("fight:magic/earth_strike/cows"), NodeStatus::Ready)];
+        assert_eq!(super::fight_style(&fiona), "magic", "the goal's own (magic)");
+        fiona.goal = GoalKind::Produce { item: "amulet_of_power".to_string(), count: 1 };
+        assert_eq!(super::fight_style(&fiona), "melee", "an earlier goal's node is no fight of this one");
+    }
 }

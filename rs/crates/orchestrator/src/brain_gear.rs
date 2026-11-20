@@ -92,9 +92,11 @@ pub(crate) fn recently_withdrawn(account: &str, item: &str, now: f64) -> bool {
     table.get(&(account.to_string(), item.to_string())).is_some_and(|last| now - last < WITHDRAWN_RETRY_SECS)
 }
 
-/// Combat style of the life's goal (non-combat goals fight melee).
+/// Combat style the bot fights now (`lifescape_planner::fight_style`:
+/// the current goal's open fight, else the goal's style; non-combat
+/// goals fight melee).
 pub fn goal_style(life: &Life) -> Style {
-    Style::parse(lifescape_planner::goal_combat_style(&life.goal))
+    Style::parse(lifescape_planner::fight_style(life))
 }
 
 /// Still true for melee and non-combat goals (callers that only speak of

@@ -97,7 +97,7 @@ pub use chains::{
     quests_for_goal, synergies, usable_chains, xp_per_tick, BootStep, Chain, ChainEval, ChainPrices, ChainStep,
     QuestShortcut, Source, SourceCtx, CHAINS, WILDERNESS_TAX_TICKS,
 };
-pub use combat::{combat_level, goal_combat_style, min_combat_for_method, pick_site, pick_site_gated, pick_site_paid, training_method, BaseLevels, CombatError, Fare, Pass, SitePick};
+pub use combat::{combat_level, fight_style, goal_combat_style, min_combat_for_method, pick_site, pick_site_gated, pick_site_paid, training_method, BaseLevels, CombatError, Fare, Pass, SitePick};
 pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, rank_money_method};
 pub use expand::{expand_goal, expand_goal_from, method_feasible, required_tool, resolve_ready};
 pub use lifecycle_retire::{retire_due, retire_finished, Retirement};

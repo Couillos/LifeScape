@@ -57,7 +57,7 @@ pub fn wanted_names(life: &Life) -> Vec<String> {
 }
 
 fn style_of(life: &Life) -> Style {
-    Style::parse(lifescape_planner::goal_combat_style(&life.goal))
+    Style::parse(lifescape_planner::fight_style(life))
 }
 
 /// One wish: the object, its slot (`pickaxe`/`axe` for tools) and the
