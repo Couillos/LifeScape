@@ -134,7 +134,8 @@ pub fn mill_line(message: &str) -> Option<MillLine> {
 /// stand refused is a typed failure.
 pub fn click_from_stands(bot: &mut Bot, loc_at: (i32, i32, u16), click: &mut dyn FnMut(&mut Bot) -> Result<(), ScriptError>, wanted: &[MillLine]) -> Result<Vec<MillLine>, ScriptError> {
     let (x, z, loc) = loc_at;
-    let stands = crate::kit::produce::loc_side_stands(bot, x, z, loc);
+    let level = bot.world.level;
+    let stands = crate::kit::produce::loc_side_stands(bot, x, z, level, loc);
     for (stand_x, stand_z) in stands.iter().copied() {
         match walk_checked(bot, stand_x, stand_z, STAND_WALK_TICKS) {
             Ok(true) => {}
@@ -270,13 +271,13 @@ mod tests {
         bot.world.level = 2;
         bot.world.x = 3165;
         bot.world.z = 3306;
-        let hopper_stands = crate::kit::produce::loc_side_stands(&mut bot, 3166, 3307, loc_named("hopper_lumbridge"));
+        let hopper_stands = crate::kit::produce::loc_side_stands(&mut bot, 3166, 3307, 2, loc_named("hopper_lumbridge"));
         assert_eq!(hopper_stands.first(), Some(&(3165, 3307)), "west of the hopper first, got {hopper_stands:?}");
         assert!(hopper_stands.contains(&(3168, 3307)) && hopper_stands.contains(&(3167, 3308)), "east and north sides, got {hopper_stands:?}");
-        let lever_stands = crate::kit::produce::loc_side_stands(&mut bot, 3166, 3305, loc_named("hopperlevers1"));
+        let lever_stands = crate::kit::produce::loc_side_stands(&mut bot, 3166, 3305, 2, loc_named("hopperlevers1"));
         assert!(lever_stands.contains(&(3165, 3305)) && lever_stands.contains(&(3167, 3305)), "lever sides, got {lever_stands:?}");
         bot.world.level = 0;
-        let bin_stands = crate::kit::produce::loc_side_stands(&mut bot, 3166, 3307, loc_named("millbase"));
+        let bin_stands = crate::kit::produce::loc_side_stands(&mut bot, 3166, 3307, 0, loc_named("millbase"));
         assert_eq!(&bin_stands[..2], &[(3165, 3307), (3166, 3306)], "bin sides nearest first, got {bin_stands:?}");
         for stands in [&hopper_stands, &lever_stands, &bin_stands] {
             assert!(!stands.contains(&(3165, 3306)), "the diagonal arrival never stands, got {stands:?}");
