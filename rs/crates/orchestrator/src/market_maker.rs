@@ -340,13 +340,14 @@ pub fn outlet_units(equity: i64, value: i64) -> i64 {
 pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
     let Some(role) = lifescape_planner::maker_role(life).filter(|role| role.phase == lifescape_planner::MakerPhase::Quoting) else { return 0 };
     let wall = wall_now();
-    {
+    // The previous pass (none after a daemon start: one pass back).
+    let previous = {
         let mut table = last_pass().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if table.get(&job.account).is_some_and(|last| wall - last < ticks_as_secs(MAKER_PASS_TICKS)) {
             return 0;
         }
-        table.insert(job.account.clone(), wall);
-    }
+        table.insert(job.account.clone(), wall)
+    };
     let Some(service) = crate::market_service::shared() else { return 0 };
     let account = job.account.as_str();
     // The maker's time value (D1) prices its shop trips (the outlet, D2);
@@ -408,7 +409,9 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
             stock: units,
             stock_cost: held.get(id).map(|position| position.cost).unwrap_or(0),
             capital: equity,
-            own_bid: bids.first().map(|(_, price, _)| *price),
+            // Unserved since the previous pass (no buy of it since): the
+            // bid climbs 10 % (`maker::quote`); bought, a fresh quote.
+            own_bid: bids.first().map(|(_, price, _)| *price).filter(|_| !bought_since(account, *id, &deals, previous.unwrap_or(wall - ticks_as_secs(MAKER_PASS_TICKS)))),
             own_ask: asks.first().map(|(_, price, _)| *price),
         };
         let quote = lifescape_market::maker_quote(&MAKER_CAPS, &input);
@@ -439,6 +442,12 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
         table.insert(account.to_string(), npc);
     }
     moves
+}
+
+/// True when `account` bought `item` (book object) in a deal opened at
+/// or after `since` (unix seconds): its bid was served this pass.
+pub fn bought_since(account: &str, item: i64, deals: &[lifescape_store::Deal], since: f64) -> bool {
+    deals.iter().any(|deal| deal.buyer == account && crate::market_audit::book_item(deal.item_id) == item && deal.created_clock as f64 >= since)
 }
 
 /// Others' best bid, best ask and resting units per side on one book

@@ -70,7 +70,9 @@ impl OrderStatus {
 /// `replaces`: the order an amend replaces (schema 6, decision Q1): the
 /// new row joins its lineage (same root, same t0); `None` opens a new
 /// lineage. `motive`: why the order exists (`need`, `gear`, `surplus`…,
-/// empty when the caller does not say), kept by every amend.
+/// empty when the caller does not say), kept by every amend. `ceiling`:
+/// a buy's limit per lot (schema 10, the 10 % walk after a restart),
+/// kept by every amend; `None` when the caller does not say.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NewOrder {
     pub account: String,
@@ -82,6 +84,7 @@ pub struct NewOrder {
     pub clock: i64,
     pub replaces: Option<i64>,
     pub motive: String,
+    pub ceiling: Option<i64>,
 }
 
 /// Cancel reason of the row an amend closed (schema 6): the row is
@@ -112,6 +115,8 @@ pub struct Order {
     /// Why a cancelled row closed (`amended`, `gear_plan`, `audit`…;
     /// empty when the canceller did not say).
     pub cancel_reason: String,
+    /// A buy's limit per lot (schema 10), `None` when unsaid.
+    pub ceiling: Option<i64>,
 }
 
 impl Order {
@@ -147,12 +152,13 @@ fn map_order(row: &rusqlite::Row<'_>) -> Result<Order, Error> {
         root_clock: row.get(13)?,
         motive: row.get(14)?,
         cancel_reason: row.get(15)?,
+        ceiling: row.get(16)?,
     })
 }
 
 const ORDER_COLUMNS: &str = "order_id, account, side, item_id, quantity, remaining, \
      price, status, dormant, created_clock, updated_clock, replaces, root_id, root_clock, \
-     motive, cancel_reason";
+     motive, cancel_reason, ceiling";
 
 impl Store {
     /// Records a new open order, returns its id.
@@ -175,8 +181,8 @@ impl Store {
         };
         self.connection.execute(
             "INSERT INTO orders(account, side, item_id, quantity, remaining, price, \
-             status, dormant, created_clock, updated_clock, replaces, root_id, root_clock, motive) \
-             VALUES (?1, ?2, ?3, ?4, ?4, ?5, 'open', ?6, ?7, ?7, ?8, ?9, ?10, ?11)",
+             status, dormant, created_clock, updated_clock, replaces, root_id, root_clock, motive, ceiling) \
+             VALUES (?1, ?2, ?3, ?4, ?4, ?5, 'open', ?6, ?7, ?7, ?8, ?9, ?10, ?11, ?12)",
             rusqlite::params![
                 new_order.account,
                 new_order.side.as_str(),
@@ -189,6 +195,7 @@ impl Store {
                 root_id,
                 root_clock,
                 new_order.motive,
+                new_order.ceiling,
             ],
         )?;
         let order_id = self.connection.last_insert_rowid();
@@ -458,6 +465,20 @@ mod orders_tests {
         assert!(store.set_order_status(settled, OrderStatus::Open, 100, 1_700_000_200).is_err());
         assert_eq!(store.get_order(cancelled)?.map(|found| found.status), Some(OrderStatus::Cancelled));
         assert_eq!(store.get_order(settled)?.map(|found| (found.status, found.remaining)), Some((OrderStatus::Settled, 0)));
+        Ok(())
+    }
+
+    /// Schema 10 (user 2026-11-20, the 10 % walk after a restart): a buy
+    /// keeps its ceiling, read back with the row; unsaid, none.
+    #[test]
+    fn a_buy_keeps_its_ceiling() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 314)?;
+        let said = store.place_order(&NewOrder { ceiling: Some(120), ..sample_order("t05") })?;
+        let unsaid = store.place_order(&sample_order("t05"))?;
+        assert_eq!(store.get_order(said)?.and_then(|row| row.ceiling), Some(120));
+        assert_eq!(store.get_order(unsaid)?.and_then(|row| row.ceiling), None);
+        assert!(store.resting_orders()?.iter().any(|row| row.order_id == said && row.ceiling == Some(120)));
         Ok(())
     }
 }

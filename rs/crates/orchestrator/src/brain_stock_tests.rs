@@ -104,6 +104,7 @@ fn order(order_id: i64, item: &str, motive: &str) -> lifescape_store::Order {
         root_clock: 0,
         motive: motive.to_string(),
         cancel_reason: String::new(),
+        ceiling: None,
     }
 }
 

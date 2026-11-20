@@ -21,13 +21,15 @@
 //!   reservation price `p = v * (1 - h * r)`: a high stock lowers BOTH
 //!   sides (sell faster, buy less), a low stock raises both;
 //! - legs: `bid = floor(p * (1 - h))`, never over `v - 1` (always under
-//!   the current price); `ask = ceil(p * (1 + h))`, never under `v + 1`
-//!   (always over it), over the bid and over what a shop pays (Q3);
+//!   the current price) when fresh; an unserved bid climbs 10 % a pass
+//!   (user 2026-11-20: buyers draw sellers); `ask = ceil(p * (1 + h))`,
+//!   never under `v + 1` (always over it), over the bid and over what a
+//!   shop pays (Q3);
 //! - half spread `h` by rotation: liquid 4 %, thin 8 %, discovery 10 %;
 //! - no demand (traded before, no other bid, no buyer over the last
-//!   `DEMAND_LOOKBACK_TICKS`, a loot horizon): the bid walks down 5 %
-//!   per pass toward 1 and the stock past one lot goes to the NPC shop
-//!   (Q3, `npc_dump`);
+//!   `DEMAND_LOOKBACK_TICKS`, a loot horizon): the stock past one lot
+//!   goes to the NPC shop (Q3, `npc_dump`); the bid climbs like any
+//!   unserved bid (no walk down any more, user 2026-11-20);
 //! - risk caps (`MakerCaps`): capital engaged per object (stock at its
 //!   value or its cost, the higher, plus the bid) ≤ 10 % of the
 //!   capital, stock ≤ 500 units,
@@ -267,7 +269,8 @@ pub struct MakerInput {
     /// Coins the maker paid for the stock it holds (its own buys).
     pub stock_cost: i64,
     pub capital: i64,
-    /// The maker's resting bid, if any (the no-demand walk toward 1).
+    /// The maker's bid still resting unserved since the last pass, if
+    /// any (none after a fill): it climbs 10 % like any buyer's.
     pub own_bid: Option<i64>,
     /// The maker's ask still resting unsold since the last pass, if any:
     /// it walks down like any seller's (`NO_DEMAND_STEP`).
@@ -371,10 +374,14 @@ pub fn quote(caps: &MakerCaps, input: &MakerInput) -> MakerQuote {
     bid_price = bid_price.max(1);
     // Discovery buys prudently: a quarter lot.
     let bid_lot = if regime == Regime::Discovery { (lot / 4).max(1) } else { lot };
-    if regime == Regime::NoDemand {
-        let walked = input.own_bid.map_or(bid_price, |own| (own as f64 * (1.0 - NO_DEMAND_STEP)).floor() as i64);
-        // No floor (user 2026-11-18): the bid walks down to 1.
-        bid_price = bid_price.min(walked).max(1);
+    // The 10 % rule for every bid (user 2026-11-20, « il faut les faire
+    // monter les offres d'achat pour inciter les gens à vendre »): a bid
+    // still unserved at this pass (`own_bid`: the caller passes none
+    // after a fill) climbs 10 % (at least a coin), whatever the regime;
+    // a higher fresh quote is taken. Its quantity follows the capital
+    // caps below (the coins engaged never grow past them).
+    if let Some(own) = input.own_bid {
+        bid_price = bid_price.max(crate::concession::walk(false, own));
     }
     let mut ask_price = (reservation * (1.0 + half) - 1e-9).ceil() as i64;
     ask_price = ask_price.max(fair + 1).max(bid_price + 1);

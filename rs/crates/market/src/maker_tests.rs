@@ -162,26 +162,27 @@ fn stock_moves_both_sides() {
     }
 }
 
-/// No price floor for the makers (user 2026-11-18: "les market makers
-/// doivent s'adapter au marché"). Nobody buys: the bid walks down 10 % a
-/// pass all the way to 1, never held at the shop's offer nor the alchemy
-/// outlet; past one lot the stock still goes to the shop (a real buyer).
-/// The step is 10 % a pass, the sellers' rate (user Q1 2026-11-18).
+/// The 10 % rule for every bid (user 2026-11-20, « il faut les faire
+/// monter les offres d'achat pour inciter les gens à vendre »; live: 351
+/// maker bids at 1 coin frozen for a day): nobody sells to it, its bid
+/// climbs 10 % a pass (at least a coin), whatever the regime, the
+/// quantity shrinking with the capital cap; past one lot the stock still
+/// goes to the shop (a real buyer). A fill restarts from a fresh quote
+/// (the caller passes no `own_bid`).
 #[test]
-fn an_object_nobody_buys_walks_its_bid_to_one_and_dumps_to_the_shop() {
-    let idle = MakerInput { best_bid: None, recent_buys: 0, stock: 300, capital: 1_000_000, own_bid: Some(40), ..liquid(0) };
+fn an_unserved_bid_climbs_ten_percent_a_pass_and_dumps_to_the_shop() {
+    let idle = MakerInput { best_bid: None, recent_buys: 0, stock: 300, capital: 1_000_000, own_bid: Some(90), ..liquid(0) };
     let first = quote(&MAKER_CAPS, &idle);
     assert_eq!(first.regime, Regime::NoDemand);
-    assert_eq!(first.bid.map(|leg| leg.price), Some(36), "10 % down a pass, like a seller's floor (user Q1)");
-    let mut own = Some(100);
-    let mut passes = 0;
-    while own != Some(1) && passes < 400 {
-        let next = quote(&MAKER_CAPS, &MakerInput { own_bid: own, ..idle }).bid.map(|leg| leg.price);
-        assert!(next < own, "always down: {next:?} after {own:?}");
+    assert_eq!(first.bid.map(|leg| leg.price), Some(99), "10 % up a pass");
+    let mut own = Some(1);
+    for _ in 0..30 {
+        let next = quote(&MAKER_CAPS, &MakerInput { own_bid: own, stock: 0, ..idle }).bid.map(|leg| leg.price);
+        assert!(next > own, "always up from an unserved bid: {next:?} after {own:?}");
         own = next;
-        passes += 1;
     }
-    assert_eq!(own, Some(1), "down to 1, under the shop's 30");
+    let fresh = quote(&MAKER_CAPS, &MakerInput { own_bid: None, ..idle }).bid.map(|leg| leg.price);
+    assert!(fresh < Some(90), "served: a fresh quote under the fair value: {fresh:?}");
     assert_eq!(first.npc_dump, 300 - lot_units(&MAKER_CAPS, 100), "past one lot goes to the shop");
     let no_shop = quote(&MAKER_CAPS, &MakerInput { outside: None, ..idle });
     assert_eq!(no_shop.npc_dump, 0, "no shop pays: nothing dumped");

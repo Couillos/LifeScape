@@ -77,7 +77,19 @@ invendu baisse de 10 % (arrondi au-dessus, au moins une pièce) jusqu'à
 1 pièce, SOUS son coût propre (plus de plancher vendeur, plus de retrait
 à l'horizon : un ask à 1 reste au carnet) ; un bid non servi monte de
 10 % (au moins une pièce) jusqu'à son plafond (ce que l'acheteur peut
-payer). Restent : recul ZIP de 5 % après un fill propre, tirage à
+payer). Toutes les offres d'achat montent (2026-11-20, décision
+utilisateur : « il faut les faire monter les offres d'achat pour inciter
+les gens à vendre » ; constat : 351 offres des teneurs à 1 pièce,
+figées depuis un jour, et 48 offres sans motif figées 18 à 67 h, leur
+marche perdue au redémarrage) : l'offre d'un teneur non servie depuis
+sa passe précédente monte de 10 % (`maker::quote`, plus de descente
+vers 1 sans demande ; servie, nouvelle cotation ; la quantité suit les
+plafonds de capital) ; le plafond d'une offre est gardé dans le carnet
+(schéma 10, colonne `ceiling`, transmis par chaque amend) et, 600 s
+après le démarrage du démon, toute offre que personne ne fait marcher
+est reprise par la marche (`market_reprice::adopt_bids`) avec son
+plafond, sinon jusqu'à ce que l'acheteur peut payer (chaque hausse
+bornée par ses pièces libres). Restent : recul ZIP de 5 % après un fill propre, tirage à
 mi-chemin vers un prix public, prise du meilleur prix opposé quand
 pressé ou quand la marche suivante l'atteint. La courbe ci-dessous ne
 fixe plus que le plafond de l'acheteur (sa limite) ; ouverture, β et

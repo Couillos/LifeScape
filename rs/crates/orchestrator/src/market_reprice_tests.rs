@@ -339,3 +339,49 @@ fn the_bid_walk_stops_at_the_wallet() {
     assert_eq!(price_of(&service, "buyer"), Some(6), "never past its 60 coins");
     cleanup(&path);
 }
+
+/// Live 2026-11-20: bids at 1 coin frozen 18 to 67 h (kai_ellis 12 070
+/// bronze 2h swords, tim_ford 9 719 raw lobsters), their walk lost at a
+/// daemon restart. Every resting bid nobody walks is adopted with its
+/// stored ceiling, else what the buyer can pay; the makers' quotes climb
+/// in their own pass; asks and walked bids are left alone.
+#[test]
+fn every_bid_nobody_walks_is_adopted_with_its_ceiling() {
+    use lifescape_store::{Order, OrderSide, OrderStatus};
+    let row = |order_id: i64, side: OrderSide, motive: &str, ceiling: Option<i64>| Order { order_id, account: "t_adopt".to_string(), side, item_id: 314, quantity: 10, remaining: 10, price: 1, status: OrderStatus::Open, motive: motive.to_string(), ceiling, ..Order::default() };
+    let rows = vec![
+        row(1, OrderSide::Buy, "", None),
+        row(2, OrderSide::Buy, "need", Some(80)),
+        row(3, OrderSide::Buy, crate::market_lineage::MARKET_MAKE, None),
+        row(4, OrderSide::Sell, "loot", None),
+        row(5, OrderSide::Buy, "gear", Some(50)),
+    ];
+    let walked = |order: i64| order == 5;
+    assert_eq!(super::bid_adoptions(&rows, &walked), vec![(1, super::UNSAID_CEILING), (2, 80)]);
+}
+
+#[test]
+fn a_maker_bid_bought_since_the_last_pass_was_served() {
+    use lifescape_store::{Deal, DealStatus};
+    let deal = |buyer: &str, item_id: i64, created_clock: i64| Deal {
+        deal_id: 1,
+        buyer: buyer.to_string(),
+        seller: "seller".to_string(),
+        item_id,
+        quantity: 1,
+        price: 5,
+        meeting_x: 0,
+        meeting_y: 0,
+        meeting_level: 0,
+        status: DealStatus::Settled,
+        fail_reason: String::new(),
+        deadline_tick: 0,
+        created_clock,
+        updated_clock: created_clock,
+        taker_side: None,
+    };
+    let deals = vec![deal("maker", 314, 1_000), deal("other", 526, 2_000)];
+    assert!(crate::market_maker::bought_since("maker", 314, &deals, 900.0));
+    assert!(!crate::market_maker::bought_since("maker", 314, &deals, 1_100.0), "an older buy: unserved this pass");
+    assert!(!crate::market_maker::bought_since("maker", 526, &deals, 900.0), "another's buy");
+}

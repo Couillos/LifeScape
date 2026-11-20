@@ -341,6 +341,61 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
     moved
 }
 
+/// Per-lot ceiling a place request states for a buy (schema 10: kept
+/// with the order, the walk survives a restart); none for a sell.
+pub fn request_ceiling(request: &Value, sell: bool, lot: i64) -> Option<i64> {
+    if sell {
+        return None;
+    }
+    request.get("ceiling").as_i64().map(|unit| lifescape_market::lots::lot_price(unit.max(1), lot))
+}
+
+/// Ceiling of an adopted bid that never stated one: what the buyer can
+/// pay, each raise capped by its free coins (`affordable_raise`).
+pub const UNSAID_CEILING: i64 = i64::MAX / 4;
+/// Seconds after the daemon start before unwalked bids are adopted: the
+/// owners' passes (`keep_bid`: gear, stock, tools) re-register theirs
+/// first, with their live ceiling.
+pub const ADOPT_GRACE_SECS: f64 = 600.0;
+
+fn daemon_start() -> f64 {
+    static START: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *START.get_or_init(wall_now)
+}
+
+/// Resting bids nobody walks (user 2026-11-20, « il faut les faire
+/// monter les offres d'achat pour inciter les gens à vendre »: live,
+/// bids at 1 coin frozen 18 to 67 h, their walk lost at a daemon
+/// restart): `(order, ceiling)`, the stored ceiling or `UNSAID_CEILING`.
+/// The market makers' quotes climb in their own pass (`maker::quote`).
+pub fn bid_adoptions(rows: &[lifescape_store::Order], handled: &dyn Fn(i64) -> bool) -> Vec<(i64, i64)> {
+    rows.iter()
+        .filter(|row| row.side == lifescape_store::OrderSide::Buy && resting(row) && row.motive != crate::market_lineage::MARKET_MAKE)
+        .filter(|row| !handled(row.order_id))
+        .map(|row| (row.order_id, row.ceiling.unwrap_or(UNSAID_CEILING).max(row.price)))
+        .collect()
+}
+
+/// Adopts every bid nobody walks into the 10 % walk (`bid_adoptions`),
+/// once the grace after the daemon start ran. Returns the count.
+pub fn adopt_bids(service: &MarketService, wall: f64) -> usize {
+    if wall - daemon_start() < ADOPT_GRACE_SECS {
+        return 0;
+    }
+    let rows = service.lock_store().resting_orders().unwrap_or_default();
+    let mut adopted = 0;
+    for (order, ceiling) in bid_adoptions(&rows, &|order| handled(service, order)) {
+        let Some(row) = rows.iter().find(|row| row.order_id == order) else { continue };
+        if adopt(service, order, QuoteBounds::for_row(row, row.price, ceiling)) {
+            adopted += 1;
+        }
+    }
+    if adopted > 0 {
+        crate::logln!("market-reprice: {adopted} resting bid(s) adopted by the 10 % walk");
+    }
+    adopted
+}
+
 /// Re-adopts a resting order the engine has no bounds for (daemon
 /// restart, listings placed before demand pricing): it walks from now.
 /// Returns false when the order already walks.

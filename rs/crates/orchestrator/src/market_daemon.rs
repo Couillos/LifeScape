@@ -142,6 +142,8 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
                     if cancelled > 0 {
                         eprintln!("market-audit: {cancelled} uncovered order(s) cancelled");
                     }
+                    // Bids nobody walks (a restart) climb again.
+                    crate::market_reprice::adopt_bids(&service, wall);
                     // Then fold same-price fragments into one order each.
                     let merged = service.consolidate_round();
                     if merged > 0 {

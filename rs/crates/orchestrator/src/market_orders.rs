@@ -109,6 +109,7 @@ impl MarketService {
                 clock,
                 replaces: Some(order_id),
                 motive: row.motive.clone(),
+                ceiling: row.ceiling,
             });
             match placed {
                 Ok(id) => match store.cancel_order_because(order_id, clock, lifescape_store::AMENDED_REASON) {
