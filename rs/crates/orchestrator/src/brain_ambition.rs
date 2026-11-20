@@ -32,7 +32,7 @@ use std::sync::Mutex;
 use lifescape_json::Value;
 use lifescape_planner::ambition_catalog::{group_skills, primary_group, specs};
 use lifescape_planner::{
-    achieved, assign_fleet, coverage_gaps, coverage_repair, describe_ambition, draw_kind, extend_ambition, keeps_ladder_end, mark_rule, needs_review, new_ambition_supplied,
+    achieved, assign_fleet, coverage_gaps, coverage_repair, describe_ambition, draw_kind, neediest_kind, extend_ambition, keeps_ladder_end, mark_rule, needs_review, new_ambition_supplied,
     new_ambition_extended_supplied, milestone_cool_key, on_goal_closed, on_goal_shortfall, optional_change, review_slot_ticks, saturate, pinned, refresh_supplied, release_pin, revise,
     Ambition, BotNow, CloseOutcome, DemandItem, FleetBot, KindDemand, Life, Stamp, GROUPS, MILESTONE_MAX_BLOCKS, MILESTONE_SHORTFALL_COOL_TICKS,
     STALE_GOAL_CAUSE,
@@ -317,6 +317,19 @@ fn redraw_by_need(life: &mut Life, live: &Value, revision_why: &str) {
     let demand = need_demand(&life.account, &held);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
     let first = draw_kind(&bot, &gaps, &demand.weights, &[]);
+    let inputs = DrawInputs::from_demand(demand, gaps);
+    replace(life, live, &bot, first, &inputs, &[], revision_why);
+}
+
+/// A retired market maker's trade (user 2026-11-20): the neediest kind
+/// of the fleet (`neediest_kind`, the need saturated by the kinds the
+/// other bots hold), built like any redraw; nothing drawable, the usual
+/// need draw.
+pub(crate) fn redraw_neediest(life: &mut Life, live: &Value, revision_why: &str) {
+    let (gaps, _, held) = fleet_view(life);
+    let demand = need_demand(&life.account, &held);
+    let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
+    let first = neediest_kind(&bot, &demand.weights, &[]).unwrap_or_else(|| draw_kind(&bot, &gaps, &demand.weights, &[]));
     let inputs = DrawInputs::from_demand(demand, gaps);
     replace(life, live, &bot, first, &inputs, &[], revision_why);
 }

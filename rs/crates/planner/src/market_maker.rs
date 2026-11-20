@@ -20,6 +20,13 @@ use crate::model::{Archetype, GoalKind, Life};
 
 /// The maker's only method: stand at its post, the daemon quotes.
 pub const MAKE_METHOD: &str = "market:make";
+/// Market makers in use (user 2026-11-20: « abandonne les teneurs, garde
+/// le mécanisme dans le code mais ne l'utilise plus »): false, no maker
+/// is created, a maker life is retired to the neediest trade
+/// (`orchestrator::market_maker::retire`). The mechanism stays intact.
+pub const MAKERS_ACTIVE: bool = false;
+/// `last_error` of the nodes a maker's retirement abandons.
+pub const MAKER_RETIRED_CAUSE: &str = "role: market maker retired (makers unused)";
 /// The maker's ambition kind (operator-only, never drawn by the fleet):
 /// a coin ladder for the playing phase.
 pub const MARKET_MAKER_KIND: &str = "market_maker";

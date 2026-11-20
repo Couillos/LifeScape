@@ -363,3 +363,19 @@ fn the_outlet_counts_training_windows_not_raw_units() {
     let raw = crate::ambition_catalog::compress(1000.0) / crate::ambition_catalog::compress(600_000.0);
     assert!(priest / fisher < raw * 0.5, "never the raw-unit ratio {raw}: {}", priest / fisher);
 }
+
+/// User 2026-11-20 (« abandonne les teneurs … trouve les rôles idéaux
+/// pour ces 11 comptes »): a retired market maker takes the neediest
+/// kind, no roll; held kinds saturate it, so the next one spreads.
+#[test]
+fn a_retired_maker_takes_the_neediest_trade_and_the_next_spreads() {
+    let need = |kind: &str, need: f64| KindDemand { kind: kind.to_string(), weight: 1.0, need, top_item: None, need_item: None };
+    let demand = vec![need("cook", 3.0), need("fisher", 2.5), need("crafter", 1.0)];
+    let bot = woodcutter_crafter("retired_maker", 7);
+    let first = crate::ambition_fleet::neediest_kind(&bot, &demand, &[]).map(|(kind, _)| kind);
+    assert_eq!(first.as_deref(), Some("cook"));
+    // One cook held: its need halves (saturate), the fisher comes next.
+    let saturated = crate::ambition_fleet::saturate(&demand, &["cook"]);
+    let second = crate::ambition_fleet::neediest_kind(&bot, &saturated, &[]).map(|(kind, _)| kind);
+    assert_eq!(second.as_deref(), Some("fisher"));
+}

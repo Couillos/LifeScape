@@ -213,6 +213,17 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
     (kind.to_string(), why)
 }
 
+/// The kind the need draw weighs most for this bot (D3 weights, no
+/// roll, operator kinds out): a retired market maker takes the neediest
+/// trade of the fleet (user 2026-11-20, « trouve les rôles idéaux pour
+/// ces 11 comptes »); `demand` saturated by the kinds already held, so
+/// successive retirements spread. `None` when nothing is drawable.
+pub fn neediest_kind(bot: &FleetBot, demand: &[KindDemand], exclude: &[&str]) -> Option<(String, String)> {
+    let operator_only = |kind: &str| crate::ambition::ladderless(kind) || kind == crate::market_maker::MARKET_MAKER_KIND;
+    let drawable: Vec<&str> = specs().iter().map(|entry| entry.kind).filter(|kind| !operator_only(kind) && !exclude.contains(kind)).collect();
+    need_weights(bot, &drawable, demand).into_iter().max_by(|left, right| left.1.total_cmp(&right.1)).map(|(kind, _, why)| (kind.to_string(), why))
+}
+
 /// Level-led weights (the draw before D3): demand weight × √fit × tilt.
 fn level_led_weights<'kinds>(bot: &FleetBot, drawable: &[&'kinds str], demand: &[KindDemand]) -> Vec<(&'kinds str, f64, String)> {
     let mut weighted = Vec::new();

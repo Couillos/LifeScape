@@ -120,9 +120,9 @@ pub use ambition::{
     milestone_cool_key, AMBITION_CHANGE_TICKS, ALCHER, GENERALIST, MILESTONE_MAX_BLOCKS, MILESTONE_SHORTFALL_COOL_TICKS, OVERALL,
 };
 pub use ambition_catalog::{kind_weights, DemandItem, KindDemand, GROUPS};
-pub use market_maker::{become_quoting, maker_post, maker_role, quoting, switch_due, MakerPhase, MakerRole, MAKER_POSTS, MAKE_METHOD, MARKET_MAKER_KIND, MAKER_ROLE_CAUSE};
+pub use market_maker::{become_quoting, maker_post, maker_role, quoting, switch_due, MakerPhase, MakerRole, MAKER_POSTS, MAKE_METHOD, MAKERS_ACTIVE, MAKER_RETIRED_CAUSE, MARKET_MAKER_KIND, MAKER_ROLE_CAUSE};
 pub use ambition_review::{adopt_need_mark, redraw_gaps, OPERATOR_RULE, draw_rule_for, goal_from_earlier_ambition, is_milestone_origin, keeps_ladder_end, mark_rule, needs_review, review_slot_ticks, LEVEL_RULE, NEED_RULE, REVIEW_SPREAD_TICKS, STALE_GOAL_CAUSE};
-pub use ambition_fleet::{assign_fleet, coverage_gaps, coverage_repair, draw_kind, level_led, saturate, optional_change, Assignment, FleetBot, LEVEL_LED_ACCOUNTS};
+pub use ambition_fleet::{assign_fleet, coverage_gaps, coverage_repair, draw_kind, level_led, neediest_kind, saturate, optional_change, Assignment, FleetBot, LEVEL_LED_ACCOUNTS};
 pub use mapping::map_method;
 pub use model::{
     Alternative, Archetype, Engagement, GoalKind, HistoryEntry, Life, Node, NodeKind, NodeStatus,

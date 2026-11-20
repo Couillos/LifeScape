@@ -258,6 +258,7 @@ pub const MARKET_MAKER_ROLE: &str = "market_maker";
 pub fn maker_flag(role: Option<&str>, iron: bool) -> Result<bool, String> {
     match role {
         None => Ok(false),
+        Some(MARKET_MAKER_ROLE) if !lifescape_planner::MAKERS_ACTIVE => Err("market makers are unused (MAKERS_ACTIVE false, user 2026-11-20)".to_string()),
         Some(MARKET_MAKER_ROLE) if iron => Err("an Iron never trades: no Iron market maker".to_string()),
         Some(MARKET_MAKER_ROLE) => Ok(true),
         Some(other) => Err(format!("unknown role {other:?} (known: {MARKET_MAKER_ROLE})")),
@@ -721,7 +722,8 @@ mod tests {
         assert!(lifescape_planner::pinned(&ambition));
         assert_eq!((goal, origin.as_str()), (GoalKind::GetRich, "m1"), "money first (producer methods)");
         assert!(super::maker_start(7, &(0..11).collect::<Vec<u32>>()).is_err(), "every slice taken");
-        assert_eq!(super::maker_flag(Some(super::MARKET_MAKER_ROLE), false), Ok(true));
+        // Makers unused (user 2026-11-20): the role is refused while off.
+        assert_eq!(super::maker_flag(Some(super::MARKET_MAKER_ROLE), false).is_ok(), lifescape_planner::MAKERS_ACTIVE);
         assert_eq!(super::maker_flag(None, true), Ok(false));
         assert!(super::maker_flag(Some(super::MARKET_MAKER_ROLE), true).is_err(), "never an Iron maker");
         assert!(super::maker_flag(Some("merchant"), false).is_err(), "unknown role");

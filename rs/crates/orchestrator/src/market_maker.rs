@@ -52,6 +52,8 @@ pub const MAX_HELD_TYPES: usize = lifescape_planner::BANK_TYPE_LIMIT - 1 - 4 - 1
 pub const REQUOTE_REASON: &str = "market_make";
 /// Cancel reason of the orders a role switch withdraws.
 pub const ROLE_REASON: &str = "role";
+/// Cancel reason of a retired maker's quotes (makers unused, `retire`).
+pub const RETIRED_REASON: &str = "maker_retired";
 
 /// One object of the universe: id, debug name, public anchor (shop
 /// value) and what an F2P shop pays for it (Q3), if any.
@@ -324,6 +326,35 @@ pub(crate) fn maybe_switch(job: &Job, life: &mut Life) -> bool {
         role.capital_target,
         abandoned.len()
     );
+    true
+}
+
+/// Retires a maker life while makers are unused
+/// (`lifescape_planner::MAKERS_ACTIVE` false, user 2026-11-20): its
+/// resting quotes cancelled (reason `maker_retired`), the producer
+/// archetype back, every open node abandoned, the neediest trade drawn
+/// (`brain_ambition::redraw_neediest`); its stock and coins stay its own
+/// and serve its new trade or sell as leftovers. True when the life
+/// changed (save it).
+pub(crate) fn retire(job: &Job, life: &mut Life, live: &Value) -> bool {
+    if lifescape_planner::MAKERS_ACTIVE || lifescape_planner::maker_role(life).is_none() {
+        return false;
+    }
+    let mut cancelled = 0;
+    if let Some(service) = crate::market_service::shared() {
+        let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
+        for row in rows.iter().filter(|row| row.motive == crate::market_lineage::MARKET_MAKE && matches!(row.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched) && row.remaining > 0) {
+            cancelled += usize::from(cancel(&service, &job.account, row.order_id, RETIRED_REASON));
+        }
+    }
+    life.profile.archetype = lifescape_planner::Archetype::Producer;
+    let abandoned = lifescape_planner::abandon_for_role(life, lifescape_planner::MAKER_RETIRED_CAUSE);
+    life.goal_origin = None;
+    crate::brain_bid_release::free_board(&job.account);
+    crate::brain::push_history(life, "goal", "role:market_maker retired");
+    crate::logln!("brain {}: market maker retired ({cancelled} quotes cancelled, {} nodes abandoned), drawing the neediest trade", job.account, abandoned.len());
+    crate::brain_ambition::redraw_neediest(life, live, "market maker retired");
+    lifescape_planner::normalize(life);
     true
 }
 

@@ -109,6 +109,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if crate::brain_operator::apply_pending(&mut life, &live) {
         dirty = true;
     }
+    // Makers unused (user 2026-11-20): a maker life takes the neediest
+    // trade, its quotes cancelled (`market_maker::retire`).
+    if crate::market_maker::retire(job, &mut life, &live) {
+        dirty = true;
+    }
     // A market maker at its capital target leaves every other activity
     // for good and quotes its slice (plan marché Q6).
     if crate::market_maker::maybe_switch(job, &mut life) {
