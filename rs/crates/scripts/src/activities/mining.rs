@@ -68,6 +68,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat, spec.site)?;
     bot.allow_shop = spec.allow_shop;
     bot.assigned_site = spec.site;
+    bot.alternative_site = spec.alt_site;
     let task_keep = resolve_keep(bot, &spec)?;
     crate::kit::survival::wait_pack_streamed(bot)?;
     check_events(bot)?;
@@ -88,6 +89,9 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     let mut toolless = 0u32;
     let mut hurt_streak = 0u32;
+    // Depletion stamps outlive one load (a bank trip comes back to the
+    // same mined-out rocks): run memory, never persisted.
+    let mut clock = crate::kit::deplete::DepletionClock::new();
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
         // Under the eat line before the walk out (tour 3 point 8, live
@@ -106,7 +110,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         let until = state.want_goal(step_bot, &spec);
         let ores_before = ores_held(step_bot, &tiers);
-        let (ok, new_level) = crate::kit::mine::mine_load(step_bot, &tiers, &mut bank, coins, level, until)?;
+        let (ok, new_level) = crate::kit::mine::mine_load(step_bot, &tiers, &mut bank, coins, level, until, &mut clock)?;
         level = new_level;
         // A load that mined ore before its rocks ran dry is a load, never
         // a failure (live 2026-11-17, 223 « no adamantite_ore mined » on

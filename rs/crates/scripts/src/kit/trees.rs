@@ -73,7 +73,7 @@ fn tier_spawns(tier: &knowledge::trees::TreeTier, bank: &knowledge::banks::Bank)
 
 /// Every spawn of the tier's loc names on this level, any bank: the
 /// cluster-hop pool when nothing qualifies near the current bank.
-fn tier_spawns_wide(tier: &knowledge::trees::TreeTier, level: i64) -> Vec<(i32, i32)> {
+pub(crate) fn tier_spawns_wide(tier: &knowledge::trees::TreeTier, level: i64) -> Vec<(i32, i32)> {
     let mut found = Vec::new();
     for entry in knowledge::all_locs() {
         let name = entry.name.clone().unwrap_or_default().to_lowercase();
@@ -92,7 +92,7 @@ fn tier_spawns_wide(tier: &knowledge::trees::TreeTier, level: i64) -> Vec<(i32, 
 /// False when the server cleared this tile or confirmed something else
 /// here. A tile that has not streamed yet counts as standing (the static
 /// template is the truth until the server says otherwise).
-fn tree_live(bot: &Bot, spot_x: i32, spot_z: i32, tier_names: &[String]) -> bool {
+pub(crate) fn tree_live(bot: &Bot, spot_x: i32, spot_z: i32, tier_names: &[String]) -> bool {
     if bot.world.loc_removed(spot_x, spot_z, bot.world.level) {
         return false;
     }

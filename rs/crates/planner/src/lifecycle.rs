@@ -372,6 +372,7 @@ fn retarget_legs(life: &mut Life, index: usize, legs: Vec<crate::model::Alternat
     node.status = NodeStatus::Pending;
     node.method = None;
     node.site = None;
+    node.alt_site = None;
     node.toll = false;
     node.boat = false;
     node.failures = 0;

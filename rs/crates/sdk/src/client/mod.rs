@@ -173,6 +173,10 @@ pub struct Bot {
     /// Site the brain assigned to this run (x, z, level): gather pickers
     /// only consider resources around it (`--site`, kit::cycle).
     pub assigned_site: Option<(i32, i32, i32)>,
+    /// The brain's next site for the same resource (`--alt-site`): when
+    /// every node of `assigned_site` is depleted, the gatherer compares
+    /// the walk there with the respawn wait (`kit::deplete`).
+    pub alternative_site: Option<(i32, i32, i32)>,
     /// Data version sent with submits (set once at session open).
     pub plan_data_version: Option<String>,
     /// Served `wants` tags pinned by version: options build without
@@ -265,6 +269,7 @@ impl Bot {
             plan_client: None,
             nav_danger: Vec::new(),
             assigned_site: None,
+            alternative_site: None,
             plan_data_version: None,
             wants_cache: None,
             static_cache: static_cache::StaticCache::default(),

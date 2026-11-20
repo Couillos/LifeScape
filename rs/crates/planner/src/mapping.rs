@@ -243,6 +243,13 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         if sited {
             head.push("--site".to_string());
             head.push(format!("{x},{z},{level}"));
+            // The next site of a resource that depletes (user
+            // 2026-11-20): the script weighs the walk there against the
+            // respawn wait (`scripts::kit::deplete`).
+            if let Some((alt_x, alt_z, alt_level)) = node.alt_site {
+                head.push("--alt-site".to_string());
+                head.push(format!("{alt_x},{alt_z},{alt_level}"));
+            }
             for gate in lifescape_gamedata::access::gates_at(x, z, level) {
                 if let lifescape_gamedata::access::Gate::Guild { uniform: Some(uniform), .. } = gate {
                     head.push("--wear".to_string());

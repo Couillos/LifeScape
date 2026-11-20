@@ -1961,3 +1961,23 @@ des ennemis) ; corriger ici l'espérance de pièces des tables à plusieurs
 lignes de pièces (`drops.json` n'en garde qu'une, min–max : démon mineur
 158 estimées contre 66 réelles, simple départage de l'échelle) : à
 refaire dans le dump.
+
+## 2026-11-20 — Site épuisé : attendre la repousse ou changer de site
+
+Décision utilisateur : « pour l'adamantite, ça dépend du temps de marche
+pour accéder à un autre site, si c'est plus long que l'attente, alors on
+attend ». Généralisée à toute ressource dont les nœuds se vident et
+repoussent (roches de tous les minerais, arbres).
+1. Attente ici = repousse restante du nœud le plus proche (taux du
+   serveur moins le temps depuis qu'il a été vu vidé ; inconnu : le taux
+   entier).
+2. Autre site = celui que le cerveau choisirait ensuite (mêmes règles :
+   sûr, portes, pas plein, pas refroidi), joint au lancement
+   (`--alt-site`) ; coût = marche planifiée + sa propre attente s'il est
+   vu vidé.
+3. Attente ≤ coût de l'autre site : attendre sur place ; sinon
+   `Blocked depleted:<site>,<ticks>`, le site refroidi `<ticks>` pour ce
+   bot, sans échec ni ban, le cerveau envoie le bot à l'autre site.
+Rejeté : plafond fixe de l'attente (300 ticks, l'ancien guet) ; échec
+compté quand le site est vide au lancement ; refroidissement doublé comme
+la contention (les nœuds reviennent d'eux-mêmes).

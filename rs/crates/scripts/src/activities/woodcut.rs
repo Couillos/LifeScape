@@ -54,6 +54,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut level = learn_level(bot, crate::kit::woodcut::WC_STAT, 1);
     let tiers = ordered_tree_tiers(spec.resource.first().map(String::as_str), level)?;
     bot.assigned_site = spec.site;
+    bot.alternative_site = spec.alt_site;
     let mut bank = match crate::kit::site::site_bank(bot) {
         Some(bank) => bank,
         None => nearest_bank(bot)?,

@@ -396,6 +396,15 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             retry_uncounted(&mut life, index);
             push_history(&mut life, &id, "stopped");
         }
+        // Every node of the site depleted and another site sooner (user
+        // 2026-11-20): the site cools for its respawn, no failure, no
+        // block counted, no ban; the next resolve picks the other site.
+        Verdict::Blocked(needs) if crate::brain_cool::depleted_site(needs).is_some() => {
+            let (depleted, ticks) = crate::brain_cool::depleted_site(needs).unwrap_or(((0, 0, 0), 0));
+            crate::brain_cool::on_depleted(&mut life, &method, site.unwrap_or(depleted), ticks);
+            retry_uncounted(&mut life, index);
+            push_history(&mut life, &id, "depleted");
+        }
         // A contended site (D4, user 2026-11-17): no failure, no block
         // counted, no ban; the site cools for this bot and the next
         // resolve sends it elsewhere at once.

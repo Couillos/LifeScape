@@ -214,3 +214,19 @@ fn priced_training_orders_parse() {
         assert!(crate::activities::smith::smith_spot(&row.product).is_some(), "{} has no smithing cell", row.product);
     }
 }
+
+/// User 2026-11-20: a rock or tree site launches with the brain's next
+/// site (`--alt-site`); mining and woodcut parse it, a bad one fails loud.
+#[test]
+fn a_depleting_site_carries_the_next_one() {
+    for (method, script) in [("gather:mining/adamantite_ore", "mining"), ("gather:woodcut/yew_logs", "woodcut")] {
+        let mut node = Node::new("n9", NodeKind::ReachLevel { skill: "mining".to_string(), level: 99 }, Vec::new(), 99);
+        node.site = Some((3300, 3318, 0));
+        node.alt_site = Some((3242, 3165, 0));
+        let (mapped, args) = map_method(method, &node, None).expect("maps");
+        assert_eq!(mapped, script);
+        let spec = crate::kit::cycle::parse_cli(script, &args).expect("parses");
+        assert_eq!((spec.site, spec.alt_site), (Some((3300, 3318, 0)), Some((3242, 3165, 0))), "{args:?}");
+    }
+    assert!(crate::kit::cycle::parse_cli("mining", &strings(&["--alt-site", "3242,3165"])).is_err(), "three numbers");
+}

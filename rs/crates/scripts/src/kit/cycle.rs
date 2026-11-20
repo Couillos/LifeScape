@@ -111,6 +111,8 @@ pub struct TaskSpec {
     pub node_id: String,
     /// Site the brain picked (`--site x,z,level`): pickers stay there.
     pub site: Option<(i32, i32, i32)>,
+    /// The brain's next site (`--alt-site x,z,level`, `kit::deplete`).
+    pub alt_site: Option<(i32, i32, i32)>,
     /// Production chain (PRD 2, D58): `None` for single-link v2 orders.
     pub chain: Option<super::chain_spec::ChainSpec>,
     /// Skip the bank loop (melee `--no-bank`).
@@ -144,6 +146,7 @@ impl TaskSpec {
             allow_shop: true,
             node_id: String::new(),
             site: None,
+            alt_site: None,
             chain: None,
             no_bank: false,
             allow_paid: false,
@@ -192,7 +195,7 @@ pub fn parse_order(script: &'static str, args: &[String]) -> Result<TaskSpec, Sc
 pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, ScriptError> {
     let usage = || {
         ScriptError::Usage(format!(
-            "{activity} [count|spot...] [toll] [boat] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--want ITEM N] [--use ITEM N]... [--spell SPELL] [--wear ITEM]... [--skip-loot NAME]... [--allow-market] [--no-shop]"
+            "{activity} [count|spot...] [toll] [boat] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--alt-site X,Z,LEVEL] [--want ITEM N] [--use ITEM N]... [--spell SPELL] [--wear ITEM]... [--skip-loot NAME]... [--allow-market] [--no-shop]"
         ))
     };
     let mut spec = TaskSpec::named(activity);
@@ -293,11 +296,11 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
                 spec.skip_loot.push(name);
                 index += 2;
             }
-            "--site" => {
+            "--site" | "--alt-site" => {
                 let raw = args.get(index + 1).ok_or_else(usage)?;
                 let parts: Vec<i32> = raw.split(',').map(|part| part.trim().parse::<i32>()).collect::<Result<_, _>>().map_err(|_| usage())?;
                 let [x, z, level] = parts[..] else { return Err(usage()) };
-                spec.site = Some((x, z, level));
+                *(if args[index] == "--site" { &mut spec.site } else { &mut spec.alt_site }) = Some((x, z, level));
                 index += 2;
             }
             "--want" => {
@@ -606,6 +609,7 @@ pub fn blocked_access(area: &str) -> ScriptError {
 /// failure across a market pause, retaken `PASS_PAUSE_RESTARTS` times).
 pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut CycleState) -> Result<StepControl, ScriptError>) -> crate::ScriptResult {
     bot.assigned_site = spec.site;
+    bot.alternative_site = spec.alt_site;
     // A guild site: the uniform goes on before any step walks to the door.
     crate::kit::uniform::wear_uniform(bot, &spec.wear)?;
     let mut state = CycleState::start(bot);

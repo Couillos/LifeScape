@@ -508,6 +508,7 @@ pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
 /// a method no level makes safe blocks as unworkable.
 pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     node.site = None;
+    node.alt_site = None;
     node.toll = false;
     node.boat = false;
     if matches!(node.status, NodeStatus::Blocked { .. }) {
@@ -595,6 +596,7 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
             crate::combat::SitePick::At(site) => {
                 node.method = Some(method.clone());
                 node.site = Some(site);
+                node.alt_site = crate::alt_site::alternative_site(method, ctx, loads, site);
                 return;
             }
             // Across the Al Kharid fence with the fare budgeted: the
@@ -602,6 +604,7 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
             crate::combat::SitePick::Tolled(site) => {
                 node.method = Some(method.clone());
                 node.site = Some(site);
+                node.alt_site = crate::alt_site::alternative_site(method, ctx, loads, site);
                 node.toll = true;
                 return;
             }
@@ -610,6 +613,7 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
             crate::combat::SitePick::Boat { site, toll } => {
                 node.method = Some(method.clone());
                 node.site = Some(site);
+                node.alt_site = crate::alt_site::alternative_site(method, ctx, loads, site);
                 node.toll = toll;
                 node.boat = true;
                 return;

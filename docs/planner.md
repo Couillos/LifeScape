@@ -1752,6 +1752,15 @@ d'une récolte planifiée (plumes, appât de pêche :
   refroidissement.
 - Scripts : pêche (« fish failed ») et sort de malédiction (« no foe took
   … ») rendent `contended:<site>` quand d'autres joueurs travaillent le site.
+- Site épuisé (2026-11-20, décision utilisateur, détail `kit.md` § Site
+  épuisé) : un nœud placé sur un site de roches ou d'arbres porte aussi
+  `alt_site` (`alt_site::alternative_site`, même choix que `pick_site_for`
+  depuis le site, lui-même évité ; remis à zéro à chaque résolution,
+  écrit dans le fichier de vie), lancé en `--alt-site`. Le script attend
+  la repousse si elle ne dépasse pas la marche vers ce site (plus son
+  attente connue), sinon rend `depleted:<x>,<z>,<niv>,<ticks>` : le site
+  est refroidi `<ticks>` pour ce bot, sans échec ni ban
+  (`brain_cool::on_depleted`), historique `depleted`.
 - Places engagées (2026-11-20) : les places d'un site comptent aussi les
   bots qu'une réponse à une offre y a engagés (`site_crowd::engage` au
   tirage, `disengage` au tirage suivant ; un bot dont le dernier
