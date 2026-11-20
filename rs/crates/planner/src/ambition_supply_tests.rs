@@ -219,3 +219,14 @@ fn a_trout_quota_buys_its_fly_fishing_rod() {
     let legs: Vec<&str> = rod.alternatives.iter().map(|alt| alt.method.as_str()).collect();
     assert!(legs.contains(&"shop:buy"), "bought at the fishing shop: {legs:?}");
 }
+
+/// Live 2026-11-20: "produce waterrune" answers bought a water talisman
+/// no bot holds for 6.4 M coins. A lot whose every leg needs a tool
+/// nobody can come by is not workable; earth runes (talismans held) are.
+#[test]
+fn a_lot_needing_a_talisman_nobody_holds_is_not_workable() {
+    let surplus = vec![("earth_talisman".to_string(), 5_779.0), ("rune_essence".to_string(), 124_000.0)];
+    assert!(!super::lot_workable("waterrune", &surplus));
+    assert!(super::lot_workable("earthrune", &surplus));
+    assert!(super::lot_workable("waterrune", &[]), "no surplus data: no judgement");
+}

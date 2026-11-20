@@ -65,6 +65,20 @@ pub fn tool_obtainable(tool: &str, held: &dyn Fn(&str) -> i64, surplus: &[(Strin
     sold || production_legs(tool).iter().any(|leg| leg.skill.is_some())
 }
 
+/// True unless every skill leg of `item` needs a tool nobody can come by
+/// (`tool_obtainable` over the fleet surplus): a market lot (a `bid:`
+/// answer) is drawn only when some leg is workable (live 2026-11-20:
+/// "produce waterrune" answers posted a 6.4 M coin buy for a water
+/// talisman no bot holds, ~50 stuck graphs a day). Always true without
+/// surplus data or without a skill leg.
+pub fn lot_workable(item: &str, surplus: &[(String, f64)]) -> bool {
+    if surplus.is_empty() {
+        return true;
+    }
+    let legs: Vec<ProductionLeg> = production_legs(item).into_iter().filter(|leg| leg.skill.is_some()).collect();
+    legs.is_empty() || legs.iter().any(|leg| leg.tools.iter().all(|tool| tool_obtainable(tool, &|_| 0, surplus)))
+}
+
 /// True when `skill` can make `item` with tools the bot can come by
 /// (`tool_obtainable`); always true without surplus data or when the
 /// skill has no leg for it (nothing to judge).

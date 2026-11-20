@@ -485,7 +485,9 @@ pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnc
         rate: &rate,
         seats: crate::site_crowd::seats(&life.account),
         cooled: cooled.clone(),
-        shunned: lifescape_planner::bid_release::shunned_items(&life.history, &ticks_since),
+        // Given back lately, or no bot can make it now (a tool nobody can
+        // come by: the water talisman, `market_demand::unworkable_lots`).
+        shunned: lifescape_planner::bid_release::shunned_items(&life.history, &ticks_since).into_iter().chain(crate::market_demand::unworkable_lots()).collect(),
     };
     use_state(&state)
 }

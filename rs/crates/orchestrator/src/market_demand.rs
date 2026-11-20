@@ -214,6 +214,26 @@ pub fn fleet_surplus() -> Vec<(String, f64)> {
 }
 
 /// Debug name of a book item.
+/// Objects of the open bids no bot can make now
+/// (`ambition_supply::lot_workable` over `fleet_surplus`): the bid draw
+/// skips them (`brain_bids::with_bot_state`). Reused like the surplus.
+pub fn unworkable_lots() -> Vec<String> {
+    type Cache = Option<(std::time::Instant, Vec<String>)>;
+    static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(None);
+    if let Some((read_at, rows)) = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref() {
+        if read_at.elapsed().as_secs() < SURPLUS_REUSE_SECS {
+            return rows.clone();
+        }
+    }
+    let surplus = fleet_surplus();
+    let mut items: Vec<String> = resting().iter().filter(|row| row.side == lifescape_store::OrderSide::Buy).filter_map(|row| name_of(row.item_id)).collect();
+    items.sort();
+    items.dedup();
+    items.retain(|item| !lifescape_planner::ambition_supply::lot_workable(item, &surplus));
+    *CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((std::time::Instant::now(), items.clone()));
+    items
+}
+
 fn name_of(item_id: i64) -> Option<String> {
     lifescape_gamedata::obj_by_id(item_id.max(0) as usize).and_then(|obj| obj.name).map(str::to_string)
 }
