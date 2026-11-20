@@ -2,12 +2,15 @@
 //! The hybrid (user 2026-11-20, « oui implémente ça »): an ambition goal
 //! that waits on a buy sets itself aside for a market answer of ANY
 //! trade (rule and live numbers: `lifescape_planner::bid_trade` module
-//! doc). Trigger: the goal comes from one of the ambition's milestones,
-//! no node runs, nothing but parked buys is ready (the filler's moment,
-//! `brain_launch`), and the oldest parked buy has waited one filler
-//! window (`brain_filler::FILLER_TICKS`) at least: a buy that fills at
-//! once never sets the goal aside. A whole-market lot must pay now
-//! (`brain_bids::whole_market_lot`), else the filler runs as before.
+//! doc). Trigger: the goal comes from one of the ambition's milestones
+//! (or is a side goal), no node runs, nothing but waits is ready (the
+//! filler's moment, `brain_launch`), and the current goal waits on
+//! something out of the bot's hands: a parked buy for one filler window
+//! (`brain_filler::FILLER_TICKS`) at least (a buy that fills at once
+//! never sets the goal aside), or every site of its method full or
+//! cooled (`cooldown::waiting_nodes`, the cooldown outlasts the window). A
+//! whole-market lot must pay now (`brain_bids::whole_market_lot`), else
+//! the filler runs as before.
 //!
 //! Set aside: the goal's work is abandoned except the buys really posted
 //! (they stay on the book, their fill lands in the bank,
@@ -47,15 +50,24 @@ fn waits_long(life: &Life, ticks_since: &dyn Fn(i64) -> u64) -> bool {
     }
     let Some(origin) = life.goal_origin.as_deref() else { return false };
     let milestone = life.ambition.as_ref().is_some_and(|held| held.milestones.iter().any(|stone| stone.id == origin));
-    if !milestone || lifescape_planner::goal_closed(&life.history) {
+    let side = origin.starts_with(lifescape_planner::SIDE_PREFIX);
+    if !(milestone || side) || lifescape_planner::goal_closed(&life.history) {
         return false;
     }
-    // The current goal's own buys only: one left on the book by an
+    // The current goal's own waits only: one left on the book by an
     // earlier goal (`earlier_wait`) never sets the next one aside.
     let floor = life.memory.floor.unwrap_or(0);
+    let current = |id: &str| lifescape_planner::lifecycle_retire::node_number(id).is_some_and(|number| number >= floor);
+    // Every site full or cooled (live 2026-11-20 08:43 -> 09:43 UTC: 13
+    // miners on gold and adamantite rocks, fillers 30 %): the wait lasts
+    // the cooldown (`COOL_TICKS`, above one filler window), long at once.
+    let cooled = lifescape_planner::cooldown::cooled_keys(&life.history, ticks_since);
+    if lifescape_planner::cooldown::waiting_nodes(&life.history, &cooled).iter().any(|id| current(id)) {
+        return true;
+    }
     crate::brain_filler::parked_waits(life)
         .iter()
-        .filter(|(_, id, _)| lifescape_planner::lifecycle_retire::node_number(id).is_some_and(|number| number >= floor))
+        .filter(|(_, id, _)| current(id))
         .map(|(_, _, since)| ticks_since(*since))
         .max()
         .is_some_and(|waited| waited >= crate::brain_filler::FILLER_TICKS)

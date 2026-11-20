@@ -1681,6 +1681,13 @@ d'achat que ce bot sait fabriquer avec profit :
   tirage exclu) et ne redemande que le reste (`goal_for_milestone`). Aucun lot : le
   remplissage comme avant. Log `milestone mX waits on a buy, set aside
   for a market answer`.
+  Sites pleins (mesure 08:43-09:43 UTC après l'hybride : remplissage
+  30 %, 13 mineurs sur l'or et l'adamantite, chaque rocher occupé, une
+  heure de remplissage par refroidissement) : un nœud du but courant
+  qui attend un refroidissement (`cool_wait:`, chaque site plein ou
+  refroidi, `cooldown::waiting_nodes`) déclenche la mise de côté tout de
+  suite (le refroidissement, 6000 ticks, dépasse la fenêtre). Un but
+  secondaire (`side:`, jalons bannis) se met de côté comme un jalon.
 - Étalement (sans état d'un autre bot) : un bot ne répond à un objet que
   dans une fenêtre de 6000 ticks sur deux choisie par son mot
   (`answers_now`, rotation par fenêtre) ; avec la moitié de la

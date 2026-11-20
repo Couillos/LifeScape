@@ -144,3 +144,47 @@ fn a_buy_of_an_earlier_goal_sets_nothing_aside() {
     life.memory.floor = Some(1500);
     assert!(!super::set_aside_with(&mut life, &Value::Null, &ticks_since, &|_| true, never));
 }
+
+/// Live 2026-11-20 08:43 -> 09:43 UTC: 13 miners on gold and adamantite
+/// rocks, every site full; each waited the cooldown (6000 ticks) on a
+/// filler, fillers 30 % of the fleet's time. The rocks taken, the goal is
+/// set aside at once for a market answer (the cooldown outlasts a filler
+/// window); a cool run out or an earlier goal's wait sets nothing aside.
+fn miner(cooled_at: i64) -> Life {
+    use lifescape_planner::cooldown::{cool_entry, COOL_NODE, COOL_TICKS, WAIT_TAG};
+    let mut life = lily(NOW);
+    life.account = "wait_harry_page".to_string();
+    life.goal = GoalKind::Produce { item: "gold_ore".to_string(), count: 100 };
+    let mut ore = Node::new("n1500", NodeKind::ObtainItems { item: "gold_ore".to_string(), count: 100 }, Vec::new(), 100);
+    ore.status = NodeStatus::Ready;
+    life.nodes = vec![ore];
+    life.memory.floor = Some(1500);
+    life.history = vec![
+        entry("goal", "next:produce gold_ore 100", cooled_at - 10),
+        entry(COOL_NODE, &cool_entry("farm:gold_ore", COOL_TICKS, "full:farm:gold_ore"), cooled_at),
+        entry("n1500", &format!("{WAIT_TAG}farm:gold_ore"), cooled_at),
+    ];
+    life
+}
+
+#[test]
+fn a_goal_whose_every_site_is_full_is_set_aside_at_once() {
+    let mut life = miner(NOW - 10);
+    assert!(super::set_aside_with(&mut life, &Value::Null, &ticks_since, &|_| true, &mut draw_answer));
+    assert_eq!(life.goal_origin.as_deref(), Some("bid:steel_platebody"));
+    assert!(lifescape_planner::bid_trade::drawn_while_waiting(&life.history));
+    // A side goal (its milestones banned) on full rocks: the same.
+    let mut side = miner(NOW - 10);
+    side.goal_origin = Some(format!("{}demand:gold_ore", lifescape_planner::SIDE_PREFIX));
+    assert!(super::set_aside_with(&mut side, &Value::Null, &ticks_since, &|_| true, &mut draw_answer));
+}
+
+#[test]
+fn a_cool_run_out_or_an_earlier_goals_wait_sets_nothing_aside() {
+    let never = &mut |_: &mut Life| -> Option<String> { panic!("no draw expected") };
+    let mut over = miner(NOW - 7_000);
+    assert!(!super::set_aside_with(&mut over, &Value::Null, &ticks_since, &|_| true, never));
+    let mut earlier = miner(NOW - 10);
+    earlier.memory.floor = Some(1600);
+    assert!(!super::set_aside_with(&mut earlier, &Value::Null, &ticks_since, &|_| true, never));
+}
