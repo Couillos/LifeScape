@@ -98,8 +98,17 @@ pub(crate) fn fold_filler_report(life: &mut Life, node_id: &str, report: &Value)
             // bellarhodes, 34 woodcut fillers in 10 min, "missing
             // bronze_axe" every time).
             let cause = if error.is_empty() { format!("filler {stop} after {ticks} ticks") } else { error.clone() };
-            if method != "?" {
-                crate::brain_cool::on_abandon(life, &method, site, &cause);
+            // A contended site cools like a contended node's (D4): the
+            // site only, longer each time (live 2026-11-20: the same
+            // filler sent back to the Wilderness big bones every ~8 min).
+            let missing: Vec<String> = report.get("missing").as_arr().map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            let contended = crate::brain_cool::contended_site(&missing);
+            match contended {
+                _ if method == "?" => {}
+                Some(contended) => crate::brain_cool::on_contended(life, &method, site.unwrap_or(contended)),
+                None => {
+                    crate::brain_cool::on_abandon(life, &method, site, &cause);
+                }
             }
             format!("filler {node_id} ({method}) failed: {stop} after {ticks} ticks {error}; cooled, its skill sits out the fillers for {FILLER_RETRY_TICKS} ticks")
         }

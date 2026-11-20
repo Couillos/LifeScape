@@ -121,6 +121,36 @@ fn a_failed_filler_cools_its_method_at_its_site() {
     assert!(cooled.contains(&"gather:woodcut/yew_logs@3087,3481,0".to_string()), "cooled at its site: {cooled:?}");
 }
 
+/// Live 2026-11-20 (liam_west, fiona_park: `ground:big_bones@3214,3733,0`
+/// contended, the same filler sent back every ~8 minutes, 2 271 filler
+/// blocks a day): a contended filler cools its site like a contended
+/// node (no method-wide cool), each contention of the same site longer.
+#[test]
+fn a_contended_filler_cools_its_site_longer_each_time() {
+    use lifescape_planner::cooldown::COOL_TICKS;
+    let contended = |node: &str| {
+        lifescape_json::object(vec![
+            ("node_id", lifescape_json::str_value(node)),
+            ("stop", lifescape_json::str_value("blocked")),
+            ("ticks", lifescape_json::Value::Int(600)),
+            ("missing", lifescape_json::Value::Arr(vec![lifescape_json::str_value("contended:3214,3733,0")])),
+            (
+                "error",
+                lifescape_json::object(vec![("type", lifescape_json::str_value("Blocked")), ("message", lifescape_json::str_value("blocked, missing: contended:3214,3733,0"))]),
+            ),
+        ])
+    };
+    let mut life = life_of(Vec::new(), vec![entry("fill-n1", "filler:ground:big_bones@3214,3733,0", 100)]);
+    super::fold_filler_report(&mut life, "fill-n1", &contended("fill-n1"));
+    life.history.push(entry("fill-n2", "filler:ground:big_bones@3214,3733,0", 200));
+    super::fold_filler_report(&mut life, "fill-n2", &contended("fill-n2"));
+    let cools: Vec<&str> = life.history.iter().filter(|entry| entry.node == lifescape_planner::cooldown::COOL_NODE).map(|entry| entry.outcome.as_str()).collect();
+    assert_eq!(cools.len(), 2, "{cools:?}");
+    assert!(cools[0].starts_with(&format!("cool:ground:big_bones@3214,3733,0|{COOL_TICKS}|")), "{cools:?}");
+    assert!(cools[1].starts_with(&format!("cool:ground:big_bones@3214,3733,0|{}|", 2 * COOL_TICKS)), "{cools:?}");
+    assert!(!crate::brain_cool::active(&life).contains(&"ground:big_bones".to_string()), "contention never cools the method itself");
+}
+
 /// Plan équilibre step 2: a filler's claim on the order board ends with
 /// its report, whatever the window made.
 #[test]
