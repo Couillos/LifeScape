@@ -189,7 +189,7 @@ fn carry_fare(bot: &mut Bot) -> Result<(), ScriptError> {
     if short == 0 {
         return Ok(());
     }
-    let keep: Vec<u16> = pack_slots(bot).iter().map(|(_, (held, _))| *held).collect();
+    let keep = fare_pack_keep(bot);
     let bank = crate::kit::bank::nearest_bank(bot)?;
     bot.log(&format!("fares: fetching {short} coins from the bank at ({},{})", bank.x, bank.z));
     crate::kit::bank::bank_trip(bot, &bank, &keep, short)?;
@@ -197,6 +197,26 @@ fn carry_fare(bot: &mut Bot) -> Result<(), ScriptError> {
         return Err(ScriptError::Blocked { missing: vec![format!("coins:{reserve}")] });
     }
     Ok(())
+}
+
+/// Pure: pack objects a fare trip keeps at the booth (`carried`). The
+/// whole pack while it has a free slot or already carries `coins` (the
+/// fare stacks on them); a full pack without coins keeps only what
+/// `stays` in it (tools, the run's held objects): the server refuses
+/// coins into a full pack (live 2026-11-20, thorn_vera: `coins:60`
+/// blocked four times, node abandoned, fishing banned).
+pub fn fare_keep(carried: &[u16], stays: &[u16], coins: u16, free_slots: usize) -> Vec<u16> {
+    if free_slots > 0 || carried.contains(&coins) {
+        return carried.to_vec();
+    }
+    crate::market_lots::pack_kept_after_trades(carried, stays)
+}
+
+/// `fare_keep` on the live pack.
+fn fare_pack_keep(bot: &Bot) -> Vec<u16> {
+    let carried: Vec<u16> = pack_slots(bot).iter().map(|(_, (held, _))| *held).collect();
+    let Ok(coins) = obj_id(bot, "coins") else { return carried };
+    fare_keep(&carried, &crate::market_lots::pack_stays(bot), coins, crate::kit::pack::free_slots(bot))
 }
 
 /// Fetch the coins a route's fare lacks (`Error::missing_coins`: the
@@ -209,7 +229,7 @@ pub fn fetch_fare_coins(bot: &mut Bot, need: u32) -> Result<bool, ScriptError> {
     if carried >= need {
         return Ok(false);
     }
-    let keep: Vec<u16> = pack_slots(bot).iter().map(|(_, (held, _))| *held).collect();
+    let keep = fare_pack_keep(bot);
     let bank = crate::kit::bank::nearest_bank(bot)?;
     bot.log(&format!("fare: the route needs {need} coins in the pack, fetching {} at ({},{})", need - carried, bank.x, bank.z));
     crate::kit::bank::bank_trip(bot, &bank, &keep, need - carried)?;
@@ -290,6 +310,22 @@ mod tests {
         assert_eq!(super::top_up(0, 0, 0), 0, "an unpaid run carries nothing");
         disarm(&mut bot);
         assert!(!bot.allow_paid && bot.fare_reserve == 0 && bot.fare_bank.is_none(), "the next run decides its own fares");
+    }
+
+    /// Live 2026-11-20 (thorn_vera, ray_79, james_mason: `blocked,
+    /// missing: coins:60` 42 times, nodes abandoned, fishing banned): a
+    /// full pack kept whole at the booth leaves no slot for the fare, the
+    /// server refuses the coins. Without a free slot nor a coin stack, the
+    /// fare trip keeps only what stays in the pack (tools, held objects);
+    /// a pack with room, or already carrying coins, is kept whole.
+    #[test]
+    fn a_full_pack_banks_its_load_to_carry_the_fare() {
+        let carried = [995u16, 1265, 436, 438];
+        let stays = [1265u16];
+        assert_eq!(super::fare_keep(&carried, &stays, 995, 0), carried.to_vec(), "coins already carried: room for more");
+        let full = [1265u16, 436, 438];
+        assert_eq!(super::fare_keep(&full, &stays, 995, 0), vec![1265], "no slot: the load goes in, the tool stays");
+        assert_eq!(super::fare_keep(&full, &stays, 995, 1), full.to_vec(), "a free slot: the pack is kept whole");
     }
 
     /// Same bank, same price: the reserve is priced once per bank (no
