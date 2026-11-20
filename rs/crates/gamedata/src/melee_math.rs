@@ -11,6 +11,16 @@
 //! - a hit lands when `randominc(attack) > randominc(defence)`; damage is
 //!   `randominc(maxhit)`, so its mean is `maxhit / 2`.
 //! - player xp: 4 combat xp per damage point (hitpoints xp aside).
+//!
+//! Ranged and magic fighters (user 2026-11-20: every style climbs the
+//! same camps) roll like `player_combat_stat.rs2` and the NPC defence
+//! rolls of `npc_combat.rs2`: ranged attack = (level + 8 + 3, accurate)
+//! x (range bonus + 64) against (defence + 9) x (`rangedefence` + 64),
+//! max hit `combat_maxhit(effective x (arrow strength + 64))`, a shot
+//! every 4 ticks, 4 xp per damage; magic attack = (level + 8 + 1) x
+//! (magic bonus + 64) against (NPC magic + 9) x (`magicdefence` + 64),
+//! the spell's max hit, a cast every 5 ticks, the spell's base xp plus
+//! 2 per damage. The NPC answers in melee whatever the style.
 
 #![forbid(unsafe_code)]
 
@@ -29,9 +39,38 @@ pub const REGEN_TICKS_PER_HP: f64 = 100.0;
 pub const XP_PER_DAMAGE: f64 = 4.0;
 /// Style bonus of the controlled stance (every melee level +1).
 const STYLE_BONUS: i64 = 1;
+/// Ticks between two shots of a shortbow (default `attackrate`).
+pub const RANGED_ATTACK_TICKS: f64 = 4.0;
+/// Ticks between two combat casts.
+pub const MAGIC_ATTACK_TICKS: f64 = 5.0;
+/// Ranged style bonus of the accurate style (`combat_get_damagestyle_
+/// bonuses`: `^style_ranged_accurate` = +3 ranged).
+pub const RANGED_ACCURATE_BONUS: i64 = 3;
+/// Magic's fixed style bonus (`player_combat_stat.rs2`: always +1).
+pub const MAGIC_STYLE_BONUS: i64 = 1;
+/// Ranged strength of a bronze arrow (`rangebonus`), the ammo assumed
+/// when no arrow is worn.
+pub const BRONZE_ARROW_STRENGTH: i64 = 7;
+/// Ranged xp per damage point (like melee).
+pub const RANGED_XP_PER_DAMAGE: f64 = 4.0;
+/// Magic xp per damage point, on top of the spell's base xp.
+pub const MAGIC_XP_PER_DAMAGE: f64 = 2.0;
 
-/// A melee fighter: base levels, max hitpoints, combat level and the
-/// worn bonuses (`[stab, slash, crush]` triples).
+/// How the fighter deals its damage. The NPC answers in melee whatever
+/// the style (no safe spot: the hunt walks into the camp).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Offense {
+    /// Attack and strength with the worn melee bonuses.
+    Melee,
+    /// Ranged level, worn ranged attack bonus, arrow ranged strength.
+    Ranged { level: i64, attack_bonus: i64, arrow_strength: i64 },
+    /// Magic level, worn magic attack bonus, the cast spell's max hit
+    /// and base xp per cast.
+    Magic { level: i64, attack_bonus: i64, max_hit: i64, cast_xp: f64 },
+}
+
+/// A fighter: base levels, max hitpoints, combat level, the worn melee
+/// bonuses (`[stab, slash, crush]` triples) and its offense.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Fighter {
     pub attack: i64,
@@ -42,12 +81,25 @@ pub struct Fighter {
     pub attack_bonus: [i64; 3],
     pub strength_bonus: i64,
     pub defence_bonus: [i64; 3],
+    pub offense: Offense,
 }
 
 impl Fighter {
-    /// No gear: every bonus 0.
+    /// No gear: every bonus 0, melee.
     pub fn naked(attack: i64, strength: i64, defence: i64, hitpoints: i64, combat: i64) -> Fighter {
-        Fighter { attack, strength, defence, hitpoints, combat, attack_bonus: [0; 3], strength_bonus: 0, defence_bonus: [0; 3] }
+        Fighter { attack, strength, defence, hitpoints, combat, attack_bonus: [0; 3], strength_bonus: 0, defence_bonus: [0; 3], offense: Offense::Melee }
+    }
+
+    /// The same fighter shooting: ranged `level`, worn ranged attack
+    /// `attack_bonus`, arrows of `arrow_strength`.
+    pub fn shooting(self, level: i64, attack_bonus: i64, arrow_strength: i64) -> Fighter {
+        Fighter { offense: Offense::Ranged { level, attack_bonus, arrow_strength }, ..self }
+    }
+
+    /// The same fighter casting a spell of `max_hit` and `cast_xp` base
+    /// xp: magic `level`, worn magic attack `attack_bonus`.
+    pub fn casting(self, level: i64, attack_bonus: i64, max_hit: i64, cast_xp: f64) -> Fighter {
+        Fighter { offense: Offense::Magic { level, attack_bonus, max_hit, cast_xp }, ..self }
     }
 
     /// The same fighter wearing `gear` (bonuses summed, like the
@@ -100,17 +152,58 @@ pub fn max_hit(effective_strength: i64, strength_bonus: i64) -> i64 {
     (effective_strength * (strength_bonus + 64) + 320) / 640
 }
 
-/// Our damage per tick against `npc`, swinging the attack type our
-/// bonuses favour most against its defences. `self_heal_per_tick` is
-/// what the NPC heals back (monks), subtracted from our output.
+/// Odds a ranged shot lands on `npc` and its max hit, at ranged
+/// `level` with `attack_bonus` worn and arrows of `arrow_strength`.
+pub fn ranged_roll(npc: &NpcCombat, level: i64, attack_bonus: i64, arrow_strength: i64) -> (f64, i64) {
+    let effective = level.max(1) + 8 + RANGED_ACCURATE_BONUS;
+    let attack = effective * (attack_bonus + 64);
+    let defence = (npc.defence + 9) * (npc.ranged_defence + 64);
+    (hit_chance(attack, defence), max_hit(effective, arrow_strength))
+}
+
+/// Odds a combat cast lands on `npc` at magic `level` with
+/// `attack_bonus` worn (the max hit is the spell's).
+pub fn magic_odds(npc: &NpcCombat, level: i64, attack_bonus: i64) -> f64 {
+    let effective = level.max(1) + 8 + MAGIC_STYLE_BONUS;
+    hit_chance(effective * (attack_bonus + 64), (npc.magic + 9) * (npc.magic_defence + 64))
+}
+
+/// Landing odds, max hit and attack interval of the fighter's offense
+/// against `npc` (melee: the attack type its bonuses favour most).
+fn offense_roll(fighter: &Fighter, npc: &NpcCombat) -> (f64, i64, f64) {
+    match fighter.offense {
+        Offense::Melee => {
+            let effective_attack = fighter.attack + 8 + STYLE_BONUS;
+            let npc_defence = npc.defence + 9;
+            let best_chance = (0..3)
+                .map(|index| hit_chance(effective_attack * (fighter.attack_bonus[index] + 64), npc_defence * (npc.defence_bonus[index] + 64)))
+                .fold(0.0, f64::max);
+            (best_chance, max_hit(fighter.strength + 8 + STYLE_BONUS, fighter.strength_bonus), PLAYER_ATTACK_TICKS)
+        }
+        Offense::Ranged { level, attack_bonus, arrow_strength } => {
+            let (odds, most) = ranged_roll(npc, level, attack_bonus, arrow_strength);
+            (odds, most, RANGED_ATTACK_TICKS)
+        }
+        Offense::Magic { level, attack_bonus, max_hit, .. } => (magic_odds(npc, level, attack_bonus), max_hit, MAGIC_ATTACK_TICKS),
+    }
+}
+
+/// Our damage per tick against `npc` (`offense_roll`). `self_heal_per_
+/// tick` is what the NPC heals back (monks), subtracted from our output.
 fn damage_per_tick(fighter: &Fighter, npc: &NpcCombat, self_heal_per_tick: f64) -> f64 {
-    let effective_attack = fighter.attack + 8 + STYLE_BONUS;
-    let npc_defence = npc.defence + 9;
-    let best_chance = (0..3)
-        .map(|index| hit_chance(effective_attack * (fighter.attack_bonus[index] + 64), npc_defence * (npc.defence_bonus[index] + 64)))
-        .fold(0.0, f64::max);
-    let ours = max_hit(fighter.strength + 8 + STYLE_BONUS, fighter.strength_bonus);
-    best_chance * ours as f64 / 2.0 / PLAYER_ATTACK_TICKS - self_heal_per_tick
+    let (odds, most, interval) = offense_roll(fighter, npc);
+    odds * most as f64 / 2.0 / interval - self_heal_per_tick
+}
+
+/// Xp one kill of an `hitpoints`-hp NPC pays the fighter's trained
+/// skill over `kill_ticks` of exchange (magic: the base xp of every
+/// cast on top of the damage).
+fn kill_xp(fighter: &Fighter, hitpoints: f64, kill_ticks: f64) -> f64 {
+    match fighter.offense {
+        Offense::Melee => XP_PER_DAMAGE * hitpoints,
+        Offense::Ranged { .. } => RANGED_XP_PER_DAMAGE * hitpoints,
+        Offense::Magic { cast_xp, .. } => MAGIC_XP_PER_DAMAGE * hitpoints + cast_xp * kill_ticks / MAGIC_ATTACK_TICKS,
+    }
 }
 
 /// Melee max hit of an NPC by name (`npc_combat_melee.rs2`: effective
@@ -148,7 +241,7 @@ pub fn estimate(fighter: &Fighter, npc: &NpcCombat, self_heal_per_tick: f64) -> 
     Some(Estimate {
         kill_ticks,
         cycle_ticks,
-        xp_per_tick: XP_PER_DAMAGE * hitpoints / cycle_ticks,
+        xp_per_tick: kill_xp(fighter, hitpoints, kill_ticks) / cycle_ticks,
         npc_max_hit,
         damage_per_kill,
         loss_per_tick: damage_per_kill / cycle_ticks - 1.0 / REGEN_TICKS_PER_HP,
@@ -200,5 +293,22 @@ mod tests {
         assert!(guard.damage_per_kill > cow.damage_per_kill);
         assert!(cow.loss_per_tick < 0.0, "regeneration outpaces cows");
         assert_eq!(guard.npc_max_hit, 3);
+    }
+
+    /// Every style rates the same camps (user 2026-11-20): an archer and
+    /// a mage hurt a giant with their own levels and gear, never with
+    /// their (untrained) melee; the giant answers on their defence alike.
+    #[test]
+    fn archers_and_mages_rate_with_their_own_levels() {
+        let giant = by_name("giant").expect("hill giant");
+        let untrained = Fighter::naked(1, 1, 40, 40, 40);
+        let melee = estimate(&untrained, &giant, 0.0).expect("weak but rated");
+        let archer = estimate(&untrained.shooting(60, 20, 22), &giant, 0.0).expect("archer");
+        let mage = estimate(&untrained.casting(60, 10, 12, 13.5), &giant, 0.0).expect("mage");
+        assert!(archer.xp_per_tick > melee.xp_per_tick * 3.0, "archer {archer:?} vs fists {melee:?}");
+        assert!(mage.xp_per_tick > melee.xp_per_tick * 3.0, "mage {mage:?} vs fists {melee:?}");
+        assert_eq!(archer.npc_max_hit, melee.npc_max_hit, "the giant answers in melee whatever the style");
+        let bronze = estimate(&untrained.shooting(60, 20, super::BRONZE_ARROW_STRENGTH), &giant, 0.0).expect("bronze");
+        assert!(archer.kill_ticks < bronze.kill_ticks, "better arrows kill faster");
     }
 }

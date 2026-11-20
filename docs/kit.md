@@ -354,7 +354,8 @@ la plus lente des objets voulus (`respawnrate` du dump + 10, plafond 3000 ;
 épée d'acier 1000, viande cuite 200) avant de finir : avec des joueurs
 autour `contended:<site>` (D4), seul `Failed` sinon (2026-11-17 : l'ancien
 garde « 5 balayages » de `pump(2)` rendait la main en ~40 ticks). Un spot de combat nommé n'est jamais remplacé après une mort
-(banque puis erreur de danger) et un spot derrière le péage sans `toll`
+(banque puis erreur de danger), sauf un camp à risque (ci-dessous) qui
+est repris après la banque, et un spot derrière le péage sans `toll`
 donne `blocked{access:al_kharid_toll}`. Les achats (`market shopbuy`,
 accepte `toll` et `--site`) ne vont jamais seuls en Wilderness, sous
 terre ni au-delà du péage. `--want` vaut aussi pour les boucles de
@@ -633,6 +634,29 @@ sans gâcher, se soigner à la banque, emporter la nourriture adaptée.
   charge dimensionnée par le barreau ;
   sans nourriture en banque ⇒ `Blocked: <food_to_ask>` (avant : plan
   « plain », combat sans nourriture jusqu'à la mort : 57 runs `men` morts).
+
+## Échelle de combat de tous les styles, camps à risque (2026-11-20)
+
+- `melee ladder`, `ranged ladder` et `magic ladder --spell <sort>` partagent
+  la boucle `kit::ladder_hunt::run_ladder` : le barreau suit les niveaux,
+  l'équipement porté, les PV et la nourriture (`kit::ladder::fighter` lit
+  `combat_style` : l'archer tire avec son niveau de distance, son arc et
+  ses flèches portées, bronze par défaut ; le mage lance son sort, max hit
+  et XP du dump ; le PNJ répond en mêlée sur la défense du bot dans les
+  trois cas). La magie écarte les camps que son sort n'atteint pas
+  (`melee_ladder::unfit_for_spell`).
+- Barreau `Gate::Boat` (démons du volcan de Karamja) : 60 pièces gardées à
+  chaque voyage (`gate_items` : 30 à l'aller chez les marins, 30 au retour
+  chez le douanier, prises dans le SAC).
+- Camp à risque (`combat_spots::risk_spot` : ennemis de niveau ≥ 45, camps
+  des glaces et démons) : une mort y est le prix des drops (ce qui tombe
+  est détruit, puits que la flotte refait), jamais une exclusion : le bot
+  se rééquipe à la banque et y retourne (`DeathTally::accepts`). Garde
+  contre la boucle de mort : `RISK_DEATHS` = 3 morts en `RISK_WINDOW_TICKS`
+  = 3000 ticks écartent le camp du run (l'échelle continue plus bas, un
+  spot ordonné finit en erreur de danger), et deux morts d'affilée sans
+  kill ni banque restent fatales partout. Un spot ordinaire reste exclu à
+  sa première mort.
 
 ## Contention, blessure, préconditions (2026-11-17)
 

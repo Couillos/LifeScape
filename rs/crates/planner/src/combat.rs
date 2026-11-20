@@ -329,6 +329,9 @@ pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
     if let Some(known) = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(method) {
         return known.clone();
     }
+    // A fight far from any bank is one trip (user 2026-11-20,
+    // `danger::fight_site_requirement`); every other site banks its loads.
+    let kind = method_sites(method).map(|(kind, _)| kind).unwrap_or("");
     let table = method_site_list(method).map(|sites| {
         std::sync::Arc::new(
             sites
@@ -340,7 +343,7 @@ pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
                     // 2026-11-16): the boat is a fare like the toll, the
                     // nav and the script walker pay it from the pack.
                     let open_ever = !gates.iter().any(lifescape_gamedata::access::impassable);
-                    SiteRow { site: (x, z, level), required: lifescape_gamedata::danger::site_requirement(surface_x, surface_z, surface_level), gates, open_ever }
+                    SiteRow { site: (x, z, level), required: lifescape_gamedata::danger::kind_site_requirement(kind, surface_x, surface_z, surface_level), gates, open_ever }
                 })
                 .collect::<Vec<_>>(),
         )

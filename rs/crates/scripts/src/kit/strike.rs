@@ -64,7 +64,7 @@ pub(crate) fn attack_npc(bot: &mut Bot, slot: u16, no_bank: bool) -> Result<bool
                 }
                 ordered
             }
-            None => match crate::activities::magic_style::castable_spell(bot) {
+            None => match castable_spell(bot) {
                 Some(best) => best.to_string(),
                 None if !no_bank && crate::kit::magic::bank_shortfall(bot, &crate::activities::magic_style::spell_runes("wind_strike")).is_empty() => {
                     bot.log("out of runes in the pack, wind strike's banked: bank trip");
@@ -107,6 +107,17 @@ pub(crate) fn reattack_due(magic: bool, window: u64, since_attack: u64, since_pr
         return since_attack >= window;
     }
     since_attack >= window && since_progress >= window
+}
+
+/// Strongest damage spell the magic level unlocks whose runes the pack
+/// (or a worn staff) funds (PRD3 lot 6: the fight loop casts it on the
+/// target).
+pub fn castable_spell(bot: &Bot) -> Option<&'static str> {
+    use crate::activities::magic_style::{magic_level, spell_runes, DAMAGE_SPELLS};
+    let level = magic_level(bot);
+    DAMAGE_SPELLS.iter().rev().filter(|(_, need, _)| level >= *need).map(|(spell, _, _)| *spell).find(|spell| {
+        crate::kit::magic::spell_shortfall(bot, &spell_runes(spell)).is_empty()
+    })
 }
 
 #[cfg(test)]

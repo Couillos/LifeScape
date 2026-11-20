@@ -26,6 +26,12 @@ pub struct CombatSpot {
 
 const EDGEVILLE_DUNGEON: Entrance = Entrance { surface: (3097, 3468) };
 const VARROCK_SEWERS: Entrance = Entrance { surface: (3237, 3458) };
+/// The rope down the Karamja volcano (`volcano_entrance_358` (2856,3168)
+/// -> (2856,9568); `climbing_rope2_0` back up).
+const KARAMJA_VOLCANO: Entrance = Entrance { surface: (2856, 3168) };
+/// The Mudskipper Point cellar ladder into the Asgarnian ice dungeon
+/// (`ladder_cellar_inside_down_71` (3008,3150) -> (3008,9550)).
+const MUDSKIPPER_POINT: Entrance = Entrance { surface: (3008, 3150) };
 const KARAMJA_BOAT: &str = "boat 30gp port_sarim";
 const WILD_DANGER: &str = "wild";
 
@@ -91,11 +97,13 @@ const SPOTS: [CombatSpot; 9] = [
     },
 ];
 
-/// Full catalogue §5.12 (27 spots): legacy nine plus rats, imps, monks,
+/// Full catalogue §5.12 (28 spots): legacy nine plus rats, imps, monks,
 /// barbarians, crypt crawlers, bears, hobgoblins, red spiders, ice and
-/// wilderness targets. Ordered weakest first; new low spots sort where
-/// they never shadow the legacy `best_spot()` progression.
-const CATALOGUE_SPOTS: [CombatSpot; 27] = [
+/// wilderness targets, the demons. Ordered weakest first; new low spots
+/// sort where they never shadow the legacy `best_spot()` progression.
+/// No green dragons: members NPCs never spawn on this F2P world
+/// (`GameMap.ts`, `world.json` members false).
+const CATALOGUE_SPOTS: [CombatSpot; 28] = [
     CombatSpot { key: "chickens", npc_names: &["chicken"], min_level: 1, max_level: 9, entrance: None, access: None, danger: "safe" },
     CombatSpot { key: "monks", npc_names: &["monk"], min_level: 5, max_level: 20, entrance: None, access: None, danger: "safe" },
     CombatSpot { key: "barbarians", npc_names: &["barbarian"], min_level: 8, max_level: 25, entrance: None, access: None, danger: "safe" },
@@ -163,9 +171,24 @@ const CATALOGUE_SPOTS: [CombatSpot; 27] = [
     },
     CombatSpot { key: "ice_warriors", npc_names: &["icewarrior"], min_level: 50, max_level: 70, entrance: None, access: None, danger: WILD_DANGER },
     CombatSpot { key: "ice_giants", npc_names: &["icegiant"], min_level: 55, max_level: 80, entrance: None, access: None, danger: WILD_DANGER },
-    CombatSpot { key: "green_dragons", npc_names: &["green_dragon"], min_level: 75, max_level: 99, entrance: None, access: None, danger: WILD_DANGER },
-    CombatSpot { key: "lesser_demons", npc_names: &["lesser_demon"], min_level: 82, max_level: 99, entrance: None, access: Some(KARAMJA_BOAT), danger: "aggressive" },
-    CombatSpot { key: "greater_demons", npc_names: &["greater_demon"], min_level: 90, max_level: 99, entrance: None, access: Some(KARAMJA_BOAT), danger: WILD_DANGER },
+    // The two ice camps where warriors and giants share the ground (each
+    // hunts the bot that came for the other): the Asgarnian ice dungeon
+    // under Mudskipper Point and the deep Wilderness camp.
+    CombatSpot { key: "ice_dungeon", npc_names: &["icewarrior", "icegiant"], min_level: 50, max_level: 80, entrance: Some(MUDSKIPPER_POINT), access: None, danger: "underground" },
+    CombatSpot { key: "wild_ice", npc_names: &["icewarrior", "icegiant"], min_level: 55, max_level: 85, entrance: None, access: None, danger: WILD_DANGER },
+    // The six of the Karamja volcano (the five past `dragonsecretdoor`
+    // need Dragon Slayer: `melee_ladder` keeps the reachable area).
+    CombatSpot {
+        key: "lesser_demons",
+        npc_names: &["lesser_demon"],
+        min_level: 80,
+        max_level: 99,
+        entrance: Some(KARAMJA_VOLCANO),
+        access: Some(KARAMJA_BOAT),
+        danger: "underground",
+    },
+    // The deep Wilderness camp east of the lava (no boat: on foot).
+    CombatSpot { key: "greater_demons", npc_names: &["greater_demon"], min_level: 90, max_level: 99, entrance: None, access: None, danger: WILD_DANGER },
 ];
 
 /// Every legacy spot, weakest first (planner/scripts compatible).
@@ -186,6 +209,39 @@ pub fn by_key(key: &str) -> Option<CombatSpot> {
 /// True when the spot needs the Al Kharid toll (`access` names it).
 pub fn toll_gated(spot: &CombatSpot) -> bool {
     spot.access.is_some_and(|access| access.starts_with("toll"))
+}
+
+/// True when the spot sits behind the Port Sarim boat (`access` names it).
+pub fn boat_gated(spot: &CombatSpot) -> bool {
+    spot.access.is_some_and(|access| access.starts_with("boat"))
+}
+
+/// Foe level from which a camp is a risk camp (user 2026-11-20): the
+/// ice giants (49), ice warriors (57), lesser (82) and greater demons
+/// (92). There a death is the price of the drops, never a reason to
+/// leave: the bot respawns, re-gears at the bank and comes back; what it
+/// dropped is destroyed (`death.rs2`), a sink the fleet makes again.
+pub const RISK_FOE_LEVEL: i64 = 45;
+/// Combat a risk camp asks under its foes' level: lesser demons (82)
+/// from 80, greater demons (92) from 90 (user 2026-11-20).
+pub const RISK_LEVEL_SLACK: i64 = 2;
+
+/// Highest combat level (`vislevel`) among the spot's NPCs (0 unknown).
+pub fn foe_level(spot: &CombatSpot) -> i64 {
+    spot.npc_names.iter().filter_map(|name| crate::npcs_by_name(name).into_iter().next()).map(|npc| npc.vislevel).max().unwrap_or(0)
+}
+
+/// True when the spot `key` is a risk camp (`RISK_FOE_LEVEL`).
+pub fn risk_spot(key: &str) -> bool {
+    by_key(key).is_some_and(|spot| foe_level(&spot) >= RISK_FOE_LEVEL)
+}
+
+/// Combat level a risk camp asks (its foes' level less
+/// `RISK_LEVEL_SLACK`); `None` for any other spot.
+pub fn risk_floor(key: &str) -> Option<i64> {
+    let spot = by_key(key)?;
+    let level = foe_level(&spot);
+    (level >= RISK_FOE_LEVEL).then_some(level - RISK_LEVEL_SLACK)
 }
 
 /// Legacy spots whose NPCs drop `item` (debug-name prefix match: the
@@ -286,7 +342,7 @@ mod tests {
         // Catalogue §5.12: all targets placed in F2P zones with access
         // (key, fare, toll) and danger; Wilderness spots flagged.
         // Legacy `all_spots()` stays at nine for planner compatibility;
-        // the catalogue holds all 27.
+        // the catalogue holds all 28.
         assert_eq!(all_spots().len(), 9, "legacy spots frozen");
         let spots = catalogue_spots();
         assert!(spots.len() >= 20, "spots, got {}", spots.len());
@@ -307,8 +363,43 @@ mod tests {
         assert!(by_key("lesser_demons").expect("lesser").access.unwrap_or("").contains("30gp"));
         assert!(by_key("al_kharid_warriors").expect("warrior").access.unwrap_or("").contains("10gp"));
         let wild: Vec<&str> = spots.iter().filter(|entry| entry.danger == "wild").map(|entry| entry.key).collect();
-        for key in ["bears", "wild_skeletons", "ice_warriors", "green_dragons", "greater_demons"] {
+        for key in ["bears", "wild_skeletons", "ice_warriors", "wild_ice", "greater_demons"] {
             assert!(wild.contains(&key), "{key} flagged wild: {wild:?}");
         }
+    }
+
+    /// User 2026-11-20 (F2P world, `world.json` members false): members
+    /// NPCs never spawn, so no green dragon spot. The lesser demons hunt
+    /// down the Karamja volcano rope behind the boat; the greater demons
+    /// stand in the deep Wilderness, on foot (no boat).
+    #[test]
+    fn high_level_camps_follow_the_server() {
+        assert!(by_key("green_dragons").is_none(), "members NPCs never spawn here");
+        let lesser = by_key("lesser_demons").expect("lesser");
+        assert_eq!(lesser.entrance.expect("volcano rope").surface, (2856, 3168));
+        assert!(super::boat_gated(&lesser));
+        let greater = by_key("greater_demons").expect("greater");
+        assert!(greater.access.is_none() && greater.entrance.is_none() && greater.danger == "wild", "{greater:?}");
+        assert!(!super::boat_gated(&greater));
+        let dungeon = by_key("ice_dungeon").expect("ice dungeon");
+        assert_eq!(dungeon.entrance.expect("ladder").surface, (3008, 3150));
+        assert!(dungeon.npc_names.contains(&"icewarrior") && dungeon.npc_names.contains(&"icegiant"));
+    }
+
+    /// Risk camps (user 2026-11-20): foes from level 45; lesser demons
+    /// from combat 80, greater demons from 90; the giants of the
+    /// Edgeville dungeon stay an ordinary camp.
+    #[test]
+    fn risk_camps_and_their_floor() {
+        use super::{risk_floor, risk_spot};
+        for key in ["lesser_demons", "greater_demons", "ice_dungeon", "wild_ice"] {
+            assert!(risk_spot(key), "{key} is a risk camp");
+        }
+        for key in ["hill_giants", "moss_giants", "cows", "guards"] {
+            assert!(!risk_spot(key), "{key} is not");
+        }
+        assert_eq!(risk_floor("lesser_demons"), Some(80));
+        assert_eq!(risk_floor("greater_demons"), Some(90));
+        assert_eq!(risk_floor("hill_giants"), None);
     }
 }

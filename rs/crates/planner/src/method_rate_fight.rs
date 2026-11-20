@@ -17,26 +17,25 @@
 //!   (`player_magic.rs2`); an arrow per shot (the scripts never pick
 //!   them back up), the spell's runes per cast.
 
-use lifescape_gamedata::melee_math::{estimate, hit_chance, max_hit, Fighter, KILL_OVERHEAD_TICKS, PLAYER_ATTACK_TICKS};
+use lifescape_gamedata::melee_math::{estimate, Fighter, KILL_OVERHEAD_TICKS, PLAYER_ATTACK_TICKS};
 use lifescape_gamedata::npc_combat::NpcCombat;
 
 use crate::method_rate::{Action, PriorError, PriorQuery};
 
-/// Ticks between two shots of a shortbow (default `attackrate`).
-pub const RANGED_ATTACK_TICKS: f64 = 4.0;
-/// Ticks between two combat casts.
-pub const MAGIC_ATTACK_TICKS: f64 = 5.0;
-/// Ranged style bonus of the accurate style (`combat_get_damagestyle_
-/// bonuses`: `^style_ranged_accurate` = +3 ranged).
-pub const RANGED_ACCURATE_BONUS: i64 = 3;
-/// Magic's fixed style bonus (`player_combat_stat.rs2`: always +1).
-pub const MAGIC_STYLE_BONUS: i64 = 1;
-/// Ranged strength of a bronze arrow (`rangebonus`), the ammo the prior
-/// burns when the key's gear names none.
-pub const BRONZE_ARROW_STRENGTH: i64 = 7;
+// The rolls live with the ladder's exchange model (one formula for the
+// prior and the camp picker, `gamedata::melee_math`).
+pub use lifescape_gamedata::melee_math::{BRONZE_ARROW_STRENGTH, MAGIC_ATTACK_TICKS, MAGIC_STYLE_BONUS, RANGED_ACCURATE_BONUS, RANGED_ATTACK_TICKS};
+
+/// Camp a fight's prior rates: its spot, the ranged and magic ladders'
+/// `tranches::LADDER_PRIOR_SPOT` (the melee ladder keeps no prior).
+fn rated_spot(method: &str) -> Option<&str> {
+    let key = crate::method_way::fight_spot(method)?;
+    let shoots = method.starts_with("fight:ranged/") || method.starts_with("fight:magic/");
+    Some(if key == crate::tranches::MELEE_LADDER && shoots { crate::tranches::LADDER_PRIOR_SPOT } else { key })
+}
 
 fn spot_target(method: &str) -> Result<(String, NpcCombat), PriorError> {
-    let key = crate::method_way::fight_spot(method).ok_or_else(|| PriorError::NoWay(method.to_string()))?;
+    let key = rated_spot(method).ok_or_else(|| PriorError::NoWay(method.to_string()))?;
     let spot = lifescape_gamedata::combat_spots::by_key(key).ok_or_else(|| PriorError::NoWay(method.to_string()))?;
     spot.npc_names
         .iter()
@@ -70,20 +69,14 @@ fn attack_bonus(gear: &[lifescape_gamedata::equipment::Wearable], kind: &str) ->
 /// the gear `tool` names (module doc).
 pub fn ranged_roll(npc: &NpcCombat, level: u8, tool: &str) -> (f64, i64) {
     let gear = worn(tool);
-    let effective = i64::from(level.max(1)) + 8 + RANGED_ACCURATE_BONUS;
-    let attack = effective * (attack_bonus(&gear, "range") + 64);
-    let defence = (npc.defence + 9) * (npc.ranged_defence + 64);
     let arrows = gear.iter().filter(|item| item.rangebonus >= 0).map(|item| item.rangebonus).max().unwrap_or(BRONZE_ARROW_STRENGTH);
-    (hit_chance(attack, defence), max_hit(effective, arrows))
+    lifescape_gamedata::melee_math::ranged_roll(npc, i64::from(level.max(1)), attack_bonus(&gear, "range"), arrows)
 }
 
 /// Odds a combat cast lands on `npc` at `level` with the gear `tool`
 /// names (the max hit is the spell's).
 pub fn magic_odds(npc: &NpcCombat, level: u8, tool: &str) -> f64 {
-    let effective = i64::from(level.max(1)) + 8 + MAGIC_STYLE_BONUS;
-    let attack = effective * (attack_bonus(&worn(tool), "magic") + 64);
-    let defence = (npc.magic + 9) * (npc.magic_defence + 64);
-    hit_chance(attack, defence)
+    lifescape_gamedata::melee_math::magic_odds(npc, i64::from(level.max(1)), attack_bonus(&worn(tool), "magic"))
 }
 
 fn kill_units(npc_name: &str, hitpoints: i64) -> Vec<(&'static str, String, f64)> {
@@ -101,6 +94,10 @@ pub fn fight_drops_per_kill(method: &str) -> Vec<(String, f64)> {
 }
 
 fn compute_fight_drops_per_kill(method: &str) -> Vec<(String, f64)> {
+    // A ladder's camp is picked at run time: no drop of its own.
+    if crate::tranches::is_ladder(method) {
+        return Vec::new();
+    }
     let Ok((npc_name, _)) = spot_target(method) else { return Vec::new() };
     let Some(npc) = lifescape_gamedata::npcs_by_name(&npc_name).into_iter().next() else { return Vec::new() };
     let mut out: Vec<(String, f64)> = Vec::new();

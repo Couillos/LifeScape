@@ -1,16 +1,18 @@
-//! Melee training ladder: which F2P spot a fighter trains at, from its
-//! levels, worn bonuses and hitpoints (`melee_math`), within a safety
-//! rule, spread across spots and clusters by a stable seed. Pure: the
-//! script feeds live state in and walks to what comes out.
+//! Combat training ladder: which F2P spot a fighter trains at, from its
+//! levels, worn bonuses and hitpoints (`melee_math`, melee, ranged or
+//! magic: every style climbs the same camps, user 2026-11-20), within a
+//! safety rule, spread across spots and clusters by a stable seed. Pure:
+//! the script feeds live state in and walks to what comes out.
 //!
 //! Rules (user decisions 2026-11-13): every F2P melee spot is allowed;
 //! food is carried everywhere except cows and chickens. A spot is
 //! workable when:
 //! - its gate holds: `Toll` needs 10 coins (or the bot already on the
-//!   Al Kharid flank); otherwise the ladder takes the next spot, never
-//!   a block. The Edgeville dungeon giants need no key: the trapdoor
-//!   and the main dungeon reach their hall; an owned brass key only
-//!   rides along as the shortcut (`Rung::shortcut_key`);
+//!   Al Kharid flank), `Boat` the Karamja fare out and back (60 coins,
+//!   `sailors.rs2` and `customs_officer.rs2`); otherwise the ladder takes
+//!   the next spot, never a block. The Edgeville dungeon giants need no
+//!   key: the trapdoor and the main dungeon reach their hall; an owned
+//!   brass key only rides along as the shortcut (`Rung::shortcut_key`);
 //! - two NPC max hits from the eat line cannot kill (`burst`), nor two
 //!   hits of any hunter met on the way down to an underground cluster
 //!   that would attack this combat level (`approach_threat`);
@@ -18,7 +20,13 @@
 //!   covers `MIN_KILLS_PER_LOAD` kills;
 //! - one cluster at least sits outside every other hunter that would
 //!   attack this combat level, its bank too (`danger`, the target's own
-//!   NPC excluded: we came to fight it).
+//!   NPC excluded: we came to fight it). A cluster with no bank within
+//!   `danger::BANK_TREK_LIMIT` is one trip that lasts until the food runs
+//!   out (user 2026-11-20: the Wilderness greater demons, 400 tiles from
+//!   Edgeville), its bank trip priced `FAR_BANK_TRIP_TICKS`;
+//! - a risk camp (`combat_spots::risk_spot`: foes of level 45 and up)
+//!   asks its foes' level less two (lesser demons from 80, greater
+//!   demons from 90): there a death is accepted, the price of the drops.
 //!
 //! Value = xp per tick (discounted by the bank trips the food burn
 //! forces) + `COIN_XP_WEIGHT` x coins per tick, so coin droppers win
@@ -46,6 +54,9 @@ pub const MIN_FOOD: u32 = 3;
 pub const MAX_FOOD: u32 = 20;
 /// Ticks one bank round trip costs (walk out, bank, walk back).
 pub const BANK_TRIP_TICKS: f64 = 400.0;
+/// Ticks one round trip costs from a camp with no bank in reach (the
+/// deep Wilderness: 400 tiles each way to Edgeville).
+pub const FAR_BANK_TRIP_TICKS: f64 = 1200.0;
 /// Xp-equivalent of one coin: a tie-break, not a goal.
 pub const COIN_XP_WEIGHT: f64 = 0.5;
 /// Spots worth at least this share of the best are equivalent: the
@@ -57,6 +68,10 @@ pub const BAND: f64 = 0.8;
 pub const FOOD_ERRAND_GAIN: f64 = 1.3;
 /// Coins the Al Kharid toll gate takes.
 pub const TOLL_COINS: u32 = 10;
+/// Coins the Karamja boat takes out and back (30 each way, both taken
+/// from the pack: `sailors.rs2`, `customs_officer.rs2`; the nav's
+/// `boat_port_sarim_to_karamja` edge asks `coins:60`).
+pub const BOAT_COINS: u32 = 2 * crate::services::BOAT_FARE_GP as u32;
 /// Heal assumed when the bot owns no food yet (shrimps, cooked meat).
 pub const DEFAULT_HEAL: i64 = 3;
 /// F2P fish the brain may ask for when the bot owns no food, smallest
@@ -111,6 +126,8 @@ pub enum Gate {
     Open,
     /// Across the Al Kharid toll fence.
     Toll,
+    /// Behind the Port Sarim boat (Karamja and its volcano).
+    Boat,
 }
 
 /// One rung: a `combat_spots` key, the NPC whose stats rate it, the
@@ -136,18 +153,20 @@ const fn rung(key: &'static str, npc: &'static str, food_exempt: bool, gate: Gat
     Rung { key, npc, food_exempt, gate, area, self_heal_per_tick: 0.0, shortcut_key: None }
 }
 
-/// Every F2P melee rung the fight loop can hunt (surface, plus the
-/// Edgeville dungeon giants the router reaches by the Edgeville trapdoor,
-/// or the brass-key house when the key is owned).
+/// Every F2P rung the fight loop can hunt (surface, the Edgeville
+/// dungeon giants the router reaches by the Edgeville trapdoor or the
+/// brass-key house when the key is owned, the Asgarnian ice dungeon by
+/// the Mudskipper Point ladder (Draynor bank, route 209), the Karamja
+/// volcano demons by the boat and the rope, the deep Wilderness ice camp
+/// and greater demons on foot, one trip each).
 /// Left out: dark wizards (magic attackers, not a melee exchange), rats
 /// (mixed 2-10 hp NPCs), imps (teleport away mid-fight, max hit 0),
 /// bears, moss giants (their F2P
 /// hall east of the Edgeville dungeon zombies sits behind the slashable
 /// web `bigweb_slashable` (3146, 9898): no nav edge, `Disconnected`
-/// offline), the Asgarnian ice dungeon (ice warriors and giants: no F2P
-/// bank within `danger::BANK_TREK_LIMIT` of Mudskipper Point), and
-/// Crandor or members spawns (area filters).
-pub const RUNGS: [Rung; 11] = [
+/// offline), Crandor, Elvarg's lair (the five lesser demons past
+/// `dragonsecretdoor`, Dragon Slayer) and members spawns (area filters).
+pub const RUNGS: [Rung; 15] = [
     rung("chickens", "chicken", true, Gate::Open, None),
     rung("cows", "cow", true, Gate::Open, None),
     rung("goblins", "goblin", false, Gate::Open, None),
@@ -162,6 +181,13 @@ pub const RUNGS: [Rung; 11] = [
     // Edgeville dungeon camp mixes in the armed level-42 ones).
     rung("hobgoblins", "hobgoblin_unarmed", false, Gate::Open, Some((2895, 3270, 2920, 3300))),
     Rung { shortcut_key: Some(BRASS_KEY), ..rung("hill_giants", "giant", false, Gate::Open, Some((3090, 9815, 3130, 9860))) },
+    // Warriors and giants share both ice camps; rated on the warrior
+    // (eleven of the fourteen dungeon spawns).
+    rung("ice_dungeon", "icewarrior", false, Gate::Open, Some((3035, 9545, 3070, 9595))),
+    rung("wild_ice", "icewarrior", false, Gate::Open, Some((2940, 3850, 2970, 3905))),
+    // The volcano's six, never the lair past the secret door (z 9600).
+    rung("lesser_demons", "lesser_demon", false, Gate::Boat, Some((2820, 9548, 2850, 9570))),
+    rung("greater_demons", "greater_demon", false, Gate::Open, Some((3275, 3865, 3310, 3900))),
 ];
 
 /// Rung by spot key.
@@ -333,9 +359,27 @@ pub fn rung_clusters(rung: &Rung) -> Vec<(i64, i64, i64, usize)> {
     out
 }
 
+/// Surface tile a cluster banks from: its own, or its spot's entrance
+/// for an underground one (`None`: underground with no entrance).
+fn cluster_surface(rung: &Rung, cluster: (i64, i64, i64)) -> Option<(i64, i64)> {
+    let (x, z, _) = cluster;
+    if z < UNDERGROUND_OFFSET {
+        return Some((x, z));
+    }
+    crate::combat_spots::by_key(rung.key).and_then(|spot| spot.entrance).map(|entrance| entrance.surface)
+}
+
+/// True when the cluster banks within `danger::BANK_TREK_LIMIT`; false:
+/// a single trip that lasts until the food runs out.
+pub fn cluster_banked(rung: &Rung, cluster: (i64, i64, i64)) -> bool {
+    cluster_surface(rung, cluster).is_some_and(|(x, z)| crate::danger::site_bank(x, z, cluster.2).is_some())
+}
+
 /// Combat level a cluster needs: no other hunter (the rung's own NPCs
-/// excluded) covers it or its bank. Underground clusters bank from
-/// their surface entrance.
+/// excluded) covers it or its bank, and a risk camp's floor
+/// (`combat_spots::risk_floor`). Underground clusters bank from their
+/// surface entrance. No bank in reach: the cluster alone, one trip
+/// (`danger::fight_site_requirement`, user 2026-11-20).
 pub fn cluster_requirement(rung: &Rung, cluster: (i64, i64, i64)) -> u8 {
     let names: &[&str] = crate::combat_spots::by_key(rung.key).map(|spot| spot.npc_names).unwrap_or(&[]);
     let required_at = |x: i64, z: i64, level: i64| {
@@ -348,18 +392,15 @@ pub fn cluster_requirement(rung: &Rung, cluster: (i64, i64, i64)) -> u8 {
             .unwrap_or(3)
     };
     let (x, z, level) = cluster;
-    let surface = if z >= UNDERGROUND_OFFSET {
-        match crate::combat_spots::by_key(rung.key).and_then(|spot| spot.entrance) {
-            Some(entrance) => entrance.surface,
-            None => return crate::danger::NEVER,
-        }
-    } else {
-        (x, z)
-    };
-    let Some(bank) = crate::danger::site_bank(surface.0, surface.1, level) else {
+    let Some(surface) = cluster_surface(rung, cluster) else {
         return crate::danger::NEVER;
     };
-    required_at(x, z, level).max(required_at(bank.x, bank.z, bank.level))
+    let floor = crate::combat_spots::risk_floor(rung.key).map(|floor| floor.clamp(3, i64::from(crate::danger::NEVER) - 1) as u8).unwrap_or(3);
+    let site = required_at(x, z, level).max(floor);
+    match crate::danger::site_bank(surface.0, surface.1, level) {
+        Some(bank) => site.max(required_at(bank.x, bank.z, bank.level)),
+        None => site,
+    }
 }
 
 /// Rate every rung for this fighter and these holdings.
@@ -373,14 +414,17 @@ pub fn rate(fighter: &Fighter, holdings: &Holdings) -> Vec<Rated> {
         let food = if rung.food_exempt { 0 } else { food_for(&estimate, heal) };
         // Bank trips the food burn forces, as lost fighting time.
         let load_ticks = if rung.food_exempt || estimate.loss_per_tick <= 0.0 { f64::INFINITY } else { f64::from(food) * heal as f64 / estimate.loss_per_tick };
-        let fighting_share = if load_ticks.is_finite() { load_ticks / (load_ticks + BANK_TRIP_TICKS) } else { 1.0 };
-        let value = estimate.xp_per_tick * fighting_share + COIN_XP_WEIGHT * coins / estimate.cycle_ticks;
         let eat_line = fighter.hitpoints as f64 * EAT_FRACTION;
         let pool = (fighter.hitpoints as f64 - eat_line) + f64::from(food) * heal as f64;
         let safe: Vec<(i64, i64, i64, usize)> = rung_clusters(&rung)
             .into_iter()
             .filter(|(x, z, level, _)| i64::from(cluster_requirement(&rung, (*x, *z, *level))) <= fighter.combat)
             .collect();
+        // One trip without a bank in reach: the long walk back is the
+        // bank trip (`FAR_BANK_TRIP_TICKS`).
+        let trip_ticks = if safe.iter().any(|(x, z, level, _)| cluster_banked(&rung, (*x, *z, *level))) { BANK_TRIP_TICKS } else { FAR_BANK_TRIP_TICKS };
+        let fighting_share = if load_ticks.is_finite() { load_ticks / (load_ticks + trip_ticks) } else { 1.0 };
+        let value = estimate.xp_per_tick * fighting_share + COIN_XP_WEIGHT * coins / estimate.cycle_ticks;
         let threats: Vec<Option<(&str, i64)>> = safe.iter().map(|(x, z, level, _)| approach_threat(&rung, (*x, *z, *level), fighter.combat, eat_line)).collect();
         let clusters: Vec<(i64, i64, i64, usize)> = safe.iter().zip(&threats).filter(|(_, threat)| threat.is_none()).map(|(cluster, _)| *cluster).collect();
         let refused = if !gate_open(rung.gate, holdings) {
@@ -405,7 +449,19 @@ fn gate_open(gate: Gate, holdings: &Holdings) -> bool {
     match gate {
         Gate::Open => true,
         Gate::Toll => holdings.east_of_toll || holdings.coins >= TOLL_COINS,
+        Gate::Boat => holdings.coins >= BOAT_COINS,
     }
+}
+
+/// Rungs a magic run casting `spell` cannot hunt: one of the spot's NPCs
+/// is out of the spell's reach (crumble undead hits the undead only,
+/// `spells::affects`).
+pub fn unfit_for_spell(spell: &str) -> Vec<&'static str> {
+    RUNGS
+        .iter()
+        .filter(|rung| crate::combat_spots::by_key(rung.key).is_none_or(|spot| !spot.npc_names.iter().all(|npc| crate::spells::affects(spell, npc))))
+        .map(|rung| rung.key)
+        .collect()
 }
 
 /// Stable 64-bit FNV-1a of an account name (the spread seed).

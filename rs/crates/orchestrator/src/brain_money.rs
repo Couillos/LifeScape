@@ -123,7 +123,7 @@ pub fn bot_rows<'a>(set: &'a GuideSet, level_of: &dyn Fn(&str) -> u8, stock: &[(
 
 /// True for a farm method a money node launches.
 fn money_launchable(method: &str) -> bool {
-    if method == lifescape_planner::guide_methods::LADDER {
+    if lifescape_planner::tranches::is_ladder(method) {
         return false;
     }
     // Static per method (the mapping tables): read once per process, a

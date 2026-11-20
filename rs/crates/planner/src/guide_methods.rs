@@ -81,8 +81,9 @@ fn compute_catalogue() -> Vec<GuideMethod> {
         methods.push(format!("fight:melee/{}", rung.key));
     }
     for level in (1..=99u8).step_by(5) {
-        methods.push(format!("fight:ranged/{}", crate::tranches::tranche_resource("ranged", level)));
-        let spot = crate::tranches::tranche_resource("magic", level);
+        // The fixed camps: a ladder (every style from 10) is no activity.
+        methods.push(format!("fight:ranged/{}", crate::tranches::starter_camp(level)));
+        let spot = crate::tranches::starter_camp(level);
         methods.push(format!("fight:magic/{}/{spot}", crate::method_way::best_combat_spell_at(level, &spot)));
         for skill in SKILLS {
             methods.push(crate::activity::activity_of_method(&crate::tranches::reach_method(skill, level)));
@@ -97,8 +98,8 @@ fn compute_catalogue() -> Vec<GuideMethod> {
         methods.extend(recipe.inputs.iter().map(|(bones, _)| format!("bury:{bones}")));
     }
     methods.extend(made.iter().filter(|item| crate::alchemy::alch_value(item, true).is_some()).map(|item| format!("alch:{item}")));
-    // The melee ladder picks its rung at run time: each rung is listed.
-    methods.retain(|method| method != LADDER);
+    // The ladders pick their rung at run time: each melee rung is listed.
+    methods.retain(|method| !crate::tranches::is_ladder(method));
     methods.sort();
     methods.dedup();
     let mut out = Vec::new();

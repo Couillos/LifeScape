@@ -50,6 +50,7 @@ pub mod gear;
 pub mod hunt;
 pub mod janitor;
 pub mod ladder;
+pub mod ladder_hunt;
 pub mod harvest;
 pub mod load;
 pub mod locked;

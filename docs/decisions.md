@@ -1926,3 +1926,38 @@ idempotence), `funding_gifts_tests` (convocation des deux parties,
 `my_deals`, règlement vérifié sans trace marché, `no_show` retenté puis
 `mismatch` abandonné, journal), `market_lots::tests::a_gift_is_paid_
 from_the_purse`.
+
+## 2026-11-20 — Camps de haut niveau : démons, glaces, mort acceptée
+
+Constat : 47 bots sur 74 ont un combat ≥ 60, 15 ≥ 80, et rien n'existait
+au-dessus des géants des collines (niveau 28) ; distance et magie restaient
+aux vaches. Décisions (utilisateur 2026-11-20) :
+1. Catalogue (`combat_spots`) : plus de dragons verts (PNJ membres, jamais
+   apparus sur ce monde F2P : `world.json` members false, `GameMap.ts`) ;
+   démons mineurs = volcan de Karamja (corde (2856,3168) → (2856,9568),
+   bateau 30 pièces chaque sens, banque Draynor route 114 depuis le quai),
+   les six atteignables seulement (les cinq derrière `dragonsecretdoor`
+   exigent Dragon Slayer) ; démons majeurs = Wilderness profonde
+   (3280-3304, 3872-3894), à pied, sans bateau ; nouveaux camps mixtes
+   `ice_dungeon` (guerriers et géants des glaces sous Mudskipper Point,
+   Draynor route 209) et `wild_ice`. Barreaux ajoutés à l'échelle
+   (`melee_ladder::RUNGS`), `Gate::Boat` (60 pièces au sac).
+2. Un site de combat sans banque à `BANK_TREK_LIMIT` est un seul voyage
+   jusqu'à la fin de la nourriture (`danger::fight_site_requirement`,
+   `cluster_requirement`), son aller-retour compté `FAR_BANK_TRIP_TICKS`
+   = 1200 ; le danger reste une exigence de combat. Camp à risque (ennemis
+   ≥ 45) : exigence = niveau des ennemis − 2 (démons mineurs dès 80,
+   majeurs dès 90, `combat_spots::risk_floor`).
+3. Mort acceptée sur un camp à risque : le camp reste dans le run, le bot
+   se rééquipe à la banque et revient ; garde : 3 morts en 3000 ticks
+   écartent le camp, deux morts d'affilée sans progrès restent fatales
+   (`kit::survival::DeathTally`). La mort détruit ce qui tombe
+   (`death.rs2` : 3 objets gardés, 0 si skull) : un puits voulu.
+4. Distance et magie montent la même échelle dès 10 (`Offense` dans
+   `melee_math` : jets serveur de `player_combat_stat.rs2`, le PNJ répond
+   en mêlée ; formules partagées avec le prior `method_rate_fight`).
+Rejeté : drapeau « risque » écrit à la main par camp (règle tirée du niveau
+des ennemis) ; corriger ici l'espérance de pièces des tables à plusieurs
+lignes de pièces (`drops.json` n'en garde qu'une, min–max : démon mineur
+158 estimées contre 66 réelles, simple départage de l'échelle) : à
+refaire dans le dump.

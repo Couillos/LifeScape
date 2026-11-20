@@ -97,18 +97,30 @@ pub fn bank_stocks_food(bot: &Bot) -> bool {
     lifescape_gamedata::food::best_food(&refs).is_some()
 }
 
+/// Deaths a risk camp (`combat_spots::risk_spot`: ice camps, demons)
+/// may cost within `RISK_WINDOW_TICKS` before it leaves the run: the
+/// guard against a death loop (user 2026-11-20: a death there is the
+/// price of the drops, three in half an hour is a camp out of reach).
+pub const RISK_DEATHS: usize = 3;
+/// Window of the risk guard, in ticks (30 minutes at 600 ms a tick).
+pub const RISK_WINDOW_TICKS: u64 = 3000;
+
 /// Run-local death tally: consecutive deaths (a kill or a bank trip is
 /// progress and resets the streak) plus the killer spots excluded from
 /// every later re-pick. Local to one run, never global, never persisted:
-/// a spot that killed once stays out for the run.
+/// an ordinary spot that killed once stays out for the run; a risk camp
+/// stays in (the bot re-gears at the bank and goes back) until it kills
+/// `RISK_DEATHS` times within `RISK_WINDOW_TICKS`.
 pub struct DeathTally {
     deaths: u32,
     excluded: Vec<&'static str>,
+    /// Risk-camp deaths of the window (spot, tick).
+    risk_deaths: Vec<(&'static str, u64)>,
 }
 
 impl DeathTally {
     pub fn fresh() -> DeathTally {
-        DeathTally { deaths: 0, excluded: Vec::new() }
+        DeathTally { deaths: 0, excluded: Vec::new(), risk_deaths: Vec::new() }
     }
 
     pub fn excludes(&self, spot_key: &str) -> bool {
@@ -142,12 +154,39 @@ impl DeathTally {
         self.deaths = 0;
     }
 
-    pub fn note_death(&mut self, spot_key: &'static str) {
+    /// A death at `spot_key` on tick `now`: one more in the streak; the
+    /// spot leaves the run, unless it is a risk camp still under its
+    /// guard (`RISK_DEATHS` within `RISK_WINDOW_TICKS`).
+    pub fn note_death(&mut self, spot_key: &'static str, now: u64) {
         self.deaths += 1;
+        if lifescape_gamedata::combat_spots::risk_spot(spot_key) {
+            self.risk_deaths.retain(|(_, at)| now.saturating_sub(*at) < RISK_WINDOW_TICKS);
+            self.risk_deaths.push((spot_key, now));
+            if self.risk_deaths.iter().filter(|(key, _)| *key == spot_key).count() < RISK_DEATHS {
+                return;
+            }
+        }
         if !self.excludes(spot_key) {
             self.excluded.push(spot_key);
         }
     }
+
+    /// True when the death just noted at `spot_key` is the camp's price:
+    /// a risk camp still in the run (re-gear at the bank, go back).
+    pub fn accepts(&self, spot_key: &str) -> bool {
+        lifescape_gamedata::combat_spots::risk_spot(spot_key) && !self.excludes(spot_key)
+    }
+}
+
+/// After a death noted at `spot_key` in an ordered queue: true when the
+/// spot is a risk camp the run takes back (`DeathTally::accepts`; user
+/// 2026-11-20: the death is its price, the hunt re-gears at the bank).
+pub fn takes_back(bot: &mut Bot, tally: &DeathTally, spot_key: &str) -> bool {
+    let back = tally.accepts(spot_key);
+    if back {
+        bot.log(&format!("{spot_key} killed us: a risk camp, the death is its price; back after the bank"));
+    }
+    back
 }
 
 /// Second consecutive death with no kill or bank trip between: loud and
@@ -341,14 +380,14 @@ mod tests {
     fn tally_resets_on_progress_never_forgets_killers() {
         let mut tally = DeathTally::fresh();
         assert!(!tally.fatal());
-        tally.note_death("goblins");
+        tally.note_death("goblins", 0);
         assert!(tally.excludes("goblins"));
         assert!(!tally.fatal(), "one death is not fatal");
         tally.note_progress();
-        tally.note_death("goblins");
+        tally.note_death("goblins", 0);
         assert!(tally.excludes("goblins"), "exclusion survives progress");
         assert!(!tally.fatal(), "progress broke the streak");
-        tally.note_death("cows");
+        tally.note_death("cows", 0);
         assert!(tally.fatal(), "two consecutive deaths are fatal");
     }
 
@@ -407,4 +446,41 @@ mod tests {
         assert!(!is_conn_abort(&ScriptError::Sdk(Error::Interrupted("x".to_string()))), "stop is not conn");
     }
 
+}
+
+#[cfg(test)]
+mod risk_tests {
+    use super::{DeathTally, RISK_DEATHS, RISK_WINDOW_TICKS};
+
+    /// User 2026-11-20: a death at a risk camp is a cost, never a reason
+    /// to leave: the camp stays in the run, the bot re-gears and goes
+    /// back; three deaths within the window are a death loop and the
+    /// camp leaves. An ordinary spot still leaves at its first death.
+    #[test]
+    fn risk_camps_accept_deaths_until_the_guard() {
+        let mut tally = DeathTally::fresh();
+        tally.note_death("lesser_demons", 100);
+        assert!(!tally.excludes("lesser_demons") && tally.accepts("lesser_demons"), "one death: back to the demons");
+        tally.note_progress();
+        tally.note_death("lesser_demons", 900);
+        assert!(!tally.excludes("lesser_demons"), "two deaths with kills between: still the price");
+        tally.note_progress();
+        tally.note_death("lesser_demons", 1500);
+        assert_eq!(RISK_DEATHS, 3);
+        assert!(tally.excludes("lesser_demons") && !tally.accepts("lesser_demons"), "three in the window: a death loop");
+        let mut spaced = DeathTally::fresh();
+        for index in 0..5u64 {
+            spaced.note_death("greater_demons", index * RISK_WINDOW_TICKS);
+            spaced.note_progress();
+        }
+        assert!(!spaced.excludes("greater_demons"), "one death per window never trips the guard");
+        let mut plain = DeathTally::fresh();
+        plain.note_death("hill_giants", 10);
+        assert!(plain.excludes("hill_giants") && !plain.accepts("hill_giants"), "an ordinary spot leaves at once");
+        // Two deaths in a row with nothing between stay fatal anywhere.
+        let mut streak = DeathTally::fresh();
+        streak.note_death("lesser_demons", 10);
+        streak.note_death("lesser_demons", 50);
+        assert!(streak.fatal(), "no kill between: the loop guard holds");
+    }
 }

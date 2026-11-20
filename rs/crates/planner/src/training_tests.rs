@@ -153,10 +153,10 @@ fn magic_25_alchs_its_stock_when_it_beats_bolts() {
     assert_eq!(best.method, "alch:iron_dagger", "{ranked:?}");
     assert_eq!(best.batch, 300);
     assert_eq!(best.missing, vec!["naturerune".to_string(), "firerune".to_string()]);
-    assert!(ranked.iter().any(|pick| pick.method == "fight:magic/water_bolt/cows"), "the bolt stays ranked");
+    assert!(ranked.iter().any(|pick| pick.method == "fight:magic/water_bolt/ladder"), "the bolt (on the ladder) stays ranked");
     // No object to alch: the combat spell.
     let fight = with_prices(&book, 0.5, 50_000, |prices| best_pick("magic", 25, 30, prices, &[])).expect("a pick");
-    assert_eq!(fight.method, "fight:magic/water_bolt/cows");
+    assert_eq!(fight.method, "fight:magic/water_bolt/ladder");
     assert_eq!(fight.missing, vec!["airrune".to_string(), "chaosrune".to_string(), "waterrune".to_string()]);
 }
 

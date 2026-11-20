@@ -637,7 +637,7 @@ mod tests {
         let bot = stat_bot(9, 9, 9);
         let killer = knowledge::combat_spots::by_key("cows").expect("cows");
         let mut tally = DeathTally::fresh();
-        tally.note_death(killer.key);
+        tally.note_death(killer.key, 0);
         assert!(tally.excludes("cows"));
         let fallback =
             fallback_spot(&bot, &killer, tally.excluded()).expect("a same-tier repli exists");
@@ -669,9 +669,9 @@ mod tests {
     #[test]
     fn two_deaths_fail_typed_unreachable() {
         let mut tally = DeathTally::fresh();
-        tally.note_death("al_kharid_warriors");
+        tally.note_death("al_kharid_warriors", 0);
         assert!(!tally.fatal(), "one death re-picks, never fails");
-        tally.note_death("cows");
+        tally.note_death("cows", 0);
         assert!(tally.fatal(), "two consecutive deaths are fatal");
         let error = danger_error("cows", tally.deaths());
         assert!(
@@ -688,12 +688,12 @@ mod tests {
     #[test]
     fn progress_resets_the_death_streak() {
         let mut tally = DeathTally::fresh();
-        tally.note_death("cows");
+        tally.note_death("cows", 0);
         tally.note_progress();
         assert_eq!(tally.deaths(), 0, "kill/bank resets the streak");
         assert!(!tally.fatal());
         assert!(tally.excludes("cows"), "the killer stays out for the run");
-        tally.note_death("goblins");
+        tally.note_death("goblins", 0);
         assert!(!tally.fatal(), "progress between deaths: new streak, not fatal");
     }
 }
