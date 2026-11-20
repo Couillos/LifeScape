@@ -1010,13 +1010,13 @@ ouvertes qu'il sert (0..1), + part du SURPLUS qu'il consomme (débouché,
 demande utilisateur 2026-11-19 « la prière, l'allumage de feux, la
 magie, le tir à distance font disparaître des objets » ; relecture
 tour 2 : en FENÊTRES D'ENTRAÎNEMENT, `ambition_catalog::outlet_windows` =
-Σ par objet consommé de (unités au repos sur les annonces ÷ unités que
+Σ par objet consommé de (unités que la flotte DÉTIENT au-delà des offres d'achat, banques comprises, depuis 2026-11-20 ; avant : unités au repos sur les annonces ÷ unités que
 la méthode la plus rapide du type en brûle par 6000 ticks), puis ln(1 +
 fenêtres) ÷ somme de tous les types ; objets et cadences lus des
 méthodes d'entraînement du catalogue des guides, leurs flux du prior au
 niveau d'ouverture sous `work_rate::CONSUMED_CAUSES` :
-`ambition_catalog::consumption_of`, jamais une liste ; une méthode dominée par une autre voie (`dominated` : les 8 sorts de fonte, « ça coûte rien de faire fondre aux fours ») ne compte pas, le minerai en surplus appelle des forgerons, jamais des mages ; annonces des
-teneurs exclues, `market_demand::surplus_from`. Une seule compression,
+`ambition_catalog::consumption_of`, jamais une liste ; une méthode dominée par une autre voie (`dominated` : les 8 sorts de fonte, « ça coûte rien de faire fondre aux fours ») ne compte pas, le minerai en surplus appelle des forgerons, jamais des mages ; offres des
+teneurs exclues, `market_demand::fleet_surplus_from`, voir docs/economy.md § Stock de la flotte : le même surplus choisit le PRODUIT des quotas, `ambition_supply`). Une seule compression,
 ln(1 + fenêtres), parce que les stocks couvrent quatre ordres de
 grandeur (live : 1 864 os = 0,7 fenêtre d'enterrement, 637 000 plumes =
 2 600 fenêtres de pêche à la mouche) : en linéaire un seul objet
@@ -1491,7 +1491,14 @@ Les échelles ne sont plus des listes écrites à la main
   une jambe de production de cette compétence sans quête, sans ramassage,
   sur un site F2P qu'un niveau de combat rend sûr (pas d'érable F2P, pas
   de blurite) ; quota = actions pour monter 5 niveaux au palier (XP du
-  dump, médiane des produits), borné 10..200, arrondi à 5 ;
+  dump, médiane des produits), borné 10..200, arrondi à 5 ; le produit
+  RETENU au palier suit le stock de la flotte (2026-11-20,
+  `ambition_supply::pick_supplied`, docs/economy.md § Stock de la
+  flotte) : un puits (produit ouvert au niveau du palier qui mange une
+  pile couvrant son quota : poulet, bœuf, pêche à la mouche, cuir,
+  fonte, runes) d'abord, jamais un produit dont l'outil est hors
+  d'atteinte (talisman d'eau) ; règle appliquée aussi aux jalons déjà
+  écrits (`revise_supplied`) ;
 - métier consommateur (allumeur, prêtre) et combattants (archer, mage) :
   paliers de niveau, l'équipement un palier sur deux (prêtre : mêlée) ;
   guerrier : attaque, force, défense + équipement de 20 à 90 ;

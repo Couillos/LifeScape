@@ -17,9 +17,14 @@
 //!   precomputed money guide (`brain_d17::kind_profits`: its catalogue
 //!   rows, chains included, under the kind of their band skill); none
 //!   before the first set.
-//! - `surplus_from()`: units resting on the asks per object (market
-//!   makers' quotes left out), the need's outlet signal
-//!   (`ambition_catalog::kind_weights_with`, user 2026-11-19).
+//! - `fleet_surplus()` (pure `fleet_surplus_from`): units the fleet HOLDS
+//!   per object (last hourly holdings point: packs, banks, worn, listed
+//!   stock included; staff and Iron left out at capture) less the units
+//!   the open bids still want (market makers' bids left out), > 0 only.
+//!   The need's outlet signal (`ambition_catalog::kind_weights_with`) and
+//!   the product of a consuming skill's quota (`ambition_supply`). User
+//!   2026-11-20: the asks alone saw 2-4 % of the piles (1 048 638
+//!   feathers held, 605 418 listed).
 //! - `demand_items()` / `kind_demand()`: the planner inputs; each item
 //!   carries its per-unit `margin` at the best bid against its inputs at
 //!   their current market price (`planner::chain_profit`; median of the
@@ -119,20 +124,93 @@ pub fn signals_for(account: &str) -> Vec<DemandSignal> {
     signals_seen_by(Some(account))
 }
 
-/// Both planner inputs as one bot sees them (own bids left out).
-pub fn kind_demand_for(account: &str) -> (Vec<DemandItem>, Vec<KindDemand>) {
+/// The planner inputs of a draw, from ONE read of the book.
+#[derive(Debug, Clone, Default)]
+pub struct DrawDemand {
+    /// The bids the reader may answer (its own left out).
+    pub items: Vec<DemandItem>,
+    pub weights: Vec<KindDemand>,
+    /// `fleet_surplus`: (object, units held beyond the bids).
+    pub surplus: Vec<(String, f64)>,
+}
+
+/// The planner inputs as one bot sees them (own bids left out).
+pub fn kind_demand_for(account: &str) -> DrawDemand {
     kind_demand_seen_by(Some(account))
 }
 
-/// Both planner inputs from ONE read of the book: the bids `account`
-/// may answer (`None`: the fleet's) and the surplus on the asks (the
-/// outlet signal, `surplus_from`).
-fn kind_demand_seen_by(account: Option<&str>) -> (Vec<DemandItem>, Vec<KindDemand>) {
+/// The bids `account` may answer and the fleet's surplus, from one read
+/// of the book (a milestone refresh: `ambition::refresh_supplied`).
+pub fn refresh_inputs_for(account: &str) -> (Vec<DemandItem>, Vec<(String, f64)>) {
     let orders = resting();
-    let surplus = surplus_from(&orders, &name_of);
+    let surplus = fleet_surplus_from(&fleet_holdings(), &orders, &name_of);
+    let items = demand_items(&signals_seen_from(orders, Some(account), crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks));
+    (items, surplus)
+}
+
+/// The draw inputs from ONE read of the book: the bids `account` may
+/// answer (`None`: the fleet's), the kind weights, the fleet surplus
+/// (the outlet signal, `fleet_surplus_from`).
+fn kind_demand_seen_by(account: Option<&str>) -> DrawDemand {
+    let orders = resting();
+    let surplus = fleet_surplus_from(&fleet_holdings(), &orders, &name_of);
     let items = demand_items(&signals_seen_from(orders, account, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks));
     let weights = kind_weights_with(&items, &kind_profits(), &surplus);
-    (items, weights)
+    DrawDemand { items, weights, surplus }
+}
+
+/// Wall seconds a holdings read is reused (the point is hourly; the
+/// brain reads it on every pass of every bot).
+const HOLDINGS_REUSE_SECS: u64 = 300;
+
+/// The fleet's holdings per object id (the last hourly point of
+/// `holdings_hourly`, read through the daemon's market store like the
+/// book: never a store opened by path), reused `HOLDINGS_REUSE_SECS`.
+/// Market service down, store unreadable or no point yet: empty (no
+/// data, no decision), logged.
+fn fleet_holdings() -> Vec<(i64, i64)> {
+    type Cache = Option<(std::time::Instant, Vec<(i64, i64)>)>;
+    static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(None);
+    let Some(service) = crate::market_service::shared() else { return Vec::new() };
+    let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((read_at, rows)) = cache.as_ref() {
+        if read_at.elapsed().as_secs() < HOLDINGS_REUSE_SECS {
+            return rows.clone();
+        }
+    }
+    let read = service.lock_store().holdings_at_or_before(i64::MAX);
+    let rows = match read {
+        Ok(Some((_, rows))) => rows,
+        Ok(None) => {
+            crate::logln!("market_demand: no holdings point yet, no fleet surplus");
+            Vec::new()
+        }
+        Err(error) => {
+            crate::logln!("market_demand: holdings unreadable, no fleet surplus: {error}");
+            Vec::new()
+        }
+    };
+    *cache = Some((std::time::Instant::now(), rows.clone()));
+    rows
+}
+
+/// Wall seconds `fleet_surplus` is reused (read on every launch pass of
+/// every bot by the milestone revision, `brain_ambition::sync_catalog`).
+const SURPLUS_REUSE_SECS: u64 = 60;
+
+/// The fleet's surplus now (`fleet_surplus_from` over the last holdings
+/// point and the resting book), reused `SURPLUS_REUSE_SECS`.
+pub fn fleet_surplus() -> Vec<(String, f64)> {
+    type Cache = Option<(std::time::Instant, Vec<(String, f64)>)>;
+    static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(None);
+    if let Some((read_at, rows)) = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref() {
+        if read_at.elapsed().as_secs() < SURPLUS_REUSE_SECS {
+            return rows.clone();
+        }
+    }
+    let rows = fleet_surplus_from(&fleet_holdings(), &resting(), &name_of);
+    *CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((std::time::Instant::now(), rows.clone()));
+    rows
 }
 
 /// Debug name of a book item.
@@ -153,16 +231,28 @@ fn resting() -> Vec<Order> {
     }
 }
 
-/// Units resting on the asks per object (debug name), the outlet signal
-/// of the need (user 2026-11-19: what piles up unused calls for the
-/// skills that consume it). A market maker's ask is liquidity, not a
-/// surplus (like its bids, `signals_from`).
-pub fn surplus_from(orders: &[Order], name_of: &dyn Fn(i64) -> Option<String>) -> Vec<(String, f64)> {
+/// Units the fleet holds per object (debug name) beyond what the open
+/// bids still want: the outlet signal of the need and the piles a
+/// consuming skill's quota eats (user 2026-11-19: what piles up unused
+/// calls for the skills that consume it; 2026-11-20: banks included,
+/// « feather, raw chicken, raw beef, cowhide s'accumulent »). `holdings`
+/// = (object id, units) of the last hourly point (a banknote counts as
+/// its object, coins left out): listed stock stays on the seller until
+/// delivered, so the asks are inside it. A market maker's bid is
+/// liquidity, never a need that reserves stock (`signals_from`). Only
+/// objects with units left (> 0).
+pub fn fleet_surplus_from(holdings: &[(i64, i64)], orders: &[Order], name_of: &dyn Fn(i64) -> Option<String>) -> Vec<(String, f64)> {
+    let base = |item_id: i64| usize::try_from(item_id).map(|id| lifescape_gamedata::base_obj_id(id) as i64).unwrap_or(item_id);
     let mut by_item: BTreeMap<i64, i64> = BTreeMap::new();
-    for order in orders.iter().filter(|order| order.side == OrderSide::Sell && order.remaining > 0 && order.motive != crate::market_lineage::MARKET_MAKE) {
-        *by_item.entry(order.item_id).or_default() += order.remaining;
+    for (item_id, units) in holdings.iter().filter(|(item_id, _)| *item_id != crate::holdings::COINS) {
+        *by_item.entry(base(*item_id)).or_default() += (*units).max(0);
     }
-    by_item.into_iter().filter_map(|(item_id, units)| Some((name_of(item_id)?, units as f64))).collect()
+    for order in orders.iter().filter(|order| order.side == OrderSide::Buy && order.remaining > 0 && order.motive != crate::market_lineage::MARKET_MAKE) {
+        if let Some(units) = by_item.get_mut(&base(order.item_id)) {
+            *units -= order.remaining;
+        }
+    }
+    by_item.into_iter().filter(|(_, units)| *units > 0).filter_map(|(item_id, units)| Some((name_of(item_id)?, units as f64))).collect()
 }
 
 fn signals_seen_by(account: Option<&str>) -> Vec<DemandSignal> {
@@ -238,8 +328,8 @@ pub fn kind_profits() -> Vec<(String, f64)> {
     crate::guides_store::current().map(|set| crate::brain_d17::kind_profits(&set)).unwrap_or_default()
 }
 
-/// Both planner inputs at once: demand items and kind weights.
-pub fn kind_demand() -> (Vec<DemandItem>, Vec<KindDemand>) {
+/// The fleet's draw inputs at once: demand items, kind weights, surplus.
+pub fn kind_demand() -> DrawDemand {
     kind_demand_seen_by(None)
 }
 
@@ -281,16 +371,28 @@ mod tests {
         assert!((found[0].weight - 26.0 * 1.0 * 6.0).abs() < 1e-9, "age factor capped at x6: {}", found[0].weight);
     }
 
-    /// The outlet signal: units on the asks per object, every seller but
-    /// a market maker (its quote is liquidity, not a surplus).
+    /// User 2026-11-20 (« feather, raw chicken, raw beef, cowhide
+    /// s'accumulent »): 1 048 638 feathers held, 605 418 on the asks (and
+    /// the asks saw 2-4 % of the other piles). The surplus is the fleet's
+    /// STOCK (banks included, the asks inside it) less what the open bids
+    /// still want; a maker's bid reserves nothing; the coins are no pile;
+    /// a banknote counts as its object; nothing left, no row.
     #[test]
-    fn surplus_counts_the_asks_but_never_a_makers_quote() {
-        let ask = |account: &str, item: i64, units: i64| Order { side: OrderSide::Sell, ..bid(account, item, units, 5, 0) };
-        let mut quote = ask("maker_one", 1, 500);
+    fn the_surplus_is_the_held_stock_beyond_the_bids() {
+        let ask = |account: &str, item: i64, units: i64| Order { side: OrderSide::Sell, ..bid(account, item, units, 1, 0) };
+        let mut quote = bid("maker_one", 314, 500, 1, 0);
         quote.motive = crate::market_lineage::MARKET_MAKE.to_string();
-        let orders = vec![ask("woodcutter", 1, 900), ask("other", 1, 100), quote, bid("firemaker", 1, 50, 4, 0), ask("priest", 2, 30)];
-        let name = |id: i64| Some(format!("item{id}"));
-        assert_eq!(super::surplus_from(&orders, &name), vec![("item1".to_string(), 1000.0), ("item2".to_string(), 30.0)]);
+        let hide_note = lifescape_gamedata::objs_by_name("cert_cow_hide").into_iter().next().map(|obj| obj.obj_id as i64).expect("a cow hide note");
+        let holdings = vec![(314, 1_048_638), (2138, 192_216), (995, 52_000_000), (1739, 100), (hide_note, 61), (2132, 50)];
+        let orders = vec![ask("ranger", 314, 605_418), quote, bid("cook", 2138, 6_000, 1, 0), bid("crafter", 1739, 161, 2, 0), bid("cook", 2132, 50, 1, 0)];
+        let name = |id: i64| lifescape_gamedata::obj_by_id(id as usize).and_then(|obj| obj.name).map(str::to_string);
+        let found = super::fleet_surplus_from(&holdings, &orders, &name);
+        let units = |item: &str| found.iter().find(|(known, _)| known == item).map(|(_, units)| *units);
+        assert_eq!(units("feather"), Some(1_048_638.0), "the held stock, its asks inside, the maker's bid ignored: {found:?}");
+        assert_eq!(units("raw_chicken"), Some(186_216.0), "net of the cook's bid");
+        assert_eq!(units("coins"), None, "coins are no pile");
+        assert_eq!(units("cow_hide"), None, "100 hides + 61 noted, all wanted: none left");
+        assert_eq!(units("raw_beef"), None, "exactly reserved: no row");
     }
 
     /// Q6: a maker's bid on every object never turns into demand.

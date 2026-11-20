@@ -2646,3 +2646,77 @@ reste que le registre n'explique pas garde la règle par différence
 (2026-11-16 : remplacé, le diff net n'est plus qu'un contrôle, § Rendements).
 `orchestrator economy [heures] item <nom>` liste les entrées (+) et sorties
 (−) d'un objet par provenance ; sans nom, les principaux flux du monde.
+
+## Stock de la flotte : débouchés et produits des métiers qui consomment (2026-11-20)
+
+Constat (utilisateur 2026-11-20 : « feather, raw chicken, raw beef,
+cowhide s'accumulent de façon extrême sans aucune demande. cette demande
+doit exister même si c'est pour train le cooking, ou pêcher des truites
+car ça rapporte bcp d'XP » ; « pourquoi personne ne fait de
+runecrafting » ; « le marché doit s'équilibrer ») : la flotte détenait
+1 048 638 plumes (447 000 trois jours plus tôt), 192 000 poulets crus,
+193 000 bœufs crus, 161 000 peaux de vache, 124 000 essences ; asks à
+1 pièce, aucun bid. Le signal « ce qui s'accumule » ne lisait que les
+unités en vente (2 à 4 % du stock) et ne choisissait que le MÉTIER, jamais
+le PRODUIT d'un jalon : un cuisinier de niveau 29 visait truite et
+saumon, un pêcheur homard et espadon, un artisan des bijoux. Douze
+quotas de runier visaient des runes d'eau (la rune la plus demandée)
+alors que personne ne détient de talisman d'eau (butin rare de
+sorciers, 2/128) : bots bloqués sur `missing:water_talisman`.
+
+- Surplus = STOCK de la flotte (`market_demand::fleet_surplus_from`) :
+  dernier point horaire de `holdings_hourly` (sacs, banques, porté ;
+  l'annonce reste chez le vendeur jusqu'à la livraison, donc les asks
+  sont dedans ; staff et Iron exclus à la capture ; un billet compte
+  comme son objet ; pièces exclues) MOINS les unités que les offres
+  d'achat ouvertes veulent encore (offres des teneurs exclues : liquidité,
+  pas un besoin) ; seuls les objets qui en gardent (> 0). Point relu au
+  plus toutes les 300 s ; magasin illisible ou aucun point : surplus vide
+  (pas de donnée, pas de décision : les échelles choisissent comme avant).
+  Il nourrit le débouché du besoin (`outlet_windows`, inchangé : unités ÷
+  ce que la méthode la plus rapide du type brûle par 6000 ticks) et le
+  choix des produits ci-dessous.
+- Produit d'un palier (`ambition_supply::pick_supplied`, tous les métiers
+  producteurs, rien d'écrit à la main) : un PUITS d'abord = un produit de
+  la compétence du palier, ouvert au niveau du palier, dont la voie de
+  fabrication mange une pile : unités de son intrant en surplus (un
+  intrant qu'une voie SANS compétence fabrique compte aussi le surplus de
+  ses propres intrants : peaux tannées en cuir) ÷ unités par produit,
+  MOINS les unités du produit déjà empilées (`sink_pressure`), au moins
+  son quota (son propre quota d'XP, `ambition_ladder::quota`). Cuisinier :
+  poulet et bœuf (et tout poisson cru empilé) ; pêcheur : pêche à la
+  mouche avec les plumes (truite, saumon ; la canne à mouche est achetée
+  à la boutique de pêche par le blocage `missing:fly_fishing_rod` de la
+  quête de production) ; artisan : cuir ; forgeron : fonte du minerai
+  empilé ; runier : essence. L'XP d'un puits le justifie même quand ses
+  pièces par tick sont faibles (les métiers qui consomment sont les puits
+  du marché). Les puits sont tirés par la graine, pondérés par leur
+  pression (les bots d'un type se répartissent sur les piles ; les runes
+  déjà empilées, corps et feu, ne sont pas des puits). Sinon les produits
+  du palier qu'on peut faire (offre la plus lourde, sinon la graine,
+  `pick_product`), sinon le meilleur produit faisable de la compétence au
+  niveau du palier ; aucun : pas de quota à ce palier (le niveau seul).
+- Faisable (`product_workable`) : un outil de la voie (talisman, moule,
+  canne…) que le bot détient, que la flotte détient au-delà des offres,
+  qu'une boutique (ou un dialogue) vend, posé au sol, ou qu'une compétence
+  fabrique (`tool_obtainable`). Un butin rare ou une récompense de quête
+  unique n'en est pas un : sans talisman d'eau ni d'esprit dans la flotte,
+  le runier fait air, terre (et corps, feu quand la flotte en détient au-delà
+  des offres). Une offre d'achat dont la voie demande un tel outil ne
+  crée aucun jalon de demande (`insert_demand_milestone`).
+- La règle s'applique à l'état persisté (`revise_supplied`, à chaque
+  passe de lancement dans `brain_ambition::sync_catalog`) : un jalon de
+  production ouvert dont les outils sont hors d'atteinte est re-choisi
+  (échelle, extension) ou retiré (réponse à une offre) ; un quota
+  d'échelle inactif (rien fabriqué, but non en cours) qui ne mange
+  aucune pile couvrant son quota passe à un puits quand il en existe un.
+  Nouvel identifiant de jalon ; le but en cours d'un jalon retiré se
+  ferme comme un jalon que le catalogue retire. Log `brain <acct>:
+  milestones … re-aimed by the fleet's supply (piles to eat, tools
+  someone can get)`. Tests : `planner/src/ambition_supply_tests.rs`,
+  `market_demand::tests::the_surplus_is_the_held_stock_beyond_the_bids`.
+- Limite connue : le flux de plumes (≈ 284 000 par jour, butin des mages
+  et archers qui s'entraînent sur les poulets) dépasse de loin ce qu'une
+  poignée de pêcheurs à la mouche consomme (≈ 300 plumes par 6000 ticks
+  et par bot) : la demande existe désormais, l'équilibre demande aussi de
+  moins ramasser.

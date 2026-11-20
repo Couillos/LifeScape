@@ -32,8 +32,8 @@ use std::sync::Mutex;
 use lifescape_json::Value;
 use lifescape_planner::ambition_catalog::{group_skills, primary_group, specs};
 use lifescape_planner::{
-    achieved, assign_fleet, coverage_gaps, coverage_repair, describe_ambition, draw_kind, extend_ambition, keeps_ladder_end, mark_rule, needs_review, new_ambition,
-    new_ambition_extended, milestone_cool_key, on_goal_closed, on_goal_shortfall, optional_change, review_slot_ticks, saturate, pinned, refresh, release_pin, revise,
+    achieved, assign_fleet, coverage_gaps, coverage_repair, describe_ambition, draw_kind, extend_ambition, keeps_ladder_end, mark_rule, needs_review, new_ambition_supplied,
+    new_ambition_extended_supplied, milestone_cool_key, on_goal_closed, on_goal_shortfall, optional_change, review_slot_ticks, saturate, pinned, refresh_supplied, release_pin, revise,
     Ambition, BotNow, CloseOutcome, DemandItem, FleetBot, KindDemand, Life, Stamp, GROUPS, MILESTONE_MAX_BLOCKS, MILESTONE_SHORTFALL_COOL_TICKS,
     STALE_GOAL_CAUSE,
 };
@@ -172,10 +172,11 @@ fn fleet_view(life: &Life) -> (Vec<String>, bool, Vec<String>) {
 
 /// The draw inputs one bot reads (its own bids left out), the need
 /// saturated by the kinds the other bots hold (D3).
-fn need_demand(account: &str, held: &[String]) -> (Vec<DemandItem>, Vec<KindDemand>) {
-    let (items, weights) = crate::market_demand::kind_demand_for(account);
+fn need_demand(account: &str, held: &[String]) -> crate::market_demand::DrawDemand {
+    let mut demand = crate::market_demand::kind_demand_for(account);
     let refs: Vec<&str> = held.iter().map(String::as_str).collect();
-    (items, saturate(&weights, &refs))
+    demand.weights = saturate(&demand.weights, &refs);
+    demand
 }
 
 /// Units of one object on the bot (pack, bank, worn) in the live
@@ -191,11 +192,19 @@ fn live_coins(live: &Value) -> i64 {
     live_count(live, "coins")
 }
 
-/// The draw inputs shared by a redraw: demand items, kind weights, gaps.
+/// The draw inputs shared by a redraw: demand items, kind weights, gaps,
+/// and the fleet's surplus (the rung products, `ambition_supply`).
 struct DrawInputs {
     items: Vec<DemandItem>,
     weights: Vec<KindDemand>,
     gaps: Vec<String>,
+    surplus: Vec<(String, f64)>,
+}
+
+impl DrawInputs {
+    fn from_demand(demand: crate::market_demand::DrawDemand, gaps: Vec<String>) -> DrawInputs {
+        DrawInputs { items: demand.items, weights: demand.weights, gaps, surplus: demand.surplus }
+    }
 }
 
 /// The ambition `first` names for this bot, else the next draw: a coverage
@@ -207,10 +216,11 @@ fn build(account: &str, bot: &FleetBot, now: &BotNow, first: (String, String), i
     let mut excluded: Vec<String> = exclude.iter().map(|kind| kind.to_string()).collect();
     let (mut kind, mut why) = first;
     for _ in 0..=specs().len() {
+        let market = (inputs.items.as_slice(), inputs.surplus.as_slice());
         let made = if why.starts_with("coverage:") {
-            new_ambition_extended(&kind, &why, now, bot.seed, &inputs.items, stamp)
+            new_ambition_extended_supplied(&kind, &why, now, bot.seed, market, stamp)
         } else {
-            new_ambition(&kind, &why, now, bot.seed, &inputs.items, stamp)
+            new_ambition_supplied(&kind, &why, now, bot.seed, market, stamp)
         };
         match made {
             Ok(mut ambition) => {
@@ -245,7 +255,7 @@ pub(crate) fn ensure(orch: &Orchestrator, life: &mut Life, live: &Value) -> bool
         return false;
     }
     let _guard = fleet_guard().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let (items, weights) = crate::market_demand::kind_demand();
+    let demand = crate::market_demand::kind_demand();
     let others = other_lives(&life.account);
     let mut bots = vec![(fleet_bot(life, account_levels(&life.account, Some(live))), Some(live.clone()))];
     for other in &others {
@@ -254,7 +264,7 @@ pub(crate) fn ensure(orch: &Orchestrator, life: &mut Life, live: &Value) -> bool
     }
     let fleet: Vec<FleetBot> = bots.iter().map(|(bot, _)| bot.clone()).collect();
     let stamp = stamp_now();
-    let inputs = DrawInputs { items, weights, gaps: Vec::new() };
+    let inputs = DrawInputs::from_demand(demand, Vec::new());
     let mut mine = false;
     for assignment in assign_fleet(&fleet, &inputs.weights) {
         let Some((bot, snapshot)) = bots.iter().find(|(bot, _)| bot.account == assignment.account) else { continue };
@@ -289,10 +299,10 @@ pub(crate) fn ensure(orch: &Orchestrator, life: &mut Life, live: &Value) -> bool
 /// the fleet's open gaps first, never back to `exclude`.
 fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str) {
     let (gaps, _, held) = fleet_view(life);
-    let (items, weights) = need_demand(&life.account, &held);
+    let demand = need_demand(&life.account, &held);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
-    let first = draw_kind(&bot, &gaps, &weights, exclude);
-    let inputs = DrawInputs { items, weights, gaps };
+    let first = draw_kind(&bot, &gaps, &demand.weights, exclude);
+    let inputs = DrawInputs::from_demand(demand, gaps);
     replace(life, live, &bot, first, &inputs, exclude, revision_why);
 }
 
@@ -304,10 +314,10 @@ fn redraw_by_need(life: &mut Life, live: &Value, revision_why: &str) {
     let kind = life.ambition.as_ref().map(|ambition| ambition.kind.clone()).unwrap_or_default();
     let others: Vec<&str> = held.iter().map(String::as_str).collect();
     let gaps = lifescape_planner::redraw_gaps(&kind, &others);
-    let (items, weights) = need_demand(&life.account, &held);
+    let demand = need_demand(&life.account, &held);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
-    let first = draw_kind(&bot, &gaps, &weights, &[]);
-    let inputs = DrawInputs { items, weights, gaps };
+    let first = draw_kind(&bot, &gaps, &demand.weights, &[]);
+    let inputs = DrawInputs::from_demand(demand, gaps);
     replace(life, live, &bot, first, &inputs, &[], revision_why);
 }
 
@@ -330,14 +340,14 @@ fn replace(life: &mut Life, live: &Value, bot: &FleetBot, first: (String, String
 /// another bot holds its group; otherwise its ladder extends (the sole
 /// holder never leaves its group, the throttle is the user's rule).
 pub(crate) fn before_draw(life: &mut Life, live: &Value) {
-    let items = crate::market_demand::demand_items(&crate::market_demand::signals_for(&life.account));
+    let (items, surplus) = crate::market_demand::refresh_inputs_for(&life.account);
     let seed = life.seed;
     let account = life.account.clone();
     let Some(ambition) = life.ambition.as_mut() else { return };
     if let Some(pin) = release_pin(ambition, &|skill| crate::brain_succession::live_level(live, skill)) {
         crate::logln!("brain {account}: pin {} {} reached, ambition {} free to change", pin.skill, pin.level, ambition.kind);
     }
-    let closed = with_now(live, |now| refresh(ambition, now, seed, &items));
+    let closed = with_now(live, |now| refresh_supplied(ambition, now, seed, (&items, &surplus)));
     for milestone_id in &closed {
         crate::logln!("brain {account}: milestone {milestone_id} done (live levels/coins)");
     }
@@ -444,12 +454,12 @@ fn maybe_change(life: &mut Life, live: &Value) {
         return;
     }
     let (gaps, redundant, held) = fleet_view(life);
-    let (items, weights) = need_demand(&life.account, &held);
+    let demand = need_demand(&life.account, &held);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
-    if let Some((kind, why)) = optional_change(&ambition, &bot, &gaps, redundant, &weights, &ticks_since) {
+    if let Some((kind, why)) = optional_change(&ambition, &bot, &gaps, redundant, &demand.weights, &ticks_since) {
         let current = ambition.kind.clone();
         let revision_why = format!("change:{why}");
-        let inputs = DrawInputs { items, weights, gaps };
+        let inputs = DrawInputs::from_demand(demand, gaps);
         replace(life, live, &bot, (kind, why), &inputs, &[current.as_str()], &revision_why);
     }
 }
@@ -461,11 +471,29 @@ fn maybe_change(life: &mut Life, live: &Value) {
 /// changed (save it).
 pub(crate) fn sync_catalog(life: &mut Life, live: &Value) -> bool {
     let Some(ambition) = life.ambition.as_mut() else { return false };
-    let dropped = lifescape_planner::drop_stale_products(ambition);
+    let mut dropped = lifescape_planner::drop_stale_products(ambition);
+    if !dropped.is_empty() {
+        crate::logln!("brain {}: milestones {} left the {} ladder (catalogue revised)", life.account, dropped.join(", "), ambition.kind);
+    }
+    // The supply rule applies to the persisted quotas too (user rule,
+    // 2026-11-20): a tool nobody can get, an idle quota eating no pile
+    // while one waits (`ambition_supply::revise_supplied`).
+    let surplus = crate::market_demand::fleet_surplus();
+    let running = life.goal_origin.clone().filter(|_| !lifescape_planner::goal_closed(&life.history));
+    let seed = life.seed;
+    let revised = with_now(live, |now| lifescape_planner::ambition_supply::revise_supplied(ambition, now, seed, &surplus, running.as_deref()));
+    if !revised.is_empty() {
+        crate::logln!(
+            "brain {}: milestones {} re-aimed by the fleet's supply (piles to eat, tools someone can get): {}",
+            life.account,
+            revised.join(", "),
+            describe_ambition(ambition)
+        );
+        dropped.extend(revised);
+    }
     if dropped.is_empty() {
         return false;
     }
-    crate::logln!("brain {}: milestones {} left the {} ladder (catalogue revised)", life.account, dropped.join(", "), ambition.kind);
     let running = life.goal_origin.as_ref().is_some_and(|origin| dropped.contains(origin));
     if running && !lifescape_planner::goal_closed(&life.history) {
         match crate::brain_succession::succeed_goal(life, live, false) {
@@ -528,13 +556,13 @@ pub(crate) fn coverage_pass(life: &mut Life, live: &Value) -> bool {
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
     // A need-led bot (D3) picks among the gaps by need: the weights are
     // read only when a gap is open and this bot may take it.
-    let (items, weights) = if gaps.is_empty() || !redundant || !lifescape_planner::may_change(&ambition, &ticks_since) {
-        (Vec::new(), Vec::new())
+    let demand = if gaps.is_empty() || !redundant || !lifescape_planner::may_change(&ambition, &ticks_since) {
+        crate::market_demand::DrawDemand::default()
     } else {
         need_demand(&life.account, &held)
     };
-    let Some((kind, why)) = coverage_repair(&ambition, &bot, &gaps, redundant, &weights, &ticks_since) else { return false };
-    let inputs = DrawInputs { items, weights, gaps };
+    let Some((kind, why)) = coverage_repair(&ambition, &bot, &gaps, redundant, &demand.weights, &ticks_since) else { return false };
+    let inputs = DrawInputs::from_demand(demand, gaps);
     let before = life.ambition.clone();
     let current = ambition.kind.clone();
     replace(life, live, &bot, (kind, why.clone()), &inputs, &[current.as_str()], &format!("repair:{why}"));

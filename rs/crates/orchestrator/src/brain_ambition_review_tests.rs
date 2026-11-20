@@ -223,7 +223,8 @@ fn live_fleet_review_distribution() {
         }
     }
     let profits = all_profits.clone();
-    let surplus = crate::market_demand::surplus_from(&orders, &name_of);
+    let holdings = store.holdings_at_or_before(i64::MAX).expect("holdings copy").map(|(_, rows)| rows).unwrap_or_default();
+    let surplus = crate::market_demand::fleet_surplus_from(&holdings, &orders, &name_of);
     let weigh = |items: &[lifescape_planner::DemandItem], profits: &[(String, f64)], surplus: &[(String, f64)]| lifescape_planner::ambition_catalog::kind_weights_with(items, profits, surplus);
     let demand_for = |account: Option<&str>| {
         let signals = crate::market_demand::signals_seen_from(orders.clone(), account, now, &name_of, &crate::brain_stuck::seconds_to_ticks);
@@ -289,7 +290,7 @@ fn live_fleet_review_distribution() {
         let refs: Vec<&str> = others.iter().map(String::as_str).collect();
         let weights = lifescape_planner::saturate(&weights, &refs);
         let first = lifescape_planner::draw_kind(&bot, &gaps, &weights, &[]);
-        let inputs = super::DrawInputs { items, weights, gaps };
+        let inputs = super::DrawInputs { items, weights, gaps, surplus: surplus.clone() };
         let level_of = |skill: &str| bot.level(skill);
         let now_bot = BotNow { level_of: &level_of, coins: 0, held: &|_| 0 };
         let Some((next, why)) = super::build(&lives[index].account, &bot, &now_bot, first, &inputs, &[], Stamp { tick: 0, secs: now }) else { continue };
