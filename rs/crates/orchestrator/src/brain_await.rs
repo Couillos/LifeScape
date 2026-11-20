@@ -92,6 +92,14 @@ pub(crate) fn settle_with(life: &mut Life, position: usize, item: &str, count: i
         lifescape_planner::retry_uncounted(life, position);
         push_history(life, &active_id, "partial_fill");
         return Settled { waiting: false, log: Some(format!("{active_id} partial buy landed ({baseline} -> {held}/{count} {item}), re-resolving")) };
+    } else if waited > deadline && held > 0 && feeds_a_climb(life, &active_id) {
+        // A climb burns its input unit by unit: what it holds is worked now,
+        // the bid stays for the rest (live fiona_park 2026-11-20: 1 141
+        // of 4 570 bars held, the climb never smithed one, the obtain was
+        // abandoned after three deadlines).
+        lifescape_planner::complete_node(life, position, held);
+        push_history(life, &active_id, "partial_done");
+        return Settled { waiting: false, log: Some(format!("{active_id} market leg ended after {AWAIT_FILL_TICKS} ticks ({held}/{count} {item}): the climb works what it holds, its bid stays on the book")) };
     } else if waited > deadline {
         let text = lifescape_planner::market_unfilled_error(count, item, AWAIT_FILL_TICKS, held, 0);
         let fold = lifescape_planner::record_failure(life, position, &text);
@@ -101,6 +109,16 @@ pub(crate) fn settle_with(life: &mut Life, position: usize, item: &str, count: i
         return Settled { waiting: true, log: None };
     }
     Settled { waiting: false, log: None }
+}
+
+/// True when an open level climb depends on the node `node_id` (its
+/// input obtain, sized on the tranche: any unit of it is work).
+fn feeds_a_climb(life: &Life, node_id: &str) -> bool {
+    life.nodes.iter().any(|node| {
+        matches!(node.kind, lifescape_planner::NodeKind::ReachLevel { .. })
+            && !matches!(node.status, lifescape_planner::NodeStatus::Done | lifescape_planner::NodeStatus::Abandoned)
+            && node.deps.iter().any(|dep| dep == node_id)
+    })
 }
 
 #[cfg(test)]
@@ -162,6 +180,41 @@ mod tests {
         assert_eq!((node.status.clone(), node.method.clone(), node.failures), (NodeStatus::Ready, None, 1), "replanned");
         assert!(lifescape_planner::market_failed(node), "the rescue reads a market failure: {}", node.last_error);
         assert_eq!(life.history.last().map(|entry| entry.outcome.as_str()), Some("failed"));
+    }
+
+    /// Live 2026-11-20 (fiona_park n2432: `market order for 4570 iron_bar
+    /// unfilled after 6000 ticks (held 1141)`, 246 graphs stuck a day on
+    /// such roots): a climb's input obtain is sized on the whole tranche
+    /// (smithing 74->75 by iron platebodies: 4 570 bars); three deadlines
+    /// abandoned it while 1 141 bars sat in the bank and the climb never
+    /// smithed one. At the deadline, what landed goes to the climb: the
+    /// obtain is done with it, its bid stays on the book for the rest
+    /// (the climb's next block files the remainder).
+    #[test]
+    fn a_deadline_hands_what_landed_to_the_climb() {
+        let mut life = waiting_life();
+        life.nodes[0].kind = NodeKind::ObtainItems { item: "iron_bar".to_string(), count: 4570 };
+        life.nodes[0].progress_current = 0;
+        let mut climb = Node::new("n4", NodeKind::ReachLevel { skill: "smithing".to_string(), level: 75 }, vec!["n5".to_string()], 75);
+        climb.status = NodeStatus::Pending;
+        life.nodes.push(climb);
+        let market = FakeMarket { closed: Cell::new(0), buy_closed: false };
+        let outcome = settle_with(&mut life, 0, "iron_bar", 4570, 1141, 400, 360, &market);
+        assert!(!outcome.waiting);
+        assert_eq!(market.closed.get(), 0, "the bid stays on the book for the rest");
+        assert_eq!((life.nodes[0].status.clone(), life.nodes[0].failures, life.nodes[0].progress_current), (NodeStatus::Done, 0, 1141), "done with what landed");
+        // Nothing landed: the market leg failed as before.
+        let mut empty = waiting_life();
+        let mut climb = Node::new("n4", NodeKind::ReachLevel { skill: "smithing".to_string(), level: 75 }, vec!["n5".to_string()], 75);
+        climb.status = NodeStatus::Pending;
+        empty.nodes.push(climb);
+        settle_with(&mut empty, 0, "unstrung_sapphire_amulet", 5, 0, 400, 360, &market);
+        assert_eq!(empty.nodes[0].failures, 1, "nothing landed: a counted market failure");
+        // An obtain no climb waits on keeps its full count (a recipe, a
+        // quest needs every unit).
+        let mut plain = waiting_life();
+        settle_with(&mut plain, 0, "unstrung_sapphire_amulet", 5, 3, 400, 360, &market);
+        assert_eq!((plain.nodes[0].status.clone(), plain.nodes[0].failures), (NodeStatus::Ready, 1));
     }
 
     #[test]
