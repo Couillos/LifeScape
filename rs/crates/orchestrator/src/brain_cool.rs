@@ -50,12 +50,40 @@ pub(crate) fn contended_site(needs: &[String]) -> Option<(i64, i64, i64)> {
     })
 }
 
+/// Longest contended cooldown, in plain cooldowns (16 × 6000 ticks).
+pub(crate) const CONTENDED_MAX_FACTOR: u64 = 16;
+/// Ticks an earlier contended cool of a site still lengthens the next.
+pub(crate) const CONTENDED_MEMORY_TICKS: u64 = COOL_TICKS * CONTENDED_MAX_FACTOR * 2;
+/// Word every contended cool's cause carries (node and filler alike).
+const CONTENDED_CAUSE: &str = "contended";
+
+/// Pure: ticks the next contended cool of `key` lasts. Each contended
+/// cool of the same key younger than `CONTENDED_MEMORY_TICKS` doubles
+/// the plain `COOL_TICKS`, up to `CONTENDED_MAX_FACTOR` (live
+/// 2026-11-20: 5 900 of 8 183 contended blocks were the same bot back on
+/// the same site the moment its cooldown ran out). A failure cool or
+/// another site never counts.
+pub(crate) fn contended_ticks(history: &[lifescape_planner::HistoryEntry], key: &str, ticks_since: &dyn Fn(i64) -> u64) -> u64 {
+    let prefix = format!("{}{key}|", lifescape_planner::cooldown::COOL_TAG);
+    let streak = history
+        .iter()
+        .filter(|entry| entry.node == COOL_NODE && ticks_since(entry.ended) < CONTENDED_MEMORY_TICKS)
+        .filter_map(|entry| entry.outcome.strip_prefix(&prefix))
+        .filter(|rest| rest.split_once('|').is_some_and(|(_, cause)| cause.contains(CONTENDED_CAUSE)))
+        .count();
+    let factor = 1u64.checked_shl(u32::try_from(streak).unwrap_or(u32::MAX)).unwrap_or(u64::MAX).min(CONTENDED_MAX_FACTOR);
+    COOL_TICKS * factor
+}
+
 /// Cool one contended site of `method` (D4): no failure counted, no
-/// ban, the next resolve picks another site at once.
+/// ban, the next resolve picks another site at once. A site contended
+/// again cools longer (`contended_ticks`).
 pub(crate) fn on_contended(life: &mut Life, method: &str, site: (i64, i64, i64)) {
     let key = lifescape_planner::cooldown::cool_key(method, Some(site));
-    crate::logln!("brain {}: {key} contended, site cooled {COOL_TICKS} ticks for this bot (no ban, no failure)", life.account);
-    push_history(life, COOL_NODE, &cool_entry(&key, COOL_TICKS, "contended: other players work every node"));
+    let now = now_unix();
+    let ticks = contended_ticks(&life.history, &key, &|stamp: i64| crate::brain_stuck::seconds_to_ticks(now - stamp));
+    crate::logln!("brain {}: {key} contended, site cooled {ticks} ticks for this bot (no ban, no failure)", life.account);
+    push_history(life, COOL_NODE, &cool_entry(&key, ticks, "contended: other players work every node"));
 }
 
 /// Nodes waiting out a cooled method (tour 3 point 1): skipped by the
@@ -130,6 +158,42 @@ mod tests {
         assert_eq!(life.nodes[0].status, NodeStatus::Ready);
         assert_eq!(waiting(&life), vec!["n1".to_string()], "every method cooled: the node waits, open");
         assert!(!on_resolve_wait(&mut life, 0, "missing:coins:60"), "any other block is not a wait");
+    }
+
+    /// Live 2026-11-20: 8 183 contended blocks in 24 h, 5 900 of them the
+    /// same bot back on the same site (liam_west on the gem trader 62
+    /// times, felix_rook on the Wilderness big bones 58 times): the site
+    /// came back the moment its 6000 ticks ran out (median gap 894 s at
+    /// 60 ms). Each contended cool of the same key still remembered
+    /// doubles the next one, up to `CONTENDED_MAX_FACTOR`; another site
+    /// or a failure cool never counts.
+    #[test]
+    fn a_site_contended_again_cools_longer() {
+        use lifescape_planner::cooldown::{cool_entry, COOL_NODE, COOL_TICKS};
+        use lifescape_planner::HistoryEntry;
+        let key = "ground:big_bones@3214,3733,0";
+        let entry = |outcome: String, ended: i64| HistoryEntry { node: COOL_NODE.to_string(), started: ended, ended, outcome };
+        let ticks_since = |stamp: i64| (1000 - stamp) as u64 * 10;
+        let mut history = Vec::new();
+        assert_eq!(super::contended_ticks(&history, key, &ticks_since), COOL_TICKS, "first contention: the plain cooldown");
+        history.push(entry(cool_entry(key, COOL_TICKS, "blocked, missing: contended:3214,3733,0"), 900));
+        assert_eq!(super::contended_ticks(&history, key, &ticks_since), 2 * COOL_TICKS);
+        history.push(entry(cool_entry(key, 2 * COOL_TICKS, "contended: other players work every node"), 950));
+        assert_eq!(super::contended_ticks(&history, key, &ticks_since), 4 * COOL_TICKS);
+        history.push(entry(cool_entry("ground:big_bones@3000,3700,0", COOL_TICKS, "contended: other players work every node"), 960));
+        history.push(entry(cool_entry(key, COOL_TICKS, "failed: no big_bones picked"), 970));
+        assert_eq!(super::contended_ticks(&history, key, &ticks_since), 4 * COOL_TICKS, "another site, a failure: not counted");
+        for stamp in 971..990 {
+            history.push(entry(cool_entry(key, COOL_TICKS, "contended: other players work every node"), stamp));
+        }
+        assert_eq!(super::contended_ticks(&history, key, &ticks_since), super::CONTENDED_MAX_FACTOR * COOL_TICKS, "capped");
+        let forgotten = |stamp: i64| if stamp < 1000 { super::CONTENDED_MEMORY_TICKS } else { 0 };
+        assert_eq!(super::contended_ticks(&history, key, &forgotten), COOL_TICKS, "an old streak is forgotten");
+        let mut life = life_with_blocked("missing:coal");
+        super::on_contended(&mut life, "gather:mining/coal", (3298, 3317, 0));
+        super::on_contended(&mut life, "gather:mining/coal", (3298, 3317, 0));
+        let last = life.history.last().map(|entry| entry.outcome.clone()).unwrap_or_default();
+        assert!(last.starts_with(&format!("cool:gather:mining/coal@3298,3317,0|{}|", 2 * COOL_TICKS)), "{last}");
     }
 
     #[test]
