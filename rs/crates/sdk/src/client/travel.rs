@@ -76,8 +76,8 @@ const CROSS_WAIT: u64 = 7;
 const TRAVERSE_SETTLE: u64 = 4;
 /// Walk budget per planned cost unit: walking runs ~1 tile per 2 ticks,
 /// 4 per unit plus 347 base leaves stalls and door queues inside.
-const COST_PER_TICK: u64 = 4;
-const COST_BASE: u64 = 347;
+pub(crate) const COST_PER_TICK: u64 = 4;
+pub(crate) const COST_BASE: u64 = 347;
 
 /// Per-phase wall-clock of one plan: a trivial leg must cost
 /// milliseconds, so a seconds-long plan names its spinner here.
@@ -878,6 +878,11 @@ impl Bot {
                     retry.cost,
                     replan_start.elapsed().as_millis(),
                 ));
+                if paused {
+                    // The pause moved the bot: the walk back gets its own
+                    // travel budget, never just the caller's (`replan_deadline`).
+                    deadline = super::travel_pause::replan_deadline(deadline, self.world.ticks, retry.cost);
+                }
                 self.publish_plan(&retry, dest);
                 let mut retry = retry;
                 match self.run_plan_through_pauses(&mut retry, dest, &mut options, &mut deadline) {

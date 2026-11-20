@@ -63,6 +63,16 @@ pub(crate) fn pause_caused(error: &Error, mark: u64, now: u64) -> bool {
         )
 }
 
+/// Deadline of a trip replanned after a pause: the caller's (already
+/// pushed back by the pause) or, when longer, the travel budget of the
+/// new plan from now (`travel_to`'s rule). The pause leaves the bot at
+/// the Varrock square: the walk back can be far longer than the trip
+/// the caller budgeted (a 1-tile step at a mine, live 2026-11-20).
+pub(crate) fn replan_deadline(pushed: u64, now: u64, cost: u32) -> u64 {
+    let budget = u64::from(cost) * super::travel::COST_PER_TICK + super::travel::COST_BASE;
+    pushed.max(now.saturating_add(budget))
+}
+
 /// True for the marker a walk leg returns after a pause.
 pub(crate) fn is_paused_mark(error: &Error) -> bool {
     matches!(error, Error::StepRefused(detail) if detail.starts_with(PAUSED_MARK))
@@ -105,6 +115,7 @@ impl Bot {
             let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
             match self.pause_replan(options, from, dest) {
                 RemoteOutcome::Ready(next, _) => {
+                    *deadline = replan_deadline(*deadline, self.world.ticks, next.cost);
                     self.publish_plan(&next, dest);
                     *plan = next;
                 }
@@ -137,7 +148,20 @@ impl Bot {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_paused_mark, pause_caused, PAUSED_MARK};
+    use super::{is_paused_mark, pause_caused, replan_deadline, PAUSED_MARK};
+
+    /// Live 2026-11-20 (nina_rhodes-78785 and ~400 `walk timed out` a
+    /// day, mostly mining trips): a 1-tile `walk_to` (timeout 100) at
+    /// the Al Kharid mine hosted a 660-tick market pause that left the
+    /// bot at the Varrock square; the replan (243 then 148 tiles) kept
+    /// the 1-tile budget plus the pause and timed out 101 ticks into the
+    /// walk back. The replanned trip gets at least the travel budget of
+    /// its own cost (`travel_to`: 4 ticks per cost unit + 347).
+    #[test]
+    fn a_pause_replan_gets_the_budget_of_its_own_trip() {
+        assert_eq!(replan_deadline(78_355, 78_684, 148), 78_684 + 148 * 4 + 347, "the walk back is budgeted");
+        assert_eq!(replan_deadline(90_000, 78_684, 148), 90_000, "a roomier caller deadline stands");
+    }
     use crate::error::Error;
 
     /// Live 2026-11-13 (bcm9kxn4-43018): a 427-tick market pause inside
