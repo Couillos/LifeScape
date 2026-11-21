@@ -66,18 +66,31 @@ pub fn bank_items(inv: &HashMap<u16, HashMap<u8, (u16, u32)>>, bank_com: Option<
     }
 }
 
+/// Choice interfaces (comps.json): (interface, its `com_0` header).
+const CHOICE_PAGES: [(u16, u16); 4] = [(2459, 2460), (2469, 2470), (2480, 2481), (2492, 2493)];
+
+/// Pure: true when header `com` belongs to a multi2/3/4/5 page that is
+/// not the open chat modal. The server writes a choice's IF_SETTEXTs as
+/// its script runs and the IF_OPENCHAT only at the cycle's end
+/// (`NetworkPlayer.encodeOut`): until the open arrives the page may be
+/// half written (live 2026-11-21, the customs officer's "Why?" read alone).
+fn choice_page_not_open(com: u16, chat_modal: Option<u16>) -> bool {
+    CHOICE_PAGES.iter().any(|(page, header)| *header == com && chat_modal != Some(*page))
+}
+
 /// (com, text) option rows: under the latest "Select an Option" header, or
 /// the fixed multi2/3/4/5 option coms when that choice interface is open.
 /// Custom headers (Terrova's "Do you want to go to the mainland?", the
 /// tutorial recaps) never say "Select an Option", so the header rule alone
-/// blinds the bot to them.
+/// blinds the bot to them. A multi2/3/4/5 header counts only while its
+/// page is the open chat modal (`choice_page_not_open`).
 pub fn chat_options(texts: &HashMap<u16, String>, chat_modal: Option<u16>) -> Vec<(u16, String)> {
     let mut items: Vec<(u16, &String)> = texts.iter().map(|(com, text)| (*com, text)).collect();
     items.sort();
     let mut headers: Vec<usize> = items
         .iter()
         .enumerate()
-        .filter(|(_, (_, text))| text.to_lowercase().contains("select an option"))
+        .filter(|(_, (com, text))| text.to_lowercase().contains("select an option") && !choice_page_not_open(*com, chat_modal))
         .map(|(index, _)| index)
         .collect();
     let mut out: Vec<(u16, String)> = Vec::new();
@@ -174,6 +187,31 @@ mod tests {
         let options = chat_options(&texts, Some(2459));
         assert_eq!(options.len(), 2);
         assert_eq!(options[0].1, "Yes.");
+    }
+
+    /// Live 2026-11-21 (tom_king, rae_stone, mila_wade: `custom
+    /// boat_karamja_to_port_sarim asked Why?` 4 times in 6 h): the server
+    /// writes a choice's IF_SETTEXTs while the script runs and its
+    /// IF_OPENCHAT only at the cycle's end (`NetworkPlayer.encodeOut`),
+    /// so a pump can stop between them: the header and "Why?" arrived,
+    /// the two other answers not yet, the customs page (npcchat1, 4882)
+    /// still open. A multi2/3/4/5 page offers nothing until it is the
+    /// open chat modal (Client.ts draws only the open interface).
+    #[test]
+    fn a_choice_page_not_yet_open_offers_nothing() {
+        let texts = HashMap::from([
+            (2470, "Select an Option".to_string()),
+            (2471, "Why?".to_string()),
+            (4883, "Customs officer".to_string()),
+            (4884, "You need to be searched before you can board.".to_string()),
+        ]);
+        assert!(chat_options(&texts, Some(4882)).is_empty(), "multi3 still arriving under the customs page");
+        assert!(chat_options(&texts, None).is_empty(), "no chat modal open: no multi3 page either");
+        let mut full = texts.clone();
+        full.insert(2472, "Search away, I have nothing to hide.".to_string());
+        full.insert(2473, "You're not putting your hands on my things!".to_string());
+        let options: Vec<String> = chat_options(&full, Some(2469)).into_iter().map(|(_, text)| text).collect();
+        assert_eq!(options, vec!["Why?", "Search away, I have nothing to hide.", "You're not putting your hands on my things!"], "multi3 open: its three answers");
     }
 
     #[test]
