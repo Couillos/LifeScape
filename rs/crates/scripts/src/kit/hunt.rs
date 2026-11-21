@@ -172,13 +172,16 @@ pub fn nothing_hunted_error(bot: &Bot, style: &str, spots: &[&str]) -> ScriptErr
 }
 
 /// True when a hunt must refuse a spot whose camp of record is
-/// underground (`has_entrance`): without the ladder's clusters (route
-/// verified offline) and without a brain site on the surface. A surface
-/// `--site` (the Wilderness hill giants, user 2026-11-16: open to every
-/// bot) hunts the surface spawns of the same foes.
+/// underground (`has_entrance`): without the ladder's clusters and
+/// without a brain site. A surface `--site` (the Wilderness hill giants,
+/// user 2026-11-16: open to every bot) hunts the surface spawns of the
+/// same foes; an underground one (user 2026-11-21: the volcano demons,
+/// the Edgeville dungeon, the ice dungeon) walks down like the ladder,
+/// the walker riding the boat, the rope or the trapdoor: the brain only
+/// picks a camp spawn the navigation reaches from the surface and back
+/// (`access::fight_gates_at`, `nav/tests/fight_sites.rs`).
 pub fn underground_refused(has_entrance: bool, has_clusters: bool, site: Option<(i32, i32, i32)>) -> bool {
-    let surface_site = site.is_some_and(|(_, z, _)| !knowledge::underground::is_underground(i64::from(z)));
-    has_entrance && !has_clusters && !surface_site
+    has_entrance && !has_clusters && site.is_none()
 }
 
 /// Clusters on the brain site's side of the surface (a surface site
@@ -211,9 +214,9 @@ pub fn run_spot_with(
     no_bank: bool,
 ) -> Result<(u32, bool, bool), ScriptError> {
     if underground_refused(spot.entrance.is_some(), plan.clusters.is_some(), bot.assigned_site) {
-        // Underground camps only ride with the ladder's clusters (route
-        // verified offline, approach rated); a bare key never walks down.
-        // A surface site of the same foes hunts there (`underground_refused`).
+        // Underground camps ride with the ladder's clusters or the
+        // brain's site (both routed offline); a bare spot name never
+        // walks down (`underground_refused`).
         return Err(ScriptError::Usage(format!(
             "spot {} is underground, not traversable from {:?}",
             spot.key,
@@ -391,7 +394,9 @@ mod tests {
     fn a_surface_site_of_an_underground_spot_hunts_on_the_surface() {
         use super::{site_side_clusters, underground_refused};
         assert!(!underground_refused(true, false, Some((3308, 3661, 0))), "surface Wilderness giants: hunt");
-        assert!(underground_refused(true, false, Some((3100, 9830, 0))), "dungeon site without the ladder route: refused");
+        // User 2026-11-21: the brain's dungeon site is routed offline.
+        assert!(!underground_refused(true, false, Some((3110, 9845, 0))), "the brain's Edgeville dungeon site: hunt");
+        assert!(!underground_refused(true, false, Some((2837, 9565, 0))), "the brain's volcano site: hunt");
         assert!(underground_refused(true, false, None), "no site: the camp of record is underground, refused");
         assert!(!underground_refused(true, true, None), "the ladder's clusters ride down");
         assert!(!underground_refused(false, false, None), "a surface spot");

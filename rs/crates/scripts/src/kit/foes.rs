@@ -38,14 +38,20 @@ pub fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) ->
             continue;
         }
         for spawn in entry.spawns {
-            // shortcut: same-level spawns only; the fighter never rides
-            // down to a dungeon camp. Revisit if one is wanted.
+            // Same-level spawns only (a dungeon floor is level 0 too: the
+            // brain's site picks its side, `hunt::site_side_clusters`).
             if spawn.level != i64::from(anchor.2) {
                 continue;
             }
             // Members land is never a hunting ground (Crandor hobgoblins);
             // the Wilderness is (user 2026-11-16: open to every bot).
             if !knowledge::free_zones::is_free(spawn.x, spawn.z) {
+                continue;
+            }
+            // A spawn no stand or no plan reaches (the caged demon,
+            // Elvarg's lair behind its one-way door) is no camp: the
+            // brain never picks it, the hunt never walks to it.
+            if knowledge::site_reach::unreachable_spawn(spawn.x, spawn.z, spawn.level).is_some() {
                 continue;
             }
             spawns.push((spawn.x, spawn.z));
@@ -241,6 +247,22 @@ mod tests {
         let clusters = ranked_clusters(&bot, &men);
         let (first_x, first_z, _) = *clusters.first().expect("the site's level has men");
         assert!((first_x - 3100).abs().max((first_z - 3279).abs()) <= 20, "the camp at the site leads, got ({first_x},{first_z}) of {clusters:?}");
+    }
+
+    /// User 2026-11-21: the brain sends a demon fighter to a volcano
+    /// spawn; the hunt walks the volcano's camp first and never aims at
+    /// Elvarg's lair past the one-way secret door (`no_route`).
+    #[test]
+    fn a_volcano_site_hunts_the_volcano_never_the_lair() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        (bot.world.x, bot.world.z, bot.world.level) = (3092, 3245, 0);
+        bot.assigned_site = Some((2837, 9565, 0));
+        let demons = knowledge::combat_spots::by_key("lesser_demons").expect("lesser demons");
+        let clusters = crate::kit::hunt::site_side_clusters(ranked_clusters(&bot, &demons), bot.assigned_site);
+        let (first_x, first_z, _) = *clusters.first().expect("the volcano camp");
+        assert!((2820..=2850).contains(&first_x) && (9548..=9570).contains(&first_z), "the volcano leads: {clusters:?}");
+        assert!(clusters.iter().all(|(_, z, _)| *z < 9600), "never the lair: {clusters:?}");
     }
 
     /// Shop staff are excluded by op category, never by name: the
