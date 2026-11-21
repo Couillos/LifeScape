@@ -79,6 +79,13 @@
       "passable_from": "not-west",
       "reason": "bkfortressdoor2 (Black Knights' Fortress banquet hall door, wall west of (3020,3515)): quest_blackknight.rs2 [oploc1,bkfortressdoor2] opens freely only from the hall side (check_axis: stand on the door column x = 3020, i.e. the tile itself or its north/south neighbours); from the west (x = 3019) the guard dialog must be answered 'I'm going in anyway' and the knights aggro, or nothing happens without a guard",
       "verified": "2026-11-17"
+    },
+    {
+      "loc": 2606,
+      "at": [2836, 9600, 0],
+      "passable_from": "not-south",
+      "reason": "dragonsecretdoor (Karamja volcano / Elvarg's lair, m44_150 '0 20 0: 2606 0 3', wall on the south edge of (2836,9600)): crandor.rs2 [oploc1,dragonsecretdoor] opens only when check_axis_locactive (the clicker on the door row z = 9600, the lair side) or %dragonquest >= dragon_complete; from the volcano (z = 9599) it shows the default message and stays shut. Offline 2026-11-21 `route 3092 3245 0 2838 9610 0 --paid` crossed it from (2836,9599): the five lair demons read routed",
+      "verified": "2026-11-21"
     }
   ],
   "requirements": [

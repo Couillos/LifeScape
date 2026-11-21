@@ -173,3 +173,16 @@ fn side_holds_matches_server_coord_rule() {
     assert!(!Side::NotNorth.holds(north, door), "north stand refused (live exit stand)");
     assert!(!Side::South.holds(level_east, door), "strict south misses the level stand");
 }
+
+/// `crandor.rs2` `[oploc1,dragonsecretdoor]` (2836,9600), wall on the
+/// tile's south edge (`m44_150` `0 20 0: 2606 0 3`): `check_axis_locactive`
+/// is true only for a stand on the door's row (z 9600, Elvarg's lair);
+/// from the volcano (z 9599) the door answers nothing before Dragon
+/// Slayer is complete.
+#[test]
+fn not_south_opens_from_the_door_row_and_north_only() {
+    let door = Tile { x: 2836, z: 9600, level: 0 };
+    assert!(Side::NotSouth.holds(door, door), "the lair stand on the door row opens");
+    assert!(Side::NotSouth.holds(Tile { x: 2836, z: 9601, level: 0 }, door), "north of it opens");
+    assert!(!Side::NotSouth.holds(Tile { x: 2836, z: 9599, level: 0 }, door), "the volcano stand is refused");
+}

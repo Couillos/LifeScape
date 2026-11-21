@@ -81,6 +81,9 @@ pub struct OneWay {
 /// level with the door tile). Same for `check_axis` doors on a west
 /// wall (Black Knights' banquet door 2338): the stands on the door's own
 /// column (x = door x, north or south of the tile) read "inside".
+/// And for a `check_axis_locactive` door on a south wall (the Karamja
+/// volcano's `dragonsecretdoor` (2836,9600), `crandor.rs2`): only the
+/// stand on the door's own row (z = door z, the lair side) opens it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Side {
     North,
@@ -88,6 +91,7 @@ pub enum Side {
     East,
     West,
     NotNorth,
+    NotSouth,
     NotWest,
 }
 
@@ -99,6 +103,7 @@ impl Side {
             "east" => Some(Side::East),
             "west" => Some(Side::West),
             "not-north" => Some(Side::NotNorth),
+            "not-south" => Some(Side::NotSouth),
             "not-west" => Some(Side::NotWest),
             _ => None,
         }
@@ -112,6 +117,7 @@ impl Side {
             Side::East => stand.x > door.x,
             Side::West => stand.x < door.x,
             Side::NotNorth => stand.z <= door.z,
+            Side::NotSouth => stand.z >= door.z,
             Side::NotWest => stand.x >= door.x,
         }
     }
