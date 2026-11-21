@@ -1,0 +1,63 @@
+PLAN PROGRESSION ET MARCHÉ — décisions utilisateur du 2026-11-21
+
+Constat (24 h, 2026-11-21) : minage 36 % du temps de la flotte, artisanat < 1,5 %,
+magie 3,9 %, forge 1,4 %. Niveaux max : artisanat 66, forge 77, magie 63.
+280 changements d'ambition en 24 h (72 000 ticks = 72 min à 60 ms/tick).
+66 bots sur 74 ont une offre d'achat « gear » sur l'amulette de pouvoir
+(1 740 à 2,6 M, montées de 10 % par fenêtre jusqu'au portefeuille), personne
+ne la fabrique. 21 % des échanges à 1 pièce ; 9 700 ordres créés et 9 000
+annulés par heure pour 689 échanges.
+
+A. PROGRESSION
+A1 L'entraînement est un investissement : pour chaque montée, temps pour
+   atteindre le niveau puis gain par heure que le niveau rapporte (prix du
+   marché). Les montées longues lucratives (artisanat 70 / amulette de
+   pouvoir, forge 85 + minage de rune / équipement rune, magie / alchimie)
+   se comparent aux lignes rapides (aujourd'hui : XP par tick seule).
+A2 Une ambition ne change pas tant qu'elle n'est pas atteinte (comptage en
+   ticks gardé) : plus de changement facultatif (1 chance sur 4), plus de
+   réparation de couverture qui retire une ambition en cours. Palier bloqué
+   3 fois : mis de côté, le bot passe au palier suivant, ambition gardée.
+   Ambition atteinte : nouvelle ambition (A4).
+A3 Un palier d'équipement ne bloque jamais sur un objet que personne ne
+   fabrique : il attend sans compter de blocage (le mage et l'amulette de
+   pouvoir).
+A4 Plus de tirage aléatoire : le cerveau donne l'ambition qui équilibre le
+   marché — le métier dont la demande non servie rapporte le plus (mesure
+   « b » : chaque demande pèse le gain par heure de la servir, montée en
+   niveau comprise, calcul de A1 ; fin de la double compression
+   logarithmique), compte tenu des bots déjà sur le métier et de l'avance de
+   chacun. Une passe de rééquilibrage initial de la flotte, puis à chaque
+   ambition atteinte. Zezima, N0valyfe, Yogosun : jamais touchés.
+
+B. MARCHÉ (prix réels, pas l'affichage)
+B1 Un acheteur monte jusqu'à SA valeur de l'objet (équipement : gain de
+   l'amélioration ; intrant : ce que le produit rapporte), plus jusqu'à son
+   portefeuille. Limite propre à chaque bot, pas un plafond de marché.
+B2 Enchère groupée pour les objets peu échangés : toutes les N ticks, un
+   prix unique qui fait échanger le plus d'unités, tous ceux d'accord
+   échangent à ce prix ; entre deux enchères les offres ne bougent pas, la
+   marche de 10 % ne joue qu'après une enchère ratée.
+B3 Peu échangé (option C) : temps moyen entre deux échanges de l'objet plus
+   long qu'une fenêtre de marche ; retour en continu quand les échanges sont
+   deux fois plus fréquents que les pas (marge anti-bascule).
+B4 Échange continu : la marche s'ancre sur le prix moyen pondéré par le
+   volume des derniers échanges (un bradage isolé ne fait plus chuter
+   l'objet).
+B5 Échange continu : le pas rétrécit près de ce prix moyen (10 % loin, 1 %
+   tout près).
+
+C. NAVIGATION
+C1 Une marche ne se planifie qu'une fois le bot immobile (fin du pas en
+   cours), puis replanifie : plus de plan tracé pendant que le pas précédent
+   roule (≈ 45 faux échecs « step refused live=none » en 6 h).
+
+Tranché sans changement : démons de la Wilderness préférés au volcan ;
+monstres croisés en route vers un camp souterrain non comptés.
+Abandonné : épingles d'ambition, valeur remontée au diamant brut, délai
+d'ambition en heures réelles, vitesse de marche réglée sur la fréquence des
+échanges (remplacée par B3).
+
+ORDRE : lot 1 = A2, A3, C1 ; lot 2 = A1 + A4 (même calcul) ; lot 3 = B1 à B5.
+Chaque lot : tests, déploiement, mesure 1 h contre la base, correction si
+négatif.
