@@ -24,6 +24,9 @@ pub struct FleetBot {
     /// A market maker (`Archetype::MarketMaker`): keeps the level-led
     /// draw (D3 exception).
     pub market_maker: bool,
+    /// An operator's ambition (a pin, the alcher, overall, a market
+    /// maker): the A4 rebalance never touches it (`ambition_value`).
+    pub operator: bool,
 }
 
 /// Accounts that keep the LEVEL-LED draw (demand × √fit × the trait's

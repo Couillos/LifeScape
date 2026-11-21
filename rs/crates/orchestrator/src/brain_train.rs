@@ -19,6 +19,10 @@
 //!   coins per XP converted at its time value (`Climb::coin_rate`: what
 //!   its work really earns per tick, D1, never its D17), weighed by
 //!   thrift and market_affinity;
+//! - A1 (a): a pending climb that opens a lucrative way (the unserved
+//!   demand, `brain_value::pending_investments`) lifts the coin rate to
+//!   its gain per tick (`investment::time_value`): a line that costs coins
+//!   and saves ticks is taken for it;
 //! - the choice: the draw of `train_score::pick` (`guide_pick`: the first
 //!   non-empty class, a weighted draw among the lines within 15 % of its
 //!   best score, D10, the unmeasured lines' 5 % of exploration, D14), the
@@ -254,7 +258,16 @@ pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Valu
     let sick = |method: &str| ctx.sick(method).is_some() || node.excluded.iter().any(|excluded| excluded == method);
     let rate = crate::brain_plan_read::live_rate();
     let food = |method: &str| lifescape_planner::food_gate::food_short(method, ctx);
-    let climb = Climb { skill, level, target: *target, previous: node.blocked_by.as_deref(), food: Some(&food), coin_rate: crate::brain_d17::coin_rate(&life.account) };
+    // A1 (a): a pending climb that opens a lucrative way makes a tick worth
+    // that way's gain per tick (`investment::time_value`).
+    let own_rate = crate::brain_d17::coin_rate(&life.account);
+    let pending = crate::brain_value::pending_investments(skill, &level_of);
+    let coin_rate = lifescape_planner::investment::time_value(own_rate, &pending);
+    if coin_rate > own_rate {
+        let top = pending.iter().max_by(|left, right| left.value_6000.total_cmp(&right.value_6000)).map(|found| format!("{} (climb {:.0} ticks)", found.item, found.climb_ticks)).unwrap_or_default();
+        crate::logln!("brain {}: {} {skill} {level}->{target}: a tick is worth {coin_rate:.2} coins (the climb opens {top}), not {own_rate:.2}", life.account, node.id);
+    }
+    let climb = Climb { skill, level, target: *target, previous: node.blocked_by.as_deref(), food: Some(&food), coin_rate };
     match pick_from_guide(&set, &climb, life, &bot, &stock, ctx.draw_seed, &sick, &rate) {
         Ok(found) => {
             crate::logln!(

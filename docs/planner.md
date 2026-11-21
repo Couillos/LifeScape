@@ -1286,6 +1286,112 @@ la MASSE servie (`need_mass`) + part du meilleur profit (tirage au
 besoin, saturé ensuite), `need_item` = l'objet qui porte ≥ 5 % du
 besoin). `DemandSignal::asks` = unités en annonce de vente au repos.
 
+## Entraînement = investissement, ambition donnée par la valeur (plan progression A1 + A4, 2026-11-21)
+
+Décision utilisateur du 2026-11-21 (`docs/plan-progression.txt`, lot 2). Deux
+modules purs du planner, un branchement dans l'orchestrateur.
+
+### A1 : une valeur commune, « gain par 6000 ticks, montée comprise »
+`planner/src/investment.rs`. Pour un objectif P (objet demandé à `unit_price`,
+ou l'alchimie d'un lanceur) et un bot aux niveaux `L0` :
+
+```text
+paliers    = (compétence, niveau) que la voie de P demande + ceux de chaque
+             intrant QUE PERSONNE NE PRIXE (le bot doit le fabriquer lui-même)
+montée     = Σ paliers au-dessus de L0 de  xp_between(L0, palier) / taux_xp_moyen   [ticks]
+gain_tick  = flux de la voie par 6000 ticks (work_rate : produit au prix demandé,
+             intrants au prix du marché, pièces) / 6000        (comme profit::chain_profit)
+total      = min( gain_tick × (H − montée) , marge_unitaire × capacité )
+valeur_6000 = total / (H / 6000)                    (0 si montée ≥ H)
+```
+
+- **Horizon `H` = `INVESTMENT_HORIZON_TICKS` = 720 000 ticks** (120 heures de
+  production à 600 ms, 12 h au tick de dev de 60 ms). Assez long pour qu'une
+  montée de 100 000 ticks n'en prenne qu'un septième, assez court pour qu'un
+  niveau hors de portée (montée ≥ H) ne vaille rien. La montée ne rapporte
+  rien dans le modèle (ses produits se vendent en plus : bonus ignoré).
+- **Taux d'XP** : `best_xp_rate(compétence, niveau)` = meilleur XP par tick
+  parmi les méthodes du catalogue que le niveau ouvre (`guide_methods`, taux
+  dérivés des unités du dump, `work_rate`) ; la montée utilise la moyenne
+  harmonique des taux en `from` et `to − 1`. Jamais une constante à la main ;
+  pas de méthode = pas de montée chiffrable (`None`, pas de valeur par défaut).
+- **Capacité** = unités voulues (quantité non servie d'une offre ; unités
+  posées aux ventes pour l'alchimie) : une offre d'une unité à 1 M ne pèse pas
+  une demande de 66 unités.
+- **Paliers propres** (`own`) : un métier ne répond qu'aux étapes de ses
+  compétences ; les intrants des autres sont achetés (artisan : seul le
+  palier artisanat de l'amulette de pouvoir, pas l'enchantement magie 57).
+- **Alchimie** (`alchemy_investment`) : lancers par tick
+  (`alchemy::CAST_TICKS`) sur les offres qui rapportent après les runes
+  (`Caster::profit`), palier 21 (basse) ou 55 (haute).
+
+(a) **Choix de la ligne d'entraînement** (`brain_train::fill_ctx`) : une montée
+en attente qui ouvre une voie lucrative (`brain_value::pending_investments` :
+la demande non servie du marché, la compétence cible parmi les paliers à
+grimper) relève le prix du temps du bot : `coin_rate = max(son gain mesuré,
+valeur_6000 / 6000)` (`investment::time_value`). Une ligne qui coûte des
+pièces mais fait gagner des ticks passe devant la ligne gratuite et lente
+(test `a_lucrative_target_makes_the_bot_pay_for_a_faster_climb`) ; la ligne
+choisie reste le tirage R7 (`train_score::pick`) sur ce score. Le log
+`a tick is worth X coins (the climb opens P)` le dit.
+
+### A4 : le cerveau DONNE l'ambition (plus de tirage au sort)
+`planner/src/ambition_value.rs`, branchement `orchestrator/src/brain_value.rs`.
+Mesure « b » : chaque demande non servie pèse la valeur A1 de la servir ;
+fin de la double compression `compress` / `need_mass` pour ce choix (elles
+restent pour les exceptions de niveau, `draw_kind`).
+
+```text
+valeur(bot, métier) = Σ offres non servies P : serves(métier, P) × asked(P) × valeur_6000(P)
+                    + alchimie (le mage) + débouché (consommation des tas, au prix du marché)
+score = valeur, chaque offre comptée sur sa capacité RESTANTE :
+        non servi − Σ métiers tenus k : tenants(k) × serves(k, P) × unités_par_tick(P) × H
+```
+- demande non servie = offres d'achat ouvertes (prix unitaire, unités restantes)
+  et « produits manquants à la vente » : une offre sans aucune vente posée
+  pèse 1, une offre avec ventes posées pèse `ASKED_SHARE` = 0,5 (même rapport
+  que l'ancien `UNASKED_FACTOR`) ;
+- **partage** (« tout autre partage justifié ») : diviser par `tenants + 1`
+  empilait 28 bots sur le mage sur l'état live (une offre d'amulette à 1 M
+  l'unité alors qu'un mage en fait 0,3 par tick pour 66 unités demandées) ; une
+  demande que les tenants couvrent déjà n'est plus « non servie » : la
+  capacité restante tombe à zéro après quelques bots et les suivants vont à la
+  demande suivante ; idem pour l'alchimie et le débouché des tas ;
+- adéquation du bot = ses niveaux dans les compétences du métier (montée courte
+  si avancé) ; rien d'autre ;
+- meilleur score gagne, déterministe, sans graine ; aucune demande ou tout
+  couvert (scores nuls) : le métier qui a le moins de tenants, puis le meilleur
+  ajustement de compétences (`ambition_catalog::fit`), puis le nom ;
+- **s'applique** (1) à chaque nouvelle ambition (`brain_value::draw` depuis
+  `redraw`, `redraw_by_need`, `build`, `assign_kind` ; `ensure` :
+  `assign_by_value`) pour tout bot hors exceptions ; (2) une passe unique de
+  rééquilibrage initial.
+- **Exclus TOUJOURS** : `PROTECTED_ACCOUNTS` (Zezima, N0valyfe, Yogosun,
+  sans casse ; ils gardent le tirage « niveau » de D3), et toute ambition
+  d'opérateur (`FleetBot::operator` : épingle, teneur de marché, alcher,
+  overall). Leurs métiers comptent comme tenants, jamais réassignés.
+
+### Passe de rééquilibrage initial (seule exception à A2)
+`orchestrator/src/brain_rebalance.rs`, appelée dans `brain_launch` après
+`ensure`. Au premier passage sans marqueur `run/ambition_rebalance_a4.json` :
+plan de toute la flotte (`planner::rebalance` : meilleure paire (bot, métier)
+d'abord, chaque affectation compte comme tenant), attente que chaque vie active
+(écrite depuis moins d'une heure) ait son job (`covers`), marqueur écrit avec
+le plan, une ligne de log par bot avec sa raison chiffrée
+(`brain rebalance <compte>: <avant> -> <après> (valeur …)`). Chaque bot applique
+SA ligne dans SA passe (`assign_rebalanced`, révision `rebalance`, la vie est
+sauvée par son propre thread), puis est marqué appliqué : redémarrage sans
+effet, jamais de second plan. Le but de l'ancienne ambition est remplacé par
+`replace_stale_goal`. Après la passe A2 tient (une ambition ne change qu'atteinte).
+Simulation hors ligne sur une copie de l'état live : test ignoré
+`simulate_rebalance_on_the_live_state` (`brain_rebalance_sim_tests.rs`,
+variables `SIM_LIVES`, `SIM_DB`, `LIFESCAPE_SAVE_DIR`).
+
+Limite connue : le débouché des tas pèse peu en pièces (245 par 6000 ticks et
+par pêcheur pour les plumes à 1 pièce) mais, quand toutes les offres sont
+couvertes, il décide seul : un tas d'un million de plumes appelle ~38 pêcheurs
+à l'horizon de 120 heures (voir le rapport de simulation).
+
 ## L7 : précisions d'implémentation
 
 - Alternatives source-aware (`item_sources`, L1) : `farm` si la source est

@@ -269,3 +269,31 @@ fn a_line_far_ahead_wins_over_its_tool_a_close_one_does_not() {
     assert_eq!(super::drawn_class(&close), Some(0), "within the band the feasible line keeps its place");
     assert_eq!(super::drawn_class(&[]), None);
 }
+
+/// A1 (a), user 2026-11-21: a lucrative target pulls the climb. While a
+/// climb that opens a lucrative way is pending, a tick of the bot's time
+/// is worth that way's gain per tick (`investment::time_value`): the
+/// paid fast line that wins by the hours it saves beats the free slow one
+/// a poor bot would take.
+#[test]
+fn a_lucrative_target_makes_the_bot_pay_for_a_faster_climb() {
+    let rows = vec![line("fire:logs", Supply::Autonomous, 10_000.0, 0.0), line("fire:logs", Supply::Market, 30_000.0, -6_000.0)];
+    let profile = bot(0.5, 0.5);
+    let pick = |coin_rate: f64| choose(&rank_rows(&rows, &profile, Some(1.0 / coin_rate), &reach)).expect("a line").supply;
+    let poor = 0.2;
+    assert_eq!(pick(poor), Supply::Autonomous, "a poor bot works its own logs");
+    let pending = vec![crate::investment::Investment {
+        item: "amulet_of_power".to_string(),
+        method: "enchant:strung_diamond_amulet".to_string(),
+        gates: Vec::new(),
+        climb_ticks: 20_000.0,
+        gain_per_tick: 40.0,
+        margin: 900_000.0,
+        capacity: 66.0,
+        units_per_tick: 0.3,
+        value_6000: 30_000.0,
+    }];
+    let pulled = crate::investment::time_value(poor, &pending);
+    assert!((pulled - 5.0).abs() < 1e-9, "30 000 per 6000 ticks = 5 coins a tick: {pulled}");
+    assert_eq!(pick(pulled), Supply::Market, "the target makes time worth more than the coins");
+}

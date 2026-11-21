@@ -269,7 +269,7 @@ fn live_fleet_review_distribution() {
         let refs: Vec<&str> = others.iter().map(String::as_str).collect();
         let weights = lifescape_planner::saturate(&weights, &refs);
         let first = lifescape_planner::draw_kind(&bot, &gaps, &weights, &[]);
-        let inputs = super::DrawInputs { items, weights, gaps, surplus: surplus.clone() };
+        let inputs = super::DrawInputs { items, weights, gaps, surplus: surplus.clone(), value: Default::default(), held: Vec::new() };
         let level_of = |skill: &str| bot.level(skill);
         let now_bot = BotNow { level_of: &level_of, coins: 0, held: &|_| 0 };
         let Some((next, why)) = super::build(&lives[index].account, &bot, &now_bot, first, &inputs, &[], Stamp { tick: 0, secs: now }) else { continue };

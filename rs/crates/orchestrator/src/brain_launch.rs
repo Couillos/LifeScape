@@ -137,6 +137,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if !quoting && crate::cpu_profile::timed("ambition.review", || crate::brain_ambition::review_pass(&mut life)) {
         dirty = true;
     }
+    // The one-time A4 rebalance (the only exception to A2): this bot
+    // applies its row of the fleet plan once, marker persisted.
+    if !quoting && crate::cpu_profile::timed("ambition.rebalance", || crate::brain_rebalance::pass(orch, &mut life, &live)) {
+        dirty = true;
+    }
     // A revised catalogue ladder drops the stale quotas it no longer offers.
     if !quoting && crate::brain_ambition::sync_catalog(&mut life, &live) {
         dirty = true;

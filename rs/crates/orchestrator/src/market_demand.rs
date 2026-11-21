@@ -35,6 +35,8 @@
 use std::collections::BTreeMap;
 
 use lifescape_planner::ambition_catalog::kind_weights_with;
+use lifescape_planner::investment::AlchOffer;
+use lifescape_planner::UnservedBid;
 use lifescape_planner::{DemandItem, KindDemand};
 use lifescape_store::{Order, OrderSide};
 
@@ -132,6 +134,26 @@ pub struct DrawDemand {
     pub weights: Vec<KindDemand>,
     /// `fleet_surplus`: (object, units held beyond the bids).
     pub surplus: Vec<(String, f64)>,
+    /// What the A4 value reads (`ambition_value`): the unserved bids,
+    /// the alchemy offers, the market prices of every object they touch.
+    pub value: ValueInputs,
+}
+
+/// Market inputs of the A4 value (plan progression, `ambition_value`).
+#[derive(Debug, Clone, Default)]
+pub struct ValueInputs {
+    pub bids: Vec<UnservedBid>,
+    pub alch_offers: Vec<AlchOffer>,
+    /// (debug name, price per unit) of every object the value prices; an
+    /// object no trade or book backs is absent (unpriced).
+    pub prices: Vec<(String, f64)>,
+}
+
+impl ValueInputs {
+    /// Market price of an object (`None`: unpriced).
+    pub fn price_of(&self, item: &str) -> Option<f64> {
+        self.prices.iter().find(|(name, _)| name == item).map(|(_, price)| *price)
+    }
 }
 
 /// The planner inputs as one bot sees them (own bids left out).
@@ -154,9 +176,84 @@ pub fn refresh_inputs_for(account: &str) -> (Vec<DemandItem>, Vec<(String, f64)>
 fn kind_demand_seen_by(account: Option<&str>) -> DrawDemand {
     let orders = resting();
     let surplus = fleet_surplus_from(&fleet_holdings(), &orders, &name_of);
+    let value = value_inputs(&orders, account, &surplus);
     let items = demand_items(&signals_seen_from(orders, account, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks));
     let weights = kind_weights_with(&items, &kind_profits(), &surplus);
-    DrawDemand { items, weights, surplus }
+    DrawDemand { items, weights, surplus, value }
+}
+
+/// The A4 value's market inputs from one read of the book (`orders`),
+/// the bids `account` may answer (`None`: the fleet's): every unserved
+/// bid with its best unit price, the units unmet and whether an ask
+/// rests; the offers alchemy could eat (lowest unit ask and units resting
+/// per object); the market price of every object these touch
+/// (`investment::priced_items`, the surplus objects, the runes of the
+/// spells), one store read for the whole table.
+fn value_inputs(orders: &[Order], account: Option<&str>, surplus: &[(String, f64)]) -> ValueInputs {
+    value_inputs_from(orders, account, surplus, &|wanted: &[String]| match lifescape_store::Store::open(&crate::market_service::db_path()) {
+        Ok(store) => price_table(&store, wanted),
+        Err(error) => {
+            crate::logln!("market_demand: store unreadable, the A4 value carries no price: {error}");
+            Vec::new()
+        }
+    })
+}
+
+/// `value_inputs` with the price table read by `prices` (the store a
+/// caller holds: the live daemon's, or a copy for an offline simulation).
+pub fn value_inputs_from(orders: &[Order], account: Option<&str>, surplus: &[(String, f64)], prices: &dyn Fn(&[String]) -> Vec<(String, f64)>) -> ValueInputs {
+    let now = crate::market_service::MarketService::now_clock();
+    let signals = signals_seen_from(orders.to_vec(), account, now, &name_of, &crate::brain_stuck::seconds_to_ticks);
+    let bids: Vec<UnservedBid> =
+        signals.iter().map(|signal| UnservedBid { item: signal.item.clone(), unit_price: signal.best_bid.max(0) as f64, unmet: signal.unmet_qty, asked: signal.asks > 0 }).collect();
+    let alch_offers = alch_offers_from(orders, &name_of);
+    let mut wanted: Vec<String> = Vec::new();
+    let mut want = |name: &str| {
+        if !wanted.iter().any(|known| known == name) {
+            wanted.push(name.to_string());
+        }
+    };
+    for bid in &bids {
+        for name in lifescape_planner::investment::priced_items(&bid.item) {
+            want(&name);
+        }
+    }
+    for offer in &alch_offers {
+        want(&offer.item);
+    }
+    for (item, _) in surplus {
+        want(item);
+    }
+    for rune in ["naturerune", "firerune"] {
+        want(rune);
+    }
+    ValueInputs { bids, alch_offers, prices: prices(&wanted) }
+}
+
+/// Market price per unit of each object that a trade or a resting book
+/// backs (`rates_service::price_estimate`); the 1-coin default of an
+/// object nothing backs is no price: left out.
+pub fn price_table(store: &lifescape_store::Store, names: &[String]) -> Vec<(String, f64)> {
+    names
+        .iter()
+        .filter_map(|name| {
+            let (price, prior) = crate::rates_service::price_estimate(store, &display_of(name));
+            (price.is_finite() && price > 0.0 && !(prior && price <= 1.0)).then(|| (name.clone(), price))
+        })
+        .collect()
+}
+
+/// Offers alchemy could eat: per object with a resting sell offer, its
+/// lowest unit ask and the units resting (every seller).
+pub fn alch_offers_from(orders: &[Order], name_of: &dyn Fn(i64) -> Option<String>) -> Vec<AlchOffer> {
+    let mut by_item: BTreeMap<i64, (f64, f64)> = BTreeMap::new();
+    for order in orders.iter().filter(|order| order.side == OrderSide::Sell && order.remaining > 0) {
+        let unit = crate::market_units::to_unit_exact(order.item_id, order.price);
+        let entry = by_item.entry(order.item_id).or_insert((unit, 0.0));
+        entry.0 = entry.0.min(unit);
+        entry.1 += order.remaining as f64;
+    }
+    by_item.into_iter().filter_map(|(item_id, (price, units))| Some(AlchOffer { item: name_of(item_id)?, price, units })).collect()
 }
 
 /// Wall seconds a holdings read is reused (the point is hourly; the
@@ -234,7 +331,7 @@ pub fn unworkable_lots() -> Vec<String> {
     items
 }
 
-fn name_of(item_id: i64) -> Option<String> {
+pub(crate) fn name_of(item_id: i64) -> Option<String> {
     lifescape_gamedata::obj_by_id(item_id.max(0) as usize).and_then(|obj| obj.name).map(str::to_string)
 }
 

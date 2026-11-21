@@ -21,6 +21,7 @@ fn bot(account: &str, seed: u64, levels: &[(&str, u8)]) -> FleetBot {
         seed,
         kind: None,
         market_maker: false,
+        operator: false,
     }
 }
 
