@@ -115,6 +115,30 @@ fn standing_bids_keep_their_walk() {
     cleanup(&path);
 }
 
+/// B1 (lot 3 marché): a gear bid placed with a wallet-sized ceiling
+/// (live: amulet of power up to 2.6 M) follows the bot's own value when
+/// the owner's pass brings it: the price comes down to it and the
+/// PERSISTED ceiling is rewritten (what a restart adopts).
+#[test]
+fn a_bid_follows_the_owners_new_limit_and_persists_it() {
+    let (service, path) = service("own_limit");
+    funded(&service, "fighter");
+    let first = keep_bid(&service, "fighter", FEATHER, 1, 2_600_000, "gear").expect("placed");
+    let StandingBid::Placed { order, .. } = first else { panic!("{first:?}") };
+    let high = service.lock_store().get_order(order).ok().flatten().expect("row");
+    assert_eq!(high.ceiling, Some(2_600_000));
+    // Climbs well past its future limit.
+    let rich = super::keep_bid_from(&service, "fighter", FEATHER, 1, 9_000, 2_600_000, "gear").expect("kept");
+    assert!(matches!(rich, StandingBid::Kept { price, .. } if price > 3_240), "{rich:?}");
+    let kept = super::keep_bid_from(&service, "fighter", FEATHER, 1, 1_740, 3_240, "gear").expect("kept");
+    let StandingBid::Kept { order: moved, price } = kept else { panic!("{kept:?}") };
+    assert!(price <= 3_240, "the bid came down to its own value: {price}");
+    let row = service.lock_store().get_order(moved).ok().flatten().expect("row");
+    assert_eq!(row.ceiling, Some(3_240), "the persisted ceiling follows");
+    assert_eq!(bounds_of(&service, moved).map(|bounds| bounds.ceiling), Some(3_240));
+    cleanup(&path);
+}
+
 /// A listing without bounds (placed before a restart) is adopted once
 /// and walks from then on.
 #[test]

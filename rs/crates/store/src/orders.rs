@@ -274,6 +274,13 @@ impl Store {
     /// Final rows (`settled`, `cancelled`) never move again: a late
     /// refresh racing a cancel would otherwise revive a withdrawn order
     /// (review 2026-11-13). Refused writes report `NotFound`.
+    /// Rewrites the ceiling kept with a resting buy (B1, lot 3 marché:
+    /// the owner's limit moved, a restart must adopt the new one).
+    pub fn set_order_ceiling(&self, order_id: i64, ceiling: i64) -> Result<(), Error> {
+        self.connection.execute("UPDATE orders SET ceiling = ?1 WHERE order_id = ?2 AND status IN ('open','matched')", rusqlite::params![ceiling.max(1), order_id])?;
+        Ok(())
+    }
+
     pub fn set_order_status(
         &self,
         order_id: i64,
@@ -479,6 +486,8 @@ mod orders_tests {
         assert_eq!(store.get_order(said)?.and_then(|row| row.ceiling), Some(120));
         assert_eq!(store.get_order(unsaid)?.and_then(|row| row.ceiling), None);
         assert!(store.resting_orders()?.iter().any(|row| row.order_id == said && row.ceiling == Some(120)));
+        store.set_order_ceiling(said, 40)?;
+        assert_eq!(store.get_order(said)?.and_then(|row| row.ceiling), Some(40), "the owner's new limit is kept");
         Ok(())
     }
 }

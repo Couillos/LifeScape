@@ -460,6 +460,7 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
     let wanted: Vec<String> = wants.iter().map(|want| want.item.clone()).collect();
     cancel_stale_bids(job, life, &wanted);
     let stepping = crate::brain_wishlist::wanted_names(life);
+    let rate = crate::brain_d17::coin_rate(&job.account);
     for want in &wants {
         if stepping.contains(&want.item) {
             continue;
@@ -479,10 +480,13 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
             continue;
         }
         let (Some(service), Some(id)) = (service.as_ref(), id) else { continue };
-        match crate::market_reprice::keep_bid_from(service, &job.account, id, 1, want.expected, want.ceiling, crate::market_lineage::GEAR) {
+        // B1 (lot 3 marché): the bid climbs to the piece's value for THIS
+        // bot (its work rate x the uplift), never to its wallet.
+        let own_ceiling = want.own_ceiling(rate);
+        match crate::market_reprice::keep_bid_from(service, &job.account, id, 1, want.expected, own_ceiling, crate::market_lineage::GEAR) {
             Ok(crate::market_reprice::StandingBid::Placed { price, .. }) => {
                 crate::logln!(
-                    "brain {}: gear {} bid @ {price} (expected {}, ceiling {}, budget {budget}), waiting for a producer",
+                    "brain {}: gear {} bid @ {price} (expected {}, ceiling {own_ceiling} = own value, wallet share {}, budget {budget}), waiting for a producer",
                     job.account,
                     want.item,
                     want.expected,

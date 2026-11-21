@@ -188,8 +188,8 @@ mod tests {
     /// drop (under 70 % of the initial ceiling) moves the slot.
     #[test]
     fn replans_on_tier_gain_horizon_or_a_real_drop() {
-        let first = GearWant { wearpos: 3, item: "rune_scimitar".to_string(), gain: 9, expected: 100, ceiling: 100 };
-        let cheaper = GearWant { wearpos: 3, item: "adamant_scimitar".to_string(), gain: 5, expected: 40, ceiling: 40 };
+        let first = GearWant { wearpos: 3, item: "rune_scimitar".to_string(), gain: 9, expected: 100, ceiling: 100, uplift_permille: 0 };
+        let cheaper = GearWant { wearpos: 3, item: "adamant_scimitar".to_string(), gain: 5, expected: 40, ceiling: 40, uplift_permille: 0 };
         let plan = |budget: i64| if budget >= 100 { vec![first.clone()] } else { vec![cheaper.clone()] };
         let (_, memory) = hold_plan(None, 100, 0, "a", &plan);
         let (kept, memory) = hold_plan(Some(&memory), 85, 10, "a", &plan);

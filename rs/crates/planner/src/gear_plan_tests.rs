@@ -185,3 +185,32 @@ fn the_plan_wants_what_can_be_obtained_now() {
     let shield = wants.iter().find(|want| want.wearpos == SHIELD).map(|want| want.item.as_str());
     assert_eq!(shield, Some("mithril_kiteshield"), "{:?}", names(&wants));
 }
+
+/// B1 (lot 3 marché, 2026-11-21): a bidder climbs to ITS value of the
+/// piece, not to its wallet. Live: 66 gear bids on the amulet of power
+/// from 1 740 to 2.6 M, up to the purse. The value is the work rate
+/// times the relative uplift of the style score over a named horizon.
+#[test]
+fn a_gear_bid_stops_at_the_bots_own_value() {
+    use super::{own_value, GearWant, GEAR_VALUE_HORIZON_TICKS};
+    assert_eq!(GEAR_VALUE_HORIZON_TICKS, 360_000);
+    // 3 % uplift, 0.3 coin per tick: 0.3 x 360 000 x 0.03 = 3 240.
+    assert_eq!(own_value(30, 0.3), 3_240);
+    assert_eq!(own_value(30, 0.1), 1_080, "a slower earner values the same piece less");
+    assert_eq!(own_value(0, 5.0), 1, "no uplift: one coin, never zero");
+    assert_eq!(own_value(30, f64::NAN), 1);
+    let amulet = GearWant { wearpos: 2, item: "amulet_of_power".to_string(), gain: 6, expected: 1_740, ceiling: 2_600_000, uplift_permille: 30 };
+    assert_eq!(amulet.own_ceiling(0.3), 3_240, "not the 2.6 M wallet share");
+    let thin = GearWant { ceiling: 2_000, ..amulet.clone() };
+    assert_eq!(thin.own_ceiling(0.3), 2_000, "the wallet share still caps it");
+}
+
+/// The uplift of a want is its score gain over the worn total after it.
+#[test]
+fn a_want_carries_its_relative_uplift() {
+    let owned = vec!["bronze_med_helm".to_string(), "iron_dagger".to_string()];
+    let wants = plan_gear(Style::Melee, &FIGHTER, &[], &owned, 1_000_000, &alch_price);
+    for want in &wants {
+        assert!(want.uplift_permille > 0 && want.uplift_permille <= 1000, "{want:?}");
+    }
+}
