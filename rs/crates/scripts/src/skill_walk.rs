@@ -184,6 +184,13 @@ pub fn hurt_aborts(hp_now: u8, hp_before: u8, max_hp: u8) -> bool {
     hp_now < hp_before && should_eat(hp_now, max_hp, EAT_FRACTION)
 }
 
+/// Pure: a walk may fetch a fare (`fetch_fare_coins`) when it fetched
+/// none yet (`fetched_at` None) or a market pause ran since (the banking
+/// after the trades deposits the whole pack, the fare with it).
+pub fn fare_fetch_allowed(fetched_at: Option<u64>, pauses_now: u64) -> bool {
+    fetched_at.is_none_or(|mark| crate::kit::site::paused_since(mark, pauses_now))
+}
+
 /// One trip to the target (D65): a single `walk_to` (one plan, executed
 /// leg by leg) with the between-legs control installed. Random events,
 /// injury and death ride the hook between two sent legs — the executor
@@ -219,7 +226,8 @@ pub fn walk_checked_at(bot: &mut Bot, dest_x: i32, dest_z: i32, dest_level: i32,
     }
     check_events(bot)?;
     let mut rescued = false;
-    let mut fetched = false;
+    // Market pauses done when the fare was last fetched (none yet).
+    let mut fetched_at: Option<u64> = None;
     loop {
         if bot.world.ticks > deadline {
             return Err(Error::Timeout(format!(
@@ -282,10 +290,11 @@ pub fn walk_checked_at(bot: &mut Bot, dest_x: i32, dest_z: i32, dest_level: i32,
                 }
                 // A fare the pack cannot pay (the Karamja boat: part of the
                 // map for every script, user 2026-11-16): fetch the coins
-                // from the bank once, then walk again.
+                // from the bank once (once more after a market pause that
+                // banked them, `fare_fetch_allowed`), then walk again.
                 if let Some(need) = err.missing_coins() {
-                    if !fetched && crate::kit::toll::fetch_fare_coins(bot, need)? {
-                        fetched = true;
+                    if fare_fetch_allowed(fetched_at, bot.pauses_done) && crate::kit::toll::fetch_fare_coins(bot, need)? {
+                        fetched_at = Some(bot.pauses_done);
                         continue;
                     }
                     return Err(err.into());
@@ -304,7 +313,20 @@ pub fn walk_checked_at(bot: &mut Bot, dest_x: i32, dest_z: i32, dest_level: i32,
 
 #[cfg(test)]
 mod tests {
-    use super::{hurt_aborts, keep_routed, rescue_then_retry, walk_checked};
+    use super::{fare_fetch_allowed, hurt_aborts, keep_routed, rescue_then_retry, walk_checked};
+
+    /// Live 2026-11-21 (ray_79, alice_swift, shaw_sara, mila_wade: 7
+    /// nodes abandoned "no reachable method left" in 6 h): the walk to the
+    /// Karamja store fetched its 60 coins, a market pause mid-trip banked
+    /// the whole pack (`bank_deposit_all keep=0`), the replan after the
+    /// pause asked `coins:60` again and the one fetch was spent. One
+    /// fetch per walk, and one more after each market pause.
+    #[test]
+    fn a_market_pause_allows_the_fare_again() {
+        assert!(fare_fetch_allowed(None, 4), "first fare of the walk");
+        assert!(!fare_fetch_allowed(Some(4), 4), "fetched, no pause since: the walk fails with its own diagnosis");
+        assert!(fare_fetch_allowed(Some(4), 5), "a pause banked the fare: fetch it again");
+    }
 
     /// Live 2026-11-20 (1 795 NoRoute dossiers in 24 h, 48 accounts, the
     /// south-east Varrock mine): the tin rock (3283,3365) offers its south

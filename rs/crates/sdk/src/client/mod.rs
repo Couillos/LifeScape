@@ -207,6 +207,9 @@ pub struct Bot {
     pub run_events: run_events::RunEvents,
     /// Inline-pause gate, installed by the session worker (default: none).
     pub pause_gate: Option<PauseGate>,
+    /// True while a hand-added edge rides (talk, sail, gangplank): the
+    /// pump skips `pause_gate` (`with_pause_held`).
+    pub pause_held: bool,
     /// Pause ticks already billed to market pauses (and only those): the
     /// engagement budget counts work ticks, so the cycle subtracts this
     /// counter from the wall-clock tick delta. Advanced by the session
@@ -287,6 +290,7 @@ impl Bot {
             item_ledger: item_ledger::ItemLedger::default(),
             run_events: run_events::RunEvents::default(),
             pause_gate: None,
+            pause_held: false,
             pause_ticks: 0,
             pause_since: None,
             pauses_done: 0,
@@ -416,6 +420,17 @@ impl Bot {
         self.pause_ticks = self.pause_ticks.saturating_add(ticks);
         self.pause_since = None;
         self.pauses_done = self.pauses_done.saturating_add(1);
+    }
+
+    /// Run `body` with the pause gate held: no market pause starts inside
+    /// it (a sail's `p_delay` refuses every walk, live 2026-11-21). The
+    /// previous hold is restored after, whatever `body` returned.
+    pub fn with_pause_held<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+        let held_before = self.pause_held;
+        self.pause_held = true;
+        let outcome = body(self);
+        self.pause_held = held_before;
+        outcome
     }
 
     /// Open one market pause at the current tick (session gate only);
@@ -588,7 +603,7 @@ impl Bot {
             }
         }
         self.note_trail();
-        if let Some(gate) = self.pause_gate.clone() {
+        if let Some(gate) = self.pause_gate.clone().filter(|_| !self.pause_held) {
             if !gate(self) {
                 return Err(Error::Interrupted(format!("run stopped at {:?}", self.position())));
             }

@@ -109,10 +109,31 @@ fn keeper_at(shop: &str, site: (i32, i32, i32)) -> Option<String> {
     access.npcs.iter().filter_map(|npc| lifescape_gamedata::npc_by_id(*npc)).find(|npc| npc.spawns.iter().any(|spawn| (spawn.x, spawn.z, spawn.level) == (i64::from(site.0), i64::from(site.1), i64::from(site.2)))).and_then(|npc| npc.name).map(str::to_string)
 }
 
+/// Pure: coins the trip to a keeper at `site` pays in fares: the Karamja
+/// boat out and back (the nav's `coins:60` on `boat_port_sarim_to_karamja`,
+/// the brain's `payable_sale_sites` check), nothing on the mainland (the
+/// cleanup run never opens the toll gates).
+pub fn sale_fare_coins(site: (i32, i32, i32)) -> u32 {
+    let (x, z, level) = site;
+    if lifescape_gamedata::access::behind_boat(i64::from(x), i64::from(z), i64::from(level)) {
+        (2 * lifescape_gamedata::services::BOAT_FARE_GP) as u32
+    } else {
+        0
+    }
+}
+
+/// Pure: coins to withdraw with the lots so the pack (`carried` coins)
+/// pays the trip's fares (`sale_fare_coins`).
+pub fn fare_to_withdraw(site: (i32, i32, i32), carried: u32) -> u32 {
+    sale_fare_coins(site).saturating_sub(carried)
+}
+
 /// Takes every lot into the pack (banknotes for non-stackables: one slot
-/// each), only the units not carried yet; returns the lots carried with
+/// each), only the units not carried yet, plus the coins the trip to
+/// `site` pays in fares (`fare_to_withdraw`: before the first walk, never
+/// after a `NeedsRequirement coins:60`); returns the lots carried with
 /// their form (empty: nothing left to sell).
-fn withdraw_lots(bot: &mut Bot, lots: &[SaleLot]) -> Result<Vec<(SaleLot, u16)>, ScriptError> {
+fn withdraw_lots(bot: &mut Bot, lots: &[SaleLot], site: (i32, i32, i32)) -> Result<Vec<(SaleLot, u16)>, ScriptError> {
     let mut wanted: Vec<(&SaleLot, u16, u16, u32)> = Vec::new();
     for lot in lots {
         let base = obj_id(bot, &lot.item)?;
@@ -120,12 +141,20 @@ fn withdraw_lots(bot: &mut Bot, lots: &[SaleLot]) -> Result<Vec<(SaleLot, u16)>,
         let carried = crate::kit::pack::pack_total(bot, base) + if note != base { crate::kit::pack::pack_total(bot, note) } else { 0 };
         wanted.push((lot, base, note, lot.qty.saturating_sub(carried)));
     }
-    if wanted.iter().any(|(_, _, _, missing)| *missing > 0) {
+    let coins = obj_id(bot, "coins")?;
+    let fare = fare_to_withdraw(site, crate::kit::pack::pack_total(bot, coins));
+    if fare > 0 || wanted.iter().any(|(_, _, _, missing)| *missing > 0) {
         let bank = crate::kit::bank::nearest_bank(bot)?;
         if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
             return Err(ScriptError::Blocked { missing: vec!["bank".to_string()] });
         }
         bot.pump(2)?;
+        if fare > 0 {
+            bot.log(&format!("shopsell: the trip to ({},{}) pays the boat, taking {fare} coins with the lots", site.0, site.1));
+            if let Err(error) = bot.bank_withdraw(coins, fare, 300) {
+                bot.log(&format!("shopsell: fare withdraw failed ({error})"));
+            }
+        }
         for (lot, base, note, missing) in &wanted {
             let banked = bot.bank_items().get(base).copied().unwrap_or(0);
             let take = (*missing).min(banked);
@@ -181,7 +210,7 @@ pub fn run_shop_sale(bot: &mut Bot, order: &SaleOrder) -> Result<u32, ScriptErro
                 }
                 pauses_at_withdraw = Some(bot.pauses_done);
                 walked = false;
-                forms = withdraw_lots(bot, &remaining)?;
+                forms = withdraw_lots(bot, &remaining, order.site)?;
                 if forms.is_empty() {
                     bot.log("shopsell: nothing to sell (lots gone since the plan)");
                     return Ok(total);
@@ -240,6 +269,22 @@ mod tests {
     fn the_sale_site_goes_to_the_keeper_as_a_spawn() {
         assert_eq!(keeper_spawn((3080, 3511, 0)), (0, 3080, 3511));
         assert_eq!(keeper_spawn((3081, 3508, 1)), (1, 3081, 3508));
+    }
+
+    /// Live 2026-11-21 (45 `market cleanup` NoRoute in 6 h, 30 bots:
+    /// `NeedsRequirement ... boat_port_sarim_to_karamja missing coins:60`
+    /// to the Karamja general store, then `fare: the route needs 60
+    /// coins` and a second bank trip): the sale behind the boat carries
+    /// its fare out and back (the nav's `coins:60`) from the booth where
+    /// the lots are taken; a mainland keeper carries none.
+    #[test]
+    fn a_sale_behind_the_boat_carries_its_fare_from_the_lot_booth() {
+        assert_eq!(sale_fare_coins((2902, 3150, 0)), 60, "Karamja general store: the boat out and back");
+        assert_eq!(sale_fare_coins((3212, 3246, 0)), 0, "Lumbridge general store: no fare");
+        assert_eq!(fare_to_withdraw((2902, 3150, 0), 0), 60);
+        assert_eq!(fare_to_withdraw((2902, 3150, 0), 25), 35, "the pack's coins count");
+        assert_eq!(fare_to_withdraw((2902, 3150, 0), 500), 0);
+        assert_eq!(fare_to_withdraw((3212, 3246, 0), 0), 0);
     }
 
     #[test]
