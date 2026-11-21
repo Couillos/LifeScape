@@ -15,6 +15,11 @@
 //! `gamedata/data/unreachable_sites.json`, which `gamedata::danger::sites`
 //! reads; the golden test recomputes the dump so it never drifts from
 //! the collision.
+//!
+//! Combat camps: `spawn_verdicts` (same pocket rule around an NPC spawn)
+//! and, for the underground spawns, `route_verdicts` (a plan from the
+//! surface and back): `gamedata/data/unreachable_spawns.json`, recomputed
+//! by `rs/crates/nav/tests/fight_sites.rs`.
 
 #![forbid(unsafe_code)]
 
@@ -99,6 +104,51 @@ fn spawn_verdict(world: &StaticWorld, tables: &Tables, shared: &SharedEdges, spa
     } else {
         SiteVerdict::Sealed
     }
+}
+
+/// Chebyshev radius (same level) within which a tile borrows the route
+/// verdict of an already judged one: when the planner walks between the
+/// two both ways, they share the seed's answer.
+const ROUTE_SHARE_RADIUS: i32 = 24;
+/// Judged neighbours a tile tries before its own full verdict.
+const ROUTE_SHARE_TRIES: usize = 2;
+/// Wall budget of one walk between two neighbours: a cut walk only means
+/// "no borrowed verdict", the tile is then judged against the seed.
+const ROUTE_SHARE_BUDGET: std::time::Duration = std::time::Duration::from_millis(400);
+/// Wall budget of one seed walk: generous, so a verdict never depends on
+/// the machine's load (an exhaustive F2P miss takes ~2 s in release).
+const ROUTE_SEED_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Route verdicts of many tiles against one seed (`None` when the edges
+/// cannot be prepared): true when the planner, under `options`, walks
+/// `seed` → tile AND tile → `seed` (the bot gets there and back to its
+/// bank). A sealed pocket says `Disconnected` at once, but a large region
+/// no edge enters (an underground hall behind a slashable web, Elvarg's
+/// lair behind the one-way secret door) passes `spawn_verdicts`: only a
+/// plan proves the way in. A tile within `ROUTE_SHARE_RADIUS` of a judged
+/// one that the planner joins both ways takes its verdict (a dungeon's
+/// spawns are judged once, not one cross-map plan each); the verdicts are
+/// the same either way.
+pub fn route_verdicts(world: &StaticWorld, tables: &Tables, options: &NavOptions, seed: Tile, tiles: &[Tile]) -> Option<Vec<bool>> {
+    let shared = prepare_shared(world, tables, options, &mut || true)?;
+    let walks = |from: Tile, to: Tile, budget: std::time::Duration| {
+        crate::plan::plan_budgeted(world, tables, from, to, options, &shared, &mut || true, budget).is_ok()
+    };
+    let mut verdicts: Vec<bool> = Vec::with_capacity(tiles.len());
+    for (index, tile) in tiles.iter().enumerate() {
+        let spread = |other: &Tile| (other.x - tile.x).abs().max((other.z - tile.z).abs());
+        let mut near: Vec<usize> = (0..index).filter(|judged| tiles[*judged].level == tile.level && spread(&tiles[*judged]) <= ROUTE_SHARE_RADIUS).collect();
+        near.sort_by_key(|judged| (spread(&tiles[*judged]), *judged));
+        // Out first: a tile in a region no edge leaves fails at once.
+        let borrowed = near
+            .into_iter()
+            .take(ROUTE_SHARE_TRIES)
+            .find(|judged| walks(*tile, tiles[*judged], ROUTE_SHARE_BUDGET) && walks(tiles[*judged], *tile, ROUTE_SHARE_BUDGET))
+            .map(|judged| verdicts[judged]);
+        let verdict = borrowed.unwrap_or_else(|| walks(*tile, seed, ROUTE_SEED_BUDGET) && walks(seed, *tile, ROUTE_SEED_BUDGET));
+        verdicts.push(verdict);
+    }
+    Some(verdicts)
 }
 
 /// Verdict for loc `loc_id` anchored at `origin`.
