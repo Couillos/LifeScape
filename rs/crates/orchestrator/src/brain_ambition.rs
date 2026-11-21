@@ -358,6 +358,13 @@ fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str) {
     replace(life, live, &bot, first, &inputs, exclude, revision_why);
 }
 
+/// `ambition <compte> natural` (operator): the pin and operator type are
+/// already gone; the kind comes from the A4 value (`brain_value::draw`,
+/// the tenants of the other bots sharing the demand), nothing excluded.
+pub(crate) fn assign_natural(life: &mut Life, live: &Value) {
+    redraw(life, live, &[], "operator:natural");
+}
+
 /// Redraw by need (D3 review, need-led ladder end), nothing excluded: the
 /// sole holder of its primary group keeps it (`redraw_gaps`: its group is
 /// its only gap), a redundant bot fills the fleet's open gaps first.

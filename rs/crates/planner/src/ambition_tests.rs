@@ -84,7 +84,8 @@ fn beyond_coverage_draws_vary_and_follow_demand() {
     assert!(smiths > plain, "open bids tilt the draw: {smiths} vs {plain}");
     let (_, why) = (0..400u64).map(|seed| draw_kind(&bot("x", seed * 7_919 + 1, &[]), &[], &demand, &[])).find(|(kind, _)| kind == "smith").expect("a smith");
     assert_eq!(why, "need:bronze_platebody", "need-led (D3)");
-    let exempt = (0..400u64).map(|seed| draw_kind(&bot("Zezima", seed * 7_919 + 1, &[]), &[], &demand, &[])).find(|(kind, _)| kind == "smith").expect("a smith");
+    let level_led_bot = |seed: u64| FleetBot { market_maker: true, ..bot("x", seed, &[]) };
+    let exempt = (0..400u64).map(|seed| draw_kind(&level_led_bot(seed * 7_919 + 1), &[], &demand, &[])).find(|(kind, _)| kind == "smith").expect("a smith");
     assert_eq!(exempt.1, "demand:bronze_platebody", "level-led");
 }
 
@@ -130,7 +131,7 @@ fn melee_is_one_group() {
 /// aléatoire"), tilted toward a bot's strong group but never fixed by it.
 #[test]
 fn existing_levels_tilt_but_never_fix_the_draw() {
-    let frank = bot("Zezima", 11, &[("woodcutting", 64), ("fishing", 12), ("attack", 10), ("mining", 8)]);
+    let frank = FleetBot { market_maker: true, ..bot("frank_lane", 11, &[("woodcutting", 64), ("fishing", 12), ("attack", 10), ("mining", 8)]) };
     assert!(fit("woodcutter", &|skill| frank.level(skill)) > 50.0);
     let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for seed in 0..200u64 {
@@ -149,11 +150,11 @@ fn existing_levels_tilt_but_never_fix_the_draw() {
     // In a fleet pass, the best-fitting bot takes the matching gap.
     let mut fleet: Vec<FleetBot> = (0..14).map(|index| bot(&format!("b{index:02}"), index as u64 + 1, &[])).collect();
     fleet.push(frank.clone());
-    fleet.push(bot("Yogosun", 99, &[("smithing", 40), ("mining", 35)]));
+    fleet.push(FleetBot { market_maker: true, ..bot("hill_eric", 99, &[("smithing", 40), ("mining", 35)]) });
     let assigned = assign_fleet(&fleet, &[]);
     let assigned_to = |account: &str| assigned.iter().find(|row| row.account == account).map(|row| (row.kind.clone(), row.why.clone()));
-    assert_eq!(assigned_to("Zezima"), Some(("woodcutter".to_string(), "coverage:woodcutting".to_string())));
-    assert_eq!(assigned_to("Yogosun").map(|(kind, _)| kind), Some("smith".to_string()));
+    assert_eq!(assigned_to("frank_lane"), Some(("woodcutter".to_string(), "coverage:woodcutting".to_string())));
+    assert_eq!(assigned_to("hill_eric").map(|(kind, _)| kind), Some("smith".to_string()));
     // Milestones skip the rungs a high-level bot is far past.
     let ambition = new_ambition("woodcutter", "coverage:woodcutting", &BotNow { level_of: &|skill| frank.level(skill), coins: 0, held: &|_| 0 }, 11, &[], ZERO).expect("woodcutter");
     let first = &ambition.milestones[0];

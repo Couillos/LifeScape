@@ -1619,7 +1619,13 @@ Achats en dialogue : `dialogue:buy` ⇒ `dialogue_buy <objet> --want <objet> N -
 Décision utilisateur : une ambition opératrice `overall` vise la première
 place du classement overall, classé au total des niveaux puis à l'XP
 totale à total égal. `create-user <pseudo> --goal ambition:overall`
-(comptes Zezima, N0valyfe, Yogosun). Sans échelle (`ambition::ladderless`,
+(comptes Zezima, N0valyfe, Yogosun). **Toujours overall** (2026-11-21) :
+un compte protégé sans overall (vie neuve, ancienne vie, ambition atteinte)
+reçoit `overall` (`why` `protected:overall`, `ambition_fleet::draw_kind`,
+`neediest_kind`, `assign_fleet`, `brain_ambition::before_draw`) ; une
+ambition overall d'un compte protégé n'est remplacée par aucun chemin
+(`ambition::revise` la refuse) et `ambition <compte> natural` est refusée
+pour eux. Les teneurs de marché gardent seuls le tirage par niveau. Sans échelle (`ambition::ladderless`,
 comme le généraliste) : chaque but tiré est la compétence F2P la plus
 basse de `goals::OVERALL_SKILLS` (14 compétences ; les PV montent avec le
 combat), jusqu'au prochain multiple de 5 au moins 5 niveaux plus haut —

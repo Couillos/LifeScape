@@ -63,16 +63,15 @@ fn woodcutting_need_draws_the_woodcutter() {
     assert_eq!(counts.get("woodcutter").copied(), Some(200), "need alone: {counts:?}");
 }
 
-/// The exempt accounts keep today's level-led draw: with the same
-/// crafting demand, Zezima's woodcutting lead still wins draws.
+/// The protected accounts (`LEVEL_LED_ACCOUNTS`) never draw by level or
+/// need any more: they always hold the overall ambition (user
+/// 2026-11-21); the level-led draw stays for the market makers below.
 #[test]
-fn exempt_accounts_keep_the_level_led_draw() {
+fn exempt_accounts_are_given_overall() {
     let demand = bid_for("leather_gloves");
     for account in ["Zezima", "N0valyfe", "Yogosun"] {
         let counts = drawn(account, &demand);
-        let woodcutter = counts.get("woodcutter").copied().unwrap_or(0);
-        assert!(woodcutter > 0 && counts.len() >= 3, "{account}: level-led draw, got {counts:?}");
-        assert!(counts.values().all(|count| *count <= woodcutter), "{account}: the strong group stays the most likely: {counts:?}");
+        assert_eq!(counts.get("overall").copied(), Some(200), "{account}: {counts:?}");
     }
 }
 

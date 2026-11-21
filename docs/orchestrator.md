@@ -25,6 +25,20 @@ non décompté, `brain_alch::time_rate`), achats de natures et de lots sous le
 net d'alch par profit décroissant (`market_pass`), sinon de l'argent qui
 finance ces achats.
 
+`ambition <compte> natural` (2026-11-21, `src/brain_operator.rs`) : le compte
+opérateur (épingle de compétence ou type alchimiste) rejoint l'équilibre
+naturel. Même mécanique : appliquée au prochain passage du cerveau sur ce
+compte au repos. Retire l'épingle (`pin = null`) ou le type opérateur, abandonne
+les nœuds ouverts de l'ancien rôle (`role: operator ambition`), lève les bans
+causés par le changement de rôle (cas de l'alchimiste), puis donne l'ambition
+par la valeur A4 : même calcul que `assign_by_value` / la passe de
+rééquilibrage (`brain_value::draw` -> `pick_by_value`), valeur par 6000 ticks
+partagée par les tenants actuels de chaque métier ; révision `operator:natural`,
+chiffres de la valeur dans le journal du daemon. Ensuite le bot est ordinaire
+(A2 : aucun changement avant atteinte). Refusée (erreur typée) pour Zezima,
+N0valyfe et Yogosun (insensible à la casse), qui gardent l'ambition overall
+pour de bon, et pour un teneur de marché.
+
 `verify` (W2) : runner de scénarios déclaratifs (`scenarios/*.json`, lus avec
 `lifescape-json`). Setup série via `admin` (cheats + `bank_all`, effets
 vérifiés), runs parallèles sur comptes distincts (N clampé à 20 D38),

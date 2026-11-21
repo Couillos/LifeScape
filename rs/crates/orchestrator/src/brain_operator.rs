@@ -22,6 +22,11 @@ fn pending() -> &'static Mutex<HashMap<String, String>> {
 /// Kinds an operator may hand out by this command.
 pub const OPERATOR_KINDS: &[&str] = &[ALCHER];
 
+/// `ambition <compte> natural` (user 2026-11-21): the operator account
+/// joins the natural balance: pin or operator type removed, the ambition
+/// given by the A4 value like any bot's, then ordinary (A2).
+pub const NATURAL: &str = "natural";
+
 /// A trade the fleet draws (catalogue kind with a ladder, never the
 /// market maker): an operator may hand it out too.
 fn drawable_trade(kind: &str) -> bool {
@@ -33,8 +38,11 @@ pub fn request(account: &str, kind: &str) -> Result<(), String> {
     if account.is_empty() {
         return Err("ambition <compte> <kind>: no account".to_string());
     }
-    if !OPERATOR_KINDS.contains(&kind) && !drawable_trade(kind) {
-        return Err(format!("unknown operator ambition {kind:?} (known: {} or a drawn trade)", OPERATOR_KINDS.join(", ")));
+    if kind == NATURAL && lifescape_planner::protected(account) {
+        return Err(format!("{account} is a protected account (overall for good): `ambition {account} natural` refused"));
+    }
+    if kind != NATURAL && !OPERATOR_KINDS.contains(&kind) && !drawable_trade(kind) {
+        return Err(format!("unknown operator ambition {kind:?} (known: {}, {NATURAL} or a drawn trade)", OPERATOR_KINDS.join(", ")));
     }
     pending().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(account.to_string(), kind.to_string());
     crate::logln!("brain {account}: operator ambition {kind} filed, applied at its next idle pass");
@@ -48,6 +56,9 @@ pub fn request(account: &str, kind: &str) -> Result<(), String> {
 pub(crate) fn apply_pending(life: &mut Life, live: &Value) -> bool {
     let lifted = lift_role_bans(life);
     let Some(kind) = pending().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&life.account) else { return lifted };
+    if kind == NATURAL {
+        return apply_natural(life, live) || lifted;
+    }
     if kind != ALCHER {
         if !drawable_trade(&kind) {
             return lifted;
@@ -88,6 +99,32 @@ pub(crate) fn apply_pending(life: &mut Life, live: &Value) -> bool {
     }
 }
 
+/// `natural`: the pin (or the alchemist type) leaves, the open work of the
+/// old role stops, the ambition is given by value over the fleet's demand
+/// and the tenants already on each kind (`brain_ambition::assign_natural`,
+/// revision `operator:natural`), the next goal drawn at once. Refused
+/// (logged) for a protected account or a market maker.
+fn apply_natural(life: &mut Life, live: &Value) -> bool {
+    if lifescape_planner::protected(&life.account) || lifescape_planner::maker_role(life).is_some() {
+        crate::logln!("brain {}: operator ambition natural refused (protected account or market maker)", life.account);
+        return false;
+    }
+    let abandoned = lifescape_planner::abandon_for_role(life, "role: operator ambition");
+    life.goal_origin = None;
+    if let Some(held) = life.ambition.as_mut() {
+        held.pin = None;
+        held.draw_rule.clear();
+    }
+    crate::brain_ambition::assign_natural(life, live);
+    crate::brain::push_history(life, "goal", "role:natural (operator)");
+    crate::logln!("brain {}: ambition -> natural balance (operator), {} nodes abandoned", life.account, abandoned.len());
+    if let Some(label) = crate::brain_succession::draw_next(life, live) {
+        crate::logln!("brain {}: first goal {label}", life.account);
+    }
+    lifescape_planner::normalize(life);
+    true
+}
+
 /// Unban the skills a role switch banned (`planner::role_lifted_bans`).
 fn lift_role_bans(life: &mut Life) -> bool {
     if !lifescape_planner::is_alcher(life) {
@@ -107,6 +144,78 @@ fn lift_role_bans(life: &mut Life) -> bool {
 mod tests {
     /// User 2026-11-20: the retired makers are placed on trades by the
     /// operator; the market maker and unknown kinds stay refused.
+    fn live() -> lifescape_json::Value {
+        use lifescape_json::{object, Value};
+        let skill = |id: i64, level: i64| object(vec![("id", Value::Int(id)), ("level", Value::Int(level))]);
+        object(vec![("skills", Value::Arr((0..=20).map(|id| skill(id, 30)).collect()))])
+    }
+
+    fn life_holding(account: &str, held: lifescape_planner::Ambition) -> lifescape_planner::Life {
+        use lifescape_planner::{Archetype, GoalKind, Profile};
+        lifescape_planner::Life {
+            schema: 1,
+            account: account.to_string(),
+            created_at: 0,
+            seed: 11,
+            profile: Profile::new(false, 0.5, 0.5, 11, Archetype::Producer),
+            goal: GoalKind::MakeMoney,
+            nodes: Vec::new(),
+            engagement: None,
+            active: None,
+            history: Vec::new(),
+            ambition: Some(held),
+            goal_origin: None,
+            memory: Default::default(),
+        }
+    }
+
+    /// User 2026-11-21 (« les 6 opérateurs rejoignent l'équilibre
+    /// naturel »): `ambition <compte> natural` is refused for the three
+    /// protected accounts (any case) and filed for any other account.
+    #[test]
+    fn natural_is_refused_for_protected_accounts_only() {
+        for name in ["Zezima", "n0valyfe", "YOGOSUN"] {
+            let error = super::request(name, "natural").expect_err(name);
+            assert!(error.contains("protected"), "{error}");
+        }
+        assert!(super::request("t_natural_owen", "natural").is_ok());
+        super::pending().lock().unwrap().remove("t_natural_owen");
+    }
+
+    /// The pin leaves, the ambition is given by value (A4) and the
+    /// revision is `operator:natural`; the bot is then ordinary (no pin,
+    /// not an operator ambition, drawn by need).
+    #[test]
+    fn natural_unpins_and_gives_the_ambition_by_value() {
+        let now = lifescape_planner::BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 };
+        let stamp = lifescape_planner::Stamp { tick: 0, secs: 0 };
+        let pinned = lifescape_planner::pinned_ambition("smithing", 99, &now, 11, &[], stamp).expect("pinned smithing");
+        assert!(lifescape_planner::pinned(&pinned), "precondition");
+        let mut owen = life_holding("t_natural_pin", pinned);
+        super::request("t_natural_pin", "natural").expect("filed");
+        assert!(super::apply_pending(&mut owen, &live()));
+        let held = owen.ambition.as_ref().expect("an ambition");
+        assert!(held.pin.is_none(), "pin removed");
+        assert!(!lifescape_planner::pinned(held), "an ordinary ambition now");
+        assert_ne!(held.draw_rule, lifescape_planner::OPERATOR_RULE);
+        let last = held.revisions.last().expect("a revision");
+        assert_eq!(last.why, "operator:natural");
+        assert_eq!(last.from, "smith");
+    }
+
+    /// Ryan Mason's case: the alchemist type leaves for a trade by value.
+    #[test]
+    fn natural_takes_the_operator_type_away() {
+        let now = lifescape_planner::BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 };
+        let stamp = lifescape_planner::Stamp { tick: 0, secs: 0 };
+        let mut ryan = life_holding("t_natural_alcher", lifescape_planner::new_ambition(super::ALCHER, "operator:alcher", &now, 11, &[], stamp).expect("alcher"));
+        super::request("t_natural_alcher", "natural").expect("filed");
+        assert!(super::apply_pending(&mut ryan, &live()));
+        let held = ryan.ambition.as_ref().expect("an ambition");
+        assert_ne!(held.kind, super::ALCHER);
+        assert_eq!(held.revisions.last().map(|revision| revision.why.as_str()), Some("operator:natural"));
+    }
+
     #[test]
     fn an_operator_hands_out_alcher_or_any_drawn_trade() {
         for kind in ["alcher", "cook", "fisher", "crafter", "firemaker", "priest", "runecrafter"] {
