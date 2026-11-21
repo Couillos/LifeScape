@@ -10,9 +10,13 @@
 //! `lifescape_planner::pays_its_way`). No price floor, no item list.
 //!
 //! - `paying_demand`: the demand items that pass, for the side goal draw;
-//! - `release_unpaying`: gives back an open `side:demand:` or `bid:` goal
-//!   whose value fell below the bot's time (same close as the other
-//!   releases of `brain_bid_release`).
+//! - `release_unpaying`: gives back an open `side:demand:` goal whose
+//!   value fell below the bot's time (same close as the other releases
+//!   of `brain_bid_release`). A `bid:` goal is not judged here: its
+//!   answer was weighed against the asks it buys from and the training
+//!   it carries (`bid_response::preempts`, rate >= the bot's coin rate);
+//!   judging it on reference prices released 11 sound answers at the
+//!   first deploy (strung amulets bought below the reference).
 
 use lifescape_json::Value;
 use lifescape_planner::ambition_catalog::DemandItem;
@@ -50,17 +54,17 @@ pub(crate) fn paying_demand(life: &Life, live: &Value, demand: &[DemandItem]) ->
     })
 }
 
-/// The object of an open `side:demand:` or `bid:` production goal.
+/// The object of an open `side:demand:` production goal.
 fn served_item(life: &Life) -> Option<(String, String)> {
     let origin = life.goal_origin.as_deref()?;
-    let item = origin.strip_prefix(lifescape_planner::SIDE_PREFIX).and_then(|rest| rest.strip_prefix("demand:")).or_else(|| origin.strip_prefix(lifescape_planner::bid_response::BID_PREFIX))?;
+    let item = origin.strip_prefix(lifescape_planner::SIDE_PREFIX).and_then(|rest| rest.strip_prefix("demand:"))?;
     match &life.goal {
         lifescape_planner::GoalKind::Produce { item: goal_item, .. } if goal_item == item => Some((origin.to_string(), item.to_string())),
         _ => None,
     }
 }
 
-/// Gives back the open demand goal when serving it no longer pays for
+/// Gives back the open side demand goal when serving it no longer pays for
 /// the bot's time, and the draw that follows picks again (the paying
 /// filter keeps it off). Waits while a node runs. No data (no margin,
 /// no price), no decision. True when the life changed (save it).
