@@ -709,7 +709,11 @@ Sorties des temples de runecraft (2026-11-15) : bords custom
 `runecraft.rs2 [oploc1,_rc_exit_portal]` → `exit_coord` de
 `runecraft.dbrow`). Un bot coupé dans un temple (redeploy en plein trajet,
 bh99tw2f) n'avait aucune sortie : tout trajet lisait Disconnected.
-Golden `autel_terre_sortie`.
+Golden `autel_terre_sortie`. Atterrissage d'un bord custom `loc` : la case
+attendue ou une case à 2 au plus (Chebyshev, `travel_custom::landed_near`) ;
+le portail de la mine d'essence tire sa case par
+`map_findsquare(%exit_essence_mine_coord, 0, 2, lineofwalk)`, un rayon de 1
+lisait `ride wrong destination` (live 2026-11-21).
 
 ## Collision complétée par les données serveur (P6, P8, 2026-11-17)
 
