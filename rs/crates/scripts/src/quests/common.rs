@@ -795,7 +795,7 @@ fn quest_done(bot: &Bot, requirements: &QuestRequirements) -> bool {
         && requirements.completion_varps.iter().all(|(varp, value)| bot.world.varps.get(&(*varp as u16)).copied().unwrap_or(0) as i64 == *value)
 }
 
-fn skill_index(name: &str) -> Option<u8> {
+pub(crate) fn skill_index(name: &str) -> Option<u8> {
     // Mirrors lifescape SKILL_INDEX order.
     const ORDER: [&str; 21] = [
         "attack", "defence", "strength", "hitpoints", "ranged", "prayer", "magic", "cooking", "woodcutting",
