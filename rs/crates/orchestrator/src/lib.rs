@@ -89,6 +89,7 @@ pub mod trade_report;
 pub mod market_daemon;
 pub mod market_claims;
 pub mod market_demand;
+pub mod market_reference;
 pub mod market_reprice;
 pub mod market_seller;
 pub mod market_units;

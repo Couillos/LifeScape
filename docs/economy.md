@@ -115,7 +115,7 @@ marché : seule la valeur PROPRE de l'acheteur borne sa montée.
   plan, taux × hausse × horizon)`, `taux` = valeur du temps du bot
   (`brain_d17::coin_rate`, pièces par tick), `hausse` = gain de score de
   style de la pièce / (score porté + gain), en millièmes
-  (`uplift_permille`), `horizon` = `GEAR_VALUE_HORIZON_TICKS` = 360 000
+  (`uplift`, flottant), `horizon` = `GEAR_VALUE_HORIZON_TICKS` = 360 000
   ticks (moitié de la fenêtre de 12 h du taux). Exemple : 0,3 pièce/tick,
   3 % → 3 240 pièces, pas 2,6 M. Intrants : la réserve dérivée
   (`derived_demand::obtain_ceiling`) borne déjà le plafond. Le plafond
@@ -125,28 +125,46 @@ marché : seule la valeur PROPRE de l'acheteur borne sa montée.
   l'adopte avec elle. Une offre de compte hors ligne garde son plafond
   persisté jusqu'à sa prochaine passe.
 - B3 (`lifescape_market::auction::next_mode`, `trade_gap_ticks`,
-  `market_auction::auction_round`) : écart moyen entre les 8 derniers
-  échanges d'un objet (au moins le temps depuis le dernier) ; au-dessus
-  de `ENTER_GAP_TICKS` = 2 000 ticks (fenêtre de marche la plus lente) :
-  enchère ; à `EXIT_GAP_TICKS` = 1 000 ticks (deux fois plus fréquent) ou
-  moins : continu ; entre les deux le mode reste. Moins de deux échanges :
-  enchère. Mémoire du démon, remesuré au premier tour après redémarrage.
-- B2 (`auction::clearing`, `Book::set_batch` / `run_auction`,
+  `equivalent_gap_ticks`, `market_auction::auction_round`) : la même
+  grandeur dans les deux modes, le temps moyen entre deux échanges. En
+  continu : écart moyen entre les 8 derniers échanges (au moins le temps
+  depuis le dernier). En enchère l'objet n'échange qu'à chaque enchère,
+  ses exécutions ne peuvent pas le ramener : écart équivalent = période
+  (6 000 ticks) / nombre moyen de PAIRES servies par enchère (une paire =
+  un deal = une exécution, l'unité que compte l'écart continu), sur les
+  `AUCTION_HISTORY` = 4 dernières enchères, au moins 2 enchères (avant,
+  les exécutions décident). Au-dessus de `ENTER_GAP_TICKS` = 2 000 ticks
+  (fenêtre de marche la plus lente) : enchère ; à `EXIT_GAP_TICKS` = 1 000
+  (soit 6 paires par enchère) ou moins : continu ; entre les deux le mode
+  reste. Moins de deux échanges : enchère. Premier ordre d'un objet pas
+  encore mesuré (aussi après un redémarrage) : son mode est fixé avant
+  qu'il puisse s'apparier (`market_auction::ensure_mode`, appelé par
+  `place`) : un objet échangé moins de deux fois est en enchère dès sa
+  pose.
+- B2 (`auction::clear_pairs`, `Book::set_batch` / `run_auction`,
   `MarketService::auction_books`) : toutes les `AUCTION_PERIOD_TICKS` =
   6 000 ticks (trois fenêtres lentes ; l'ancienne attente de fill), chaque
   objet en enchère s'échange à UN prix : celui qui fait échanger le plus
-  d'unités (acheteurs au-dessus, vendeurs au-dessous), départage = milieu,
-  arrondi bas, de l'intervalle des prix d'ordre qui atteignent ce
-  maximum ; meilleurs prix puis plus anciens d'abord ; jamais un compte
-  contre lui-même ni une paire en refroidissement. Chaque paire devient un
-  deal (même rendez-vous). Entre deux enchères le carnet de l'objet
-  ne croise rien (un ordre qui croise attend) et ses ordres ne marchent
+  d'unités, calculé sur les paires réellement permises (jamais un compte
+  contre lui-même, jamais une paire en refroidissement : un teneur qui a
+  achat et vente au carnet ne fausse plus l'équilibre) ; l'appariement
+  suit les mêmes paires (glouton par priorité puis chemins augmentants :
+  volume maximal des paires permises). Départage : milieu, arrondi bas, de
+  l'intervalle des prix d'ordre qui atteignent ce maximum ; si le milieu
+  échange moins, le prix d'ordre optimal le plus proche (le plus bas à
+  égalité). Chaque paire devient un deal (même rendez-vous). Entre deux
+  enchères le carnet de l'objet ne croise rien et ses ordres ne marchent
   pas ; juste après une enchère, les ordres restés au carnet marchent
-  UNE fois (la marche de 10 %, un vendeur sans acheteur ou l'inverse).
-- B4 (`market_auction::recent_fills`, `anchor_for`) : la marche s'ancre
+  UNE fois (la marche de 10 %). Ordre pressé (motif `need`, ou `urgent` :
+  vente de fin de charge, banque pleine) posé sur un objet en enchère :
+  enchère immédiate sur cet objet (`pressed_auction`), même prix unique
+  pour tous les ordres présents, jamais l'attente de la période ; ses
+  paires comptent dans la période en cours.
+- B4 (`market_auction::anchor_of`) : la marche s'ancre
   sur le prix moyen pondéré par le volume des échanges réglés des
   `ANCHOR_WINDOW_TICKS` = 36 000 derniers ticks (au plus 50, les échanges
-  du compte exclus : table des deals, index `idx_deals_item_clock` créé à
+  du compte exclus DANS la requête, la limite ne compte que les autres :
+  table des deals, `Store::settled_fills_since`, index `idx_deals_item_clock` créé à
   l'ouverture sans changer la version du schéma), à la place du dernier
   prix échangé ; le tirage à mi-chemin vers cette ancre reste. Un échange
   isolé à 1 pièce parmi dix à 50 : ancre 46.

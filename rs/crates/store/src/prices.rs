@@ -52,16 +52,17 @@ impl Store {
     }
 
     /// The item's newest `limit` settled deals since `since_clock`
-    /// (store clock), newest first, with their parties (B4: the anchor
-    /// leaves out the asking account's own fills; executions carry no
-    /// account). Indexed on `schema::DEAL_ITEM_INDEX`.
-    pub fn settled_fills_since(&self, item_id: i64, since_clock: i64, limit: i64) -> Result<Vec<SettledFill>, Error> {
+    /// (store clock), newest first, WITHOUT those of `excluded_account`
+    /// (B4: the anchor leaves out the asking account's own fills; the
+    /// exclusion is in the query, so the limit counts only the others;
+    /// executions carry no account). Indexed on `schema::DEAL_ITEM_INDEX`.
+    pub fn settled_fills_since(&self, item_id: i64, since_clock: i64, excluded_account: &str, limit: i64) -> Result<Vec<SettledFill>, Error> {
         let mut statement = self.connection.prepare_cached(
             "SELECT price, quantity, buyer, seller FROM deals \
-             WHERE item_id = ?1 AND status = 'settled' AND updated_clock >= ?2 \
-             ORDER BY updated_clock DESC LIMIT ?3",
+             WHERE item_id = ?1 AND status = 'settled' AND updated_clock >= ?2 AND buyer <> ?3 AND seller <> ?3 \
+             ORDER BY updated_clock DESC LIMIT ?4",
         )?;
-        let mut rows = statement.query(rusqlite::params![item_id, since_clock, limit.max(0)])?;
+        let mut rows = statement.query(rusqlite::params![item_id, since_clock, excluded_account, limit.max(0)])?;
         let mut fills = Vec::new();
         while let Some(row) = rows.next()? {
             fills.push(SettledFill { price: row.get(0)?, quantity: row.get(1)?, buyer: row.get(2)?, seller: row.get(3)? });

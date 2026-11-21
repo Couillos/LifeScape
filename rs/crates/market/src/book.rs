@@ -94,39 +94,19 @@ impl Book {
     /// later arrival of a pair is its taker. Orders drained leave the
     /// book; the rest keeps its rank.
     pub fn run_auction(&mut self, kept_apart: &dyn Fn(&str, &str) -> bool) -> Vec<Fill> {
-        let quote = |orders: &[Order]| orders.iter().map(|order| (order.price, order.remaining)).collect::<Vec<_>>();
-        let Some(found) = crate::auction::clearing(&quote(&self.buys), &quote(&self.sells)) else {
+        let orders = |side: &[Order]| side.iter().map(|order| crate::auction::AuctionOrder { account: order.account.clone(), price: order.price, quantity: order.remaining }).collect::<Vec<_>>();
+        let may_trade = |buyer: &str, seller: &str| buyer != seller && !kept_apart(buyer, seller);
+        let Some((found, pairs)) = crate::auction::clear_pairs(&orders(&self.buys), &orders(&self.sells), &may_trade) else {
             return Vec::new();
         };
         let mut fills = Vec::new();
-        for bid_index in 0..self.buys.len() {
-            if self.buys[bid_index].price < found.price {
-                break;
-            }
-            for ask_index in 0..self.sells.len() {
-                if self.sells[ask_index].price > found.price {
-                    break;
-                }
-                let (bid, ask) = (&self.buys[bid_index], &self.sells[ask_index]);
-                if bid.remaining == 0 || ask.remaining == 0 || bid.account == ask.account || kept_apart(&bid.account, &ask.account) {
-                    continue;
-                }
-                let take = bid.remaining.min(ask.remaining);
-                let arrival = |order: &Order| self.arrivals.get(&order.id).copied().unwrap_or(0);
-                let taker = if arrival(bid) < arrival(ask) { Side::Sell } else { Side::Buy };
-                fills.push(Fill {
-                    buy_id: bid.id,
-                    sell_id: ask.id,
-                    buyer: bid.account.clone(),
-                    seller: ask.account.clone(),
-                    item: bid.item,
-                    quantity: take,
-                    price: found.price,
-                    taker,
-                });
-                self.buys[bid_index].remaining -= take;
-                self.sells[ask_index].remaining -= take;
-            }
+        for (bid_index, ask_index, take) in pairs {
+            let (bid, ask) = (&self.buys[bid_index], &self.sells[ask_index]);
+            let arrival = |order: &Order| self.arrivals.get(&order.id).copied().unwrap_or(0);
+            let taker = if arrival(bid) < arrival(ask) { Side::Sell } else { Side::Buy };
+            fills.push(Fill { buy_id: bid.id, sell_id: ask.id, buyer: bid.account.clone(), seller: ask.account.clone(), item: bid.item, quantity: take, price: found.price, taker });
+            self.buys[bid_index].remaining -= take;
+            self.sells[ask_index].remaining -= take;
         }
         for gone in self.buys.iter().chain(self.sells.iter()).filter(|order| order.remaining == 0) {
             self.arrivals.remove(&gone.id);

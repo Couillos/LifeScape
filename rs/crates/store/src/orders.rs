@@ -270,17 +270,18 @@ impl Store {
         Ok(())
     }
 
-    /// Marks an order matched or settled after a deal moves forward.
-    /// Final rows (`settled`, `cancelled`) never move again: a late
-    /// refresh racing a cancel would otherwise revive a withdrawn order
-    /// (review 2026-11-13). Refused writes report `NotFound`.
     /// Rewrites the ceiling kept with a resting buy (B1, lot 3 marché:
-    /// the owner's limit moved, a restart must adopt the new one).
+    /// the owner's limit moved, a restart must adopt the new one). In the
+    /// book's unit (coins per lot), like the column it writes.
     pub fn set_order_ceiling(&self, order_id: i64, ceiling: i64) -> Result<(), Error> {
         self.connection.execute("UPDATE orders SET ceiling = ?1 WHERE order_id = ?2 AND status IN ('open','matched')", rusqlite::params![ceiling.max(1), order_id])?;
         Ok(())
     }
 
+    /// Marks an order matched or settled after a deal moves forward.
+    /// Final rows (`settled`, `cancelled`) never move again: a late
+    /// refresh racing a cancel would otherwise revive a withdrawn order
+    /// (review 2026-11-13). Refused writes report `NotFound`.
     pub fn set_order_status(
         &self,
         order_id: i64,

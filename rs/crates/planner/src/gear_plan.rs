@@ -51,10 +51,11 @@ pub struct GearWant {
     pub gain: i64,
     pub expected: i64,
     pub ceiling: i64,
-    /// Relative uplift of the bot's style score this piece brings, in
-    /// thousandths: `gain / (worn score + gain)` over the plan's slots
-    /// (B1, lot 3 marché: the bot's own value of the piece, `own_value`).
-    pub uplift_permille: i64,
+    /// Relative uplift of the bot's style score this piece brings:
+    /// `gain / (worn score + gain)` over the plan's slots (B1, lot 3
+    /// marché: the bot's own value of the piece, `own_value`). Float: a
+    /// small uplift must not round to nothing.
+    pub uplift: f64,
 }
 
 /// Ticks of the bot's work a piece's uplift is counted over (B1): 360 000
@@ -66,11 +67,14 @@ pub const GEAR_VALUE_HORIZON_TICKS: u64 = 360_000;
 /// What a gear piece is worth to the bot (B1, user plan 2026-11-21): the
 /// coins its work earns over `GEAR_VALUE_HORIZON_TICKS` more thanks to
 /// the piece, `coin_rate` (coins per tick of work, the measured time
-/// value) times the relative uplift of its style score. At least 1; NOT
-/// a market cap: the bot's own limit, whatever the market asks.
-pub fn own_value(uplift_permille: i64, coin_rate: f64) -> i64 {
+/// value) times the relative uplift of its style score, in coins (a
+/// float: under one coin the piece is worth no bid at all, never a bid
+/// at 1 held for life). NOT a market cap: the bot's own limit, whatever
+/// the market asks.
+pub fn own_value(uplift: f64, coin_rate: f64) -> f64 {
     let rate = if coin_rate.is_finite() { coin_rate.max(0.0) } else { 0.0 };
-    ((rate * GEAR_VALUE_HORIZON_TICKS as f64 * uplift_permille.max(0) as f64 / 1000.0).floor() as i64).max(1)
+    let uplift = if uplift.is_finite() { uplift.max(0.0) } else { 0.0 };
+    rate * GEAR_VALUE_HORIZON_TICKS as f64 * uplift
 }
 
 fn is_tool(name: &str) -> bool {
@@ -261,7 +265,7 @@ pub fn plan_gear_from(
         let Some(at) = pick else { continue };
         let (item, value, expected) = &options[*at];
         let share = (i128::from(*expected) * i128::from(budget) / i128::from(total)) as i64;
-        wants.push(GearWant { wearpos: *wearpos, item: item.clone(), gain: value - have, expected: *expected, ceiling: share.max(*expected), uplift_permille: (value - have) * 1000 / (worn_total + value - have).max(1) });
+        wants.push(GearWant { wearpos: *wearpos, item: item.clone(), gain: value - have, expected: *expected, ceiling: share.max(*expected), uplift: (value - have) as f64 / (worn_total + value - have).max(1) as f64 });
     }
     wants
 }
@@ -269,8 +273,10 @@ pub fn plan_gear_from(
 impl GearWant {
     /// Bid ceiling of this want (B1): the wallet share the plan gave it,
     /// never over what the piece is worth to this bot (`own_value`).
-    pub fn own_ceiling(&self, coin_rate: f64) -> i64 {
-        self.ceiling.min(own_value(self.uplift_permille, coin_rate)).max(1)
+    /// `None` when that worth is under one coin: no bid is placed.
+    pub fn own_ceiling(&self, coin_rate: f64) -> Option<i64> {
+        let ceiling = (self.ceiling as f64).min(own_value(self.uplift, coin_rate)).floor() as i64;
+        (ceiling >= 1).then_some(ceiling)
     }
 }
 

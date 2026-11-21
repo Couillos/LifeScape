@@ -125,3 +125,49 @@ fn an_isolated_one_coin_sale_barely_moves_the_anchor() {
     assert_eq!(anchor_price(&[(7, 0), (0, 5)]), None, "nothing usable");
     assert_eq!(anchor_price(&[]), None);
 }
+
+/// Review lot 3 (4/5): the equilibrium is computed on the pairs that may
+/// really trade (never an account with itself), and the matching follows
+/// the same pairs. A maker holding a bid at 10 and an ask at 6: the middle
+/// of the unrestricted interval (8) would trade nothing.
+#[test]
+fn an_auction_clears_on_the_pairs_it_may_match() {
+    let mut book = Book::new();
+    book.set_batch(true);
+    book.place(1, "maker", 314, Side::Sell, 5, 6).expect("places");
+    book.place(2, "maker", 314, Side::Buy, 5, 10).expect("places");
+    book.place(3, "buyer", 314, Side::Buy, 5, 7).expect("places");
+    book.place(4, "seller", 314, Side::Sell, 5, 9).expect("places");
+    let fills = book.run_auction(&no_pair_kept_apart);
+    assert_eq!(fills.iter().map(|fill| fill.quantity).sum::<i64>(), 5, "five units trade: {fills:?}");
+    assert!(fills.iter().all(|fill| fill.price == 7), "the optimal price nearest the middle (8), the lower on a tie: {fills:?}");
+    assert!(fills.iter().all(|fill| fill.buyer != fill.seller));
+}
+
+/// Greedy matching in priority order would leave units unmatched (the
+/// best bid takes the only ask the other can use): the matching reroutes.
+#[test]
+fn the_matching_reaches_the_maximum_volume_of_the_allowed_pairs() {
+    let mut book = Book::new();
+    book.set_batch(true);
+    book.place(1, "zed", 314, Side::Sell, 5, 5).expect("places");
+    book.place(2, "wen", 314, Side::Sell, 5, 6).expect("places");
+    book.place(3, "pat", 314, Side::Buy, 5, 10).expect("places");
+    book.place(4, "wen", 314, Side::Buy, 5, 9).expect("places");
+    let fills = book.run_auction(&no_pair_kept_apart);
+    assert_eq!(fills.iter().map(|fill| fill.quantity).sum::<i64>(), 10, "pat-wen and wen-zed: {fills:?}");
+    assert!(fills.iter().all(|fill| fill.price == fills[0].price));
+}
+
+/// B3 (review 1): an auction object trades once per auction, so the
+/// gap is measured as the period over the pairs served per auction.
+#[test]
+fn the_equivalent_gap_is_the_period_over_the_pairs_served() {
+    assert_eq!(equivalent_gap_ticks(&[]), None, "no auction yet: the executions decide");
+    assert_eq!(equivalent_gap_ticks(&[6]), None, "one auction is not a trend");
+    assert_eq!(equivalent_gap_ticks(&[6, 6]), Some(1000.0), "6 pairs per 6 000 ticks = one per 1 000");
+    assert_eq!(equivalent_gap_ticks(&[2, 4, 3]), Some(2000.0), "mean 3 pairs: one per 2 000");
+    assert_eq!(equivalent_gap_ticks(&[0, 0]), Some(f64::INFINITY), "nothing served: rare");
+    assert!(!next_mode(true, equivalent_gap_ticks(&[6, 6])), "6 pairs an auction: back to continuous");
+    assert!(next_mode(true, equivalent_gap_ticks(&[3, 3])), "3 pairs an auction (2 000 ticks): stays");
+}

@@ -134,8 +134,8 @@ impl MarketService {
     /// every pair that agrees trades at the object's single clearing
     /// price, through the normal path (`settle_crossed`: one deal per
     /// pair, the rendezvous procedure executes it). Returns the deals
-    /// opened.
-    pub(crate) fn auction_books(&self, items: &[i64], now_wall: f64) -> Vec<i64> {
+    /// opened, each with its object (`(item, deal)`).
+    pub(crate) fn auction_books(&self, items: &[i64], now_wall: f64) -> Vec<(i64, i64)> {
         let mut deals = Vec::new();
         for item in items {
             let matched = {
@@ -147,7 +147,7 @@ impl MarketService {
                 book.run_auction(&guard_fn).into_iter().map(|fill| (fill.clone(), rows_for_fill(&pre, &fill))).collect::<Vec<_>>()
             };
             let Some(first) = matched.first().map(|(fill, _)| fill.buy_id) else { continue };
-            deals.extend(self.settle_crossed(first, matched));
+            deals.extend(self.settle_crossed(first, matched).into_iter().map(|deal| (*item, deal)));
         }
         deals
     }

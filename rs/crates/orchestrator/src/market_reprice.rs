@@ -271,7 +271,7 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
     }
     let batch = service.lock_store().begin_batch().unwrap_or(false);
     let (mut moved, mut parked, mut refused) = (0usize, 0usize, 0usize);
-    let mut recent: HashMap<i64, Vec<lifescape_store::prices::SettledFill>> = HashMap::new();
+    let mut anchors: HashMap<(i64, String), Option<i64>> = HashMap::new();
     for (order, mut bounds) in due {
         let row = service.lock_store().get_order(order).ok().flatten();
         let Some(row) = row.filter(resting) else {
@@ -293,8 +293,7 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
         bounds.price_patience = Some(patience);
         // B4: the volume-weighted mean of the item's recent settled
         // trades, the asking account's own fills left out.
-        let fills = recent.entry(row.item_id).or_insert_with(|| crate::market_auction::recent_fills(service, row.item_id, tick_ms));
-        let traded = crate::market_auction::anchor_for(fills, &bounds.account);
+        let traded = *anchors.entry((row.item_id, bounds.account.clone())).or_insert_with(|| crate::market_auction::anchor_of(service, row.item_id, &bounds.account, tick_ms));
         let (bid, ask) = service.lock_engine().books.get(&row.item_id).map(|book| book.best()).unwrap_or((None, None));
         let opposite = if bounds.sell { bid } else { ask };
         let decision = concession::step(&window_of(&bounds, row.price, filled, wall, tick_ms, traded, opposite, patience));

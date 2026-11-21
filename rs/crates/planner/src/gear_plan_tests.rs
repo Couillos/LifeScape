@@ -195,14 +195,19 @@ fn a_gear_bid_stops_at_the_bots_own_value() {
     use super::{own_value, GearWant, GEAR_VALUE_HORIZON_TICKS};
     assert_eq!(GEAR_VALUE_HORIZON_TICKS, 360_000);
     // 3 % uplift, 0.3 coin per tick: 0.3 x 360 000 x 0.03 = 3 240.
-    assert_eq!(own_value(30, 0.3), 3_240);
-    assert_eq!(own_value(30, 0.1), 1_080, "a slower earner values the same piece less");
-    assert_eq!(own_value(0, 5.0), 1, "no uplift: one coin, never zero");
-    assert_eq!(own_value(30, f64::NAN), 1);
-    let amulet = GearWant { wearpos: 2, item: "amulet_of_power".to_string(), gain: 6, expected: 1_740, ceiling: 2_600_000, uplift_permille: 30 };
-    assert_eq!(amulet.own_ceiling(0.3), 3_240, "not the 2.6 M wallet share");
+    assert!((own_value(0.03, 0.3) - 3_240.0).abs() < 1e-6);
+    assert!((own_value(0.03, 0.1) - 1_080.0).abs() < 1e-6, "a slower earner values the same piece less");
+    assert_eq!(own_value(0.0, 5.0), 0.0, "no uplift: worth nothing");
+    assert_eq!(own_value(0.03, f64::NAN), 0.0);
+    let amulet = GearWant { wearpos: 2, item: "amulet_of_power".to_string(), gain: 6, expected: 1_740, ceiling: 2_600_000, uplift: 0.03 };
+    assert_eq!(amulet.own_ceiling(0.3), Some(3_240), "not the 2.6 M wallet share");
     let thin = GearWant { ceiling: 2_000, ..amulet.clone() };
-    assert_eq!(thin.own_ceiling(0.3), 2_000, "the wallet share still caps it");
+    assert_eq!(thin.own_ceiling(0.3), Some(2_000), "the wallet share still caps it");
+    // Review 3: a small uplift is a small float, never a bid at 1 for life.
+    let faint = GearWant { uplift: 0.00001, ..amulet.clone() };
+    assert_eq!(faint.own_ceiling(0.1), None, "worth 0.36 coin: no bid");
+    let tiny = GearWant { uplift: 0.0004, ..amulet };
+    assert_eq!(tiny.own_ceiling(0.1), Some(14), "a few coins, honestly");
 }
 
 /// The uplift of a want is its score gain over the worn total after it.
@@ -211,6 +216,6 @@ fn a_want_carries_its_relative_uplift() {
     let owned = vec!["bronze_med_helm".to_string(), "iron_dagger".to_string()];
     let wants = plan_gear(Style::Melee, &FIGHTER, &[], &owned, 1_000_000, &alch_price);
     for want in &wants {
-        assert!(want.uplift_permille > 0 && want.uplift_permille <= 1000, "{want:?}");
+        assert!(want.uplift > 0.0 && want.uplift <= 1.0, "{want:?}");
     }
 }

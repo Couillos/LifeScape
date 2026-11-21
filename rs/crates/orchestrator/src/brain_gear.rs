@@ -250,6 +250,15 @@ pub(crate) fn next_gear_cost(job: &Job, life: &Life, live: &Value) -> i64 {
     wants.iter().map(|want| want.expected.max(0)).sum()
 }
 
+/// A resting gear bid of the account on `item` whose piece is no longer
+/// worth a coin to it: withdrawn (B1, review lot 3).
+fn withdraw_unworthy_bid(service: &crate::market_service::MarketService, account: &str, item: i64) {
+    let rows = service.lock_store().account_orders(account).unwrap_or_default();
+    for row in rows.iter().filter(|row| row.item_id == item && cancellable(row) && row.motive == crate::market_lineage::GEAR) {
+        cancel_order(service, account, row.order_id);
+    }
+}
+
 fn cancel_order(service: &crate::market_service::MarketService, account: &str, order: i64) -> bool {
     let reply = service.handle(&lifescape_json::object(vec![
         ("op", lifescape_json::str_value("cancel")),
@@ -482,7 +491,11 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
         let (Some(service), Some(id)) = (service.as_ref(), id) else { continue };
         // B1 (lot 3 marché): the bid climbs to the piece's value for THIS
         // bot (its work rate x the uplift), never to its wallet.
-        let own_ceiling = want.own_ceiling(rate);
+        let Some(own_ceiling) = want.own_ceiling(rate) else {
+            crate::logln!("brain {}: gear {} worth under one coin to this bot (uplift {:.5}, rate {rate:.3} coin/tick): no bid", job.account, want.item, want.uplift);
+            withdraw_unworthy_bid(service, &job.account, id);
+            continue;
+        };
         match crate::market_reprice::keep_bid_from(service, &job.account, id, 1, want.expected, own_ceiling, crate::market_lineage::GEAR) {
             Ok(crate::market_reprice::StandingBid::Placed { price, .. }) => {
                 crate::logln!(

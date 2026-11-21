@@ -2106,3 +2106,17 @@ demande seules ; la limite B1 est la valeur PROPRE de l'acheteur) :
   borné [1 % ; 10 %] ; sans prix moyen 10 %.
 Rejeté : seuil brut d'échanges par heure ; plafond de marché sur les
 offres ; déplacer les ordres pendant l'attente d'une enchère.
+
+Revue du lot 3 (même jour) : (1) en enchère l'écart se mesure en paires
+servies par enchère (période / paires, 4 dernières enchères, 2 au moins),
+même seuils que le continu : sinon l'objet ne pouvait jamais en sortir ;
+(2) un ordre `need` ou `urgent` sur un objet en enchère déclenche une
+enchère immédiate, même prix unique ; (3) l'apport d'une pièce est un
+flottant, une valeur propre sous 1 pièce ne pose aucune offre (journalisé,
+l'offre d'équipement existante est retirée) ; (4/5) l'équilibre et
+l'appariement de l'enchère portent sur les mêmes paires permises (flot
+maximal) ; (6) le mode d'un objet jamais mesuré est fixé au premier ordre ;
+(7) l'ancre exclut les échanges du compte dans la requête et une erreur de
+base est journalisée ; (8) `market_service.rs` découpé
+(`market_reference.rs` : prix courants, `quote`, `book`) ; (9) le plafond
+persisté est dans l'unité du carnet (par lot), comme la colonne.
