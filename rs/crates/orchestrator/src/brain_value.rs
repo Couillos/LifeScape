@@ -22,8 +22,8 @@ use crate::market_demand::ValueInputs;
 pub(crate) fn with_context<T>(inputs: &ValueInputs, surplus: &[(String, f64)], body: impl FnOnce(&ValueContext) -> T) -> T {
     let rate = crate::brain_plan_read::live_rate();
     let price = |item: &str| inputs.price_of(item);
-    let roster = fleet_roster();
-    let context = ValueContext { bids: &inputs.bids, alch_offers: &inputs.alch_offers, surplus, price: &price, xp_rate: &best_xp_rate, rate: &rate, roster: Some(&roster) };
+    let (roster, targets) = fleet_roster();
+    let context = ValueContext { bids: &inputs.bids, alch_offers: &inputs.alch_offers, surplus, price: &price, xp_rate: &best_xp_rate, rate: &rate, roster: Some(&roster), targets: &targets };
     body(&context)
 }
 
@@ -34,24 +34,35 @@ const ROSTER_REUSE_SECS: u64 = 60;
 /// 2026-11-21): every fleet life with its kind and its levels (live
 /// snapshot when the bot streams, else its engine save), reused
 /// `ROSTER_REUSE_SECS`.
-pub(crate) fn fleet_roster() -> Vec<lifescape_planner::FleetBot> {
-    type Cache = Option<(std::time::Instant, Vec<lifescape_planner::FleetBot>)>;
+pub(crate) fn fleet_roster() -> (Vec<lifescape_planner::FleetBot>, Vec<(String, String, u8)>) {
+    type Cache = Option<(std::time::Instant, Vec<lifescape_planner::FleetBot>, Vec<(String, String, u8)>)>;
     static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(None);
     let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some((read_at, roster)) = cache.as_ref() {
+    if let Some((read_at, roster, targets)) = cache.as_ref() {
         if read_at.elapsed().as_secs() < ROSTER_REUSE_SECS {
-            return roster.clone();
+            return (roster.clone(), targets.clone());
         }
     }
-    let roster: Vec<lifescape_planner::FleetBot> = crate::brain_ambition::other_lives("")
+    let lives = crate::brain_ambition::other_lives("");
+    let roster: Vec<lifescape_planner::FleetBot> = lives
         .iter()
         .map(|life| {
             let snapshot = crate::supervise::live_of(&life.account);
             crate::brain_ambition::fleet_bot(life, crate::brain_ambition::account_levels(&life.account, snapshot.as_ref()))
         })
         .collect();
-    *cache = Some((std::time::Instant::now(), roster.clone()));
-    roster
+    // The open level milestones of every ambition: who climbs where.
+    let targets: Vec<(String, String, u8)> = lives
+        .iter()
+        .flat_map(|life| {
+            life.ambition.iter().flat_map(|held| held.milestones.iter()).filter(|stone| stone.status != lifescape_planner::ambition::MilestoneStatus::Done).filter_map(|stone| match &stone.target {
+                lifescape_planner::ambition::Target::Level { skill, level } => Some((life.account.clone(), skill.clone(), *level)),
+                _ => None,
+            })
+        })
+        .collect();
+    *cache = Some((std::time::Instant::now(), roster.clone(), targets.clone()));
+    (roster, targets)
 }
 
 /// Why no kind could be given (typed, logged by the caller; no fallback).

@@ -15,7 +15,7 @@ use lifescape_planner::cooldown::{split_key, COOL_NODE, COOL_TAG};
 use lifescape_planner::investment::{pull_per_tick, time_value, Investment};
 use lifescape_planner::{ambition_to_value, milestone_cool_key, set_aside, Ambition, HistoryEntry, Life, Milestone, MilestoneStatus, MILESTONE_MAX_BLOCKS};
 
-/// The A4 rebalance row of the account (`run/ambition_rebalance_a4b.json`)
+/// The A4 rebalance row of the account (`run/ambition_rebalance_a4c.json`)
 /// and whether the bot already applied it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanInfo {

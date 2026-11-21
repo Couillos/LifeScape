@@ -1391,15 +1391,15 @@ score = valeur / (tenants du métier + 1), chaque ligne comptée sur sa capacit�
 étape que personne ne couvre (diamant : artisanat 70) n'est plus servie par
 le métier de la dernière étape (enchantement, magie) : poids du terme × part
 couverte des étapes que le métier n'entraîne pas ; l'étape non couverte du
-métier porte toute la demande (`serves` = 1). Couverture = un autre bot
-(hors protégés, opérateurs, teneurs de marché) au niveau requis, sinon la
-meilleure part d'XP déjà acquise par un bot sur un métier qui l'entraîne.
-Le marqueur du rééquilibrage a changé (`a4b`) : la passe unique rejoue avec
-cette valeur.
+métier porte toute la demande (`serves` = 1, montée comprise, A1).
+Couverture binaire : un autre bot (hors protégés, opérateurs, teneurs de
+marché) qui a déjà le niveau, ou dont une ambition a un jalon ouvert exactement
+à ce niveau et qui l'atteint en moins de `INVESTMENT_HORIZON_TICKS`. Le
+marqueur du rééquilibrage a changé (`a4c`) : la passe unique rejoue.
 
 ### Passe de rééquilibrage initial (seule exception à A2)
 `orchestrator/src/brain_rebalance.rs`, appelée dans `brain_launch` après
-`ensure`. Au premier passage sans marqueur `run/ambition_rebalance_a4b.json` :
+`ensure`. Au premier passage sans marqueur `run/ambition_rebalance_a4c.json` :
 plan de toute la flotte (`planner::rebalance` : meilleure paire (bot, métier)
 d'abord ; un bot ne change que si le meilleur métier bat de plus de
 `MIN_GAIN_TO_CHANGE` = +25 % la valeur de garder le sien, évaluée de même

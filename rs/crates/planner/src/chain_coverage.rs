@@ -9,25 +9,27 @@
 //! steps(item)       = (skill, level) of the item's easiest skilled way and,
 //!                     recursively, of the inputs of that way
 //! coverage(s, g)    = 1 when another working bot has the skill s at g or
-//!                     more; else the best progress of a bot on a kind that
-//!                     trains s: xp(level) / xp(g), the share of the XP the
-//!                     step asks that it already holds (0 when nobody is on
-//!                     it; the XP is back-loaded: crafting 66 holds ~70 % of
-//!                     the XP of 70, crafting 20 almost none)
-//! weight(kind, P)   = serves(kind, P) × asked × Π coverage of the steps
-//!                     the kind does not train
+//!                     more, or is on an ambition whose open milestone is
+//!                     exactly (s, g) and is within the A1 horizon of it
+//!                     (`climb_ticks` at the best XP rate under
+//!                     `INVESTMENT_HORIZON_TICKS`); else 0 (binary: a
+//!                     crafter at 20 covers nothing, 8 low crafters do not
+//!                     make crafting 70 "covered" by their XP share)
+//! weight(kind, P)   = serves(kind, P) x asked x product of coverage of the
+//!                     steps the kind does not train
 //!                     (serves = 1 when a step the kind trains is uncovered)
 //! ```
 //!
 //! Protected accounts, operator ambitions and market makers cover nothing
 //! (they serve no demand), the bot being valued is left out (coverage is
-//! by the OTHERS). Bots already on a step and their progress count.
-//! Pure: the roster comes in as an argument.
+//! by the OTHERS). Pure: the roster and the open level milestones
+//! (`targets`: account, skill, level) come in as arguments.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use crate::ambition_fleet::FleetBot;
+use crate::investment::{climb_ticks, INVESTMENT_HORIZON_TICKS};
 
 /// Deepest chain of inputs followed.
 const STEP_DEPTH: u8 = 4;
@@ -66,23 +68,20 @@ fn collect(item: &str, depth: u8, out: &mut Vec<(String, u8)>) {
     }
 }
 
-/// How much of the step `(skill, level)` the roster's bots other than
-/// `exclude` cover, in [0, 1] (module doc).
-pub fn coverage(roster: &[FleetBot], exclude: &str, skill: &str, level: u8) -> f64 {
-    let mut best: f64 = 0.0;
-    for other in roster.iter().filter(|other| !other.account.eq_ignore_ascii_case(exclude) && !crate::ambition_value::protected(&other.account) && !other.operator && !other.market_maker) {
+/// Whether the step `(skill, level)` is covered by the roster's bots
+/// other than `exclude`: 1.0 or 0.0 (module doc).
+pub fn coverage(roster: &[FleetBot], targets: &[(String, String, u8)], exclude: &str, skill: &str, level: u8, xp_rate: &dyn Fn(&str, u8) -> Option<f64>) -> f64 {
+    let covered = roster.iter().filter(|other| !other.account.eq_ignore_ascii_case(exclude) && !crate::ambition_value::protected(&other.account) && !other.operator && !other.market_maker).any(|other| {
         let have = other.level(skill);
         if have >= level {
-            return 1.0;
+            return true;
         }
-        let on_step = other.kind.as_deref().is_some_and(|kind| crate::ambition_value::own_skills(kind).contains(&skill));
-        if !on_step {
-            continue;
-        }
-        let asked = crate::sizing::xp_between(1, level);
-        if asked > 0.0 {
-            best = best.max((crate::sizing::xp_between(1, have.max(1)) / asked).min(1.0));
-        }
+        let aims = targets.iter().any(|(account, target_skill, target_level)| account.eq_ignore_ascii_case(&other.account) && target_skill == skill && *target_level == level);
+        aims && climb_ticks(skill, have, level, xp_rate).is_some_and(|ticks| ticks < INVESTMENT_HORIZON_TICKS)
+    });
+    if covered {
+        1.0
+    } else {
+        0.0
     }
-    best
 }

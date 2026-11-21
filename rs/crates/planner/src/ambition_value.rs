@@ -126,6 +126,10 @@ pub struct ValueContext<'a> {
     /// steps of a chain (`chain_coverage`). `None`: not read (offline
     /// callers that value a single kind), every step counts covered.
     pub roster: Option<&'a [FleetBot]>,
+    /// The open level milestones of the roster's bots (account, skill,
+    /// level): a bot climbing exactly to a step covers it when it is
+    /// within the horizon of it.
+    pub targets: &'a [(String, String, u8)],
 }
 
 /// The value of one kind for one bot, with what drives it.
@@ -227,7 +231,7 @@ impl<'a, 'ctx> Prepared<'a, 'ctx> {
         if let Some(known) = self.coverage.borrow().get(&key) {
             return *known;
         }
-        let share = crate::chain_coverage::coverage(roster, &bot.account, skill, level);
+        let share = crate::chain_coverage::coverage(roster, self.ctx.targets, &bot.account, skill, level, self.ctx.xp_rate);
         self.coverage.borrow_mut().insert(key, share);
         share
     }

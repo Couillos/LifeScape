@@ -5,14 +5,15 @@
 //! marker computes the plan for the whole fleet
 //! (`lifescape_planner::rebalance`: the value of the unserved demand, the
 //! climb included, shared by the bots already on each kind), writes it
-//! with its marker to `run/ambition_rebalance_a4b.json` and logs it bot by
+//! with its marker to `run/ambition_rebalance_a4c.json` and logs it bot by
 //! bot with its figures; every bot then applies ITS row in its own launch
 //! pass (its life is saved by its own thread, never by another's). With
 //! the marker present the pass never runs again, whatever the restarts;
 //! after it A2 holds (an ambition changes only once achieved). The marker
-//! is named `a4b` since 2026-11-21: the value now discounts a chain step
-//! nobody covers (`planner::chain_coverage`) and the pass runs once more
-//! with it (the first marker, `a4`, stays on disk, unread).
+//! is named `a4c` since 2026-11-21: the value now discounts a chain step
+//! nobody covers (`planner::chain_coverage`, binary coverage) and the pass
+//! runs once more with it (the earlier markers `a4`, `a4b` stay on disk,
+//! unread).
 //!
 //! Never planned, never changed: `lifescape_planner::PROTECTED_ACCOUNTS`
 //! (Zezima, N0valyfe, Yogosun) and every operator ambition (pins, market
@@ -50,7 +51,7 @@ pub struct Marker {
 }
 
 pub fn marker_path() -> std::path::PathBuf {
-    crate::paths::run_dir().join("ambition_rebalance_a4b.json")
+    crate::paths::run_dir().join("ambition_rebalance_a4c.json")
 }
 
 /// One process at a time reads-modifies-writes the marker.

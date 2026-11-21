@@ -35,7 +35,7 @@ fn simulate_rebalance_on_the_live_state() {
     println!("unserved bids: {}, alch offers: {}, prices: {}", inputs.bids.len(), inputs.alch_offers.len(), inputs.prices.len());
     let rate = |method: &str, level: u8| lifescape_planner::work_rate::prior_rate(method, level);
     let price = |item: &str| inputs.price_of(item);
-    let context = ValueContext { bids: &inputs.bids, alch_offers: &inputs.alch_offers, surplus: &surplus, price: &price, xp_rate: &lifescape_planner::investment::best_xp_rate, rate: &rate, roster: None };
+    let context = ValueContext { bids: &inputs.bids, alch_offers: &inputs.alch_offers, surplus: &surplus, price: &price, xp_rate: &lifescape_planner::investment::best_xp_rate, rate: &rate, roster: None, targets: &[] };
     let moved = rebalance(&bots, &context);
     let mut before: std::collections::BTreeMap<String, usize> = Default::default();
     let mut after: std::collections::BTreeMap<String, usize> = Default::default();

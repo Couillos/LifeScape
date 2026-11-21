@@ -176,7 +176,7 @@ A4, lecture seule ; l'ambition brute reste passée telle quelle dans
 `ambition`) : `ambition_view` = comment l'ambition a été donnée
 (`given.source` : `protected` overall des comptes protégés, `pin`, `operator`,
 `a4_rebalance` / `a4_kept` avec la ligne du marqueur
-`run/ambition_rebalance_a4b.json` : valeur par 6000 ticks, tenants, objet qui la
+`run/ambition_rebalance_a4c.json` : valeur par 6000 ticks, tenants, objet qui la
 porte, montée ; `a4_draw` tirage par la valeur à l'atteinte ou
 `operator:natural`, chiffres relus dans la dernière ligne « given by value »
 du journal du daemon, jamais inventés ; `legacy` tirage d'avant A4), les

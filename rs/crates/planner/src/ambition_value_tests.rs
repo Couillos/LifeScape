@@ -50,7 +50,7 @@ fn rate(method: &str, level: u8) -> Option<crate::work_rate::WorkRate> {
 }
 
 fn context<'a>(bids: &'a [UnservedBid], offers: &'a [AlchOffer]) -> ValueContext<'a> {
-    ValueContext { bids, alch_offers: offers, surplus: &[], price: &price, xp_rate: &xp_rate, rate: &rate, roster: None }
+    ValueContext { bids, alch_offers: offers, surplus: &[], price: &price, xp_rate: &xp_rate, rate: &rate, roster: None, targets: &[] }
 }
 
 fn score(found: &Option<Pick>) -> f64 {
@@ -282,14 +282,14 @@ fn the_outlet_of_a_pile_counts_in_the_score() {
         "logs" => Some(40.0),
         other => price(other),
     };
-    let ctx = ValueContext { bids: &[], alch_offers: &[], surplus: &surplus, price: &priced, xp_rate: &xp_rate, rate: &rate, roster: None };
+    let ctx = ValueContext { bids: &[], alch_offers: &[], surplus: &surplus, price: &priced, xp_rate: &xp_rate, rate: &rate, roster: None, targets: &[] };
     let value = |kind: &str| kind_value(&bot("f1", &[]), kind, &ctx);
     let (fisher, firemaker) = (value("fisher"), value("firemaker"));
     assert!(fisher.value_6000 > 0.0 && (fisher.value_6000 - fisher.outlet_6000).abs() < 1e-9, "{fisher:?}");
     assert!(firemaker.value_6000 > 10.0 * fisher.value_6000, "dear logs weigh more than 1-coin feathers: {firemaker:?} {fisher:?}");
     // The assigned bots use the pile up: a small pile is gone after one bot.
     let small = vec![("logs".to_string(), 50.0)];
-    let small_ctx = ValueContext { bids: &[], alch_offers: &[], surplus: &small, price: &priced, xp_rate: &xp_rate, rate: &rate, roster: None };
+    let small_ctx = ValueContext { bids: &[], alch_offers: &[], surplus: &small, price: &priced, xp_rate: &xp_rate, rate: &rate, roster: None, targets: &[] };
     let moved = rebalance(&[bot("a1", &[]), bot("a2", &[])], &small_ctx);
     let firemakers = moved.iter().filter(|row| row.pick.kind == "firemaker").count();
     assert_eq!(firemakers, 1, "50 logs feed one firemaker, the second finds the pile gone: {moved:?}");
@@ -332,15 +332,17 @@ fn each_buyer_pays_his_own_price() {
     assert!(laddered_value * 10.0 < flat_value, "{laddered_value} against {flat_value}");
 }
 
-fn context_with<'a>(bids: &'a [UnservedBid], roster: &'a [FleetBot]) -> ValueContext<'a> {
-    ValueContext { roster: Some(roster), ..context(bids, &[]) }
+fn context_with<'a>(bids: &'a [UnservedBid], roster: &'a [FleetBot], targets: &'a [(String, String, u8)]) -> ValueContext<'a> {
+    ValueContext { roster: Some(roster), targets, ..context(bids, &[]) }
 }
 
 /// Live 2026-11-21: mages were given the enchant of the amulet of power
 /// while nobody had crafting 70 for the diamond amulet (0 amulets made).
-/// With no one covering that step the mage's value of the bid falls and
-/// the crafter gets it; a crafter at 69 on the step covers it and the
-/// mage's value returns.
+/// Coverage is binary: with nobody at the level and nobody aiming
+/// exactly at it, the mage's value of the bid falls and the crafter (66,
+/// the closest) gets it; a bot AT 70, or one aiming at crafting 70
+/// within the horizon, covers the step and the mage's value returns.
+/// Low crafters on the kind that aim at nothing exact cover nothing.
 #[test]
 fn an_uncovered_upstream_step_takes_the_value_from_the_last_step() {
     let steps = crate::chain_coverage::chain_steps("amulet_of_power");
@@ -350,8 +352,10 @@ fn an_uncovered_upstream_step_takes_the_value_from_the_last_step() {
     let crafter = bot("c0", &[("magic", 60), ("crafting", 66)]);
     let unread = context(&bids, &[]);
     let support = holding("support", "smith", &[("smithing", 99), ("mining", 99), ("runecraft", 99)]);
-    let nobody = vec![support.clone(), holding("far", "crafter", &[("crafting", 20)]), holding("other_mage", "mage", &[("magic", 70), ("crafting", 30)])];
-    let uncovered = context_with(&bids, &nobody);
+    // Eight crafters on the kind at 40 to 69, none aiming at 70 exactly.
+    let mut nobody = vec![support.clone(), holding("other_mage", "mage", &[("magic", 70), ("crafting", 30)])];
+    nobody.extend((0..8).map(|index| holding(&format!("low{index}"), "crafter", &[("crafting", 40 + index * 3)])));
+    let uncovered = context_with(&bids, &nobody, &[]);
     let mage_before = kind_value(&mage, "mage", &unread).value_6000;
     let mage_uncovered = kind_value(&mage, "mage", &uncovered).value_6000;
     assert!(mage_uncovered < mage_before / 10.0, "uncovered: mage {mage_uncovered} against {mage_before}");
@@ -359,14 +363,19 @@ fn an_uncovered_upstream_step_takes_the_value_from_the_last_step() {
     let crafter_uncovered = kind_value(&crafter, "crafter", &uncovered).value_6000;
     assert!(crafter_uncovered > crafter_before, "the uncovered step takes the value: {crafter_uncovered} against {crafter_before}");
     assert!(crafter_uncovered > mage_uncovered, "crafter {crafter_uncovered} against mage {mage_uncovered}");
-    // Someone on the step at 69 covers it: the mage's value is back.
-    let covering = vec![support, holding("near", "crafter", &[("crafting", 69)]), holding("other_mage", "mage", &[("magic", 70), ("crafting", 30)])];
-    let covered = context_with(&bids, &covering);
-    let mage_covered = kind_value(&mage, "mage", &covered).value_6000;
-    assert!(mage_covered > mage_uncovered * 5.0, "covered: mage {mage_covered} against {mage_uncovered}");
+    // A bot at 70 covers it.
+    let mut at_level = nobody.clone();
+    at_level.push(holding("master", "crafter", &[("crafting", 70)]));
+    let covered = kind_value(&mage, "mage", &context_with(&bids, &at_level, &[])).value_6000;
+    assert!(covered > mage_uncovered * 5.0, "covered by a level-70 bot: mage {covered} against {mage_uncovered}");
+    // A bot aiming exactly at crafting 70 within the horizon covers it too.
+    let aims = vec![("low3".to_string(), "crafting".to_string(), 70u8)];
+    let aiming = kind_value(&mage, "mage", &context_with(&bids, &nobody, &aims)).value_6000;
+    assert!(aiming > mage_uncovered * 5.0, "covered by a bot aiming at 70: mage {aiming} against {mage_uncovered}");
+    // A target short of the exact level covers nothing.
+    let near_miss = vec![("low3".to_string(), "crafting".to_string(), 60u8)];
+    assert!(kind_value(&mage, "mage", &context_with(&bids, &nobody, &near_miss)).value_6000 < mage_before / 10.0);
     // Protected accounts cover nothing: a maxed protected bot changes no value.
     let with_protected = vec![holding("Zezima", "overall", &[("crafting", 99), ("magic", 99)])];
-    let ignored = context_with(&bids, &with_protected);
-    assert!((kind_value(&mage, "mage", &ignored).value_6000 - mage_uncovered).abs() < mage_uncovered.max(1.0) * 10.0);
-    assert!(kind_value(&mage, "mage", &ignored).value_6000 < mage_before / 10.0, "a protected account covers no step");
+    assert!(kind_value(&mage, "mage", &context_with(&bids, &with_protected, &[])).value_6000 < mage_before / 10.0, "a protected account covers no step");
 }
