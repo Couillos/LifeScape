@@ -13,6 +13,7 @@ use lifescape_sdk::waits::wait_ticks;
 use lifescape_sdk::Bot;
 use crate::devtools::sides_of;
 use crate::kit::pack::pack_total;
+use crate::kit::site::paused_since;
 use crate::quests::common::find_loc;
 use crate::ScriptError;
 
@@ -48,18 +49,68 @@ fn walk_failed_fatal(error: &lifescape_sdk::Error) -> bool {
     matches!(error, lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))
 }
 
+/// Chebyshev reach of a temple around its exit portal: the altar rooms
+/// span ~15 tiles from their portal, the next temple sits 50+ away.
+const TEMPLE_RADIUS: i32 = 40;
+
+/// Pure: `here` (level, x, z) stands inside the `prefix` temple (near its
+/// exit portal, level 0). A market pause can take the bot out of the
+/// temple to the Varrock square (live 2026-11-21 kai_ellis 05:57).
+pub(crate) fn in_temple(prefix: &str, here: (i32, i32, i32)) -> bool {
+    PORTALS.iter().find(|(name, _, _, _)| *name == prefix).is_some_and(|(_, _, portal_x, portal_z)| {
+        here.0 == 0 && (here.1 - portal_x).abs().max((here.2 - portal_z).abs()) <= TEMPLE_RADIUS
+    })
+}
+
+/// Outcome of one altar click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AltarStep {
+    /// The altar bound this much essence.
+    Bound(u32),
+    /// A market pause closed meanwhile: the delivery banked the pack but
+    /// the tools and left the bot at the Varrock square, a lower count
+    /// is no craft. The load is cut, the cycle takes it again.
+    PauseCut,
+    /// Nothing bound from this stand (no-reach corner): next stand.
+    NextStand,
+}
+
+/// Pure: read one click from the essence count `before`/`after` and
+/// whether a market pause closed since the load began (read first).
+pub(crate) fn altar_step(before: u32, after: u32, paused: bool) -> AltarStep {
+    if paused {
+        AltarStep::PauseCut
+    } else if after < before {
+        AltarStep::Bound(before - after)
+    } else {
+        AltarStep::NextStand
+    }
+}
+
+/// `Failed` for a load a market pause cut (`kit::site::pause_can_explain`:
+/// the cycle takes the load again, never a contract error).
+fn pause_cut(altar: &str, essence_name: &str, bot: &Bot) -> ScriptError {
+    ScriptError::Failed(format!("{altar}: market pause cut the {essence_name} load, now at {:?}", bot.position()))
+}
+
 /// Click the altar from every orthogonal stand until the essence burns.
 /// A single `approach` stops at the first tile in range, which can be a
 /// no-reach corner (`I can't reach that!` with the pack untouched); the
-/// stands walk the neighbour that crafts. Reports the last game message
-/// instead of crying about missing essence.
+/// stands walk the neighbour that crafts. An empty pack or a market pause
+/// during the load (the delivery banks the pack, live 2026-11-21) fails
+/// typed `Failed`: the world's state, retaken by the cycle. `Usage` only
+/// when the essence stayed in the pack through every stand, no pause.
 pub(crate) fn craft_at_altar(bot: &mut Bot, essence: u16, essence_name: &str, altar: &str) -> Result<u32, ScriptError> {
+    let before = pack_total(bot, essence);
+    if before == 0 {
+        return Err(ScriptError::Failed(format!("{altar}: no {essence_name} in the pack at {:?}", bot.position())));
+    }
+    let pauses_mark = bot.pauses_done;
     let (loc_x, loc_z, level, loc) = find_loc(bot, &[altar], 150)?;
     let (width, length) = knowledge::locs_by_name(altar)
         .first()
         .map(|entry| (entry.width as i32, entry.length as i32))
         .unwrap_or((3, 3));
-    let before = pack_total(bot, essence);
     let seen = bot.world.messages.len();
     let stands = stands_around(loc_x, loc_z, width, length, bot.world.x, bot.world.z);
     for (stand_x, stand_z) in &stands {
@@ -67,14 +118,21 @@ pub(crate) fn craft_at_altar(bot: &mut Bot, essence: u16, essence_name: &str, al
             if walk_failed_fatal(&error) {
                 return Err(error.into());
             }
+            if paused_since(pauses_mark, bot.pauses_done) {
+                return Err(pause_cut(altar, essence_name, bot));
+            }
             continue;
         }
         bot.op_loc(1, loc_x, loc_z, loc)?;
         wait_ticks(bot, 10)?;
-        let after = pack_total(bot, essence);
-        if after < before {
-            return Ok(before - after);
+        match altar_step(before, pack_total(bot, essence), paused_since(pauses_mark, bot.pauses_done)) {
+            AltarStep::Bound(bound) => return Ok(bound),
+            AltarStep::PauseCut => return Err(pause_cut(altar, essence_name, bot)),
+            AltarStep::NextStand => {}
         }
+    }
+    if paused_since(pauses_mark, bot.pauses_done) {
+        return Err(pause_cut(altar, essence_name, bot));
     }
     let last = bot.world.messages.get(seen..).unwrap_or_default().last().cloned().unwrap_or_default();
     Err(ScriptError::Usage(format!(
@@ -108,4 +166,61 @@ pub(crate) fn exit_temple(bot: &mut Bot, prefix: &str, portal: &str) -> Result<(
         }
     }
     Err(ScriptError::Failed(format!("{portal} did not move us from {:?} (stands {})", bot.position(), stands.len())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{altar_step, craft_at_altar, in_temple, AltarStep, PORTALS};
+    use crate::kit::pack::obj_id;
+    use crate::kit::site::pause_can_explain;
+    use crate::tables_live::attach_live_tables;
+    use crate::ScriptError;
+    use lifescape_sdk::Bot;
+
+    fn offline_bot() -> Bot {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot
+    }
+
+    /// Live 2026-11-21 kai_ellis 07:08: a market delivery banked the 26
+    /// essence mid-trip (`bank_deposit_all ... Rune essence`), the trip
+    /// replanned and the bot clicked the earth altar from 12 stands with
+    /// an empty pack: `Usage` banned runecraft and magic. An empty pack
+    /// is the world's state, never a contract error: typed `Failed`,
+    /// which the cycle retakes after a pause (`pause_can_explain`).
+    #[test]
+    fn empty_pack_at_the_altar_is_no_contract_error() {
+        let mut bot = offline_bot();
+        let essence = obj_id(&bot, "blankrune").expect("essence id");
+        let outcome = craft_at_altar(&mut bot, essence, "blankrune", "earth_altar");
+        match outcome {
+            Err(error @ ScriptError::Failed(_)) => assert!(pause_can_explain(&error), "the cycle retakes it after a pause"),
+            other => panic!("empty pack must fail typed Failed, got {other:?}"),
+        }
+    }
+
+    /// One altar click: a closed pause cuts the load whatever the pack
+    /// shows (the delivery banked it: a lower count is no craft), a lower
+    /// count without pause is the bound essence, else the next stand.
+    #[test]
+    fn altar_step_reads_pause_before_the_pack() {
+        assert_eq!(altar_step(26, 0, true), AltarStep::PauseCut, "banked by the delivery, not bound");
+        assert_eq!(altar_step(26, 26, true), AltarStep::PauseCut, "pause, nothing bound");
+        assert_eq!(altar_step(26, 0, false), AltarStep::Bound(26), "all bound");
+        assert_eq!(altar_step(26, 26, false), AltarStep::NextStand, "no reach from this stand");
+    }
+
+    /// Live 2026-11-21 kai_ellis 05:57: the pause took the bot from the
+    /// air temple to the Varrock square; the exit portal is only tried
+    /// from inside the temple (no 8 nav dossiers from Varrock).
+    #[test]
+    fn temple_test_reads_the_portal_area() {
+        for (prefix, _, x, z) in PORTALS {
+            assert!(in_temple(prefix, (0, x + 2, z + 10)), "{prefix} altar room");
+        }
+        assert!(!in_temple("air", (0, 3185, 3436)), "Varrock square");
+        assert!(!in_temple("air", (1, 2841, 4828)), "other level");
+        assert!(!in_temple("nature", (0, 2841, 4828)), "no portal row");
+    }
 }

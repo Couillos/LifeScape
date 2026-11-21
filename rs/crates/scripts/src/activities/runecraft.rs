@@ -13,7 +13,7 @@
 
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
-use super::runecraft_temple::{craft_at_altar, exit_temple};
+use super::runecraft_temple::{craft_at_altar, exit_temple, in_temple};
 use crate::kit::bank::{bank_trip, bank_withdraw_items, nearest_bank};
 use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::kit::pack::{free_slots, obj_id, pack_total};
@@ -78,11 +78,21 @@ fn craft_load(
     ruin_at: (i64, i64, i64),
 ) -> Result<u32, ScriptError> {
     bot.travel_to(lifescape_sdk::plan::Tile { x: ruin_at.0 as i32, z: ruin_at.1 as i32, level: ruin_at.2 as i32 })?;
+    // A market pause on the way banked the pack but the tools (live
+    // 2026-11-21 kai_ellis: the essence deposited, the trip replanned to
+    // the ruins): `Failed`, the cycle takes the load again.
+    if pack_total(bot, essence) == 0 {
+        return Err(ScriptError::Failed(format!("{ESSENCE} left the pack on the way to {ruin}, at {:?}", bot.position())));
+    }
     use_item_on_loc(bot, talisman_name, &[ruin])?;
     let made = match craft_at_altar(bot, essence, ESSENCE, altar) {
         Ok(made) => made,
         Err(error) => {
-            let _ = exit_temple(bot, prefix, portal);
+            // A pause can leave the bot at the Varrock square: the
+            // portal is only worked from inside the temple.
+            if in_temple(prefix, bot.position()) {
+                let _ = exit_temple(bot, prefix, portal);
+            }
             return Err(error);
         }
     };
@@ -135,6 +145,9 @@ pub fn run_runecraft(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let outcome = run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
         if pack_total(step_bot, essence) == 0 || pack_total(step_bot, talisman) == 0 {
+            // After a market pause the bot stands at the Varrock square:
+            // restock at the bank nearest to where it is now.
+            bank = nearest_bank(step_bot)?;
             bank_trip(step_bot, &bank, &keep_stock, 0)?;
             let per = lifescape_gamedata::action_odds::runes_per_essence(rune_name, learn_level(step_bot, RUNECRAFT_STAT, level)).unwrap_or(1).max(1) as u32;
             fill_essence(step_bot, &bank, essence, talisman, crate::kit::want::inputs_for(state.want_left(step_bot, &spec), per))?;
