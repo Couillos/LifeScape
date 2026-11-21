@@ -15,7 +15,7 @@
 //!
 //! No other bot's state: the book is public (D22), the rest is the bot's.
 
-use crate::ambition::{Ambition, MilestoneStatus, Target};
+use crate::ambition::{Ambition, Target};
 
 /// One inventory: the smallest lot a player bothers listing.
 pub const SALE_LOT_MIN: i64 = 28;
@@ -148,7 +148,7 @@ pub fn sale_lot(spare: i64, view: Option<&BookView>) -> i64 {
 /// its abandoned firemaking chain had cut).
 pub fn own_use_items(ambition: &Ambition) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for stone in ambition.milestones.iter().filter(|stone| stone.status != MilestoneStatus::Done) {
+    for stone in ambition.milestones.iter().filter(|stone| crate::ambition::drawable(stone)) {
         match &stone.target {
             Target::Level { skill, level } => {
                 let from = stone.progress.0.clamp(1, 99) as u8;

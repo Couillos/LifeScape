@@ -380,8 +380,30 @@ pub fn set_aside(stone: &Milestone) -> bool {
 }
 
 /// A milestone the bot may still draw: not done, not set aside.
-fn drawable(stone: &Milestone) -> bool {
+pub fn drawable(stone: &Milestone) -> bool {
     stone.status != MilestoneStatus::Done && !set_aside(stone)
+}
+
+/// Resume the milestones set aside (A2 review, user rule: an ambition
+/// never changes before it is achieved): only when no other milestone is
+/// drawable, and only those whose set-aside cooldown (`cooled`, the
+/// `milestone_cool_key` entries) has lapsed; their blocks reset and they
+/// go back to `Pending`. Returns the resumed ids (the brain logs them).
+pub fn resume_set_aside(ambition: &mut Ambition, cooled: &[String]) -> Vec<String> {
+    if ambition.milestones.iter().any(drawable) {
+        return Vec::new();
+    }
+    let kind = ambition.kind.clone();
+    let mut resumed = Vec::new();
+    for stone in ambition.milestones.iter_mut().filter(|stone| set_aside(stone)) {
+        if cooled.contains(&milestone_cool_key(&kind, &stone.id)) {
+            continue;
+        }
+        stone.blocked_count = 0;
+        stone.status = MilestoneStatus::Pending;
+        resumed.push(stone.id.clone());
+    }
+    resumed
 }
 
 /// Open milestones of an ambition: not done, not set aside (the next
@@ -594,7 +616,7 @@ fn insert_demand_milestone(ambition: &mut Ambition, now: &BotNow, market: Market
     // (`ambition_supply::product_workable`: the water talisman).
     let workable = |item: &str, skill: &str| crate::ambition_supply::product_workable(item, skill, now.held, surplus);
     let level_of = now.level_of;
-    let open_demand = ambition.milestones.iter().any(|stone| stone.status != MilestoneStatus::Done && stone.origin.starts_with("demand:"));
+    let open_demand = ambition.milestones.iter().any(|stone| drawable(stone) && stone.origin.starts_with("demand:"));
     if open_demand {
         return;
     }

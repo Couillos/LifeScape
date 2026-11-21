@@ -23,7 +23,7 @@
 //! temps » : any gap is priced), it is never given back.
 //! Pure: game data and the life only.
 
-use crate::ambition::{MilestoneStatus, Target};
+use crate::ambition::Target;
 use crate::model::{GoalKind, Life, NodeKind, NodeStatus};
 
 /// History outcome (node `goal`) the brain writes right after the draw of
@@ -49,7 +49,7 @@ pub fn drawn_under_rule(history: &[crate::model::HistoryEntry]) -> bool {
 pub fn planned_levels(life: &Life) -> Vec<(String, u8)> {
     let Some(ambition) = life.ambition.as_ref() else { return Vec::new() };
     let mut out: Vec<(String, u8)> = Vec::new();
-    for stone in ambition.milestones.iter().filter(|stone| stone.status != MilestoneStatus::Done) {
+    for stone in ambition.milestones.iter().filter(|stone| crate::ambition::drawable(stone)) {
         if let Target::Level { skill, level } = &stone.target {
             match out.iter_mut().find(|(known, _)| known == skill) {
                 Some(known) => known.1 = known.1.max(*level),

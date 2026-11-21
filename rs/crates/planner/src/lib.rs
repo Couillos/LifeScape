@@ -118,7 +118,7 @@ pub use side_goal::{goal_feasible, method_banned, side_goal, side_goal_with, ste
 pub use goals::{append_goal, append_goal_with, draw_goal, draw_goal_origin, draw_goal_origin_with, goal_closed, goal_root_done, goal_skills, lowest_skill_goal, serves_goal, next_goal, NoGoal, DONE_TAG, OVERALL_SKILLS, STUCK_TAG, TRAINABLE};
 pub use ambition::{
     achieved, ambition_from_value, describe as describe_ambition, ambition_to_value, drop_stale_products, extend as extend_ambition, goal_for_milestone, mark_drawn, may_change, new_ambition,
-    new_ambition_extended, new_ambition_extended_supplied, new_ambition_supplied, refresh_supplied, next_milestone, open_count, set_aside, pinned, pinned_ambition, release_pin, AmbitionError, BotNow, Pin,
+    new_ambition_extended, new_ambition_extended_supplied, new_ambition_supplied, refresh_supplied, next_milestone, open_count, resume_set_aside, set_aside, drawable, pinned, pinned_ambition, release_pin, AmbitionError, BotNow, Pin,
     on_goal_closed, on_goal_shortfall, refresh, revise, Ambition, CloseOutcome, Milestone, MilestoneStatus, Revision, Stamp, Target,
     milestone_cool_key, AMBITION_CHANGE_TICKS, ALCHER, GENERALIST, MILESTONE_MAX_BLOCKS, MILESTONE_SHORTFALL_COOL_TICKS, OVERALL,
 };

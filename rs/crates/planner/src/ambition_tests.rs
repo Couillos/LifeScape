@@ -478,3 +478,41 @@ fn a_kind_serves_the_bids_its_own_skills_make() {
     refresh(&mut low, &BotNow { level_of: &novice_of, coins: 0, held: &|_| 0 }, 3, &bid);
     assert!(!low.milestones.iter().any(|stone| stone.origin == "demand:steel_bar"), "smelting steel needs 30");
 }
+
+/// Ladder exhausted but one milestone set aside: the draw offers nothing
+/// (side goal, never an achieved ambition) while it cools; once the
+/// cooldown lapsed it is drawable again, its blocks reset (A2 review).
+#[test]
+fn a_set_aside_milestone_is_resumed_after_its_cooldown() {
+    let mut life = life_with("smith");
+    let ambition = life.ambition.as_mut().expect("smith");
+    ambition.rung = spec("smith").expect("spec").ladder.len();
+    for stone in ambition.milestones.iter_mut() {
+        stone.status = MilestoneStatus::Done;
+    }
+    let last = ambition.milestones.last_mut().expect("a milestone");
+    last.status = MilestoneStatus::Blocked;
+    last.blocked_count = MILESTONE_MAX_BLOCKS;
+    let id = last.id.clone();
+    let key = crate::ambition::milestone_cool_key("smith", &id);
+    assert!(!achieved(life.ambition.as_ref().expect("smith")), "never a false achievement");
+    assert!(matches!(crate::goals::draw_goal_origin(&life, &|_| 1, &|_| 0), Err(crate::goals::NoGoal::MilestonesBanned(_))), "side goal while it waits");
+    let ambition = life.ambition.as_mut().expect("smith");
+    assert!(crate::ambition::resume_set_aside(ambition, &[key.clone()]).is_empty(), "still cooling");
+    assert_eq!(crate::ambition::resume_set_aside(ambition, &[]), vec![id.clone()], "cooldown lapsed: resumed");
+    let stone = ambition.milestones.iter().find(|stone| stone.id == id).expect("stone");
+    assert_eq!((stone.blocked_count, stone.status), (0, MilestoneStatus::Pending));
+    let (_, origin) = crate::goals::draw_goal_origin(&life, &|_| 1, &|_| 0).expect("drawable again");
+    assert_eq!(origin.as_deref(), Some(id.as_str()));
+}
+
+/// Another drawable milestone left: nothing is resumed yet.
+#[test]
+fn a_set_aside_milestone_waits_while_others_are_drawable() {
+    let mut life = life_with("smith");
+    let ambition = life.ambition.as_mut().expect("smith");
+    let first = ambition.milestones.iter_mut().find(|stone| stone.status != MilestoneStatus::Done).expect("open");
+    first.status = MilestoneStatus::Blocked;
+    first.blocked_count = MILESTONE_MAX_BLOCKS;
+    assert!(crate::ambition::resume_set_aside(ambition, &[]).is_empty());
+}

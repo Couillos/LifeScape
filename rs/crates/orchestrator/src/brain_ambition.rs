@@ -16,7 +16,7 @@
 //!   ambition of a need-led bot is redrawn by need (D3, never extended);
 //!   an exception's or a pin's is redrawn past the throttle when another
 //!   bot holds its group, else its ladder extends.
-//! - `review_pass` (one-time D3 review) and `replace_stale_goal` (the
+//! - `review_pass` (one-time D3 mark, never a retirement) and `replace_stale_goal` (the
 //!   goal an earlier ambition drew is replaced): `ambition_review`.
 //! - `after_close`: a goal close folds into its milestone; blocked
 //!   `MILESTONE_MAX_BLOCKS` times, the milestone is set aside and the
@@ -32,8 +32,8 @@ use std::sync::Mutex;
 use lifescape_json::Value;
 use lifescape_planner::ambition_catalog::{group_skills, primary_group, specs};
 use lifescape_planner::{
-    achieved, assign_fleet, coverage_gaps, describe_ambition, draw_kind, neediest_kind, extend_ambition, keeps_ladder_end, mark_rule, needs_review, new_ambition_supplied,
-    new_ambition_extended_supplied, milestone_cool_key, on_goal_closed, on_goal_shortfall, review_slot_ticks, saturate, pinned, refresh_supplied, release_pin, revise,
+    achieved, assign_fleet, coverage_gaps, describe_ambition, draw_kind, neediest_kind, extend_ambition, keeps_ladder_end, mark_rule, new_ambition_supplied,
+    new_ambition_extended_supplied, milestone_cool_key, on_goal_closed, on_goal_shortfall, resume_set_aside, saturate, pinned, refresh_supplied, release_pin, revise,
     Ambition, BotNow, CloseOutcome, DemandItem, FleetBot, KindDemand, Life, Stamp, GROUPS, MILESTONE_MAX_BLOCKS, MILESTONE_SHORTFALL_COOL_TICKS,
     STALE_GOAL_CAUSE,
 };
@@ -375,6 +375,17 @@ pub(crate) fn before_draw(life: &mut Life, live: &Value) {
     }
     if achieved(ambition) {
         on_achieved(life, live);
+        return;
+    }
+    // Set-aside milestones come back (blocks reset) when nothing else is
+    // drawable and their cooldown lapsed: the ambition never changes
+    // before it is achieved (A2). Meanwhile: the side goal.
+    let cooled = lifescape_planner::cooldown::cooled_keys(&life.history, &ticks_since);
+    if let Some(ambition) = life.ambition.as_mut() {
+        let resumed = resume_set_aside(ambition, &cooled);
+        if !resumed.is_empty() {
+            crate::logln!("brain {account}: milestones {} set aside resumed (cooldown over, nothing else drawable); ambition {} kept", resumed.join(", "), ambition.kind);
+        }
     }
 }
 
@@ -471,6 +482,10 @@ pub(crate) fn after_close(life: &mut Life, end: GoalEnd) {
         }
         CloseOutcome::SetAside { id, count } => {
             let kind = life.ambition.as_ref().map(|ambition| ambition.kind.clone()).unwrap_or_default();
+            // Cooled for `AMBITION_CHANGE_TICKS`: resumed (blocks reset) only
+            // once nothing else is drawable and the cooldown lapsed.
+            let key = milestone_cool_key(&kind, &id);
+            crate::brain::push_history(life, COOL_NODE, &cool_entry(&key, lifescape_planner::AMBITION_CHANGE_TICKS, "set aside"));
             crate::logln!("brain {}: milestone {id} blocked {count} times, set aside; ambition {kind} kept, next milestone", life.account);
         }
         CloseOutcome::Dropped { id, count } => {
@@ -569,54 +584,23 @@ pub(crate) fn coverage_pass(life: &Life) {
     }
 }
 
-/// Daemon clock of the one-time review: set at the first brain pass
-/// (seconds after the start), with its unix seconds: an ambition changed
-/// after it (an operator switch of the same pass, a fresh draw) is never
-/// reviewed.
-fn review_epoch() -> &'static (std::time::Instant, i64) {
-    static EPOCH: std::sync::OnceLock<(std::time::Instant, i64)> = std::sync::OnceLock::new();
-    EPOCH.get_or_init(|| (std::time::Instant::now(), now_secs()))
+/// One-time D3 mark (user 2026-11-19, then A2 of 2026-11-21): an
+/// ambition a need-led bot holds without the `need` mark and drawn by the
+/// need before the mark is only marked. It is never retired: an ambition
+/// changes only once achieved (the old-rule redraw at the daemon start is
+/// gone). True when the life changed (save it).
+pub(crate) fn review_pass(life: &mut Life) -> bool {
+    review_at(life)
 }
 
-/// One-time D3 review (user 2026-11-19, « je t'avais demandé de revoir
-/// les ambitions »): an ambition a need-led bot holds without the `need`
-/// mark (drawn by the old level-led rule) and last changed before the
-/// daemon start is redrawn by need at the bot's first launch pass past its
-/// slot (`review_slot_ticks`, spread over `REVIEW_SPREAD_TICKS` after the
-/// start: never the whole fleet in one tick); a need draw made before the
-/// mark (`need`, `need:*`) is only marked. The exceptions and every
-/// operator ambition (`pinned`, `operator` mark) are never touched; the
-/// sole holder of a group keeps it (`redraw_by_need`). True when the life
-/// changed (save it).
-pub(crate) fn review_pass(life: &mut Life, live: &Value) -> bool {
-    let (epoch, started_secs) = review_epoch();
-    let elapsed = crate::brain_stuck::seconds_to_ticks(epoch.elapsed().as_secs() as i64);
-    review_at(life, live, elapsed, *started_secs)
-}
-
-fn review_at(life: &mut Life, live: &Value, elapsed_ticks: u64, started_secs: i64) -> bool {
+fn review_at(life: &mut Life) -> bool {
     let account = life.account.clone();
-    if let Some(ambition) = life.ambition.as_mut() {
-        if lifescape_planner::adopt_need_mark(ambition) {
-            crate::logln!("brain {account}: ambition {} ({}) drawn by need before the mark, marked need (D3)", ambition.kind, ambition.why);
-            return true;
-        }
+    let Some(ambition) = life.ambition.as_mut() else { return false };
+    if lifescape_planner::adopt_need_mark(ambition) {
+        crate::logln!("brain {account}: ambition {} ({}) drawn by need before the mark, marked need (D3)", ambition.kind, ambition.why);
+        return true;
     }
-    let bot = fleet_bot(life, Vec::new());
-    let Some(ambition) = life.ambition.as_ref() else { return false };
-    let before_start = lifescape_planner::ambition::last_change_secs(ambition) < started_secs;
-    if !before_start || !needs_review(ambition, &bot) || elapsed_ticks < review_slot_ticks(&life.account) {
-        return false;
-    }
-    crate::logln!(
-        "brain {}: ambition {} ({}) drawn before the need rule (D3), redrawn by need",
-        life.account,
-        ambition.kind,
-        ambition.why
-    );
-    let before = life.ambition.clone();
-    redraw_by_need(life, live, "review:need");
-    life.ambition != before
+    false
 }
 
 /// A changed ambition replaces the goal an earlier one drew (D3,

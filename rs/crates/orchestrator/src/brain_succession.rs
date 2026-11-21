@@ -527,6 +527,10 @@ mod tests {
         assert!(lifescape_planner::set_aside(stone), "{stone:?}");
         let next = lifescape_planner::next_milestone(ambition, &[]).expect("a next milestone");
         assert_ne!(next.id, first);
+        // Cooled AMBITION_CHANGE_TICKS: resumed only once the cooldown lapsed
+        // and nothing else is drawable.
+        let cooled = lifescape_planner::cooldown::cooled_keys(&smith.history, &|_| 0);
+        assert!(cooled.contains(&lifescape_planner::milestone_cool_key("smith", &first)), "the set-aside cools: {cooled:?}");
     }
 
     /// A3 (user 2026-11-21): an `equip` milestone stuck on a piece nobody

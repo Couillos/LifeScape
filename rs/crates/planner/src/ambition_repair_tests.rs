@@ -177,3 +177,18 @@ fn revision_seconds_read_the_old_key() {
     let legacy = ambition_from_value(&lifescape_json::parse(&text).expect("json")).expect("old file");
     assert_eq!(legacy.revisions[0].at_secs, 5_000, "old key read");
 }
+
+/// A2 review: a demand milestone set aside (blocked 3 times) no longer
+/// blocks every new demand: the next paying bid makes another one.
+#[test]
+fn a_set_aside_demand_milestone_does_not_block_new_demand() {
+    let mut cook = new_ambition("cook", "random", &now(&fresh, 0, &nothing_held), 3, &[], ZERO).expect("cook");
+    refresh(&mut cook, &now(&fresh, 0, &nothing_held), 3, &bid("shrimp", Some(5.0)));
+    assert_eq!(demand_stones(&cook), 1);
+    for stone in cook.milestones.iter_mut().filter(|stone| stone.origin.starts_with("demand:")) {
+        stone.status = MilestoneStatus::Blocked;
+        stone.blocked_count = super::MILESTONE_MAX_BLOCKS;
+    }
+    refresh(&mut cook, &now(&fresh, 0, &nothing_held), 3, &bid("anchovies", Some(5.0)));
+    assert_eq!(demand_stones(&cook), 2, "the set-aside demand is no open demand");
+}
