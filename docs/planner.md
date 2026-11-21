@@ -624,8 +624,10 @@ l'ambition du groupe de la compétence (`magic` → `mage`, `smithing` →
 `smith`, `cooking` → `cook`…) ÉPINGLÉE (`ambition.pin = {skill, level}`,
 `why = operator:pin:<compétence>:<niveau>`, `ambition::pinned_ambition`)
 et part sur son premier jalon (`goal_origin = m1`). Tant que la compétence
-n'a pas le niveau : jamais de redraw (bloqué ×3 ⇒ le jalon est retiré,
-`CloseOutcome::Dropped`, l'échelle continue), jamais de changement
+n'a pas le niveau : jamais de redraw (bloqué ×3 ⇒ pour une épingle
+seulement, le jalon est retiré, `CloseOutcome::Dropped`, l'échelle
+continue ; hors épingle il est mis de côté puis repris, voir « Clôture »
+plus bas), jamais de changement
 facultatif ni de réparation de couverture, échelle épuisée ⇒ prolongement
 (`extend`, +5 niveaux jusqu'à 99). Refus typé (`NotPinnable`) si aucune
 ambition ne grimpe la compétence (PV, membres) ou niveau hors 2..=99.
@@ -1010,9 +1012,42 @@ retour à l'ambition au tirage suivant). Sans ambition : AUCUN but
 (`NoGoal::NoAmbition`, typé et loggé) ; le plus-bas-skill ne sert que le `generalist` explicite. Clôture
 (`brain_succession::close_goal` → `brain_ambition::after_close`) : quota
 ou équipement fait ⇒ jalon `done` ; but bloqué ⇒ `blocked`,
-`blocked_count + 1` ; à `MILESTONE_MAX_BLOCKS` = 3 ⇒ nouveau tirage
-immédiat de l'ambition (politique approuvée, log `milestone mN blocked 3
-times, redrawing ambition`), jamais vers le même type. Échelle épuisée
+`blocked_count + 1`. A2 (décision du 2026-11-21) : une ambition ne change
+JAMAIS avant d'être atteinte. À `MILESTONE_MAX_BLOCKS` = 3 le jalon est
+MIS DE CÔTE (`ambition::set_aside` : statut `blocked`, compteur gardé, la
+trace reste dans la vie ; `CloseOutcome::SetAside`, log `milestone mN
+blocked 3 times, set aside; ambition K kept, next milestone`) : il n'est
+plus tiré (`next_milestone`, `next_feasible_milestone`), ne compte plus
+parmi les jalons ouverts (`open_count` : les rungs suivants se
+matérialisent à sa place) et le bot passe au jalon suivant. La règle lit
+le compteur écrit : une vie déjà écrite avec un jalon `blocked` ×3 la
+suit au chargement, sans rien déclencher de plus. Si TOUS les jalons
+restants sont mis de côté, le tirage ne trouve aucun jalon ouvert : but
+d'appoint (`side_goal`) comme pour des jalons bannis, jamais un
+retirage. Un jalon mis de côté n'est pas perdu (règle stricte : l'ambition ne change jamais avant
+d'être atteinte) : sa mise de côté pose un refroidissement de
+`AMBITION_CHANGE_TICKS` = 72 000 ticks (clé `milestone_cool_key`), et
+quand le bot n'a plus AUCUN autre jalon tirable ET que ce
+refroidissement est fini, `ambition::resume_set_aside` le rend tirable
+(compteur remis à zéro, statut `pending`, log `milestones mN set aside
+resumed`) à `before_draw` ; entre-temps, but d'appoint. `achieved()`
+reste « tous les jalons `done` » (jamais de fausse atteinte). Les
+lecteurs d'« ouvert » (outils, objets gardés, niveaux planifiés,
+demande, quotas de l'offre) filtrent avec `ambition::drawable` : un jalon
+de côté n'achète ni n'immobilise rien et un jalon `demand:*` de côté ne
+bloque pas une nouvelle demande. A3 (même décision) : un jalon `equip` ne bloque jamais sur un
+objet que personne ne fabrique (`equip_wait::unmade_equip_piece` : un
+`obtain` de la pièce, pas fait, ni détenu (sac, banque, porté) ni
+obtenable maintenant — offre au carnet, boutique ouverte, voie de
+production dont un bot de la flotte a le niveau,
+`gear_plan::obtainable_now` ; règle générale, tout objet d'équipement,
+l'amulette de pouvoir des mages n'étant que le cas vu en direct) : la
+clôture (`GoalEnd::UnmadeGear`) rouvre le jalon sans compter de blocage
+ni bannir de compétence, le met en pause 6000 ticks
+(`MILESTONE_SHORTFALL_COOL_TICKS`, comme un manque du marché) et le bot
+travaille ses autres jalons ; il retente à la fin de la pause (log
+`milestone mN waits: <objet> is neither held, nor on the market, nor made
+by anyone`). Échelle épuisée
 (`achieved`) d'un bot au besoin (D3) : nouveau tirage au besoin, jamais de
 prolongation (voir « D3 dans les vies ») ; pour les exceptions et les
 épingles : nouveau tirage seulement si un autre bot tient le groupe
@@ -1025,19 +1060,17 @@ tirage (loggé). Un tirage qui ne donne aucun jalon ouvert est refusé
 atteinte à la naissance, retirée à chaque passe) ; une ambition de
 couverture se prolonge à la place (`new_ambition_extended`). Une nouvelle
 ambition lit les pièces détenues (un teneur riche ne repart pas à 5 000).
-Changement facultatif (après un jalon fait, à la clôture d'un but OU
-quand `refresh` clôt un jalon niveau/pièces) : au plus une fois toutes
-les `AMBITION_CHANGE_TICKS` = 72 000 ticks (temps mur converti par la
-durée de tick mesurée) ; un bot redondant comble d'abord un trou de
-couverture, sinon une chance sur quatre d'un nouveau tirage ; le seul
-détenteur d'un groupe ne le quitte jamais. Réparation de couverture
+Plus de changement facultatif (A2, 2026-11-21) : ni après un jalon fait,
+ni à la clôture d'un but, ni quand `refresh` clôt un jalon niveau/pièces,
+ni 1 chance sur 4 de retirage, ni « bot redondant comble un trou » :
+`optional_change` et `coverage_repair` n'existent plus. Seules restent
+les révisions de l'opérateur (épingle, teneur de marché retiré,
+opérateur) et le tirage d'une ambition atteinte. Couverture
 (`brain_ambition::coverage_pass`, toutes les 300 s par compte au passage
-de lancement) : les trous de la flotte sont loggés à chaque changement
-(`fleet coverage gap: …` ; un bot fermé laisse son groupe) et un bot
-redondant dont le dernier changement a 72 000 ticks prend le trou tout de
-suite (`coverage_repair`, révision `repair:coverage:<groupe>` ; son but en
-cours, tiré par l'ancienne ambition, est remplacé : voir « D3 dans les
-vies » plus bas).
+de lancement) : les trous de la flotte sont seulement loggés à chaque
+changement (`fleet coverage gap: …` ; un bot fermé laisse son groupe) ;
+aucune ambition en cours n'est retirée pour en combler un, le trou ne
+sert qu'au tirage de la prochaine ambition atteinte.
 
 Couverture de flotte (`assign_fleet`, pur) : au premier passage qui
 rencontre une vie sans ambition, toute la flotte est assignée (fichiers
@@ -1128,8 +1161,8 @@ besoins égaux, tirage uniforme × inclinaison (`why` = `random`). `why`
 = `need:<objet>` quand un objet porte au moins `NEED_LABEL_FLOOR` = 5 %
 du besoin DU TYPE (même parmi des centaines d'offres), sinon `need`.
 Tous les jalons ouverts refroidis : log `every open milestone cools`
-(but d'appoint), jamais « banned skill » sans compétence. Changement facultatif d'un bot au besoin : seulement vers un type
-qui a du besoin (sinon il garde son ambition). Exceptions
+(but d'appoint), jamais « banned skill » sans compétence. (Le changement facultatif d'un bot au besoin, seulement vers un type
+qui a du besoin, est retiré par A2.) Exceptions
 (`ambition_fleet::LEVEL_LED_ACCOUNTS`, `level_led`) : Zezima, N0valyfe,
 Yogosun et tout teneur de marché (archétype `MarketMaker` ou ambition
 `market_maker`, `FleetBot::market_maker`) gardent le tirage d'avant
@@ -1147,25 +1180,14 @@ coupent du yew », `planner/src/ambition_review.rs`, cerveau
   (`ambition.draw_rule` = `need` ou `level`, posée par
   `brain_ambition::build` via `mark_rule`) ; une vie écrite avant la
   marque la lit vide (champ absent = ancienne règle).
-- Révision unique (`needs_review`) : une ambition sans marque `need` d'un
-  bot hors exceptions, dont le dernier changement précède le démarrage
-  du daemon, est retirée au besoin (révision `review:need`, log `drawn
-  before the need rule (D3), redrawn by need`). Jamais pour les comptes
-  d'exception ni une ambition d'opérateur : `pinned()` (épingle,
-  `overall`, `alcher`, `market_maker`) ou marque `operator` posée par
-  son constructeur (`become_alcher`, `pinned_ambition`, `overall_start`,
-  `maker_start`) : ryan_mason reste alchimiste, et un changement
-  d'opérateur appliqué au début du même passage n'est jamais défait. Un
-  `generalist` non opérateur est révisé. Les tirages au besoin d'avant la
-  marque (`why` `need` / `need:*`, depuis 03a27a2) sont seulement marqués
-  (`adopt_need_mark`). Le seul détenteur de son groupe primaire le garde
-  (`redraw_gaps` : son groupe est son seul trou ; un bot redondant voit
-  les trous de la flotte). Étalée : chaque compte a sa fente
-  (`review_slot_ticks`, hachage stable du nom) dans les
-  `REVIEW_SPREAD_TICKS` = 12 000 ticks qui suivent le premier passage du
-  cerveau (12 min à 60 ms) ; revue à son premier passage de lancement
-  après la fente, donc au plus une tranche de travail plus tard (~20 min
-  en dev) : toute la flotte dans l'heure du redémarrage.
+- Plus de révision unique qui retire une ambition en cours (A2,
+  2026-11-21) : le retrait au démarrage du daemon des ambitions sans
+  marque `need` (révision `review:need`, `needs_review`, fentes
+  `review_slot_ticks`) n'existe plus dans le cerveau. `review_pass` ne
+  fait qu'adopter la marque `need` des tirages au besoin d'avant la
+  marque (`why` `need` / `need:*`, `adopt_need_mark`). Une ambition ne
+  change qu'une fois atteinte. Les fonctions pures de `ambition_review`
+  restent (outil de simulation, fin d'échelle).
 - Fin d'échelle (`keeps_ladder_end`) : hors exceptions et épingles, plus
   de prolongation (`extend`) de la même ambition ; nouveau tirage au
   besoin immédiat (révision `achieved`, sans exclure le type : le besoin

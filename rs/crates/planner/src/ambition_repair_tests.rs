@@ -4,11 +4,10 @@
 
 use super::{
     achieved, ambition_from_value, ambition_to_value, extend, new_ambition, new_ambition_extended, open_count, refresh, AmbitionError, BotNow,
-    MilestoneStatus, Stamp, Target, AMBITION_CHANGE_TICKS, GENERALIST, MAX_DONE_KEPT,
+    MilestoneStatus, Stamp, Target, GENERALIST, MAX_DONE_KEPT,
 };
 use crate::ambition_catalog::DemandItem;
 use crate::market_maker::MARKET_MAKER_KIND;
-use crate::ambition_fleet::{coverage_repair, FleetBot};
 
 const ZERO: Stamp = Stamp { tick: 0, secs: 0 };
 
@@ -166,34 +165,6 @@ fn refresh_reports_the_milestones_it_closes() {
     assert!(refresh(&mut smith, &now(&smithing, 0, &nothing_held), 3, &[]).is_empty(), "closed once");
 }
 
-fn fleet_bot(seed: u64) -> FleetBot {
-    FleetBot {
-        account: "b0".to_string(),
-        levels: Vec::new(),
-        ironman: false,
-        market_affinity: 0.5,
-        seed,
-        kind: Some("fisher".to_string()),
-        market_maker: false,
-    }
-}
-
-/// Finding 4: an open gap is filled by a redundant bot past the 72 000
-/// tick throttle (the user's rule), never by the sole holder of its own
-/// group, never by a throttled bot; no gap, no change.
-#[test]
-fn coverage_repair_fills_gaps_within_the_throttle() {
-    let fisher = new_ambition("fisher", "random", &now(&fresh, 0, &nothing_held), 7, &[], ZERO).expect("fisher");
-    let gaps = vec!["smithing".to_string()];
-    let late = |_: i64| AMBITION_CHANGE_TICKS;
-    let early = |_: i64| AMBITION_CHANGE_TICKS - 1;
-    let filled = coverage_repair(&fisher, &fleet_bot(7), &gaps, true, &[], &late).expect("fills the gap");
-    assert_eq!((filled.0.as_str(), filled.1.as_str()), ("smith", "coverage:smithing"));
-    assert_eq!(coverage_repair(&fisher, &fleet_bot(7), &gaps, false, &[], &late), None, "sole holder keeps its group");
-    assert_eq!(coverage_repair(&fisher, &fleet_bot(7), &gaps, true, &[], &early), None, "72 000 ticks between changes");
-    assert_eq!(coverage_repair(&fisher, &fleet_bot(7), &[], true, &[], &late), None, "no gap");
-}
-
 /// Finding 7: the revision stamp is `at_secs`; old files wrote `at`.
 #[test]
 fn revision_seconds_read_the_old_key() {
@@ -205,4 +176,19 @@ fn revision_seconds_read_the_old_key() {
     let text = lifescape_json::stringify(&value).replace("\"at_secs\"", "\"at\"");
     let legacy = ambition_from_value(&lifescape_json::parse(&text).expect("json")).expect("old file");
     assert_eq!(legacy.revisions[0].at_secs, 5_000, "old key read");
+}
+
+/// A2 review: a demand milestone set aside (blocked 3 times) no longer
+/// blocks every new demand: the next paying bid makes another one.
+#[test]
+fn a_set_aside_demand_milestone_does_not_block_new_demand() {
+    let mut cook = new_ambition("cook", "random", &now(&fresh, 0, &nothing_held), 3, &[], ZERO).expect("cook");
+    refresh(&mut cook, &now(&fresh, 0, &nothing_held), 3, &bid("shrimp", Some(5.0)));
+    assert_eq!(demand_stones(&cook), 1);
+    for stone in cook.milestones.iter_mut().filter(|stone| stone.origin.starts_with("demand:")) {
+        stone.status = MilestoneStatus::Blocked;
+        stone.blocked_count = super::MILESTONE_MAX_BLOCKS;
+    }
+    refresh(&mut cook, &now(&fresh, 0, &nothing_held), 3, &bid("anchovies", Some(5.0)));
+    assert_eq!(demand_stones(&cook), 2, "the set-aside demand is no open demand");
 }

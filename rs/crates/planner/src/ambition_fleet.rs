@@ -8,7 +8,7 @@
 //! every bot's levels, profile and current kind come in as plain values;
 //! the daemon reads the life files.
 
-use crate::ambition::{may_change, pinned, Ambition, GENERALIST};
+use crate::ambition::GENERALIST;
 use crate::ambition_catalog::{fit, kind_for_group, primary_group, transform_share, KindDemand, GROUPS, specs};
 
 /// One bot as the fleet assignment sees it.
@@ -258,47 +258,9 @@ fn need_weights<'kinds>(bot: &FleetBot, drawable: &[&'kinds str], demand: &[Kind
     weighted
 }
 
-/// Coverage repair (review 2026-11-13): an open gap (a group no fleet
-/// ambition holds, e.g. its holder was closed or left the role) is filled
-/// by a bot whose own group another bot also holds (`redundant`) and whose
-/// last change is `AMBITION_CHANGE_TICKS` old (the user's rule: one change
-/// per 72 000 ticks). Checked by the brain on every pass, not only after
-/// a milestone. `None`: no gap, sole holder, throttled, or no gap this bot
-/// may hold, or an operator pin.
-pub fn coverage_repair(ambition: &Ambition, bot: &FleetBot, gaps: &[String], redundant: bool, demand: &[KindDemand], ticks_since: &dyn Fn(i64) -> u64) -> Option<(String, String)> {
-    if gaps.is_empty() || ambition.kind == GENERALIST || pinned(ambition) || !redundant || !may_change(ambition, ticks_since) {
-        return None;
-    }
-    let (kind, why) = draw_kind(bot, gaps, demand, &[ambition.kind.as_str()]);
-    why.starts_with("coverage:").then_some((kind, why))
-}
-
-/// Optional change after a completed milestone (never mandatory): only
-/// when `AMBITION_CHANGE_TICKS` passed since the last change. A bot whose
-/// primary group another bot also covers (`redundant`) fills an open gap
-/// first; otherwise one chance in four (seeded per completed milestone)
-/// of a fresh `draw_kind`. A need-led bot (D3) changes only toward a
-/// kind that has need (no need elsewhere: it keeps its ambition). The
-/// sole holder of a group never leaves it, nor does an operator pin.
-/// Returns (kind, why) when the ambition should change.
-pub fn optional_change(ambition: &Ambition, bot: &FleetBot, gaps: &[String], redundant: bool, demand: &[KindDemand], ticks_since: &dyn Fn(i64) -> u64) -> Option<(String, String)> {
-    if ambition.kind == GENERALIST || pinned(ambition) || !may_change(ambition, ticks_since) || !redundant {
-        return None;
-    }
-    if let Some(filled) = coverage_repair(ambition, bot, gaps, redundant, demand, ticks_since) {
-        return Some(filled);
-    }
-    let current = ambition.kind.as_str();
-    let done = ambition.milestones.iter().filter(|stone| stone.status == crate::ambition::MilestoneStatus::Done).count();
-    if mix(bot.seed, &format!("change{done}")) % 4 != 0 {
-        return None;
-    }
-    let (kind, why) = draw_kind(bot, &[], demand, &[current]);
-    if !level_led(bot) && why != "need" && !why.starts_with("need:") {
-        return None;
-    }
-    Some((kind, why))
-}
+// A2 (user 2026-11-21): no optional change and no coverage repair of a
+// running ambition (`optional_change`, `coverage_repair` are gone): an
+// ambition ends only when it is achieved; the gaps stay a log.
 
 #[cfg(test)]
 #[path = "ambition_market_tests.rs"]

@@ -16,7 +16,7 @@
 //! does not train. Replaces the blanket D52 tool gate (every axe, pickaxe,
 //! net, … never sold by anyone), which kept tools off the market.
 
-use lifescape_planner::{Life, MilestoneStatus, NodeStatus};
+use lifescape_planner::{Life, NodeStatus};
 
 /// Tool families a skill always works with, by its canonical (cheapest)
 /// name; fishing tools come from the products (`required_tool`).
@@ -69,7 +69,7 @@ pub fn work_needs(life: &Life) -> (Vec<String>, Vec<String>) {
         }
     }
     if let Some(ambition) = &life.ambition {
-        for stone in ambition.milestones.iter().filter(|stone| stone.status != MilestoneStatus::Done) {
+        for stone in ambition.milestones.iter().filter(|stone| lifescape_planner::ambition::drawable(stone)) {
             match &stone.target {
                 lifescape_planner::ambition::Target::Level { skill, .. } => {
                     tools.extend(skill_tools(skill).iter().map(|tool| tool.to_string()));

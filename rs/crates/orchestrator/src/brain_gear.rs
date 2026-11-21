@@ -216,6 +216,20 @@ fn obtainable_now(service: Option<&std::sync::Arc<crate::market_service::MarketS
     gear_plan::obtainable_now(item, has_ask, gear_plan::shop_route_open(item, quests), &|skill| crate::brain_gear_fleet::best(skill, now))
 }
 
+/// A3 (user 2026-11-21): the piece a stuck `equip` goal waits on that
+/// nobody makes (`lifescape_planner::equip_wait`): not held (pack, bank,
+/// worn per the live snapshot) and not obtainable now. `None`: every
+/// missing piece has a way, the failure is the bot's.
+pub(crate) fn unmade_equip_piece(life: &Life, live: &Value) -> Option<String> {
+    let quests_owned = crate::brain_rescue::quests_done(life);
+    let quests: Vec<&str> = quests_owned.iter().map(String::as_str).collect();
+    let service = crate::market_service::shared();
+    let now = wall_now();
+    let held = |item: &str| crate::brain_ambition::live_count(live, item) > 0;
+    let obtainable = |item: &str| obtainable_now(service.as_ref(), item, &quests, now);
+    lifescape_planner::equip_wait::unmade_equip_piece(life, &held, &obtainable)
+}
+
 /// What the gear plan would buy next at this wallet (its wants at their
 /// expected prices, same budget as `gear_pass`): the part of a donor's
 /// reserve kept for its own gear (`funding_plan`). An Iron buys none.

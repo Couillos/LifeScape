@@ -284,10 +284,13 @@ Décisions (règles utilisateur) :
   couverture ne compte que les comptes ayant un job dans le daemon (hors
   `admin`/`bite`), jamais les vieilles vies de `run/lives`. Les comptes
   existants reçoivent leur ambition au premier passage, loggée.
-- Changement facultatif au plus une fois toutes les 72 000 ticks ; un
-  jalon bloqué 3 fois ⇒ nouveau tirage immédiat (politique approuvée,
-  loggée), comme une échelle épuisée : ces deux-là ne sont pas des
-  changements facultatifs et ne sont pas bridés.
+- (Remplacé par A2 du 2026-11-21, `docs/plan-progression.txt` : plus de
+  changement facultatif toutes les 72 000 ticks, plus de retirage après
+  3 blocages. Une ambition ne change qu'une fois atteinte ; un jalon
+  bloqué 3 fois est mis de côté puis repris après 72 000 ticks quand rien
+  d'autre n'est tirable, voir `docs/planner.md` § Ambitions par bot.)
+  Ancienne règle : changement facultatif au plus une fois toutes les
+  72 000 ticks ; un jalon bloqué 3 fois ⇒ nouveau tirage immédiat.
 - Bannissements (6000 ticks) respectés : les jalons d'une compétence
   bannie sont sautés, jamais forcés.
 - Offres d'achat ⇒ production : une offre ouverte qu'une ambition sait

@@ -5,8 +5,7 @@
 //! and every market maker.
 
 use crate::ambition_catalog::{kind_weights, DemandItem, KindDemand};
-use crate::ambition::{new_ambition, BotNow, Stamp, AMBITION_CHANGE_TICKS};
-use crate::ambition_fleet::{draw_kind, level_led, optional_change, FleetBot, LEVEL_LED_ACCOUNTS};
+use crate::ambition_fleet::{draw_kind, level_led, FleetBot, LEVEL_LED_ACCOUNTS};
 
 /// The audit's case: a strong woodcutter (70) with some crafting (30).
 fn woodcutter_crafter(account: &str, seed: u64) -> FleetBot {
@@ -112,30 +111,6 @@ fn gaps_and_empty_demand_ignore_the_levels() {
     let counts = drawn("frank_lane", &[]);
     let woodcutter = counts.get("woodcutter").copied().unwrap_or(0);
     assert!(woodcutter < 40 && counts.len() >= 10, "even draw without need: {counts:?}");
-}
-
-/// A need-led bot changes ambition after a milestone only toward a kind
-/// that has need: with need only for its own kind, it keeps it.
-#[test]
-fn optional_change_only_toward_a_need() {
-    let crafter = new_ambition("crafter", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 7, &[], Stamp { tick: 0, secs: 0 }).expect("crafter");
-    let late = |_: i64| AMBITION_CHANGE_TICKS;
-    let own = bid_for("leather_gloves");
-    let logs = bid_for("willow_logs");
-    let mut kept = 0;
-    let mut moved = 0;
-    for seed in 0..80u64 {
-        let bot = woodcutter_crafter("frank_lane", seed);
-        assert_eq!(optional_change(&crafter, &bot, &[], true, &own, &late), None, "no need elsewhere: kept");
-        match optional_change(&crafter, &bot, &[], true, &logs, &late) {
-            Some((kind, why)) => {
-                assert_eq!((kind.as_str(), why.as_str()), ("woodcutter", "need:willow_logs"));
-                moved += 1;
-            }
-            None => kept += 1,
-        }
-    }
-    assert!(moved > 0 && kept > moved, "one chance in four toward the need: {moved} moved, {kept} kept");
 }
 
 /// One bid as the market reads it (`asked`: a resting sell offer exists).

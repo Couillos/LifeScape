@@ -6,21 +6,25 @@
 //! this module changes a milestone status (the node statuses stay with
 //! `lifecycle`).
 //!
-//! Rules: an optional change at most once every `AMBITION_CHANGE_TICKS`;
-//! a milestone blocked `MILESTONE_MAX_BLOCKS` times redraws the ambition
-//! at once (approved policy, logged by the brain); banned skills are
-//! skipped (`next_milestone`), never trained through a ban. The catalogue
-//! lives in `ambition_catalog`, the fleet coverage in `ambition_fleet`.
+//! Rules (user 2026-11-21, plan-progression A2): an ambition never
+//! changes until it is achieved (no optional change, no coverage repair
+//! of a running one; operator revisions stay); a milestone blocked
+//! `MILESTONE_MAX_BLOCKS` times is SET ASIDE (`set_aside`: status
+//! `blocked`, count kept, never drawn again, the trace stays), the bot
+//! goes on to the next milestone and the ambition is kept; banned skills
+//! are skipped (`next_milestone`), never trained through a ban. The
+//! catalogue lives in `ambition_catalog`, the fleet coverage in
+//! `ambition_fleet`.
 
 use lifescape_json::{object, str_value, Value};
 
 use crate::ambition_catalog::{group_of_skill, kind_for_group, pick_product, spec, DemandItem, Then};
 use crate::model::{GoalKind, Life};
 
-/// Ticks between two optional ambition changes (72 min at 60 ms dev, 12 h
-/// at 600 ms prod). Blocked and achieved redraws are not optional.
+/// Ticks between two changes of an ambition an exception or a pin holds
+/// past its ladder end (72 min at 60 ms dev, 12 h at 600 ms prod).
 pub const AMBITION_CHANGE_TICKS: u64 = 72_000;
-/// Stuck closes of one milestone before the ambition is redrawn.
+/// Stuck closes of one milestone before it is set aside.
 pub const MILESTONE_MAX_BLOCKS: u32 = 3;
 /// Open (not done) milestones kept materialized ahead.
 pub const OPEN_MILESTONES: usize = 3;
@@ -368,9 +372,44 @@ fn push_milestone(ambition: &mut Ambition, target: Target, origin: &str) {
     });
 }
 
-/// Open (not done) milestones of an ambition.
+/// A milestone set aside (A2): blocked `MILESTONE_MAX_BLOCKS` times. The
+/// rule reads the persisted count, so a life written before it follows it
+/// at load (a milestone already blocked 3 times triggers nothing more).
+pub fn set_aside(stone: &Milestone) -> bool {
+    stone.status == MilestoneStatus::Blocked && stone.blocked_count >= MILESTONE_MAX_BLOCKS
+}
+
+/// A milestone the bot may still draw: not done, not set aside.
+pub fn drawable(stone: &Milestone) -> bool {
+    stone.status != MilestoneStatus::Done && !set_aside(stone)
+}
+
+/// Resume the milestones set aside (A2 review, user rule: an ambition
+/// never changes before it is achieved): only when no other milestone is
+/// drawable, and only those whose set-aside cooldown (`cooled`, the
+/// `milestone_cool_key` entries) has lapsed; their blocks reset and they
+/// go back to `Pending`. Returns the resumed ids (the brain logs them).
+pub fn resume_set_aside(ambition: &mut Ambition, cooled: &[String]) -> Vec<String> {
+    if ambition.milestones.iter().any(drawable) {
+        return Vec::new();
+    }
+    let kind = ambition.kind.clone();
+    let mut resumed = Vec::new();
+    for stone in ambition.milestones.iter_mut().filter(|stone| set_aside(stone)) {
+        if cooled.contains(&milestone_cool_key(&kind, &stone.id)) {
+            continue;
+        }
+        stone.blocked_count = 0;
+        stone.status = MilestoneStatus::Pending;
+        resumed.push(stone.id.clone());
+    }
+    resumed
+}
+
+/// Open milestones of an ambition: not done, not set aside (the next
+/// rungs materialize in their place).
 pub fn open_count(ambition: &Ambition) -> usize {
-    ambition.milestones.iter().filter(|stone| stone.status != MilestoneStatus::Done).count()
+    ambition.milestones.iter().filter(|stone| drawable(stone)).count()
 }
 
 fn milestone_number(stone: &Milestone) -> usize {
@@ -577,7 +616,7 @@ fn insert_demand_milestone(ambition: &mut Ambition, now: &BotNow, market: Market
     // (`ambition_supply::product_workable`: the water talisman).
     let workable = |item: &str, skill: &str| crate::ambition_supply::product_workable(item, skill, now.held, surplus);
     let level_of = now.level_of;
-    let open_demand = ambition.milestones.iter().any(|stone| stone.status != MilestoneStatus::Done && stone.origin.starts_with("demand:"));
+    let open_demand = ambition.milestones.iter().any(|stone| drawable(stone) && stone.origin.starts_with("demand:"));
     if open_demand {
         return;
     }
@@ -630,7 +669,7 @@ fn insert_demand_milestone(ambition: &mut Ambition, now: &BotNow, market: Market
     push_milestone(ambition, target, &origin);
     // Ahead of the ladder: move it before the first open milestone.
     if let Some(last) = ambition.milestones.pop() {
-        let position = ambition.milestones.iter().position(|stone| stone.status != MilestoneStatus::Done).unwrap_or(ambition.milestones.len());
+        let position = ambition.milestones.iter().position(|stone| drawable(stone)).unwrap_or(ambition.milestones.len());
         ambition.milestones.insert(position, last);
     }
 }
@@ -645,7 +684,7 @@ pub fn next_milestone<'a>(ambition: &'a Ambition, avoid: &[String]) -> Option<&'
     ambition
         .milestones
         .iter()
-        .filter(|stone| stone.status != MilestoneStatus::Done)
+        .filter(|stone| drawable(stone))
         .find(|stone| stone.target.skills().iter().all(|skill| !avoid.contains(skill)))
 }
 
@@ -660,7 +699,7 @@ pub fn next_feasible_milestone<'a>(ambition: &'a Ambition, avoid: &[String], sic
     ambition
         .milestones
         .iter()
-        .filter(|stone| stone.status != MilestoneStatus::Done)
+        .filter(|stone| drawable(stone))
         .filter(|stone| !cooled.contains(&milestone_cool_key(&ambition.kind, &stone.id)))
         .filter(|stone| stone.target.skills().iter().all(|skill| !avoid.contains(skill)))
         .find(|stone| milestone_workable(&stone.target, avoid, sick))
@@ -709,8 +748,9 @@ pub enum CloseOutcome {
     /// Level and coin milestones wait for the next refresh to read live.
     Reopened(String),
     Blocked { id: String, count: u32 },
-    /// Blocked `MILESTONE_MAX_BLOCKS` times: redraw the ambition now.
-    RedrawNeeded { id: String, count: u32 },
+    /// Blocked `MILESTONE_MAX_BLOCKS` times: set aside (`set_aside`), the
+    /// ambition kept, the next milestone drawn (A2).
+    SetAside { id: String, count: u32 },
     /// Blocked `MILESTONE_MAX_BLOCKS` times in a pinned ambition: the
     /// milestone is dropped (the next refresh materializes the next rung),
     /// the ambition kept.
@@ -731,7 +771,7 @@ pub fn on_goal_closed(life: &mut Life, stuck: bool) -> CloseOutcome {
             return CloseOutcome::Blocked { id: origin, count };
         }
         let Some(ambition) = life.ambition.as_mut().filter(|ambition| pinned(ambition)) else {
-            return CloseOutcome::RedrawNeeded { id: origin, count };
+            return CloseOutcome::SetAside { id: origin, count };
         };
         ambition.milestones.retain(|kept| kept.id != origin);
         return CloseOutcome::Dropped { id: origin, count };

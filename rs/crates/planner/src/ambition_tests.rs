@@ -7,7 +7,7 @@ use super::{
 };
 use crate::ambition_catalog::{fit, kind_weights, products, spec, DemandItem, Then, GROUPS, specs};
 use crate::market_maker::MARKET_MAKER_KIND;
-use crate::ambition_fleet::{assign_fleet, coverage_gaps, draw_kind, optional_change, FleetBot};
+use crate::ambition_fleet::{assign_fleet, coverage_gaps, draw_kind, FleetBot};
 use crate::model::{Archetype, GoalKind, Life, Profile};
 
 const ZERO: Stamp = Stamp { tick: 0, secs: 0 };
@@ -179,22 +179,17 @@ fn held_ambitions_cover_and_nobody_draws_the_maker() {
     }
 }
 
-/// Optional change: at most once every 72 000 ticks, never for the sole
-/// holder of a group; a blocked or achieved redraw is not optional.
+/// An operator revision restarts the 72 000-tick clock (`may_change`, kept
+/// for the achieved exceptions); no optional change exists any more (A2).
 #[test]
 fn change_throttle_holds_72000_ticks() {
     let mut life = life_with("fisher");
     let ambition = life.ambition.clone().expect("fisher");
-    let myself = bot("b0", 7, &[]);
     let early = |_: i64| AMBITION_CHANGE_TICKS - 1;
     let late = |_: i64| AMBITION_CHANGE_TICKS;
     assert!(!may_change(&ambition, &early));
     assert!(may_change(&ambition, &late));
-    let gaps = vec!["smithing".to_string()];
-    assert_eq!(optional_change(&ambition, &myself, &gaps, true, &[], &early), None, "throttled");
-    assert_eq!(optional_change(&ambition, &myself, &gaps, false, &[], &late), None, "sole holder keeps its group");
-    let (kind, why) = optional_change(&ambition, &myself, &gaps, true, &[], &late).expect("a redundant fisher fills the gap");
-    assert_eq!((kind.as_str(), why.as_str()), ("smith", "coverage:smithing"));
+    let (kind, why) = ("smith".to_string(), "coverage:smithing".to_string());
     let next = new_ambition(&kind, &why, &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 7, &[], Stamp { tick: 80_000, secs: 5_000 }).expect("smith");
     revise(&mut life, next, "change:coverage:smithing", Stamp { tick: 80_000, secs: 5_000 });
     let revised = life.ambition.as_ref().expect("revised");
@@ -204,9 +199,11 @@ fn change_throttle_holds_72000_ticks() {
     assert!(!may_change(revised, &since_revision), "the clock restarts at the revision");
 }
 
-/// A milestone blocked 3 times asks for a redraw; done quotas close.
+/// A2 (user 2026-11-21): a milestone blocked 3 times is set aside, the
+/// ambition is kept and the bot goes on to the next milestone; a life
+/// already written with a milestone blocked 3 times follows the rule too.
 #[test]
-fn blocked_milestone_redraws_after_three_blocks() {
+fn blocked_milestone_is_set_aside_after_three_blocks() {
     let mut life = life_with("smith");
     let first = next_milestone(life.ambition.as_ref().expect("smith"), &[]).expect("a milestone").id.clone();
     for round in 1..=MILESTONE_MAX_BLOCKS {
@@ -216,14 +213,35 @@ fn blocked_milestone_redraws_after_three_blocks() {
         if round < MILESTONE_MAX_BLOCKS {
             assert_eq!(outcome, CloseOutcome::Blocked { id: first.clone(), count: round });
         } else {
-            assert_eq!(outcome, CloseOutcome::RedrawNeeded { id: first.clone(), count: round });
+            assert_eq!(outcome, CloseOutcome::SetAside { id: first.clone(), count: round });
         }
     }
-    let stone = life.ambition.as_ref().and_then(|ambition| ambition.milestones.iter().find(|stone| stone.id == first)).expect("stone");
+    let ambition = life.ambition.as_ref().expect("ambition kept");
+    let stone = ambition.milestones.iter().find(|stone| stone.id == first).expect("stone kept, the trace stays");
     assert_eq!((stone.status, stone.blocked_count), (MilestoneStatus::Blocked, 3));
-    let myself = bot("b0", 7, &[]);
-    let (kind, _) = draw_kind(&myself, &["smithing".to_string()], &[], &["smith"]);
-    assert_ne!(kind, "smith", "the blocked kind is excluded from the redraw");
+    assert!(super::set_aside(stone), "blocked 3 times = set aside");
+    let next = next_milestone(ambition, &[]).expect("the next milestone");
+    assert_ne!(next.id, first, "the bot passes to the next milestone");
+    let (_, origin) = crate::goals::draw_goal_origin(&life, &|_| 1, &|_| 0).expect("a goal");
+    assert_ne!(origin.as_deref(), Some(first.as_str()), "the set-aside milestone is not drawn");
+    assert!(ambition.milestones.iter().filter(|stone| !super::set_aside(stone) && stone.status != MilestoneStatus::Done).count() == super::open_count(ambition), "set aside milestones are not open");
+}
+
+/// A2: set-aside milestones leave room for the next rungs (the 3 open
+/// milestones stay materialized ahead of the bot).
+#[test]
+fn set_aside_milestones_leave_room_for_the_next_rungs() {
+    let mut life = life_with("smith");
+    let ambition = life.ambition.as_mut().expect("smith");
+    let open = super::open_count(ambition);
+    let first = ambition.milestones.iter().find(|stone| stone.status != MilestoneStatus::Done).expect("open").id.clone();
+    let stone = ambition.milestones.iter_mut().find(|stone| stone.id == first).expect("stone");
+    stone.status = MilestoneStatus::Blocked;
+    stone.blocked_count = MILESTONE_MAX_BLOCKS;
+    assert_eq!(super::open_count(ambition), open - 1);
+    let fresh = BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 };
+    super::refresh(ambition, &fresh, 7, &[]);
+    assert_eq!(super::open_count(ambition), super::OPEN_MILESTONES, "the ladder materializes the next milestone");
 }
 
 /// Bans are respected: a banned skill's milestones are skipped.
@@ -459,4 +477,42 @@ fn a_kind_serves_the_bids_its_own_skills_make() {
     let mut low = new_ambition("smith", "random", &BotNow { level_of: &novice_of, coins: 0, held: &|_| 0 }, 3, &[], ZERO).expect("smith");
     refresh(&mut low, &BotNow { level_of: &novice_of, coins: 0, held: &|_| 0 }, 3, &bid);
     assert!(!low.milestones.iter().any(|stone| stone.origin == "demand:steel_bar"), "smelting steel needs 30");
+}
+
+/// Ladder exhausted but one milestone set aside: the draw offers nothing
+/// (side goal, never an achieved ambition) while it cools; once the
+/// cooldown lapsed it is drawable again, its blocks reset (A2 review).
+#[test]
+fn a_set_aside_milestone_is_resumed_after_its_cooldown() {
+    let mut life = life_with("smith");
+    let ambition = life.ambition.as_mut().expect("smith");
+    ambition.rung = spec("smith").expect("spec").ladder.len();
+    for stone in ambition.milestones.iter_mut() {
+        stone.status = MilestoneStatus::Done;
+    }
+    let last = ambition.milestones.last_mut().expect("a milestone");
+    last.status = MilestoneStatus::Blocked;
+    last.blocked_count = MILESTONE_MAX_BLOCKS;
+    let id = last.id.clone();
+    let key = crate::ambition::milestone_cool_key("smith", &id);
+    assert!(!achieved(life.ambition.as_ref().expect("smith")), "never a false achievement");
+    assert!(matches!(crate::goals::draw_goal_origin(&life, &|_| 1, &|_| 0), Err(crate::goals::NoGoal::MilestonesBanned(_))), "side goal while it waits");
+    let ambition = life.ambition.as_mut().expect("smith");
+    assert!(crate::ambition::resume_set_aside(ambition, &[key.clone()]).is_empty(), "still cooling");
+    assert_eq!(crate::ambition::resume_set_aside(ambition, &[]), vec![id.clone()], "cooldown lapsed: resumed");
+    let stone = ambition.milestones.iter().find(|stone| stone.id == id).expect("stone");
+    assert_eq!((stone.blocked_count, stone.status), (0, MilestoneStatus::Pending));
+    let (_, origin) = crate::goals::draw_goal_origin(&life, &|_| 1, &|_| 0).expect("drawable again");
+    assert_eq!(origin.as_deref(), Some(id.as_str()));
+}
+
+/// Another drawable milestone left: nothing is resumed yet.
+#[test]
+fn a_set_aside_milestone_waits_while_others_are_drawable() {
+    let mut life = life_with("smith");
+    let ambition = life.ambition.as_mut().expect("smith");
+    let first = ambition.milestones.iter_mut().find(|stone| stone.status != MilestoneStatus::Done).expect("open");
+    first.status = MilestoneStatus::Blocked;
+    first.blocked_count = MILESTONE_MAX_BLOCKS;
+    assert!(crate::ambition::resume_set_aside(ambition, &[]).is_empty());
 }

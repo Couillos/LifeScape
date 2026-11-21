@@ -193,3 +193,18 @@ fn a_released_listing_pushes_the_new_locks_at_once() {
     drop(service);
     let _ = std::fs::remove_file(&path);
 }
+
+/// A2 review: a milestone set aside (blocked 3 times) needs no tool: the
+/// smith's hammer stays kept only while a drawable milestone needs it.
+#[test]
+fn a_set_aside_milestone_needs_no_tool() {
+    use lifescape_planner::{new_ambition, BotNow, MilestoneStatus, Stamp, MILESTONE_MAX_BLOCKS};
+    let mut life = life_with(&[]);
+    life.ambition = new_ambition("woodcutter", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: 0 }).ok();
+    assert!(super::work_needs(&life).0.contains(&"bronze_axe".to_string()), "a drawable woodcutting milestone keeps the axe");
+    for stone in life.ambition.as_mut().expect("woodcutter").milestones.iter_mut() {
+        stone.status = MilestoneStatus::Blocked;
+        stone.blocked_count = MILESTONE_MAX_BLOCKS;
+    }
+    assert!(!super::work_needs(&life).0.contains(&"bronze_axe".to_string()), "set aside: no tool kept for it");
+}

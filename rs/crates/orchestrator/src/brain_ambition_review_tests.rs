@@ -7,7 +7,6 @@
 use lifescape_json::{object, Value};
 use lifescape_planner::{
     needs_review, new_ambition, Ambition, Archetype, BotNow, GoalKind, HistoryEntry, Life, MilestoneStatus, Node, NodeKind, NodeStatus, Profile, Revision, Stamp, NEED_RULE,
-    REVIEW_SPREAD_TICKS,
 };
 
 fn now_secs() -> i64 {
@@ -79,55 +78,35 @@ fn a_need_led_ladder_end_redraws_and_an_exception_extends() {
     assert!(kept.milestones.iter().any(|stone| stone.origin == lifescape_planner::ambition::EXTEND_ORIGIN), "extended past the ladder");
 }
 
-/// One-time review: an unmarked (old-rule) ambition of a need-led bot is
-/// redrawn by need once its slot is reached, marked, never again; the
-/// exception is untouched. Its goal, linked to the old ambition, is then
-/// replaced.
+/// A2 review (user 2026-11-21): the one-time review never retires a
+/// running ambition any more. An unmarked (old-rule) ambition of a
+/// need-led bot is only marked `need`; its kind, goal and revisions stay.
 #[test]
-fn the_review_redraws_old_rule_ambitions_once_and_spares_the_exceptions() {
+fn the_review_never_retires_a_running_ambition() {
     let drawn_long_ago = now_secs() - 400_000;
     let mut arthur = life("b0", ambition("woodcutter", "random", drawn_long_ago));
     arthur.goal = GoalKind::MaxSkills { skills: vec!["woodcutting".to_string()], level: 99 };
     let milestone = arthur.ambition.as_ref().and_then(|held| held.milestones.first()).map(|stone| stone.id.clone()).expect("a milestone");
     lifescape_planner::mark_drawn(&mut arthur, Some(&milestone));
-    arthur.history.push(goal_entry("next:woodcutting 99", now_secs() - 5_000));
-    let slot = lifescape_planner::review_slot_ticks("b0");
-    if slot > 0 {
-        assert!(!super::review_at(&mut arthur, &live(), slot - 1, now_secs() - 60), "not before its slot");
-    }
-    assert!(super::review_at(&mut arthur, &live(), REVIEW_SPREAD_TICKS, now_secs() - 60), "reviewed in the window");
+    super::review_at(&mut arthur);
     let held = arthur.ambition.clone().expect("an ambition");
-    assert_eq!(held.draw_rule, NEED_RULE);
-    assert_eq!(held.revisions.last().map(|revision| revision.why.as_str()), Some("review:need"));
-    assert!(!super::review_at(&mut arthur, &live(), REVIEW_SPREAD_TICKS * 10, now_secs() - 60), "once only");
-    assert_eq!(arthur.ambition.as_ref().map(|held| held.revisions.len()), Some(held.revisions.len()));
-    // The goal the old woodcutter ambition drew is replaced.
-    assert!(super::replace_stale_goal(&mut arthur, &live()), "goal of the old ambition replaced");
-    assert!(arthur.history.iter().rev().find(|entry| entry.outcome.starts_with("next:")).is_some_and(|entry| entry.outcome != "next:woodcutting 99"));
+    assert_eq!((held.kind.as_str(), held.draw_rule.as_str(), held.revisions.len()), ("woodcutter", held.draw_rule.as_str(), 0), "kept, never redrawn");
+
     let mut zezima = life("Zezima", ambition("woodcutter", "random", drawn_long_ago));
     let before = zezima.ambition.clone();
-    assert!(!super::review_at(&mut zezima, &live(), REVIEW_SPREAD_TICKS * 10, now_secs() - 60), "exception untouched");
-    assert_eq!(zezima.ambition, before);
+    super::review_at(&mut zezima);
+    assert_eq!(zezima.ambition.as_ref().map(|held| held.kind.as_str()), before.as_ref().map(|held| held.kind.as_str()), "exception untouched");
 }
 
-/// Review 2026-11-19: an operator ambition is never undone. The alcher
-/// switch (`orchestrator ambition ryan_mason alcher`) applied at the start
-/// of a pass (`brain_operator::apply_pending`) and the review in the same
-/// pass leave it alcher; an ambition drawn after the daemon start (an
-/// operator's, a fresh draw) is never reviewed, marked or not.
+/// Review 2026-11-19: an operator ambition is never undone (the alcher
+/// switch applied in the same pass as the review stays alcher).
 #[test]
 fn an_operator_switch_survives_the_review_of_the_same_pass() {
-    let started = now_secs() - 60;
     let mut ryan = life("b0", ambition("woodcutter", "random", now_secs() - 400_000));
     let switched = super::with_now(&live(), |now| lifescape_planner::become_alcher(&mut ryan, now, super::stamp_now()));
     assert!(switched.is_ok(), "{switched:?}");
-    assert!(!super::review_at(&mut ryan, &live(), REVIEW_SPREAD_TICKS * 10, started), "the operator's alcher stays");
+    super::review_at(&mut ryan);
     assert_eq!(ryan.ambition.as_ref().map(|held| held.kind.as_str()), Some(lifescape_planner::ALCHER));
-    // Even unmarked, an ambition changed after the start is not reviewed.
-    let mut fresh = life("b0", ambition("woodcutter", "random", now_secs()));
-    assert!(!super::review_at(&mut fresh, &live(), REVIEW_SPREAD_TICKS * 10, started), "changed after the daemon start");
-    let mut old = life("b0", ambition("woodcutter", "random", now_secs() - 400_000));
-    assert!(super::review_at(&mut old, &live(), REVIEW_SPREAD_TICKS * 10, started), "drawn before the start: reviewed");
 }
 
 /// mila_wade / nina_rhodes (live 2026-11-19): woodcutter -> fisher at

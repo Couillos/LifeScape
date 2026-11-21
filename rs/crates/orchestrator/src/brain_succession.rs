@@ -61,18 +61,21 @@ fn ticks_since(stamp: i64) -> u64 {
 /// a market shortfall (a buy left unfilled or refused) bans nothing and
 /// never counts a milestone block (decision D3, user 2026-11-19).
 pub(crate) fn close_goal(life: &mut Life, live: &Value, stuck: bool) {
-    let shortfall = close_goal_history(life, stuck);
-    let end = match (stuck, shortfall) {
-        (false, _) => GoalEnd::Done,
-        (true, true) => GoalEnd::MarketShortfall,
-        (true, false) => GoalEnd::Stuck,
+    // A3: an equip goal stuck on gear nobody makes waits (no block, no ban).
+    let unmade = if stuck { crate::brain_gear::unmade_equip_piece(life, live) } else { None };
+    let shortfall = close_goal_history(life, stuck, unmade.is_some());
+    let end = match (stuck, shortfall, unmade) {
+        (false, _, _) => GoalEnd::Done,
+        (true, _, Some(item)) => GoalEnd::UnmadeGear(item),
+        (true, true, None) => GoalEnd::MarketShortfall,
+        (true, false, None) => GoalEnd::Stuck,
     };
-    crate::brain_ambition::after_close(life, live, end);
+    crate::brain_ambition::after_close(life, end);
 }
 
 /// Writes the close into the history; true when a stuck goal's cause is
 /// a market shortfall (`lifescape_planner::market_shortfall`).
-fn close_goal_history(life: &mut Life, stuck: bool) -> bool {
+fn close_goal_history(life: &mut Life, stuck: bool, unmade_gear: bool) -> bool {
     let mut skills = goal_skills(&life.goal);
     if !stuck {
         push_history(life, "goal", &format!("{DONE_TAG}{}", skills.join(",")));
@@ -83,7 +86,7 @@ fn close_goal_history(life: &mut Life, stuck: bool) -> bool {
         class: "graph stuck".to_string(),
         last_error: "no abandoned node found".to_string(),
     });
-    let shortfall = lifescape_planner::market_shortfall(&cause.last_error);
+    let shortfall = lifescape_planner::market_shortfall(&cause.last_error) || unmade_gear;
     // A quest that failed for good cools as a quest, never as the skills
     // of the goal waiting on it (user rule 2026-11-14: Rune Mysteries
     // banned mining on bh99tw2f): its nodes wait out the cooldown
@@ -462,7 +465,7 @@ mod tests {
         quest.last_error = "Failed: rune mysteries: no air talisman".to_string();
         life.nodes = vec![quota, quest];
         life.history.push(HistoryEntry { node: "n416".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
-        super::close_goal_history(&mut life, true);
+        super::close_goal_history(&mut life, true, false);
         let fresh = |_: i64| 0u64;
         let banned = lifescape_planner::banned_skills(&life.history, &fresh);
         assert_eq!(banned, vec!["quest:runemysteries".to_string()], "no skill, the quest cools");
@@ -497,6 +500,71 @@ mod tests {
             assert_eq!(stone.blocked_count, blocks, "{last_error}: {stone:?}");
             assert_eq!(stone.status == MilestoneStatus::Blocked, blocks > 0, "{last_error}: {stone:?}");
             assert!(lifescape_planner::goal_closed(&smith.history), "{last_error}: the goal is closed once");
+        }
+    }
+
+    /// A2 (user 2026-11-21): a milestone stuck three times is set aside,
+    /// the ambition is kept (no redraw, no revision) and the next draw
+    /// takes the next milestone.
+    #[test]
+    fn a_milestone_blocked_three_times_is_set_aside_not_redrawn() {
+        let mut smith = life_with(GoalKind::Produce { item: "iron_dagger".to_string(), count: 10 });
+        smith.ambition = new_ambition("smith", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: 0 }).ok();
+        let first = smith.ambition.as_ref().and_then(|ambition| lifescape_planner::next_milestone(ambition, &[])).map(|stone| stone.id.clone()).expect("a milestone");
+        for _ in 0..lifescape_planner::MILESTONE_MAX_BLOCKS {
+            lifescape_planner::mark_drawn(&mut smith, Some(&first));
+            let mut node = Node::new("n1", NodeKind::ObtainItems { item: "iron_bar".to_string(), count: 5 }, Vec::new(), 5);
+            node.status = NodeStatus::Abandoned;
+            node.failures = 3;
+            node.last_error = "Failed: no anvil in reach".to_string();
+            smith.nodes = vec![node];
+            smith.history.push(HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
+            super::close_goal(&mut smith, &live(&[]), true);
+        }
+        let ambition = smith.ambition.as_ref().expect("ambition kept");
+        assert_eq!((ambition.kind.as_str(), ambition.revisions.len()), ("smith", 0), "never redrawn");
+        let stone = ambition.milestones.iter().find(|stone| stone.id == first).expect("the trace stays");
+        assert!(lifescape_planner::set_aside(stone), "{stone:?}");
+        let next = lifescape_planner::next_milestone(ambition, &[]).expect("a next milestone");
+        assert_ne!(next.id, first);
+        // Cooled AMBITION_CHANGE_TICKS: resumed only once the cooldown lapsed
+        // and nothing else is drawable.
+        let cooled = lifescape_planner::cooldown::cooled_keys(&smith.history, &|_| 0);
+        assert!(cooled.contains(&lifescape_planner::milestone_cool_key("smith", &first)), "the set-aside cools: {cooled:?}");
+    }
+
+    /// A3 (user 2026-11-21): an `equip` milestone stuck on a piece nobody
+    /// makes (the mages' amulet of power: not held, no ask, no fleet
+    /// crafter) waits, cooled, with no block and no skill ban; the same
+    /// stuck goal on a piece that has a way (the staff: a shop sells it)
+    /// is the bot's failure and counts a block.
+    #[test]
+    fn an_equip_milestone_waits_on_gear_nobody_makes() {
+        for (piece, blocks, waits) in [("amulet_of_power", 0, true), ("magic_staff", 1, false)] {
+            let mut mage = life_with(GoalKind::EquipBest { style: "magic".to_string() });
+            mage.ambition = new_ambition("mage", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: 0 }).ok();
+            let ambition = mage.ambition.as_mut().expect("mage");
+            let first = ambition.milestones.iter_mut().find(|stone| stone.status != MilestoneStatus::Done).expect("a milestone");
+            first.target = lifescape_planner::Target::Equip { style: "magic".to_string() };
+            let origin = first.id.clone();
+            lifescape_planner::mark_drawn(&mut mage, Some(&origin));
+            let mut buy = Node::new("n1", NodeKind::ObtainItems { item: piece.to_string(), count: 1 }, Vec::new(), 1);
+            buy.status = NodeStatus::Abandoned;
+            buy.failures = 3;
+            buy.last_error = "Failed: no seller".to_string();
+            let equip = Node::new("n2", NodeKind::EquipBest { style: "magic".to_string() }, vec!["n1".to_string()], 1);
+            mage.nodes = vec![buy, equip];
+            mage.history.push(HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
+            super::close_goal(&mut mage, &live(&[]), true);
+            let stone = mage.ambition.as_ref().and_then(|ambition| ambition.milestones.iter().find(|stone| stone.id == origin)).cloned().expect("milestone kept");
+            assert_eq!(stone.blocked_count, blocks, "{piece}: {stone:?}");
+            assert!(!lifescape_planner::set_aside(&stone), "{piece}");
+            let cooled = lifescape_planner::cooldown::cooled_keys(&mage.history, &|_| 0);
+            let key = lifescape_planner::milestone_cool_key("mage", &origin);
+            assert_eq!(cooled.contains(&key), waits, "{piece}: cooled {cooled:?}");
+            let banned = lifescape_planner::banned_skills(&mage.history, &|_| 0u64);
+            assert!(banned.is_empty() || !waits, "{piece}: no skill ban while waiting, got {banned:?}");
+            assert_eq!(mage.ambition.as_ref().map(|ambition| ambition.kind.as_str()), Some("mage"), "the ambition is kept");
         }
     }
 

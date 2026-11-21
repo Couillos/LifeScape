@@ -38,7 +38,7 @@
 
 use lifescape_gamedata::obtain::WayKind;
 
-use crate::ambition::{Ambition, BotNow, MilestoneStatus, Target, EXTEND_ORIGIN};
+use crate::ambition::{Ambition, BotNow, Target, EXTEND_ORIGIN};
 use crate::ambition_catalog::{dominated, pick_product, spec, DemandItem, Then};
 use crate::ambition_ladder::{products_of, quota};
 use crate::obtain_legs::{production_legs, ProductionLeg};
@@ -200,7 +200,7 @@ pub fn revise_supplied(ambition: &mut Ambition, now: &BotNow, seed: u64, surplus
         let workable = product_workable(&item, &skill, now.held, surplus);
         let ladder = stone.origin == "ladder" || stone.origin == EXTEND_ORIGIN;
         let idle = stone.progress.0 <= 0 && running != Some(stone.id.as_str());
-        let open = stone.status != MilestoneStatus::Done;
+        let open = crate::ambition::drawable(stone);
         let wants_sink = ladder && idle && workable && sink_pressure(&item, &skill, surplus) < count as f64;
         if !open || (workable && !wants_sink) {
             index += 1;
