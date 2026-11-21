@@ -37,7 +37,7 @@
     <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates" aria-current="page">Rates</a><a class="navlink" href="/guides-money">Money guide</a><a class="navlink" href="/guides-training">Training guide</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores">Hiscores</a><a class="navlink" href="/errors">Errors</a></nav>
   </div>
 </div>
-<h1>Rates <span class="muted">· measured yields per 6000 work ticks (profit: <a href="/guides-money">money guide</a>, XP: <a href="/guides-training">training guide</a>)</span></h1>
+<h1>Rates</h1>
 <div id="filters">
   <input id="search" placeholder="Search activity, object, site, tool, skill…" autocomplete="off">
   <select id="group" title="One row per activity (method × style, its keys folded) or per exact key (site × tool × band)"><option value="activity">per activity</option><option value="key">per key (site × tool × band)</option></select>
@@ -49,7 +49,6 @@
   <label>rows <select id="limit"></select></label>
 </div>
 <div id="pager"><button id="prev">◀ prev</button><button id="next">next ▶</button><span id="summary" class="muted"></span></div>
-<div class="muted">Each row folds the keys the filters keep: figures are Σ / Σ work ticks over them (never a mean of rates); <span class="prior">estimated (thin)</span> = under 3 runs, the brain reads the game prior. Products: + in, consumption: − out, valued at the current price; XP derived from the units. Click a row for every flow and its keys (click a key for its own flows).</div>
 <table id="rates"></table>
 <div id="timing" class="muted"></div>
 <details>
