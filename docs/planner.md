@@ -733,8 +733,11 @@ récolte garde `site_requirement` (`NEVER` sans banque). Ferme
 par drop (`farm:<objet>`, `mapping::spot_for_drop` →
 `gamedata::combat_spots::drop_spots`) : le spot NON GARDÉ le plus faible
 dont un PNJ lâche l'objet (os ⇒ poulets), un spot à péage seulement s'il
-est le seul (péage budgété, voir ci-dessous) ; jamais souterrain, clé ou
-bateau (bâton de magie : moss giants ⇒ pas de jambe `farm:`). Les spots
+est le seul (péage budgété, voir ci-dessous), un camp souterrain que la
+navigation atteint après ceux de surface de son groupe (big bones ⇒ géants
+du donjon d'Edgeville, 2026-11-21) ; jamais clé ou bateau, jamais un spot
+sans position (bâton de magie : moss giants derrière la toile ⇒ pas de
+jambe `farm:`). Les spots
 du drop sont ses sites (`combat::method_sites`), comme une récolte.
 Seulement un spot que l'exécutant de mêlée sait coter
 (`melee_ladder::RUNGS` : jamais les mages noirs, qui lancent des sorts) et
@@ -771,7 +774,26 @@ passage et `bank_trip` les garde dans le sac pendant une course payante.
 Portes d'accès des sites (2026-11-13, `gamedata::access`) : guilde
 d'artisanat (40 + tablier brun porté), des cuisiniers (32 + toque portée),
 des mineurs (60), clé de laiton (Edgeville), Karamja (bateau 30 po,
-`sailors.rs2`), Crandor, souterrain, Wilderness. `combat::pick_site_gated`
+`sailors.rs2`), Crandor, souterrain, Wilderness. Souterrain (décision
+utilisateur 2026-11-21) : un combat ou une ferme de butin
+(`combat::is_fight_method`, pas les malédictions) lit
+`access::fight_gates_at`, qui lève la porte souterraine sur une position
+de camp prouvée atteignable aller-retour (`nav/tests/fight_sites.rs`,
+voir `docs/navigation.md`) ; ses autres portes restent (bateau du volcan,
+clé, guilde). Récoltes et postes gardent `gates_at` : jamais sous terre
+(sauf guilde des mineurs). Ouverts ainsi : démons mineurs du volcan
+(bateau + corde, besoin `coins:60` sans le passage), donjon d'Edgeville
+(trappe, sans clé), donjon de glace (échelle de Mudskipper Point), égouts
+de Varrock, mine des Nains (scorpions). Danger et banque se lisent au
+spawn (`site_banks` prix par route, à travers les échelles) ; un camp à
+risque ne compte pas ses propres adversaires (`danger::camp_site_requirement`,
+comme `cluster_requirement` de l'échelle : 165 pour les démons, jamais
+atteint), son plancher (niveau − 2) reste. La marche d'un choix de site
+passe par l'entrée souterraine la plus proche
+(`method_rate_trip::site_walk_tiles`, aussi `market_value::walk_ticks`).
+La chasse (`kit::hunt`) descend au site souterrain du cerveau ; un nom de
+camp souterrain sans site ni grappes de l'échelle reste refusé.
+`combat::pick_site_gated`
 + `Pass` (niveaux live, objets détenus) : un site gardé compte seulement si
 la porte s'ouvre ; sinon `SitePick::Access` ⇒ `missing:access:<guilde>`
 (déplié : montée + uniforme) ou `missing:<clé>`. Banque et danger d'un site

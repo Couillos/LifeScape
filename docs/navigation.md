@@ -728,12 +728,31 @@ lisait `ride wrong destination` (live 2026-11-21).
   choix des scripts ; recalculé par `nav/tests/work_sites.rs`
   (`LIFESCAPE_WRITE_SITES=1`).
 - Spawns de camps de combat qu'aucune case ouverte n'atteint
-  (`site_reach::spawn_verdicts` : barreaux, mur, pièce scellée) :
-  `gamedata/data/unreachable_spawns.json` (28 spawns, dont le démon mineur
-  en cage de la tour des Sorciers (3110,3157,2)), exclus de
+  (`site_reach::spawn_verdicts` : barreaux, mur, pièce scellée) ou
+  qu'aucun plan n'atteint (`site_reach::route_verdicts`, raison
+  `no_route` : depuis Lumbridge ET retour, F2P, pièces des passages
+  tenues, portes à exigence de `nav_overrides` ouvertes puisque
+  `gamedata::access` les juge par bot ; une tuile à ≤ 48 cases qu'un plan
+  relie dans les deux sens à une tuile déjà jugée prend son verdict) :
+  `gamedata/data/unreachable_spawns.json` (87 spawns : le démon mineur en
+  cage de la tour des Sorciers (3110,3157,2), le repaire d'Elvarg, les
+  géants moussus derrière la toile, les araignées des égouts de Varrock,
+  Crandor, les ruines clôturées de la Wilderness (3091,3861)), exclus de
   `combat_spots::positions` (table des sites du cerveau, grappes de
-  l'échelle) ; recalculé par `nav/tests/fight_sites.rs`
-  (`LIFESCAPE_WRITE_SITES=1`).
+  l'échelle et de la chasse) ; recalculé par `nav/tests/fight_sites.rs`
+  (`LIFESCAPE_WRITE_SITES=1`, ~40 s). Tout spawn de camp restant,
+  souterrain compris, est donc atteint par la navigation : le cerveau y
+  envoie combats et fermes de butin (décision utilisateur 2026-11-21,
+  `access::fight_gates_at`) ; routes hors ligne : Draynor → volcan
+  (2837,9565) `--paid` coût 408 (bateau, corde), retour 404 ; banque
+  d'Edgeville → géants (3110,9845) coût 244 par la trappe sans clé,
+  retour 294 ; Draynor → donjon de glace (3053,9576) coût 300 par
+  l'échelle de Mudskipper Point, retour 347.
+- Porte secrète du volcan (`dragonsecretdoor` 2606, (2836,9600), mur au
+  sud) : `crandor.rs2` ne l'ouvre que depuis la rangée de la porte (côté
+  repaire, `check_axis_locactive`) avant la fin de Dragon Slayer ;
+  `one_way_doors` `not-south` (nouveau côté : `stand.z >= door.z`). Avant,
+  le plan entrait dans le repaire depuis le volcan.
 - Après une traversée scriptée (péage, porte téléportante, ride), le SDK
   attend 2 ticks avant d'envoyer la marche suivante (`travel_settle`,
   `p_delay(0)` serveur).

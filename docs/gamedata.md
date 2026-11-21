@@ -165,7 +165,11 @@ dans `content/maps` (`crafting_guild_door` (2933,3289), `chefdoor`
 (3019,3339)). `surface_of` : tuile où se lisent banque et danger d'un site
 (porte de guilde, rez-de-chaussée d'un étage sans banque). `impassable` :
 bateau tant que `BOAT_ROUTED` est faux (la nav n'a pas d'arête pour les
-marins), souterrain, Wilderness. Les voies de recette rangent moules et
+marins), souterrain, Wilderness. `fight_gates_at` (2026-11-21) : les
+portes d'un site de combat, sans la porte souterraine sur une position de
+camp (`combat_spots::routed_underground` : chaque position restante est
+atteinte aller-retour, `site_reach` lit la raison `no_route` de
+`unreachable_spawns.json`). Les voies de recette rangent moules et
 talismans dans `Way.tools` (portés, jamais consommés), les voies de sort
 portent leurs runes, les teintures d'Aggie leurs intrants (`aggie.rs2`).
 `quest_requirements` porte `reward_points` (`^<clé>_questpoints`) et
