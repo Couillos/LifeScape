@@ -24,6 +24,7 @@ fn bot(account: &str, kind: &str) -> FleetBot {
         seed: 7,
         kind: Some(kind.to_string()),
         market_maker: false,
+        operator: false,
     }
 }
 

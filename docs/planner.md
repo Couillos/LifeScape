@@ -1286,6 +1286,129 @@ la MASSE servie (`need_mass`) + part du meilleur profit (tirage au
 besoin, saturé ensuite), `need_item` = l'objet qui porte ≥ 5 % du
 besoin). `DemandSignal::asks` = unités en annonce de vente au repos.
 
+## Entraînement = investissement, ambition donnée par la valeur (plan progression A1 + A4, 2026-11-21)
+
+Décision utilisateur du 2026-11-21 (`docs/plan-progression.txt`, lot 2). Deux
+modules purs du planner, un branchement dans l'orchestrateur.
+
+### A1 : une valeur commune, « gain par 6000 ticks, montée comprise »
+`planner/src/investment.rs`. Pour un objectif P (objet demandé à `unit_price`,
+ou l'alchimie d'un lanceur) et un bot aux niveaux `L0` :
+
+```text
+paliers    = (compétence, niveau) que la voie de P demande + ceux de chaque
+             intrant QUE PERSONNE NE PRIXE (le bot doit le fabriquer lui-même)
+montée     = Σ paliers au-dessus de L0 de  xp_between(L0, palier) / taux_xp_moyen   [ticks]
+gain_tick  = flux de la voie par 6000 ticks (work_rate : produit au prix demandé,
+             intrants au prix du marché, pièces) / 6000        (comme profit::chain_profit)
+total      = min( gain_tick × (H − montée) , marge_unitaire × capacité )
+valeur_6000 = total / (H / 6000)                    (0 si montée ≥ H)
+```
+
+- **Horizon `H` = `INVESTMENT_HORIZON_TICKS` = 720 000 ticks** (120 heures de
+  production à 600 ms, 12 h au tick de dev de 60 ms). Assez long pour qu'une
+  montée de 100 000 ticks n'en prenne qu'un septième, assez court pour qu'un
+  niveau hors de portée (montée ≥ H) ne vaille rien. La montée ne rapporte
+  rien dans le modèle (ses produits se vendent en plus : bonus ignoré).
+- **Taux d'XP** : `best_xp_rate(compétence, niveau)` = meilleur XP par tick
+  parmi les méthodes du catalogue que le niveau ouvre (`guide_methods`, taux
+  dérivés des unités du dump, `work_rate`) ; la montée utilise la moyenne
+  harmonique des taux en `from` et `to − 1`. Jamais une constante à la main ;
+  pas de méthode = pas de montée chiffrable (`None`, pas de valeur par défaut).
+- **Capacité** = unités voulues (quantité non servie d'une offre ; unités
+  posées aux ventes pour l'alchimie) : une offre d'une unité à 1 M ne pèse pas
+  une demande de 66 unités.
+- **Paliers propres** (`own`) : un métier ne répond qu'aux étapes de ses
+  compétences ; les intrants des autres sont achetés (artisan : seul le
+  palier artisanat de l'amulette de pouvoir, pas l'enchantement magie 57).
+- **Alchimie** (`alchemy_investment`) : lancers par tick
+  (`alchemy::CAST_TICKS`) sur les offres qui rapportent après les runes
+  (`Caster::profit`), palier 21 (basse) ou 55 (haute).
+
+(a) **Choix de la ligne d'entraînement** (`brain_train::fill_ctx`) : une montée
+en attente qui ouvre une voie lucrative (`brain_value::pending_investments` :
+la demande non servie du marché, la compétence cible parmi les paliers à
+grimper) relève le prix du temps du bot : `coin_rate = max(son gain mesuré,
+valeur_6000 / 6000)` (`investment::time_value`). Une ligne qui coûte des
+pièces mais fait gagner des ticks passe devant la ligne gratuite et lente
+(test `a_lucrative_target_makes_the_bot_pay_for_a_faster_climb`) ; la ligne
+choisie reste le tirage R7 (`train_score::pick`) sur ce score. Le log
+`a tick is worth X coins (the climb opens P)` le dit.
+
+### A4 : le cerveau DONNE l'ambition (plus de tirage au sort)
+`planner/src/ambition_value.rs`, branchement `orchestrator/src/brain_value.rs`.
+Mesure « b » : chaque demande non servie pèse la valeur A1 de la servir ;
+fin de la double compression `compress` / `need_mass` pour ce choix (elles
+restent pour les exceptions de niveau, `draw_kind`).
+
+```text
+valeur(bot, métier) = Σ lignes de demande P : serves(métier, P) × asked(P) × valeur_6000(P)   (montée DU BOT)
+                    + alchimie (le mage)
+                    + débouché des tas : min(ce qu'UN bot du métier brûle sur l'horizon,
+                      tas restant après les autres affectés de la passe) × prix courant
+score = valeur / (tenants du métier + 1), chaque ligne comptée sur sa capacité RESTANTE
+        (non servi − unités déjà couvertes par les bots affectés pendant la passe)
+```
+- lignes de demande (toutes les sources de valeur du marché déjà lues par le
+  cerveau, economy.md § Rentabilité) : les offres d'achat ouvertes (prix
+  unitaire, unités restantes ; sans vente posée elles pèsent 1, avec ventes
+  posées `ASKED_SHARE` = 0,5), les VENTES du marché (`market_demand::sale_lines` :
+  par objet échangé dans les 24 h et fabriqué par une voie, les unités qu'un
+  nouveau vendeur place sur l'horizon, `SALES_SHARE` 50 % du volume du jour,
+  moins les ventes déjà posées au prix courant ou en dessous, au prix courant ;
+  un objet qui a une offre garde sa seule ligne d'offre), l'alchimie des
+  natures posées aux ventes ;
+- **partage** : les bots déjà sur le métier au départ divisent sa valeur par
+  `tenants + 1` (formule de l'utilisateur) ; les bots affectés PENDANT la passe
+  couvrent la demande qu'on leur donne (diviser par `tenants + 1` seul
+  empilait 28 bots sur le mage : une offre d'amulette à 1 M l'unité, un mage en
+  fait 0,3 par tick pour 66 unités). Un bot ne fait qu'une chose à la fois
+  (`cover`) : son temps (l'horizon) va aux lignes les plus denses de son
+  métier d'abord, chacune prend les ticks que sa capacité restante demande ;
+  quand les lignes sont couvertes, le bot suivant va à la demande suivante ;
+- débouché des tas (règle utilisateur : les métiers consommateurs détruisent
+  des objets, on règle les tas en consommant plus, jamais en récoltant moins) :
+  dans le SCORE, valorisé au prix courant de l'objet consommé (1 pièce = valeur
+  faible, voulu : les plumes pèsent peu, les bûches ou le poisson cru
+  davantage) ; les bots affectés pendant la passe usent le tas ;
+- avance du bot DANS le score : la valeur A1 se calcule par bot, le temps de
+  montée part de SES niveaux actuels jusqu'aux paliers de la voie (un forgeron
+  73-75 a une montée courte vers la forge, un débutant la paie entière) ;
+- meilleur score gagne, déterministe, sans graine ; égalité (aucune demande ou
+  tout couvert, scores nuls) : le moins de tenants, puis le débouché, puis
+  le meilleur ajustement de compétences (`ambition_catalog::fit`), puis le nom ;
+- **s'applique** (1) à chaque nouvelle ambition (`brain_value::draw` depuis
+  `redraw`, `redraw_by_need`, `build`, `assign_kind` ; `ensure` :
+  `assign_by_value`) pour tout bot hors exceptions ; (2) une passe unique de
+  rééquilibrage initial.
+- **Exclus TOUJOURS** : `PROTECTED_ACCOUNTS` (Zezima, N0valyfe, Yogosun,
+  sans casse ; ils gardent le tirage « niveau » de D3), et toute ambition
+  d'opérateur (`FleetBot::operator` : épingle, teneur de marché, alcher,
+  overall). Leurs métiers comptent comme tenants, jamais réassignés.
+
+### Passe de rééquilibrage initial (seule exception à A2)
+`orchestrator/src/brain_rebalance.rs`, appelée dans `brain_launch` après
+`ensure`. Au premier passage sans marqueur `run/ambition_rebalance_a4.json` :
+plan de toute la flotte (`planner::rebalance` : meilleure paire (bot, métier)
+d'abord ; un bot ne change que si le meilleur métier bat de plus de
+`MIN_GAIN_TO_CHANGE` = +25 % la valeur de garder le sien, évaluée de même
+(son métier partagé par ses tenants, sans la couverture des autres affectés) ;
+chaque affectation compte comme tenant), attente que chaque vie active
+(écrite depuis moins d'une heure) ait son job (`covers`), marqueur écrit avec
+le plan, une ligne de log par bot avec sa raison chiffrée
+(`brain rebalance <compte>: <avant> -> <après> (valeur …)`). Chaque bot applique
+SA ligne dans SA passe (`assign_rebalanced`, révision `rebalance`, la vie est
+sauvée par son propre thread), puis est marqué appliqué : redémarrage sans
+effet, jamais de second plan. Le but de l'ancienne ambition est remplacé par
+`replace_stale_goal`. Après la passe A2 tient (une ambition ne change qu'atteinte).
+Simulation hors ligne sur une copie de l'état live : test ignoré
+`simulate_rebalance_on_the_live_state` (`brain_rebalance_sim_tests.rs`,
+variables `SIM_LIVES`, `SIM_DB`, `LIFESCAPE_SAVE_DIR`).
+
+Les ventes sont lues dans la fenêtre des 24 h du carnet
+(`Store::volumes_since`) ; l'horizon en jours = `H` × durée du tick
+(`market_eta::live_tick_ms`).
+
 ## L7 : précisions d'implémentation
 
 - Alternatives source-aware (`item_sources`, L1) : `farm` si la source est

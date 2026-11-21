@@ -103,6 +103,14 @@ impl Store {
         Ok(levels)
     }
 
+    /// Units traded per item since `from_clock` (items with at least one
+    /// fill), item id order.
+    pub fn volumes_since(&self, from_clock: i64) -> Result<Vec<(i64, i64)>, Error> {
+        let mut statement = self.connection.prepare_cached("SELECT item_id, SUM(quantity) FROM executions WHERE clock >= ?1 GROUP BY item_id ORDER BY item_id")?;
+        let rows = statement.query_map(rusqlite::params![from_clock], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     /// Units of one item traded in `[from_clock, to_clock)`.
     pub fn volume_between(&self, item_id: i64, from_clock: i64, to_clock: i64) -> Result<i64, Error> {
         let mut statement = self.connection.prepare_cached(
@@ -128,6 +136,18 @@ mod tests {
 
     fn fill(clock: i64, price: i64, quantity: i64) -> NewExecution {
         NewExecution { item_id: 314, quantity, price, clock, server_tick: clock, taker_side: None }
+    }
+
+    #[test]
+    fn volumes_since_sums_each_item_after_the_clock() -> Result<(), crate::Error> {
+        let store = Store::open_in_memory()?;
+        store.upsert_item(&crate::Item { item_id: 314, name: "Feather".to_string(), shop_price: 0, alch_value: 0 })?;
+        for (clock, quantity) in [(10, 5), (50, 2), (60, 3)] {
+            store.record_execution(&fill(clock, 1, quantity))?;
+        }
+        assert_eq!(store.volumes_since(40)?, vec![(314, 5)]);
+        assert_eq!(store.volumes_since(0)?, vec![(314, 10)]);
+        Ok(())
     }
 
     #[test]

@@ -17,6 +17,7 @@ fn woodcutter_crafter(account: &str, seed: u64) -> FleetBot {
         seed,
         kind: None,
         market_maker: false,
+        operator: false,
     }
 }
 

@@ -2396,6 +2396,26 @@ courant est borné par l'ask d'impact (1 unité → 1149, pas 2747), un
 nouveau lot ouvre là, et les asks au repos marchent de 5 % par fenêtre
 jusqu'à leur réserve (≤ 140 en 60 fenêtres). Bande ×5 inchangée.
 
+### Valeur d'une demande non servie, montée en niveau comprise (A1 + A4, 2026-11-21)
+
+La rentabilité de tout le marché sert maintenant aussi à CHOISIR l'ambition
+(`planner/src/investment.rs`, `ambition_value.rs`, détail dans
+`docs/planner.md` § « Entraînement = investissement ») : pour chaque offre
+d'achat non servie ET pour les ventes absorbées au prix courant (volume du jour,
+`market_demand::sale_lines`), mêmes sources de prix que `profit::chain_profit` (prix
+demandé du produit, intrants au prix courant du marché, flux de la voie par
+6000 ticks), valeur = gain par tick sur un horizon de 720 000 ticks, la montée
+au niveau qui débloque la voie déduite (XP manquante / meilleur taux d'XP
+connu), plafonné par la marge × la quantité demandée. Les montées longues
+lucratives (artisanat 70 / amulette de pouvoir, forge 85 + minage de rune,
+magie 55 / alchimie) se comparent ainsi aux lignes rapides. Pas de plancher ni
+de plafond de prix : l'offre, la demande, le prix du marché. Le débouché des
+tas (plumes, os, bûches, poisson cru) entre dans le score : ce qu'un bot du
+métier consomme sur l'horizon, borné par le tas restant, au prix courant (les
+compétences qui consomment sont des puits ; les tas se règlent en consommant
+plus, jamais en récoltant moins).
+
+
 ## Butin : coût nul, lots entiers, prix qui écoule (2026-11-14)
 
 Constat live (15:40, frank_lane, mêlée aux guerriers d'Al Kharid) :
