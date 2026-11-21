@@ -171,12 +171,35 @@ totaux faits/abandonnés, quêtes prouvées, 40 derniers enregistrements ;
 panneau « Nœuds terminés »). Un fichier pas encore réécrit depuis la
 retraite est affiché retraité. La page Lives compte `done` = nœuds faits
 du graphe + `memory.done_total`.
+Vue progression (2026-11-21, `src/web_brain_view.rs`, plan progression A1 à
+A4, lecture seule ; l'ambition brute reste passée telle quelle dans
+`ambition`) : `ambition_view` = comment l'ambition a été donnée
+(`given.source` : `protected` overall des comptes protégés, `pin`, `operator`,
+`a4_rebalance` / `a4_kept` avec la ligne du marqueur
+`run/ambition_rebalance_a4.json` : valeur par 6000 ticks, tenants, objet qui la
+porte, montée ; `a4_draw` tirage par la valeur à l'atteinte ou
+`operator:natural`, chiffres relus dans la dernière ligne « given by value »
+du journal du daemon, jamais inventés ; `legacy` tirage d'avant A4), les
+révisions expliquées (`revision_rows`, les règles retirées marquées :
+`blocked:`, `change:`, `repair:`, `review:`), chaque jalon avec son vrai état
+(`state` : `open`, `active`, `waiting` = refroidi après un palier
+d'équipement que personne ne fabrique (A3) ou une offre sans vendeur,
+`set_aside` = bloqué 3 fois, `done`) et le refroidissement restant
+(`ticks_left`, entrée `cool:milestone:<type>/<id>` de l'historique) ; `goal.origin`
+(jalon, jalon de demande `demand:`, réponse à une offre `bid:`, but d'appoint
+`side:`, alchimie, remplissage `filler`) ; `cooling` = sites et méthodes
+refroidis (`method@x,z,niv`) ; `training` = valeur du temps du but de montée
+(A1 : gain mesuré du bot par tick, attrait des montées lucratives en attente
+`investment::pull_per_tick`, plus grande des deux = ce que le choix de ligne
+d'entraînement utilise) ; `tick_ms` (ticks en minutes). Ces sections ouvrent
+le panneau de l'onglet Cerveau et le Détail de la page ; les compteurs à
+rebours et `training` restent hors de `version`.
 Source en échec ⇒ ligne dans `errors`, jamais une liste vide muette.
 `version` = mtime du fichier de vie + empreinte du contenu affiché (hors
 comptes à rebours) : le front relit toutes les 5 s et ne redessine le
 graphe SVG (colonnes ambition → jalons → but → tâches par plus long
 chemin de dépendance) que si elle change. Tests :
-`web_brain_tests.rs`, `node orchestration/static/brain.test.js`.
+`web_brain_tests.rs`, `web_brain_view_tests.rs`, `node orchestration/static/brain.test.js`.
 Serveur de jeu via `LIFESCAPE_SERVER_HOST` / `LIFESCAPE_SERVER_PORT`
 (défaut `127.0.0.1:43594`), données engine via `LIFESCAPE_ENGINE_DIR`
 (défaut `../lostcity/engine`).

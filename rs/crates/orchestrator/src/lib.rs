@@ -152,6 +152,7 @@ pub mod web_job_lives;
 pub mod web_ws;
 pub mod web_lives;
 pub mod web_brain;
+pub mod web_brain_view;
 pub mod web_market;
 pub mod web_errors;
 pub mod errors_aggregate;

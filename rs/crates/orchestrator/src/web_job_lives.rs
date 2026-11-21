@@ -109,7 +109,7 @@ pub(crate) fn summarize(life: &Life) -> LifeSummary {
 /// The filler running now, if any: the latest filler history entry is a
 /// launch (`filler:<method>@<site>`) its end (`filler_done`, failure)
 /// has not followed yet. `(parked node, method)`.
-fn running_filler(life: &Life) -> Option<(String, String)> {
+pub(crate) fn running_filler(life: &Life) -> Option<(String, String)> {
     let last = life.history.iter().rev().find(|entry| crate::brain_filler::is_filler_node(&entry.node))?;
     let launched = last.outcome.strip_prefix(crate::brain_filler::FILLER_LAUNCH_TAG)?;
     let method = launched.split('@').next().unwrap_or(launched).to_string();

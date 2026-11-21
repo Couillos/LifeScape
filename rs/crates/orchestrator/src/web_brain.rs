@@ -19,6 +19,9 @@ use lifescape_json::{self as json, object, str_value, Value};
 use lifescape_planner::{ban_states, life_from_value, BanState, HistoryEntry, Life, Node, NodeKind, NodeStatus};
 
 use crate::web::{err_json, Dispatch};
+use crate::web_brain_view::{
+    ambition_view, cooling, cooling_view, filler_view, goal_origin_view, logged_value, training_view, LoggedValue, PlanInfo, TrainingInput,
+};
 
 /// Every source besides the life file, gathered by `brain_response_in`
 /// (tests pass fixtures). Rows keep the daemon command shapes.
@@ -41,6 +44,14 @@ pub struct BrainSources {
     pub errors: Vec<String>,
     /// Life file modification stamp, milliseconds.
     pub life_mtime_ms: i64,
+    /// The account's row of the A4 rebalance marker, if any.
+    pub plan: Option<PlanInfo>,
+    /// Last « given by value » line of the daemon log for the ambition.
+    pub logged: Option<LoggedValue>,
+    /// What the training line choice reads for the goal's skill (A1).
+    pub training: Option<TrainingInput>,
+    /// Server tick length in milliseconds (ticks to minutes in the page).
+    pub tick_ms: u64,
 }
 
 fn arr(rows: Vec<Value>) -> Value {
@@ -349,6 +360,19 @@ pub fn brain_version(life_mtime_ms: i64, payload: &Value) -> String {
     let mut stable = payload.clone();
     if let Value::Obj(map) = &mut stable {
         map.remove("version");
+        // Countdowns and live rates move every poll, the graph does not.
+        map.remove("training");
+        map.remove("cooling");
+        if let Some(Value::Obj(view)) = map.get_mut("ambition_view") {
+            if let Some(Value::Arr(rows)) = view.get_mut("milestones") {
+                for row in rows.iter_mut() {
+                    if let Value::Obj(fields) = row {
+                        fields.remove("ticks_left");
+                        fields.remove("state_text");
+                    }
+                }
+            }
+        }
         if let Some(Value::Arr(bans)) = map.get_mut("banned_skills") {
             for ban in bans.iter_mut() {
                 if let Value::Obj(fields) = ban {
@@ -375,11 +399,18 @@ pub fn brain_payload(account: &str, life_value: &Value, sources: &BrainSources, 
     let orders: Vec<Value> = sources.orders.iter().map(|row| order_value(row, &sources.ceilings)).collect();
     let deals: Vec<Value> = sources.deals.iter().map(|row| deal_value(row, account)).collect();
     let wishes: Vec<Value> = sources.wishes.iter().map(|wish| wish_value(wish, &orders)).collect();
+    let cools = cooling(&life.history, ticks_since);
+    let filler = crate::web_job_lives::running_filler(&life);
     let mut payload = object(vec![
         ("ok", Value::Bool(true)),
         ("account", str_value(account)),
         ("ambition", life_value.get("ambition").clone()),
-        ("goal", goal_value(&life, life_value)),
+        ("ambition_view", ambition_view(account, &life, sources.plan.as_ref(), sources.logged.as_ref(), &cools)),
+        ("cooling", cooling_view(&cools)),
+        ("filler", filler_view(filler.as_ref())),
+        ("training", training_view(sources.training.as_ref())),
+        ("tick_ms", Value::Int(sources.tick_ms as i64)),
+        ("goal", goal_value(&life, life_value, filler.as_ref())),
         ("active", life.active.as_deref().map(str_value).unwrap_or(Value::Null)),
         ("nodes", arr(life.nodes.iter().map(node_value).collect())),
         ("retired", retired_view(&life)),
@@ -398,8 +429,9 @@ pub fn brain_payload(account: &str, life_value: &Value, sources: &BrainSources, 
     payload
 }
 
-fn goal_value(life: &Life, life_value: &Value) -> Value {
+fn goal_value(life: &Life, life_value: &Value, filler: Option<&(String, String)>) -> Value {
     object(vec![
+        ("origin", goal_origin_view(life, filler)),
         ("label", str_value(&crate::web_job_lives::goal_text(&life.goal))),
         ("origin_milestone", life_value.get("goal_origin").clone()),
         ("raw", life_value.get("goal").clone()),
@@ -468,8 +500,36 @@ pub fn brain_response_in(
             .collect(),
         None => Vec::new(),
     };
-    let sources = BrainSources { live: live.get("state").clone(), orders, deals, wishes, ceilings, errors, life_mtime_ms };
+    let (plan, logged, training) = progression_sources(run_dir, account, &life_value, live.get("state"));
+    let sources = BrainSources { live: live.get("state").clone(), orders, deals, wishes, ceilings, errors, life_mtime_ms, plan, logged, training, tick_ms: lifescape_sdk::waits::tick_ms() };
     brain_payload(account, &life_value, &sources, ticks_since)
+}
+
+/// The inputs the progression view reads beside the life: the account's
+/// A4 marker row, the daemon log's last value line for its ambition, and
+/// the A1 value of time for the skill of its goal.
+fn progression_sources(run_dir: &std::path::Path, account: &str, life_value: &Value, live: &Value) -> (Option<PlanInfo>, Option<LoggedValue>, Option<TrainingInput>) {
+    let Some(life) = life_from_value(life_value) else { return (None, None, None) };
+    let plan = std::fs::read_to_string(run_dir.join("ambition_rebalance_a4.json"))
+        .ok()
+        .and_then(|text| json::parse(&text).ok())
+        .and_then(|value| crate::brain_rebalance::Marker::from_value(&value))
+        .and_then(|marker| {
+            let applied = marker.applied.iter().any(|name| name.eq_ignore_ascii_case(account));
+            marker.plan.iter().find(|row| row.account.eq_ignore_ascii_case(account)).map(|row| PlanInfo { from: row.from.clone(), kind: row.kind.clone(), numbers: row.numbers.clone(), applied, computed_secs: marker.computed_secs })
+        });
+    let logged = life.ambition.as_ref().and_then(|ambition| logged_value(run_dir, account, &ambition.kind));
+    let training = match &life.goal {
+        lifescape_planner::GoalKind::MaxSkills { skills, .. } if skills.len() == 1 && !live.is_null() => {
+            let levels = crate::brain_market::live_levels(live);
+            let level_of = |skill: &str| levels.iter().find(|(known, _)| known == skill).map(|(_, level)| *level).unwrap_or(1);
+            let skill = skills[0].clone();
+            let pending = crate::brain_value::pending_investments(&skill, &level_of);
+            Some(TrainingInput { skill, own_rate: crate::brain_d17::coin_rate(account), pending })
+        }
+        _ => None,
+    };
+    (plan, logged, training)
 }
 
 /// `brain_wishes` daemon command: the brain's own wishlist for a job

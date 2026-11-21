@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -38,6 +38,11 @@
   .st-blocked { background: #5e3c1d; color: #ffd9a0; }
   .st-failed { background: #5e1d1d; color: #ffb0b0; }
   .st-abandoned { background: #222; color: #777; text-decoration: line-through; }
+  .st-open { background: #333; color: #ccc; }
+  .st-waiting { background: #1d3f5e; color: #9fd0ff; }
+  .st-set_aside { background: #3a2f1d; color: #c9a96e; }
+  #progress-detail { max-width: 760px; font-size: 12px; margin: 6px 0 10px; }
+  #progress-detail h3 { font-size: 12px; color: #ff0; margin: 8px 0 3px; }
   .alt { color: #888; font-size: 11px; }
   #tabs { display: flex; gap: 6px; margin: 12px 0 0; border-bottom: 1px solid #333; }
   .tab { background: #0a0a0a; color: #04A800; border: 1px solid #444; border-bottom: none; border-radius: 3px 3px 0 0; padding: 4px 12px; cursor: pointer; font: inherit; }
@@ -64,9 +69,9 @@
     <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/guides-money">Money guide</a><a class="navlink" href="/guides-training">Training guide</a><a class="navlink" href="/life" aria-current="page">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores">Hiscores</a><a class="navlink" href="/errors">Errors</a></nav>
   </div>
 </div>
-<h1>Lives <span class="muted">· one row per account, detail below</span></h1>
+<h1>Vies <span class="muted">· un compte par ligne, détail dessous</span></h1>
 <div id="toolbar">
-  <input id="search" placeholder="Filter account…" autocomplete="off" oninput="onSearch()">
+  <input id="search" placeholder="Filtrer un compte…" autocomplete="off" oninput="onSearch()">
   <span id="count" class="muted"></span>
 </div>
 <div id="tablewrap"><table id="index"></table></div>
@@ -89,14 +94,15 @@
   <div id="brain-tip"></div>
 </div>
 <div id="detail">
-  <h2 id="title">Pick a bot</h2>
+  <h2 id="title">Choisir un bot</h2>
   <div id="goal" class="muted"></div>
   <div id="profile" class="muted"></div>
+  <div id="progress-detail"></div>
   <h2>Engagement</h2>
   <div id="engaged" class="muted">-</div>
-  <h2>Tasks</h2>
+  <h2>Tâches</h2>
   <table id="nodes" class="detail"></table>
-  <h2>History</h2>
+  <h2>Historique</h2>
   <table id="history" class="detail"></table>
 </div>
 <script src="/table.js"></script>

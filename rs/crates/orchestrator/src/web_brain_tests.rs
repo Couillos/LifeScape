@@ -117,6 +117,10 @@ fn sources() -> BrainSources {
         ceilings: vec![(8, 140)],
         errors: Vec::new(),
         life_mtime_ms: 1_700_000_000_000,
+        plan: None,
+        logged: None,
+        training: None,
+        tick_ms: 60,
     }
 }
 
@@ -287,4 +291,39 @@ fn response_reads_the_file_and_the_sources() {
     assert_eq!(brain_response_in(&dir, "nobody", &dispatch, &ticks_100).get("ok").as_bool(), Some(false));
     assert_eq!(brain_response_in(&dir, "../x", &dispatch, &ticks_100).get("ok").as_bool(), Some(false));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Lives page, progression view: the payload carries how the ambition was
+/// given, the real milestone states, the goal origin; a cooldown countdown
+/// moves nothing in the version (the graph is not redrawn for it).
+#[test]
+fn the_payload_carries_the_progression_view() {
+    let mut life = fixture_life();
+    life.history.push(HistoryEntry { node: "cool".to_string(), started: 5, ended: 5, outcome: "cool:gather:mining/iron_ore@3295,3310,0|6000|contended".to_string() });
+    let mut miner = lifescape_planner::new_ambition("miner", "need:iron_ore", &lifescape_planner::BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 7, &[], lifescape_planner::Stamp { tick: 0, secs: 0 }).expect("miner");
+    miner.milestones[0].status = lifescape_planner::MilestoneStatus::Done;
+    miner.milestones[1].status = lifescape_planner::MilestoneStatus::Active;
+    life.goal_origin = Some(miner.milestones[1].id.clone());
+    life.ambition = Some(miner);
+    let mut fixture = sources();
+    fixture.plan = Some(crate::web_brain_view::PlanInfo {
+        from: "miner".to_string(),
+        kind: "miner".to_string(),
+        numbers: "value 909 per 6000 ticks (kept: no change beats it by 25 %), 3 bots already on miner".to_string(),
+        applied: true,
+        computed_secs: 0,
+    });
+    let first = brain_payload("t42", &life_to_value(&life), &fixture, &|_| 100);
+    let view = first.get("ambition_view");
+    assert_eq!(view.get("given").get("source").as_str(), Some("a4_kept"));
+    assert_eq!(view.get("given").get("numbers").get("value_6000").as_i64(), Some(909));
+    let states: Vec<String> = view.get("milestones").as_arr().cloned().unwrap_or_default().iter().map(|row| row.get("state").as_str().unwrap_or("").to_string()).collect();
+    assert_eq!(&states[..2], &["done".to_string(), "active".to_string()]);
+    assert!(states[2..].iter().all(|state| state == "open"), "{states:?}");
+    assert_eq!(first.get("goal").get("origin").get("kind").as_str(), Some("milestone"));
+    assert_eq!(first.get("cooling").as_arr().map(Vec::len), Some(1));
+    assert_eq!(first.get("tick_ms").as_i64(), Some(60));
+    let later = brain_payload("t42", &life_to_value(&life), &fixture, &|_| 2_000);
+    assert_ne!(first.get("cooling"), later.get("cooling"), "the countdown moved");
+    assert_eq!(first.get("version"), later.get("version"), "but not the version");
 }

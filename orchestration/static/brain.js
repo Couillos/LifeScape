@@ -123,7 +123,8 @@ var BrainLayout = (function () {
     var boxes = [];
     var edges = [];
     var columns = [];
-    var ambition = payload.ambition && typeof payload.ambition === 'object' ? payload.ambition : null;
+    var ambition = payload.ambition_view && typeof payload.ambition_view === 'object' ? payload.ambition_view
+      : (payload.ambition && typeof payload.ambition === 'object' ? payload.ambition : null);
     var goalId = 'goal';
     if (ambition) {
       columns.push([{ id: 'ambition', type: 'ambition', h: 74, data: ambition }]);
@@ -217,9 +218,187 @@ var BrainLayout = (function () {
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
+  // -- Presenters (pure, French, no jargon) ---------------------------------
+  // Read the progression view of /api/brain (ambition_view, goal.origin,
+  // cooling, training, tick_ms) built by web_brain_view.rs. Each returns an
+  // HTML string; every value goes through escapeHtml.
+  var SOURCE_LABEL = {
+    protected: 'Compte protégé', pin: 'Épinglée par l\'opérateur', operator: 'Type opérateur',
+    a4_rebalance: 'Rééquilibrage A4', a4_kept: 'Gardée par la passe A4', a4_draw: 'Choisie par la valeur', legacy: 'Tirée avant A4',
+  };
+  var STATE_LABEL = { open: 'ouvert', active: 'en cours', waiting: 'en attente', done: 'fait', set_aside: 'mis de côté' };
+  var ORIGIN_LABEL = {
+    milestone: 'origine', demand: 'origine', bid: 'origine', side: 'origine', alch: 'origine', filler: 'origine', none: 'origine',
+  };
+  var ORIGIN_SHORT = { bid: 'offre d\'achat', side: 'but d\'appoint', alch: 'alchimie', filler: 'remplissage', none: 'sans origine' };
+
+  function groupDigits(value) {
+    return String(Math.round(Number(value) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  }
+
+  // Ticks as « 7 200 ticks (≈ 12 min) »: the server tick length decides the
+  // minutes (60 ms in dev, 600 ms in prod).
+  function durationText(ticks, tickMs) {
+    var count = Number(ticks) || 0;
+    var base = groupDigits(count) + ' ticks';
+    if (!tickMs) return base;
+    var seconds = count * tickMs / 1000;
+    var approx;
+    if (seconds < 90) approx = Math.round(seconds) + ' s';
+    else if (seconds < 5400) approx = Math.round(seconds / 60) + ' min';
+    else {
+      var hours = Math.floor(seconds / 3600);
+      var minutes = Math.round((seconds - hours * 3600) / 60);
+      approx = hours + ' h' + (minutes ? ' ' + String(minutes).padStart(2, '0') : '');
+    }
+    return base + ' (≈ ' + approx + ')';
+  }
+
+  function sourceLabel(source) { return SOURCE_LABEL[source] || 'Ambition'; }
+
+  // The figures of a value pick, one line: value per 6000 ticks, tenants,
+  // the object that carries it, the climb it needs.
+  function numbersLine(numbers, tickMs) {
+    if (!numbers || typeof numbers !== 'object') return '';
+    var bits = [];
+    if (numbers.value_6000 !== null && numbers.value_6000 !== undefined) bits.push('valeur ' + groupDigits(numbers.value_6000) + ' pièces par 6000 ticks');
+    if (numbers.holders !== null && numbers.holders !== undefined) bits.push(numbers.holders + (numbers.holders > 1 ? ' bots déjà sur ce métier' : ' bot déjà sur ce métier'));
+    if (numbers.driver) bits.push('portée par ' + numbers.driver);
+    if (numbers.climb_ticks) bits.push('montée de ' + durationText(numbers.climb_ticks, tickMs));
+    if (!bits.length && numbers.text) return numbers.text;
+    return bits.join(' · ');
+  }
+
+  function stampText(seconds) {
+    if (!seconds) return '-';
+    var date = new Date(seconds * 1000);
+    var pad = function (number) { return String(number).padStart(2, '0'); };
+    return pad(date.getDate()) + '/' + pad(date.getMonth() + 1) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+  }
+
+  // Ambition: type, label, how it was given (with the value that carries
+  // it), then the revisions, newest first, retired rules named as such.
+  function ambitionHtml(payload) {
+    var view = payload.ambition_view;
+    var tickMs = payload.tick_ms;
+    if (!view) return '<h3>Ambition</h3><div class="muted">aucune ambition portée</div>';
+    var esc = escapeHtml;
+    var given = view.given || {};
+    var out = ['<h3>Ambition</h3><div><b>' + esc(view.label || view.kind) + '</b> <span class="muted">(' + esc(view.kind) + ')</span></div>'];
+    out.push('<div><span class="chip st-ready">' + esc(sourceLabel(given.source)) + '</span> ' + esc(given.text || '') + '</div>');
+    var line = numbersLine(given.numbers, tickMs);
+    if (line) out.push('<div class="alt">' + esc(line) + '</div>');
+    if (view.drawn_at) out.push('<div class="alt">en place depuis le ' + esc(stampText(view.drawn_at)) + ' · échelon ' + esc(view.rung) + '</div>');
+    var rows = view.revision_rows || [];
+    out.push('<h3>Révisions (' + esc(view.revision_total || 0) + ')</h3>');
+    if (!rows.length) out.push('<div class="muted">aucune</div>');
+    rows.slice(0, 8).forEach(function (row) {
+      out.push('<div><span class="alt">' + esc(stampText(row.at_secs)) + '</span> ' + esc(row.from) + ' → ' + esc(row.to) +
+        (row.retired_rule ? ' <span class="chip st-abandoned">règle retirée</span>' : '') +
+        '<div class="alt">' + esc(row.text) + '</div></div>');
+    });
+    var total = Number(view.revision_total) || rows.length;
+    if (total > 8) out.push('<div class="muted">… et ' + (total - 8) + ' plus anciennes</div>');
+    return out.join('');
+  }
+
+  // Short state of one milestone for the graph box.
+  function milestoneShort(stone, tickMs) {
+    var label = STATE_LABEL[stone.state] || stone.status || '?';
+    if (stone.ticks_left) label += ' · ' + durationText(stone.ticks_left, tickMs).replace(/ ticks/, 't');
+    return label;
+  }
+
+  // Milestones with their real state: open, waiting (gear nobody makes,
+  // unfilled buy), done, set aside (blocked three times) with the cooldown
+  // left before the retry.
+  function milestonesHtml(payload) {
+    var view = payload.ambition_view;
+    if (!view) return '';
+    var esc = escapeHtml;
+    var stones = view.milestones || [];
+    var count = function (state) { return stones.filter(function (stone) { return stone.state === state; }).length; };
+    var out = ['<h3>Jalons</h3><div class="muted">' + count('active') + ' en cours · ' + count('open') + ' ouverts · ' + count('waiting') + ' en attente · ' +
+      count('set_aside') + ' mis de côté · ' + count('done') + ' faits</div>'];
+    // Ladder order: what is left first, then the last three done.
+    var openFirst = stones.filter(function (stone) { return stone.state !== 'done'; });
+    var doneAll = stones.filter(function (stone) { return stone.state === 'done'; });
+    var doneShown = doneAll.length;
+    openFirst.concat(doneAll.slice(-3)).forEach(function (stone) {
+      var progress = stone.progress && stone.progress[1] ? ' <span class="alt">' + esc(stone.progress[0]) + '/' + esc(stone.progress[1]) + '</span>' : '';
+      var origin = stone.origin && stone.origin.indexOf('demand:') === 0 ? ' <span class="alt">demande du marché</span>' : '';
+      out.push('<div><span class="chip st-' + esc(stone.state) + '">' + esc(STATE_LABEL[stone.state] || stone.state) + '</span> <b>' + esc(stone.id) + '</b> ' +
+        esc(stone.label) + progress + origin + '<div class="alt">' + esc(stone.state_text) + '</div></div>');
+    });
+    if (doneShown > 3) out.push('<div class="muted">… ' + (doneShown - 3) + ' jalons faits plus anciens non listés</div>');
+    return out.join('');
+  }
+
+  // Current goal and where it comes from.
+  function goalHtml(payload) {
+    var goal = payload.goal || {};
+    var origin = goal.origin || {};
+    var esc = escapeHtml;
+    var out = ['<h3>But courant</h3><div><b>' + esc(goal.label || '?') + '</b></div>'];
+    out.push('<div><span class="chip st-ready">' + esc(ORIGIN_LABEL[origin.kind] || 'origine') + '</span> ' + esc(origin.text || '') + '</div>');
+    if (payload.filler) out.push('<div class="alt">remplissage en cours : ' + esc(payload.filler.method) + ' (en attendant le marché pour ' + esc(payload.filler.parked) + ')</div>');
+    return out.join('');
+  }
+
+  // Sites and methods the brain avoids for this bot, with the time left.
+  function coolingHtml(payload) {
+    var rows = payload.cooling || [];
+    var esc = escapeHtml;
+    var out = ['<h3>Sites et méthodes en refroidissement</h3>'];
+    if (!rows.length) return out.join('') + '<div class="muted">aucun</div>';
+    rows.forEach(function (row) {
+      out.push('<div><span class="chip st-blocked">' + esc(row.method) + '</span> ' + (row.site ? '<span class="alt">site ' + esc(row.site) + '</span> ' : '') +
+        esc(durationText(row.ticks_left, payload.tick_ms)) + '<div class="alt">' + esc(row.cause) + '</div></div>');
+    });
+    return out.join('');
+  }
+
+  // Value of time (A1): coins one tick of the bot's work is worth when
+  // the training line is chosen, and the climbs that lift it.
+  function trainingHtml(payload) {
+    var view = payload.training;
+    var esc = escapeHtml;
+    var out = ['<h3>Valeur du temps</h3>'];
+    if (!view) return out.join('') + '<div class="muted">pas d\'entraînement en cours</div>';
+    var fixed = function (value) { return (Number(value) || 0).toFixed(2); };
+    out.push('<div>' + esc(view.skill) + ' : un tick vaut <b>' + fixed(view.time_value) + '</b> pièce(s)' +
+      (view.lifted ? ' <span class="chip st-active">relevé par une montée lucrative</span>' : '') + '</div>');
+    out.push('<div class="alt">gain mesuré du bot ' + fixed(view.own_rate) + ' par tick · attrait des montées en attente ' + fixed(view.pull_per_tick) + ' par tick</div>');
+    var pending = view.pending || [];
+    if (!pending.length) out.push('<div class="muted">aucune montée lucrative en attente</div>');
+    pending.forEach(function (found) {
+      var gates = (found.gates || []).filter(function (gate) { return gate.climb_ticks > 0; })
+        .map(function (gate) { return gate.skill + ' ' + gate.level; }).join(', ');
+      out.push('<div>' + esc(found.item) + ' <span class="alt">valeur ' + esc(groupDigits(found.value_6000)) + ' par 6000 ticks · montée ' +
+        esc(durationText(found.climb_ticks, payload.tick_ms)) + (gates ? ' (' + esc(gates) + ')' : '') + '</span></div>');
+    });
+    return out.join('');
+  }
+
+  // The progression sections of one payload, in reading order.
+  function progressionHtml(payload) {
+    return goalHtml(payload) + ambitionHtml(payload) + milestonesHtml(payload) + trainingHtml(payload) + coolingHtml(payload);
+  }
+
+  // Short origin for the goal box of the graph.
+  function originShort(origin) {
+    if (!origin || !origin.kind) return 'sans origine';
+    var raw = origin.raw ? ' ' + origin.raw : '';
+    if (origin.kind === 'milestone' || origin.kind === 'demand') return 'jalon' + raw + (origin.kind === 'demand' ? ' · demande' : '');
+    return ORIGIN_SHORT[origin.kind] || origin.kind;
+  }
+
   return {
     parentsOf: parentsOf, ranks: ranks, collapsibleDone: collapsibleDone, visibleNodes: visibleNodes,
     layout: layout, badgesFor: badgesFor, escapeHtml: escapeHtml, nodeHeight: nodeHeight,
+    durationText: durationText, sourceLabel: sourceLabel, numbersLine: numbersLine, ambitionHtml: ambitionHtml,
+    milestonesHtml: milestonesHtml, milestoneShort: milestoneShort, goalHtml: goalHtml, coolingHtml: coolingHtml,
+    trainingHtml: trainingHtml, originShort: originShort, progressionHtml: progressionHtml,
   };
 })();
 
@@ -233,9 +412,10 @@ var BrainView = (function () {
   var STATUS = {
     pending: ['#333', '#ccc'], ready: ['#1d3f5e', '#9fd0ff'], active: ['#1d5e2a', '#c8ffd2'],
     done: ['#2c4a2c', '#9ccc9c'], blocked: ['#5e3c1d', '#ffd9a0'], failed: ['#5e1d1d', '#ffb0b0'],
-    abandoned: ['#222', '#777'],
+    abandoned: ['#222', '#777'], open: ['#333', '#ccc'], waiting: ['#1d3f5e', '#9fd0ff'], set_aside: ['#3a2f1d', '#c9a96e'],
   };
   var EDGE = { dep: '#666', goal: '#888', plan: '#4a7', origin: '#ff0', filed: '#f90' };
+  var GOAL_KIND_LABEL = { next: 'suivant', done: 'fait', stuck: 'bloqué', unban: 'ban levé', other: 'note' };
   var BADGE = { wish: '#7a4fbf', buy: '#1d5e5e', sell: '#5e5e1d', deal: '#2a5ea8' };
   var account = null;
   var payload = null;
@@ -291,19 +471,24 @@ var BrainView = (function () {
     var lines = [];
     if (box.type === 'ambition') {
       lines.push('Ambition: ' + (data.label || data.kind || '?'));
-      if (data.why) lines.push('Pourquoi: ' + data.why);
+      if (data.given) {
+        lines.push(BrainLayout.sourceLabel(data.given.source) + ' : ' + data.given.text);
+        var figures = BrainLayout.numbersLine(data.given.numbers, payload && payload.tick_ms);
+        if (figures) lines.push(figures);
+      } else if (data.why) lines.push('Pourquoi: ' + data.why);
       if (data.groups && data.groups.length) lines.push('Groupes: ' + data.groups.join(', '));
-      (data.revisions || []).slice(-3).forEach(function (rev) {
-        lines.push('Révision @' + rev.tick + ': ' + rev.from + ' → ' + rev.to + (rev.why ? ' (' + rev.why + ')' : ''));
+      (data.revision_rows || []).slice(0, 3).forEach(function (rev) {
+        lines.push('Révision : ' + rev.from + ' → ' + rev.to + ' (' + (rev.retired_rule ? 'règle retirée : ' : '') + rev.text + ')');
       });
     } else if (box.type === 'milestone') {
       lines.push('Jalon ' + data.id + ': ' + (data.label || ''));
-      lines.push('Statut: ' + (data.status || '?') + ' · ' + (data.kind || '') + ' → ' + targetText(data.target));
+      lines.push('État : ' + (data.state_text || data.status || '?') + ' · ' + (data.kind || '') + ' → ' + targetText(data.target));
       if (progressText(data.progress)) lines.push('Progrès: ' + progressText(data.progress));
       if (data.blocked_count) lines.push('Blocages: ' + data.blocked_count);
     } else if (box.type === 'goal') {
       lines.push('But courant: ' + (data.label || '?'));
-      if (data.origin_milestone) lines.push('Issu du jalon ' + data.origin_milestone);
+      if (data.origin && data.origin.text) lines.push('Origine : ' + data.origin.text);
+      else if (data.origin_milestone) lines.push('Issu du jalon ' + data.origin_milestone);
     } else {
       lines.push(data.id + ' · ' + data.label + ' · ' + data.status);
       if (progressText(data.progress)) lines.push('Progrès: ' + progressText(data.progress));
@@ -323,7 +508,7 @@ var BrainView = (function () {
   function drawBox(layer, box) {
     var data = box.data || {};
     var group = svgNode('g', { 'data-id': box.id, cursor: box.type === 'node' ? 'pointer' : 'default' }, layer);
-    var status = box.type === 'node' || box.type === 'milestone' ? data.status : (box.type === 'goal' ? 'active' : 'ready');
+    var status = box.type === 'node' ? data.status : (box.type === 'milestone' ? (data.state || data.status) : (box.type === 'goal' ? 'active' : 'ready'));
     var colors = statusColors(status);
     var stroke = box.type === 'goal' ? '#ff0' : (box.type === 'ambition' ? '#4a7' : '#444');
     svgNode('rect', { x: box.x, y: box.y, width: box.w, height: box.h, rx: 5, fill: colors[0], stroke: stroke, 'stroke-width': box.type === 'node' ? 1 : 1.5 }, group);
@@ -331,13 +516,13 @@ var BrainView = (function () {
     var sub;
     if (box.type === 'ambition') {
       title = clip(data.label || data.kind, 30);
-      sub = clip(data.why || data.kind || '', 36);
+      sub = clip(data.given ? BrainLayout.sourceLabel(data.given.source) + (data.given.numbers && data.given.numbers.value_6000 ? ' · ' + data.given.numbers.value_6000 + '/6000t' : '') : (data.why || data.kind || ''), 36);
     } else if (box.type === 'milestone') {
       title = clip(data.label, 28);
-      sub = (data.status || '') + (progressText(data.progress) ? ' · ' + progressText(data.progress) : '') + (data.blocked_count ? ' · ⚠' + data.blocked_count : '');
+      sub = (data.state ? BrainLayout.milestoneShort(data, payload && payload.tick_ms) : (data.status || '')) + (progressText(data.progress) ? ' · ' + progressText(data.progress) : '') + (data.blocked_count ? ' · ⚠' + data.blocked_count : '');
     } else if (box.type === 'goal') {
       title = 'But: ' + clip(data.label, 24);
-      sub = data.origin_milestone ? 'jalon ' + data.origin_milestone : 'sans ambition';
+      sub = data.origin ? BrainLayout.originShort(data.origin) : (data.origin_milestone ? 'jalon ' + data.origin_milestone : 'sans origine');
     } else {
       title = data.id + ' ' + clip(data.label, 24);
       sub = data.status + (progressText(data.progress) ? ' · ' + progressText(data.progress) : '') +
@@ -447,6 +632,7 @@ var BrainView = (function () {
     if (payload.errors && payload.errors.length) {
       out.push('<h3>Sources en erreur</h3>' + payload.errors.map(function (error) { return '<div class="brain-err">' + esc(error) + '</div>'; }).join(''));
     }
+    out.push(BrainLayout.progressionHtml(payload));
     var live = payload.live || {};
     var levels = live.levels || {};
     out.push('<h3>Live</h3><div>combat ' + esc(live.combat === null || live.combat === undefined ? '?' : live.combat) +
@@ -490,7 +676,7 @@ var BrainView = (function () {
       var pad = function (number) { return String(number).padStart(2, '0'); };
       var chip = { next: 'st-ready', done: 'st-done', stuck: 'st-failed', unban: 'st-pending' }[entry.kind] || 'st-pending';
       return '<div><span class="alt">' + pad(date.getDate()) + '/' + pad(date.getMonth() + 1) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes()) +
-        '</span> <span class="chip ' + chip + '">' + esc(entry.kind) + '</span> <span class="alt">' + esc(entry.outcome) + '</span></div>';
+        '</span> <span class="chip ' + chip + '">' + esc(GOAL_KIND_LABEL[entry.kind] || entry.kind) + '</span> <span class="alt">' + esc(entry.outcome) + '</span></div>';
     }).join('') : '<div class="muted">aucun</div>'));
     return out.join('');
   }

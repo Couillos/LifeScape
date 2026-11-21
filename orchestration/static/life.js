@@ -31,13 +31,15 @@ async function getJson(url) {
 function goalText(goal) {
   if (!goal || typeof goal !== 'object') return '-';
   const kind = goal.kind || '?';
-  if (kind === 'max_skills') return 'max ' + (goal.skills || []).join(',') + ' → ' + goal.level;
-  if (kind === 'obtain') return 'obtain ' + goal.count + ' × ' + goal.item;
-  if (kind === 'complete_quest') return 'quest ' + goal.quest;
-  if (kind === 'equip_best') return 'equip ' + goal.style;
-  if (kind === 'access_area') return 'reach ' + goal.area;
-  if (kind === 'make_money') return 'make money';
-  if (kind === 'get_rich') return 'get rich' + (goal.merchant === true ? ' (merchant)' : goal.merchant === false ? ' (producer)' : '');
+  if (kind === 'max_skills') return 'monter ' + (goal.skills || []).join(',') + ' → ' + goal.level;
+  if (kind === 'obtain') return 'obtenir ' + goal.count + ' × ' + goal.item;
+  if (kind === 'produce') return 'produire ' + goal.count + ' × ' + goal.item;
+  if (kind === 'complete_quest') return 'quête ' + goal.quest;
+  if (kind === 'equip_best') return 'équipement ' + goal.style;
+  if (kind === 'access_area') return 'accéder à ' + goal.area;
+  if (kind === 'make_money') return 'gagner de l\'argent';
+  if (kind === 'get_rich') return 'devenir riche';
+  if (kind === 'make_market') return 'teneur de marché';
   return kind;
 }
 
@@ -76,7 +78,7 @@ function renderIndex() {
     if (account === selected) trs[i].className = "cur";
     trs[i].onclick = ((name) => () => pick(name))(account);
   }
-  document.getElementById("count").textContent = rows.length + " account(s)";
+  document.getElementById("count").textContent = rows.length + " compte(s)";
 }
 
 // Sortable text rides beside the raw values: TableSort sorts the raw
@@ -126,13 +128,13 @@ function onSearch() {
 function kindText(node) {
   const kind = node.kind || '?';
   const params = node.params || {};
-  if (kind === 'reach_level') return 'reach ' + params.skill + ' ' + params.level;
-  if (kind === 'obtain_items') return 'obtain ' + params.count + ' × ' + params.item;
-  if (kind === 'complete_quest') return 'quest ' + params.quest;
-  if (kind === 'equip_best') return 'equip ' + params.style;
-  if (kind === 'access_area') return 'reach ' + params.area;
-  if (kind === 'space_cleanup') return 'cleanup bank';
-  if (kind === 'make_money') return 'make money';
+  if (kind === 'reach_level') return params.skill + ' ' + params.level;
+  if (kind === 'obtain_items') return 'obtenir ' + params.count + ' × ' + params.item;
+  if (kind === 'complete_quest') return 'quête ' + params.quest;
+  if (kind === 'equip_best') return 'équipement ' + params.style;
+  if (kind === 'access_area') return 'accéder à ' + params.area;
+  if (kind === 'space_cleanup') return 'vider la banque';
+  if (kind === 'make_money') return 'gagner de l\'argent';
   return kind;
 }
 
@@ -161,6 +163,19 @@ function showTab(name) {
   if (BrainView) BrainView.setActive(brain);
 }
 
+// Ambition, jalons, but courant, valeur du temps, refroidissements : the
+// progression sections of the brain view, in the Détail tab too.
+async function loadProgress() {
+  const holder = document.getElementById('progress-detail');
+  if (!holder || selected === null || typeof BrainLayout === 'undefined') return;
+  const requested = selected;
+  try {
+    const payload = await getJson('/api/brain/' + encodeURIComponent(requested));
+    if (requested !== selected) return;
+    holder.innerHTML = payload.ok ? BrainLayout.progressionHtml(payload) : '<div class="muted">' + BrainLayout.escapeHtml(payload.error || 'cerveau illisible') + '</div>';
+  } catch (e) { /* keep the last frame */ }
+}
+
 function altText(alternatives) {
   if (!alternatives || !alternatives.length) return '<span class="muted">-</span>';
   return alternatives.map(alt =>
@@ -177,24 +192,24 @@ async function loadDetail() {
   } catch (e) { /* keep the last frame */ }
   if (!life) return;
   document.getElementById('title').textContent = life.account +
-    (life.active ? ' · on ' + life.active : ' · idle');
-  document.getElementById('goal').textContent = 'goal: ' + goalText(life.goal);
+    (life.active ? ' · sur ' + life.active : ' · au repos');
+  document.getElementById('goal').textContent = 'but : ' + goalText(life.goal);
   const profile = life.profile || {};
   document.getElementById('profile').textContent =
     (profile.ironman ? 'ironman · ' : '') + (profile.archetype || '') +
-    ' · market affinity ' + Math.round((profile.market_affinity || 0) * 100) + '%' +
-    ' · patience ' + Math.round((profile.price_patience || 0) * 100) + '%';
+    ' · goût du marché ' + Math.round((profile.market_affinity || 0) * 100) + ' %' +
+    ' · patience sur les prix ' + Math.round((profile.price_patience || 0) * 100) + ' %';
   const engaged = life.engagement;
   document.getElementById('engaged').textContent = engaged
-    ? engaged.node + ': ' + engaged.min_ticks + '–' + engaged.max_ticks + ' ticks (drawn ' + engaged.chosen + ')'
-    : 'no engagement (between tasks)';
+    ? engaged.node + ' : ' + engaged.min_ticks + '–' + engaged.max_ticks + ' ticks (tiré : ' + engaged.chosen + ')'
+    : 'aucun engagement (entre deux tâches)';
 
-  const head = '<tr><th class="left">id</th><th class="left">task</th><th class="left">status</th>' +
-    '<th class="left">method + alternatives</th><th>progress</th><th>ticks</th></tr>';
+  const head = '<tr><th class="left">id</th><th class="left">tâche</th><th class="left">état</th>' +
+    '<th class="left">méthode + alternatives</th><th>progrès</th><th>ticks</th></tr>';
   const rows = (life.nodes || []).map(node => {
     const progress = node.progress && node.progress.target
       ? node.progress.current + '/' + node.progress.target : '-';
-    const method = node.method ? '<div>' + node.method + '</div>' : '<span class="muted">undecided</span>';
+    const method = node.method ? '<div>' + node.method + '</div>' : '<span class="muted">pas encore choisie</span>';
     return '<tr><td class="left">' + node.id + '</td><td class="left">' + kindText(node) + '</td>' +
       '<td class="left">' + statusChip(node.status) + '</td>' +
       '<td class="left">' + method + altText(node.alternatives) + '</td>' +
@@ -202,7 +217,7 @@ async function loadDetail() {
   });
   document.getElementById('nodes').innerHTML = head + rows.join('');
 
-  const hhead = '<tr><th class="left">node</th><th class="left">outcome</th><th class="left">ended</th></tr>';
+  const hhead = '<tr><th class="left">nœud</th><th class="left">issue</th><th class="left">fin</th></tr>';
   const hrows = (life.history || []).slice(-20).reverse().map(entry => {
     const date = new Date(entry.ended * 1000);
     const label = String(date.getDate()).padStart(2, '0') + '/' + String(date.getMonth() + 1).padStart(2, '0') +
@@ -210,8 +225,9 @@ async function loadDetail() {
     return '<tr><td class="left">' + entry.node + '</td><td class="left">' + entry.outcome +
       '</td><td class="left">' + label + '</td></tr>';
   });
+  loadProgress();
   document.getElementById('history').innerHTML = hhead +
-    (hrows.join('') || '<tr><td class="left muted" colspan="3">no history yet</td></tr>');
+    (hrows.join('') || '<tr><td class="left muted" colspan="3">pas encore d\'historique</td></tr>');
 }
 
 loadLives().then(() => {

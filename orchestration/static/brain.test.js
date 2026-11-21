@@ -121,3 +121,104 @@ test('badges match wishes, orders and deals by object', () => {
   assert.deepEqual(BrainLayout.badgesFor(NODES[0], payload), [], 'no object, no badge');
   assert.equal(BrainLayout.escapeHtml('<a "b">&'), '&lt;a &quot;b&quot;&gt;&amp;');
 });
+
+// -- Progression view (A1 to A4): presenters of the Cerveau panel ------------
+
+const VIEW = {
+  kind: 'miner', label: 'mineur : minerais et barres', rung: 3, drawn_at: 1795272845, revision_total: 2,
+  given: {
+    source: 'a4_rebalance', text: 'Donnée par le rééquilibrage A4.',
+    numbers: { text: 'value 909 per 6000 ticks', value_6000: 909, holders: 14, driver: 'iron_ore', climb_ticks: 0, kept: false },
+  },
+  revision_rows: [
+    { at_secs: 1795272845, from: 'priest', to: 'miner', why: 'rebalance', text: 'rééquilibrage A4 : le métier dont la demande non servie rapporte le plus', retired_rule: false },
+    { at_secs: 1795252942, from: 'mage', to: 'priest', why: 'repair:coverage:prayer', text: 'règle retirée : réparation de couverture', retired_rule: true },
+  ],
+  milestones: [
+    { id: 'm1', label: 'mining 70', state: 'done', state_text: 'fait', progress: [70, 70], origin: 'ladder', ticks_left: null },
+    { id: 'm2', label: 'équiper le meilleur magic', state: 'waiting', state_text: 'en attente : équipement que personne ne fabrique (ni en stock, ni au marché), nouvel essai dans 900 ticks', progress: [0, 1], origin: 'ladder', ticks_left: 900 },
+    { id: 'm3', label: 'mining 80', state: 'set_aside', state_text: 'mis de côté (bloqué 3 fois) : reprise possible dans 4000 ticks', progress: [70, 80], origin: 'ladder', ticks_left: 4000 },
+    { id: 'm4', label: 'produire 200 iron_ore', state: 'open', state_text: 'ouvert', progress: [0, 200], origin: 'demand:iron_ore', ticks_left: null },
+  ],
+};
+
+test('durations read in ticks and in minutes with the server tick length', () => {
+  assert.equal(BrainLayout.durationText(900, 600), '900 ticks (≈ 9 min)');
+  assert.equal(BrainLayout.durationText(40, 600), '40 ticks (≈ 24 s)');
+  assert.equal(BrainLayout.durationText(72000, 600), '72 000 ticks (≈ 12 h)');
+  assert.equal(BrainLayout.durationText(100, 0), '100 ticks', 'no tick length, no minutes');
+});
+
+test('the ambition shows how it was given, its value and the revisions', () => {
+  const html = BrainLayout.ambitionHtml({ ambition_view: VIEW, tick_ms: 600 });
+  assert.match(html, /mineur : minerais et barres/);
+  assert.match(html, /Rééquilibrage A4/);
+  assert.match(html, /valeur 909 pièces par 6000 ticks/);
+  assert.match(html, /14 bots déjà sur ce métier/);
+  assert.match(html, /portée par iron_ore/);
+  assert.match(html, /règle retirée/, 'a retired rule is named as retired');
+  assert.match(html, /Révisions \(2\)/);
+  assert.doesNotMatch(html, /repair:coverage/, 'raw rule codes are not shown');
+  assert.match(BrainLayout.ambitionHtml({ ambition_view: null }), /aucune ambition/);
+});
+
+test('every protected, pinned and operator source has its label', () => {
+  for (const [source, label] of [['protected', 'Compte protégé'], ['pin', 'Épinglée'], ['operator', 'Type opérateur'], ['a4_kept', 'Gardée'], ['a4_draw', 'valeur'], ['legacy', 'avant A4']]) {
+    const html = BrainLayout.ambitionHtml({ ambition_view: Object.assign({}, VIEW, { given: { source: source, text: 't', numbers: null } }) });
+    assert.match(html, new RegExp(label, 'i'), source);
+  }
+});
+
+test('milestones show their real state with the cooldown left', () => {
+  const html = BrainLayout.milestonesHtml({ ambition_view: VIEW, tick_ms: 600 });
+  assert.match(html, /1 ouverts · 1 en attente · 1 mis de côté · 1 faits/);
+  assert.match(html, /st-waiting/);
+  assert.match(html, /personne ne fabrique/);
+  assert.match(html, /st-set_aside/);
+  assert.match(html, /reprise possible dans 4000 ticks/);
+  assert.match(html, /demande du marché/, 'a milestone born of a market demand is marked');
+  assert.equal(BrainLayout.milestonesHtml({ ambition_view: null }), '');
+  assert.equal(BrainLayout.milestoneShort(VIEW.milestones[2], 600), 'mis de côté · 4 000t (≈ 40 min)'.replace('4 000t', '4 000t'));
+  assert.equal(BrainLayout.milestoneShort(VIEW.milestones[3], 600), 'ouvert');
+});
+
+test('the goal names its origin: milestone, buy offer, side goal, filler', () => {
+  const goal = (origin, extra) => BrainLayout.goalHtml(Object.assign({ goal: { label: 'magic 70', origin: origin } }, extra || {}));
+  assert.match(goal({ kind: 'milestone', text: 'jalon m1 : magic 70', raw: 'm1' }), /jalon m1 : magic 70/);
+  assert.match(goal({ kind: 'bid', text: 'réponse à une offre d\'achat : sapphire', raw: 'bid:sapphire' }), /offre d&#39;achat|offre d'achat/);
+  assert.match(goal({ kind: 'side', text: 'but d\'appoint : money', raw: 'side:money' }), /appoint/);
+  assert.match(goal({ kind: 'none', text: 'sans origine (but libre)', raw: '' }, { filler: { method: 'gather:woodcut/yew_logs', parked: 'n1315' } }), /remplissage en cours : gather:woodcut\/yew_logs/);
+  assert.equal(BrainLayout.originShort({ kind: 'milestone', raw: 'm3' }), 'jalon m3');
+  assert.equal(BrainLayout.originShort({ kind: 'demand', raw: 'm4' }), 'jalon m4 · demande');
+  assert.equal(BrainLayout.originShort({ kind: 'bid', raw: 'bid:x' }), 'offre d\'achat');
+  assert.equal(BrainLayout.originShort(null), 'sans origine');
+});
+
+test('cooldowns list the avoided sites and methods with the time left', () => {
+  const html = BrainLayout.coolingHtml({ tick_ms: 600, cooling: [{ method: 'gather:mining/iron_ore', site: '3295,3310,0', ticks_left: 600, cause: 'contended' }] });
+  assert.match(html, /gather:mining\/iron_ore/);
+  assert.match(html, /site 3295,3310,0/);
+  assert.match(html, /600 ticks \(≈ 6 min\)/);
+  assert.match(BrainLayout.coolingHtml({ cooling: [] }), /aucun/);
+});
+
+test('the value of time shows the lift of a lucrative climb', () => {
+  const training = { skill: 'crafting', own_rate: 1.5, pull_per_tick: 10, time_value: 10, lifted: true,
+    pending: [{ item: 'amulet_of_power', method: 'craft', climb_ticks: 120000, value_6000: 60000, gain_per_tick: 3, gates: [{ skill: 'crafting', level: 70, climb_ticks: 120000 }, { skill: 'mining', level: 40, climb_ticks: 0 }] }] };
+  const html = BrainLayout.trainingHtml({ training: training, tick_ms: 600 });
+  assert.match(html, /un tick vaut <b>10\.00<\/b>/);
+  assert.match(html, /relevé par une montée lucrative/);
+  assert.match(html, /amulet_of_power/);
+  assert.match(html, /crafting 70/);
+  assert.doesNotMatch(html, /mining 40/, 'a gate already reached is not a climb');
+  assert.match(BrainLayout.trainingHtml({ training: null }), /pas d'entraînement/);
+  assert.doesNotMatch(BrainLayout.trainingHtml({ training: Object.assign({}, training, { lifted: false }) }), /relevé/);
+});
+
+test('the graph reads the enriched ambition and drops no milestone', () => {
+  const model = BrainLayout.layout({ ambition: { kind: 'x' }, ambition_view: VIEW, goal: { label: 'mining 80', origin_milestone: 'm3' }, nodes: [] }, { collapsed: [] });
+  const ids = model.boxes.map((box) => box.id).sort();
+  assert.deepEqual(ids, ['ambition', 'goal', 'm:m1', 'm:m2', 'm:m3', 'm:m4']);
+  const stone = model.boxes.find((box) => box.id === 'm:m2');
+  assert.equal(stone.data.state, 'waiting');
+});
