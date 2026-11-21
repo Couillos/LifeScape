@@ -248,8 +248,11 @@ pub fn risk_floor(key: &str) -> Option<i64> {
 /// `goblin_greenarmour` drop row meets the `goblins` spot hunting plain
 /// `goblin`s), the spots a bot can farm: ungated ones first, then the
 /// toll-gated ones (legal once the brain budgets the fare), weakest first
-/// in each group. Never underground (a bare key never walks down), never
-/// behind a key or a boat.
+/// in each group; a camp of record underground (the Edgeville dungeon
+/// hill giants) ranks after the surface ones of its group. A spot needs
+/// a position: an underground camp counts only through the spawns the
+/// navigation reaches (`positions`, user 2026-11-21: drop farms go
+/// underground like fights). Never behind a key or a boat.
 pub fn drop_spots(item: &str) -> Vec<CombatSpot> {
     let Some(obj) = crate::objs_by_name(item).into_iter().next() else { return Vec::new() };
     let npcs: Vec<String> = crate::drops::drops_for_obj(obj.obj_id)
@@ -259,11 +262,12 @@ pub fn drop_spots(item: &str) -> Vec<CombatSpot> {
         .collect();
     let mut out: Vec<CombatSpot> = SPOTS
         .iter()
-        .filter(|spot| spot.entrance.is_none() && (spot.access.is_none() || toll_gated(spot)))
+        .filter(|spot| spot.access.is_none() || toll_gated(spot))
         .filter(|spot| npcs.iter().any(|npc| spot.npc_names.iter().any(|hunted| npc.starts_with(hunted))))
+        .filter(|spot| !positions(spot.key).is_empty())
         .copied()
         .collect();
-    out.sort_by_key(|spot| toll_gated(spot));
+    out.sort_by_key(|spot| (toll_gated(spot), spot.entrance.is_some()));
     out
 }
 
@@ -291,9 +295,24 @@ pub fn best_catalogue_spot(melee_level: i64) -> CombatSpot {
 
 /// F2P spawn positions for one spot (all NPC names, zone-filtered),
 /// never a spawn no stand reaches (`site_reach::unreachable_spawn`: the
-/// caged lesser demon of the Wizards' Tower, live 2026-11-21).
+/// caged lesser demon of the Wizards' Tower, live 2026-11-21), nor an
+/// underground one no plan from the surface enters (`no_route`).
 pub fn positions(key: &str) -> Vec<(i64, i64, i64)> {
     raw_positions(key).into_iter().filter(|(x, z, level)| crate::site_reach::unreachable_spawn(*x, *z, *level).is_none()).collect()
+}
+
+/// True when (x, z, level) is an underground position of a catalogue
+/// camp (`positions`, z ≥ 6400): the navigation reaches every one from
+/// the surface and back (`rs/crates/nav/tests/fight_sites.rs` writes
+/// `no_route` for the others), so a fight there passes the generic
+/// underground gate (`access::fight_gates_at`, user 2026-11-21). Any
+/// other underground tile (a rock, a stray spawn) is false.
+pub fn routed_underground(x: i64, z: i64, level: i64) -> bool {
+    static ROUTED: std::sync::OnceLock<std::collections::HashSet<(i64, i64, i64)>> = std::sync::OnceLock::new();
+    let routed = ROUTED.get_or_init(|| {
+        CATALOGUE_SPOTS.iter().flat_map(|spot| positions(spot.key)).filter(|(_, spawn_z, _)| crate::underground::is_underground(*spawn_z)).collect()
+    });
+    crate::underground::is_underground(z) && routed.contains(&(x, z, level))
 }
 
 /// Every F2P spawn of a spot, reachable or not (the reach dump's input,

@@ -10,7 +10,10 @@
 //! an NPC spawn no stand reaches in the open world (the caged lesser
 //! demon of the Wizards' Tower) is no position of its camp
 //! (`combat_spots::positions`), so neither the brain's site table nor the
-//! ladder's clusters ever aim at it.
+//! ladder's clusters ever aim at it. An underground spawn also needs a
+//! plan from the surface and back (`no_route` otherwise: Elvarg's lair,
+//! the moss giants behind the web): every underground camp position left
+//! is one the navigation reaches (`access::fight_gates_at`).
 
 #![forbid(unsafe_code)]
 
@@ -40,6 +43,7 @@ fn parse_table(raw: &str) -> Table {
         let (Some(x), Some(z), Some(level)) = (row.get("x").as_i64(), row.get("z").as_i64(), row.get("level").as_i64()) else { continue };
         let reason = match row.get("reason").as_str() {
             Some("sealed") => "sealed",
+            Some("no_route") => "no_route",
             _ => "no_stand",
         };
         out.insert((x, z, level), reason);
@@ -54,7 +58,8 @@ pub fn unreachable(x: i64, z: i64, level: i64) -> Option<&'static str> {
 }
 
 /// Why the NPC spawn at `(x, z, level)` is no fight site (`sealed`,
-/// `no_stand`), `None` for a reachable one.
+/// `no_stand`, or `no_route`: underground and no plan from the surface
+/// enters it and comes back), `None` for a reachable one.
 pub fn unreachable_spawn(x: i64, z: i64, level: i64) -> Option<&'static str> {
     spawn_table().get(&(x, z, level)).copied()
 }

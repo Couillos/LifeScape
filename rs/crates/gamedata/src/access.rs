@@ -24,9 +24,18 @@
 //! - the Wilderness is open (user 2026-11-16): its hunters count in the
 //!   danger model like any other, the zone is never a gate;
 //! - underground (level 0, z ≥ 6400) outside the Mining Guild: dungeons
-//!   reached by trapdoors and ladders the scripts never take for a gather
-//!   or a drop farm (`kit::hunt::run_spot_with` refuses a bare key
-//!   underground).
+//!   reached by trapdoors, ladders and ropes. A gather never goes down
+//!   (`Gate::Underground`, impassable). A FIGHT does when the navigation
+//!   reaches the camp (user 2026-11-21: the Karamja volcano demons behind
+//!   the boat and the rope, the Edgeville dungeon by its trapdoor, the
+//!   Asgarnian ice dungeon by the Mudskipper Point ladder):
+//!   `fight_gates_at` lifts the generic gate on a camp position
+//!   (`combat_spots::routed_underground`: `nav/tests/fight_sites.rs`
+//!   proves a plan from the surface and back for each, `no_route`
+//!   otherwise, e.g. Elvarg's lair behind its one-way secret door); the
+//!   site's other gates stay (the boat, a key door), its danger and bank
+//!   read at the spawn (`danger::fight_site_requirement`, `site_banks`
+//!   priced by route through the ladders).
 //! The Al Kharid toll is positional (which side the bot stands on), see
 //! `toll::crossing`.
 
@@ -227,6 +236,21 @@ pub fn gates_at(x: i64, z: i64, level: i64) -> Vec<Gate> {
     out
 }
 
+/// Gates of a FIGHT site (a camp's spawn, a drop farm's foe): `gates_at`
+/// without the generic underground gate on a camp position the
+/// navigation reaches from the surface and back
+/// (`combat_spots::routed_underground`, user 2026-11-21); every other
+/// gate stays (the volcano's Karamja boat, a key door, a guild). Any
+/// other underground tile keeps `Gate::Underground`; gathers and
+/// stations read `gates_at`.
+pub fn fight_gates_at(x: i64, z: i64, level: i64) -> Vec<Gate> {
+    let mut gates = gates_at(x, z, level);
+    if crate::combat_spots::routed_underground(x, z, level) {
+        gates.retain(|gate| *gate != Gate::Underground);
+    }
+    gates
+}
+
 /// Ground tile a guild site is reached from (outside its door, the
 /// Mining Guild ladder top): its bank and danger read there (an upstairs
 /// range or an underground rock has no bank on its own level). The site
@@ -292,6 +316,31 @@ mod tests {
         assert!(!shop_floor_routed(3040, 9740, 0), "the Mining Guild keeps its gate");
         assert!(!shop_floor_routed(3100, 9900, 0), "another dungeon");
         assert!(!shop_floor_routed(2998, 3444, 0), "surface");
+    }
+
+    /// User 2026-11-21: a fight goes underground where the navigation
+    /// reaches the camp. The volcano demons keep only the boat (offline
+    /// `route 3092 3245 0 2837 9565 0 --paid`: sail, the rope, 37 tiles);
+    /// the Edgeville dungeon giants (trapdoor) and the ice dungeon
+    /// (Mudskipper Point ladder) open; Elvarg's lair (one-way secret
+    /// door) and the moss giants' hall (web) stay shut; a rock below
+    /// ground keeps the gate (gathers never go down).
+    #[test]
+    fn routed_camps_lift_the_underground_gate_for_fights_only() {
+        use super::fight_gates_at;
+        let volcano = fight_gates_at(2837, 9565, 0);
+        assert!(matches!(volcano.as_slice(), [Gate::Boat { area: "karamja", fare: 30 }]), "{volcano:?}");
+        assert!(gates_at(2837, 9565, 0).contains(&Gate::Underground), "the plain gates keep it");
+        assert!(fight_gates_at(3110, 9845, 0).is_empty(), "a hill giant: {:?}", fight_gates_at(3110, 9845, 0));
+        assert!(fight_gates_at(3053, 9576, 0).is_empty(), "an ice warrior");
+        assert!(fight_gates_at(2838, 9610, 0).contains(&Gate::Underground), "Elvarg's lair");
+        assert!(fight_gates_at(3157, 9905, 0).contains(&Gate::Underground), "the moss giants behind the web");
+        for (x, z, level) in crate::danger::sites("mining", "coal").into_iter().chain(crate::danger::sites("mining", "mithril_ore")) {
+            let gates = gates_at(x, z, level);
+            if z >= 6400 && !gates.iter().any(|gate| matches!(gate, Gate::Guild { .. })) {
+                assert!(gates.iter().any(impassable), "underground rock ({x},{z}) stays shut: {gates:?}");
+            }
+        }
     }
 
     /// The guild's silver yard and the two quest-locked rooms are gated;
