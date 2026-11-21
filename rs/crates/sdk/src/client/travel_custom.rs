@@ -70,13 +70,21 @@ fn at(bot: &Bot, tile: Tile) -> bool {
     (bot.world.x, bot.world.z, bot.world.level) == (tile.x, tile.z, tile.level)
 }
 
-/// Landing of a teleporting loc: the expected tile or one of its eight
-/// neighbours on the same level. Some server teleports pick a free square
-/// around their coord (live 2026-11-14: the essence mine exit portal
-/// landed at (3254,3401) and (3252,3402) for (3253,3401)); the next walk
-/// segment starts from wherever the bot stands.
+/// Chebyshev radius of a teleport landing around its coord: the widest
+/// server pick among the custom loc edges, the essence mine exit portal's
+/// `map_findsquare(%exit_essence_mine_coord, 0, 2, ^map_findsquare_lineofwalk)`
+/// (`essence_mine.rs2`).
+const LANDING_RADIUS: i32 = 2;
+
+/// Landing of a teleporting loc: the expected tile or a square up to
+/// `LANDING_RADIUS` around it on the same level. Some server teleports
+/// pick a free square around their coord (live 2026-11-14: (3254,3401)
+/// and (3252,3402) for (3253,3401); live 2026-11-21: (3255,3401),
+/// (3253,3399), (3252,3403) read as `ride wrong destination` under a
+/// radius of 1); the next walk segment starts from wherever the bot
+/// stands.
 fn landed_near(bot: &Bot, tile: Tile) -> bool {
-    bot.world.level == tile.level && (bot.world.x - tile.x).abs().max((bot.world.z - tile.z).abs()) <= 1
+    bot.world.level == tile.level && (bot.world.x - tile.x).abs().max((bot.world.z - tile.z).abs()) <= LANDING_RADIUS
 }
 
 fn last_game_message(bot: &Bot) -> String {
@@ -259,15 +267,27 @@ impl Bot {
 #[cfg(test)]
 mod tests {
 
+    /// Server `essence_mine.rs2` [oploc1,blankrunestone_exit_portal]:
+    /// `map_findsquare(%exit_essence_mine_coord, 0, 2, lineofwalk)`, a
+    /// random square up to 2 tiles (Chebyshev) from (3253,3401). Live
+    /// 2026-11-21: `ride wrong destination` landed at (3255,3401),
+    /// (3253,3399), (3252,3403)... all two squares off.
     #[test]
-    fn a_teleport_landing_one_square_off_counts() {
+    fn a_teleport_landing_two_squares_off_counts() {
         let mut bot = crate::client::Bot::new("127.0.0.1", 43594, ".", ".");
+        let want = lifescape_nav::plan::Tile { x: 3253, z: 3401, level: 0 };
         bot.world.level = 0;
-        bot.world.x = 3254;
+        for (x, z) in [(3254, 3401), (3255, 3401), (3253, 3399), (3252, 3399), (3253, 3403), (3252, 3403), (3251, 3399)] {
+            bot.world.x = x;
+            bot.world.z = z;
+            assert!(super::landed_near(&bot, want), "({x},{z}) is a server landing");
+        }
+        bot.world.x = 3256;
         bot.world.z = 3401;
-        assert!(super::landed_near(&bot, lifescape_nav::plan::Tile { x: 3253, z: 3401, level: 0 }));
-        bot.world.x = 3255;
-        assert!(!super::landed_near(&bot, lifescape_nav::plan::Tile { x: 3253, z: 3401, level: 0 }));
+        assert!(!super::landed_near(&bot, want), "three squares off is elsewhere");
+        bot.world.x = 3253;
+        bot.world.level = 1;
+        assert!(!super::landed_near(&bot, want), "other level");
     }
 
     use super::{fare_pick, paid_allowed};
