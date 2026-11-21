@@ -524,6 +524,22 @@ fn margin_at(item: &str, sale_price: f64, reference: &dyn Fn(&str) -> f64) -> Op
     lifescape_planner::chain_profit(item, &prices, 1.0).ok().map(|verdict| verdict.margin)
 }
 
+/// Price one unit of `item` is sold at when served now: the best resting
+/// bid of `signals`, else the market reference. `None`: the store cannot
+/// be read (logged).
+pub(crate) fn serving_price(item: &str, signals: &[DemandSignal]) -> Option<f64> {
+    if let Some(signal) = signals.iter().find(|signal| signal.item == item) {
+        return Some(signal.best_bid.max(0) as f64);
+    }
+    match lifescape_store::Store::open(&crate::market_service::db_path()) {
+        Ok(store) => Some(crate::rates_service::price_estimate(&store, &display_of(item)).0),
+        Err(error) => {
+            crate::logln!("market_demand: store unreadable, serving price of {item} unknown: {error}");
+            None
+        }
+    }
+}
+
 /// Per-unit margin of serving `item` now: the best resting bid of
 /// `signals` (the demand the bot answers), else the market reference
 /// when no bid rests, against the inputs at the reference. `None`: no

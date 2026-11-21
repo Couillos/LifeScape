@@ -34,6 +34,7 @@ pub mod brain_idle;
 pub mod brain_inflight;
 pub mod brain_stranded;
 pub mod brain_bid_release;
+pub mod brain_milestone_value;
 pub mod brain_serve_value;
 pub mod brain_wait_answer;
 pub mod brain_bids;

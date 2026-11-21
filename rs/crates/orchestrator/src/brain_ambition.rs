@@ -441,6 +441,9 @@ pub(crate) fn before_draw(life: &mut Life, live: &Value) {
         return;
     }
     let (items, surplus) = crate::market_demand::refresh_inputs_for(&life.account);
+    // A bid whose serving does not pay the bot's time is no demand
+    // milestone to adopt (value comparison, `brain_milestone_value`).
+    let items = crate::brain_milestone_value::paying_items(life, live, items);
     let seed = life.seed;
     let account = life.account.clone();
     let Some(ambition) = life.ambition.as_mut() else { return };
