@@ -449,7 +449,7 @@ pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnc
         if quarantined.iter().any(|known| known == method) || lifescape_planner::cooldown::method_cooled(&cooled, method) {
             return 0.0;
         }
-        let level = crate::rates_measure::band_skill(method, "").map(|skill| level_of(&skill)).unwrap_or(1);
+        let level = crate::rates_read::read_skill(method).map(|skill| level_of(&skill)).unwrap_or(1);
         let tool = crate::report_meta::best_tools(method, &owned).join("+");
         match units_per_6000_at(&snapshot, method, item, level, &tool) {
             Ok(rate) => rate,

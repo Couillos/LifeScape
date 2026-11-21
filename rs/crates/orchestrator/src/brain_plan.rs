@@ -77,7 +77,7 @@ pub(crate) fn live_owned(live: &Value) -> Vec<String> {
 /// prior). A method nothing estimates is a typed error (logged by the
 /// caller), never a blind figure.
 pub(crate) fn farm_yield(snapshot: &crate::rates_service::Snapshot, method: &str, display: &str, live: &Value) -> Result<f64, crate::rates_read::RateError> {
-    let level = match crate::rates_measure::band_skill(method, "") {
+    let level = match crate::rates_read::read_skill(method) {
         Some(skill) => crate::brain_succession::live_level(live, &skill),
         None => 1,
     };

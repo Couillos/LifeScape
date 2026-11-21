@@ -73,3 +73,29 @@ fn no_measure_no_prior_is_an_error() {
     let read = estimate(&YieldBook::default(), &RateQuery { method: "mill:pot_flour".to_string(), level: 1, ..RateQuery::default() }, 0);
     assert!(matches!(read, Err(RateError::NoPrior { .. })), "{read:?}");
 }
+
+/// A melee farm of gems is measured per combat style: the brain reads it
+/// at the guides' fight style and the attack band, so the fleet's own
+/// yield (not the level-1 prior) answers (live 2026-11-21: "0.00000
+/// units a tick" for ~160 gems an hour).
+#[test]
+fn a_gem_farm_reads_its_measured_melee_yield() {
+    let method = "farm:uncut_sapphire";
+    assert_eq!(read_style(method), "melee:attack");
+    assert_eq!(read_skill(method).as_deref(), Some("attack"));
+    let run = RunSample {
+        work_ticks: 6000,
+        pause_ticks: 60,
+        flows: vec![("Uncut sapphire".to_string(), "loot".to_string(), 3)],
+        units: vec![("kill".to_string(), "giant".to_string(), 120)],
+        clock: 100,
+    };
+    let query = RateQuery { method: method.to_string(), style: read_style(method).to_string(), site: None, tool: "adamant_battleaxe".to_string(), level: 80 };
+    let mut book = YieldBook::default();
+    for _ in 0..3 {
+        book.record(&key_of_query(&query), &run);
+    }
+    let prior = gained_per_6000(&YieldBook::default(), method, "Uncut sapphire", 80, "adamant_battleaxe").expect("prior");
+    let measured = gained_per_6000(&book, method, "Uncut sapphire", 80, "adamant_battleaxe").expect("measured");
+    assert!(measured > 5.0 * prior, "the fleet's measure {measured} against the prior {prior}");
+}

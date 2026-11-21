@@ -265,10 +265,24 @@ pub fn gate_level(method: &str) -> u8 {
         .clamp(1, 99) as u8
 }
 
+/// Style the brain reads a method's measures under: the melee fights
+/// (the `farm:` drops among them) are measured per combat style, the
+/// guides read them at `SOURCE_FIGHT_STYLE` (melee:attack); an empty
+/// style read none of them and fell to the level-1 prior (2026-11-21:
+/// uncut gems read 0.00000 units a tick while ~160 an hour were farmed).
+pub fn read_style(method: &str) -> &'static str {
+    let activity = lifescape_planner::activity::activity_of_method(method);
+    if activity.starts_with("fight:melee/") {
+        lifescape_planner::guide_chain::SOURCE_FIGHT_STYLE
+    } else {
+        lifescape_planner::work_rate::style_of(method)
+    }
+}
+
 /// The brain's read: `display` gained per 6000 ticks of `method` for a
 /// bot at `level` with `tool` (no site: every site of the key).
 pub fn gained_per_6000(book: &YieldBook, method: &str, display: &str, level: u8, tool: &str) -> Result<f64, RateError> {
-    let query = RateQuery { method: method.to_string(), style: String::new(), site: None, tool: tool.to_string(), level };
+    let query = RateQuery { method: method.to_string(), style: read_style(method).to_string(), site: None, tool: tool.to_string(), level };
     estimate(book, &query, crate::rates_service::now_secs()).map(|read| read.gained(display))
 }
 
@@ -295,6 +309,12 @@ pub fn estimate_key(book: &YieldBook, key: &YieldKey, now: i64) -> Result<RateEs
     let tool = if key.tool == crate::rates_estimator::ANY { String::new() } else { key.tool.clone() };
     let query = RateQuery { method: key.method.clone(), style: key.style.clone(), site, tool, level: key.band.clamp(1, 99) as u8 };
     estimate(book, &query, now)
+}
+
+/// Level of `skill_of(live)` the method's rates are read at: the band
+/// skill under the style it is read with (attack for a melee farm).
+pub fn read_skill(method: &str) -> Option<String> {
+    lifescape_planner::activity::band_skill(method, read_style(method))
 }
 
 #[cfg(test)]

@@ -78,7 +78,9 @@ pub(crate) fn release_unpaying(life: &mut Life, live: &Value) -> bool {
     // Levels the goal trains on the way are its own cost (bid answers
     // carry their training): every leg counts here.
     let (per_tick, time_value) = crate::brain_bids::with_bot_state(life, live, |state| (units_per_tick(&item, &|_| u8::MAX, state.units), crate::brain_bids::bot_rate(life)));
-    if lifescape_planner::pays_its_way(margin, per_tick, time_value) {
+    // No rate read (no way measured or priored): no data, no decision;
+    // a zero is never a verdict that it pays at no price.
+    if per_tick <= 0.0 || lifescape_planner::pays_its_way(margin, per_tick, time_value) {
         return false;
     }
     let abandoned = lifescape_planner::abandon_goal_work(life, UNPAID_CAUSE);
