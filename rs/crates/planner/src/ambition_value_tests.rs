@@ -268,18 +268,31 @@ fn a_bot_changes_only_when_the_gain_beats_the_margin() {
     assert!((MIN_GAIN_TO_CHANGE - 0.25).abs() < 1e-12);
 }
 
-/// The outlet of a consumer skill (the piles its training burns, at the
-/// market price) is read, but only breaks ties: it is no part of the score
-/// (burning feathers is no gain; it drew 38 of 74 bots on the live state).
+/// Consumer trades destroy objects and piles are settled by consuming more
+/// (user rule): the outlet of a pile (what one bot of the kind burns over
+/// the horizon, bounded by the pile left, at the object's price) is part of
+/// the SCORE. A pile of 1-coin feathers weighs little against dear logs; a
+/// pile of dear logs gives a firemaker a positive value; the bots assigned
+/// in the pass use the pile up.
 #[test]
-fn the_outlet_of_a_pile_breaks_ties_never_the_score() {
-    let surplus = vec![("feather".to_string(), 1_000_000.0)];
-    let priced = |name: &str| if name == "feather" { Some(2.0) } else { price(name) };
+fn the_outlet_of_a_pile_counts_in_the_score() {
+    let surplus = vec![("feather".to_string(), 1_000_000.0), ("logs".to_string(), 1_000_000.0)];
+    let priced = |name: &str| match name {
+        "feather" => Some(1.0),
+        "logs" => Some(40.0),
+        other => price(other),
+    };
     let ctx = ValueContext { bids: &[], alch_offers: &[], surplus: &surplus, price: &priced, xp_rate: &xp_rate, rate: &rate };
-    let row = kind_value(&bot("f1", &[]), "fisher", &ctx);
-    assert!(row.outlet_6000 > 0.0 && row.value_6000 == 0.0, "{row:?}");
-    let pick = pick_by_value(&bot("f1", &[]), &["cook", "crafter", "miner", "smith", "woodcutter", "ranger", "warrior", "priest", "mage", "runecrafter", "firemaker"], &ctx, &[]).expect("pick");
-    assert_eq!(pick.kind, "fisher", "the only kind nobody holds, and the pile leans it: {pick:?}");
+    let value = |kind: &str| kind_value(&bot("f1", &[]), kind, &ctx);
+    let (fisher, firemaker) = (value("fisher"), value("firemaker"));
+    assert!(fisher.value_6000 > 0.0 && (fisher.value_6000 - fisher.outlet_6000).abs() < 1e-9, "{fisher:?}");
+    assert!(firemaker.value_6000 > 10.0 * fisher.value_6000, "dear logs weigh more than 1-coin feathers: {firemaker:?} {fisher:?}");
+    // The assigned bots use the pile up: a small pile is gone after one bot.
+    let small = vec![("logs".to_string(), 50.0)];
+    let small_ctx = ValueContext { bids: &[], alch_offers: &[], surplus: &small, price: &priced, xp_rate: &xp_rate, rate: &rate };
+    let moved = rebalance(&[bot("a1", &[]), bot("a2", &[])], &small_ctx);
+    let firemakers = moved.iter().filter(|row| row.pick.kind == "firemaker").count();
+    assert_eq!(firemakers, 1, "50 logs feed one firemaker, the second finds the pile gone: {moved:?}");
 }
 
 /// A bot works one thing at a time: one assigned miner covers only its

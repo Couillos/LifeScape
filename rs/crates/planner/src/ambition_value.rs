@@ -22,7 +22,10 @@
 //!   object traded in the last day, the units a new seller places over the
 //!   horizon at the current price less the asks resting under it,
 //!   `market_demand::sale_lines`), the alchemy of the natures on the asks,
-//!   (the outlet of the consumer skills only breaks ties);
+//!   and the OUTLET of the consumer skills (user rule: consumer trades destroy
+//!   objects, piles are settled by consuming more: what one bot of the kind
+//!   burns over the horizon, bounded by the pile left after the other bots
+//!   assigned in the pass, at the current price of the object);
 //! - `investment(P)` reads the bot's own levels in the skills of the kind
 //!   (`investment::investment`, `own`): the climb of an advanced bot is
 //!   short, a fresh one pays the whole climb: that is the bot's fit (its
@@ -110,10 +113,10 @@ pub struct ValueContext<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct KindValue {
     pub kind: String,
-    /// Bids and alchemy: the unserved demand in coins per 6000 ticks.
+    /// Bids, sales, alchemy and outlet: coins per 6000 ticks.
     pub value_6000: f64,
-    /// The piles the kind's training burns (coins per 6000 ticks): breaks
-    /// a tie between kinds of equal value and equal holders, never more.
+    /// The part of `value_6000` that is the outlet of the piles the kind's
+    /// training burns (also the first tie-break).
     pub outlet_6000: f64,
     /// The object carrying the most value, with its climb in ticks.
     pub driver: Option<(String, f64)>,
@@ -305,7 +308,7 @@ fn evaluate(terms: &KindTerms, existing: &[usize], assigned: &[usize], covered: 
         let residual = (pile - assigned[terms.kind_index] as f64 * per_6000 * windows).max(0.0);
         outlet += share * per_6000.min(residual / windows) * unit_price;
     }
-    KindValue { kind: prep.kinds[terms.kind_index].to_string(), value_6000: total, outlet_6000: outlet, driver: driver.map(|(item, _, climb)| (item, climb)) }
+    KindValue { kind: prep.kinds[terms.kind_index].to_string(), value_6000: total + outlet, outlet_6000: outlet, driver: driver.map(|(item, _, climb)| (item, climb)) }
 }
 
 fn holder_counts(prep: &Prepared, held: &[&str]) -> Vec<usize> {

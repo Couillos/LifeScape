@@ -1344,9 +1344,10 @@ restent pour les exceptions de niveau, `draw_kind`).
 ```text
 valeur(bot, métier) = Σ lignes de demande P : serves(métier, P) × asked(P) × valeur_6000(P)   (montée DU BOT)
                     + alchimie (le mage)
+                    + débouché des tas : min(ce qu'UN bot du métier brûle sur l'horizon,
+                      tas restant après les autres affectés de la passe) × prix courant
 score = valeur / (tenants du métier + 1), chaque ligne comptée sur sa capacité RESTANTE
         (non servi − unités déjà couvertes par les bots affectés pendant la passe)
-débouché des tas (consommation, au prix du marché) : DÉPARTAGE seulement, hors score
 ```
 - lignes de demande (toutes les sources de valeur du marché déjà lues par le
   cerveau, economy.md § Rentabilité) : les offres d'achat ouvertes (prix
@@ -1365,13 +1366,16 @@ débouché des tas (consommation, au prix du marché) : DÉPARTAGE seulement, ho
   (`cover`) : son temps (l'horizon) va aux lignes les plus denses de son
   métier d'abord, chacune prend les ticks que sa capacité restante demande ;
   quand les lignes sont couvertes, le bot suivant va à la demande suivante ;
+- débouché des tas (règle utilisateur : les métiers consommateurs détruisent
+  des objets, on règle les tas en consommant plus, jamais en récoltant moins) :
+  dans le SCORE, valorisé au prix courant de l'objet consommé (1 pièce = valeur
+  faible, voulu : les plumes pèsent peu, les bûches ou le poisson cru
+  davantage) ; les bots affectés pendant la passe usent le tas ;
 - avance du bot DANS le score : la valeur A1 se calcule par bot, le temps de
   montée part de SES niveaux actuels jusqu'aux paliers de la voie (un forgeron
   73-75 a une montée courte vers la forge, un débutant la paie entière) ;
 - meilleur score gagne, déterministe, sans graine ; égalité (aucune demande ou
-  tout couvert, scores nuls) : le moins de tenants, puis le débouché des tas
-  (tas de plumes, os, bûches brûlés par l'entraînement : jamais dans le
-  score, un million de plumes à 1 pièce y envoyait 38 bots à la pêche), puis
+  tout couvert, scores nuls) : le moins de tenants, puis le débouché, puis
   le meilleur ajustement de compétences (`ambition_catalog::fit`), puis le nom ;
 - **s'applique** (1) à chaque nouvelle ambition (`brain_value::draw` depuis
   `redraw`, `redraw_by_need`, `build`, `assign_kind` ; `ensure` :

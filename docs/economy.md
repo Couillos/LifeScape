@@ -2340,8 +2340,10 @@ connu), plafonné par la marge × la quantité demandée. Les montées longues
 lucratives (artisanat 70 / amulette de pouvoir, forge 85 + minage de rune,
 magie 55 / alchimie) se comparent ainsi aux lignes rapides. Pas de plancher ni
 de plafond de prix : l'offre, la demande, le prix du marché. Le débouché des
-tas (plumes, os, bûches) ne fait que départager à valeur égale : le prix de ce
-qu'une méthode brûle n'est pas un gain.
+tas (plumes, os, bûches, poisson cru) entre dans le score : ce qu'un bot du
+métier consomme sur l'horizon, borné par le tas restant, au prix courant (les
+compétences qui consomment sont des puits ; les tas se règlent en consommant
+plus, jamais en récoltant moins).
 
 
 ## Butin : coût nul, lots entiers, prix qui écoule (2026-11-14)

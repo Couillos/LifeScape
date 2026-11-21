@@ -56,6 +56,9 @@ fn simulate_rebalance_on_the_live_state() {
     let by_value = moved.iter().filter(|row| row.pick.value_6000 > 0.0).count();
     let kept = moved.iter().filter(|row| row.pick.kept).count();
     println!("COUNTS movable {} | changed {changed} | kept by margin {kept} | by value {by_value} | by tie-break {}", moved.len(), moved.len() - by_value);
+    for row in moved.iter().filter(|row| ["firemaker", "priest", "cook", "ranger", "warrior", "fisher", "mage"].contains(&row.pick.kind.as_str())).take(40) {
+        println!("CONSUMER {} | {} | {}", row.account, row.pick.kind, row.pick.numbers());
+    }
     println!("BEFORE {before:?}");
     println!("AFTER  {after:?}");
 }
