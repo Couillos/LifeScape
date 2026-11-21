@@ -331,7 +331,13 @@ pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
     }
     // A fight far from any bank is one trip (user 2026-11-20,
     // `danger::fight_site_requirement`); every other site banks its loads.
-    let kind = method_sites(method).map(|(kind, _)| kind).unwrap_or("");
+    let (kind, resource) = method_sites(method).unwrap_or(("", String::new()));
+    // A risk camp asks its floor at every site (user 2026-11-20, the
+    // ladder's `cluster_requirement`): live 2026-11-21, the lesser demons
+    // (foes 82) read "in reach" at combat 59 through one site whose own
+    // danger said 15.
+    let floor = if kind == "fight" { lifescape_gamedata::combat_spots::risk_floor(&resource) } else { None };
+    let floor = floor.map(|level| level.clamp(3, i64::from(lifescape_gamedata::danger::NEVER) - 1) as u8).unwrap_or(3);
     let table = method_site_list(method).map(|sites| {
         std::sync::Arc::new(
             sites
@@ -343,7 +349,8 @@ pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
                     // 2026-11-16): the boat is a fare like the toll, the
                     // nav and the script walker pay it from the pack.
                     let open_ever = !gates.iter().any(lifescape_gamedata::access::impassable);
-                    SiteRow { site: (x, z, level), required: lifescape_gamedata::danger::kind_site_requirement(kind, surface_x, surface_z, surface_level), gates, open_ever }
+                    let required = lifescape_gamedata::danger::kind_site_requirement(kind, surface_x, surface_z, surface_level).max(floor);
+                    SiteRow { site: (x, z, level), required, gates, open_ever }
                 })
                 .collect::<Vec<_>>(),
         )
@@ -820,5 +827,24 @@ mod tests {
         assert!((site.0 - 3272).abs() <= 2 && (site.1 - 3185).abs() <= 2, "al kharid's furnace, got {site:?}");
         assert_eq!(bank_weight("fight:melee/cows", (3255, 3270, 0), BANK_LOADS), 0, "a fight weighs no bank");
         assert_eq!(bank_weight("smelt:iron_bar", (3225, 3256, 0), 1), 0, "one load rides in the pack");
+    }
+
+    /// Live 2026-11-21 (jim_ford, attack 48, combat 59): the lesser
+    /// demons (foes 82) were "in reach" through the one site whose own
+    /// danger read 15. A risk camp asks its floor at every site
+    /// (`combat_spots::risk_floor`, the ladder's `cluster_requirement`):
+    /// the row's combat prerequisite and every site pick.
+    #[test]
+    fn a_risk_camp_asks_its_floor_at_every_site() {
+        use super::{method_site_table, min_combat_for_method, pick_site, SitePick};
+        for (method, spot) in [("fight:melee/lesser_demons", "lesser_demons"), ("fight:melee/greater_demons", "greater_demons"), ("fight:melee/ice_dungeon", "ice_dungeon")] {
+            let floor = lifescape_gamedata::combat_spots::risk_floor(spot).expect("a risk camp") as u8;
+            let table = method_site_table(method).expect("sites");
+            assert!(table.iter().all(|row| row.required >= floor), "{method}: every site asks {floor}");
+            assert!(min_combat_for_method(method) >= floor, "{method}: {}", min_combat_for_method(method));
+        }
+        let prereqs = crate::guide_prereq::prereqs_of("fight:melee/lesser_demons", "melee:attack", 50, "");
+        assert!(prereqs.combat >= 80, "{prereqs:?}");
+        assert!(!matches!(pick_site("fight:melee/lesser_demons", 59, Some((3092, 3245, 0))), SitePick::At(_) | SitePick::Tolled(_)), "no demon site at combat 59");
     }
 }
