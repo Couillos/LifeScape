@@ -112,10 +112,10 @@ fn site_walk(here: (i32, i32, i32), site: (i32, i32, i32)) -> Option<(i32, i32, 
 pub fn run_ground_pickup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("ground_pickup", &rest)?;
-    if spec.allow_paid {
-        bot.allow_paid = true;
-        bot.log("toll gates allowed for this run");
-    }
+    // The fares of the trip, carried before the first walk (the Karamja
+    // boat sites: live 2026-11-21, owen_wood left Varrock without coins,
+    // `NeedsRequirement coins:60` logged before the walk fetched them).
+    crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat, spec.site)?;
     bot.allow_shop = spec.allow_shop;
     bot.assigned_site = spec.site;
     let task_keep = resolve_keep(bot, &spec)?;
