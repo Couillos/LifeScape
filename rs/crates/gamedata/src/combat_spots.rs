@@ -295,8 +295,8 @@ pub fn best_catalogue_spot(melee_level: i64) -> CombatSpot {
 
 /// F2P spawn positions for one spot (all NPC names, zone-filtered),
 /// never a spawn no stand reaches (`site_reach::unreachable_spawn`: the
-/// caged lesser demon of the Wizards' Tower, live 2026-11-21), nor an
-/// underground one no plan from the surface enters (`no_route`).
+/// caged lesser demon of the Wizards' Tower, live 2026-11-21), nor one
+/// no plan from Lumbridge enters and leaves (`no_route`: Crandor, Elvarg's lair).
 pub fn positions(key: &str) -> Vec<(i64, i64, i64)> {
     raw_positions(key).into_iter().filter(|(x, z, level)| crate::site_reach::unreachable_spawn(*x, *z, *level).is_none()).collect()
 }

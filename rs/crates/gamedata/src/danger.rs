@@ -145,6 +145,24 @@ pub fn fight_site_requirement(x: i64, z: i64, level: i64) -> u8 {
     }
 }
 
+/// `fight_site_requirement` with the camp's own foes left out (`foes`,
+/// NPC debugnames; the melee ladder's `cluster_requirement`: we came to
+/// fight them). For a risk camp only, whose floor
+/// (`combat_spots::risk_floor`, foes' level less two) is the price of
+/// fighting them: their own aggression bound (twice their level, 165 for
+/// the volcano's lesser demons) is a level no bot ever reaches. Other
+/// hunters at the site and its bank still count.
+pub fn camp_site_requirement(foes: &[&str], x: i64, z: i64, level: i64) -> u8 {
+    let required_at = |x: i64, z: i64, level: i64| {
+        hunters().iter().filter(|hunter| !foes.contains(&hunter.name) && covers(hunter, x, z, level)).map(passive_from).max().unwrap_or(3)
+    };
+    let site = required_at(x, z, level);
+    match site_bank(x, z, level) {
+        Some(bank) => site.max(required_at(bank.x, bank.z, bank.level)),
+        None => site,
+    }
+}
+
 /// Requirement of a site worked by a method of `kind`: a fight reads
 /// `fight_site_requirement`, every other kind `site_requirement`.
 pub fn kind_site_requirement(kind: &str, x: i64, z: i64, level: i64) -> u8 {
@@ -277,5 +295,18 @@ mod tests {
         assert_eq!(method_requirement("mining", "copper_ore"), Some(3));
         assert_eq!(method_requirement("woodcut", "logs"), Some(3));
         assert_eq!(method_requirement("fishing", "no_such_fish"), None);
+    }
+
+    /// User 2026-11-21: the volcano's lesser demons hunt every bot (level
+    /// 82, passive only from 165): the camp read 165 at its own spawns,
+    /// no bot ever fought there. Left out (we came to fight them), the
+    /// site reads its other hunters only; its floor (80) is the
+    /// planner's.
+    #[test]
+    fn a_camp_leaves_its_own_foes_out() {
+        let volcano = super::fight_site_requirement(2837, 9565, 0);
+        assert!(volcano > 99, "the demons themselves: {volcano}");
+        let camp = super::camp_site_requirement(&["lesser_demon"], 2837, 9565, 0);
+        assert!(camp < 80, "the demons left out: {camp}");
     }
 }
