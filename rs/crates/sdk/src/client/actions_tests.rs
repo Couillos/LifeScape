@@ -49,6 +49,7 @@ fn bank_stand_walk_propagates_dead_socket_instead_of_refusing() {
         Error::Interrupted("run stopped".to_string()),
         Error::State("bank_main:inv missing".to_string()),
         Error::Protocol("bad frame".to_string()),
+        Error::NeverStill("kept moving".to_string()),
     ] {
         assert!(!Bot::bank_stand_walk_refused(&err), "propagates, never a refusal: {err}");
     }

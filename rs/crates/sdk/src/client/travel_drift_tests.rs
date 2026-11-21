@@ -157,9 +157,9 @@ fn bot_on(port: u16, proxy: &std::path::Path, version: &str, client_seed: [i32; 
 }
 
 /// A bot that never stops is not planned from: after the tick bound the
-/// wait is a typed `Timeout`, and no plan was asked.
+/// wait is a typed `NeverStill`, and no plan was asked.
 #[test]
-fn a_bot_that_never_stops_is_a_typed_timeout_without_any_plan() {
+fn a_bot_that_never_stops_is_a_typed_never_still_without_any_plan() {
     let (world, tables) = test_nav_context();
     let version = "drift-never";
     let service = Service::start(Snapshot::new(world, tables, version.to_string()), &test_socket("sdk-drift-never"), 1)
@@ -171,6 +171,50 @@ fn a_bot_that_never_stops_is_a_typed_timeout_without_any_plan() {
     drop(bot);
     let _ = game.join();
     let _ = std::fs::remove_file(&proxy);
-    assert!(matches!(outcome, Err(crate::error::Error::Timeout(ref detail)) if detail.contains("never stood still")), "{outcome:?}");
+    assert!(matches!(outcome, Err(crate::error::Error::NeverStill(ref detail)) if detail.contains("never stood still")), "{outcome:?}");
     assert!(froms.lock().expect("froms").is_empty(), "no plan asked from a moving bot");
+}
+
+/// A market pause run by the pump during the wait (the gate moves the
+/// bot and spends more ticks than the bound): the wait starts over from
+/// the pause's return, never `NeverStill`, and the plan is asked from the
+/// tile the pause left.
+#[test]
+fn a_pause_during_the_wait_restarts_it_instead_of_failing() {
+    let (world, tables) = test_nav_context();
+    let version = "drift-pause";
+    let service = Service::start(Snapshot::new(world, tables, version.to_string()), &test_socket("sdk-drift-pause"), 1)
+        .expect("service starts");
+    let (proxy, froms) = slow_proxy(service.socket_path().to_path_buf(), Duration::from_millis(10));
+    let (port, game, client_seed, server_seed) = walking_server(0, 0);
+    let mut bot = bot_on(port, &proxy, version, client_seed, server_seed);
+    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    bot.pause_gate = Some(Arc::new(move |bot: &mut Bot| {
+        if !fired.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            bot.world.x += 3;
+            bot.world.ticks += 100;
+            bot.note_pause(100);
+        }
+        true
+    }));
+    let outcome = bot.plan_travel(Tile { x: 3186, z: 3436, level: 0 });
+    drop(bot);
+    let _ = game.join();
+    let _ = std::fs::remove_file(&proxy);
+    outcome.expect("plans after the pause");
+    assert_eq!(froms.lock().expect("froms").clone(), vec![(3208, 3400)], "asked from the tile after the pause");
+}
+
+/// A bot already seen at the same tile on the previous tick is still:
+/// no tick is waited.
+#[test]
+fn a_bot_seen_still_on_the_previous_tick_waits_no_tick() {
+    let (port, game, client_seed, server_seed) = walking_server(0, 0);
+    let mut bot = bot_on(port, std::path::Path::new("/nonexistent"), "still", client_seed, server_seed);
+    bot.world.ticks = 10;
+    bot.trail.push((9, 3205, 3400, 0));
+    bot.wait_until_still().expect("still");
+    assert_eq!(bot.world.ticks, 10, "no tick pumped");
+    drop(bot);
+    let _ = game.join();
 }

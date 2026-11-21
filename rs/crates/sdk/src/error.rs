@@ -19,6 +19,10 @@ pub enum Error {
     State(String),
     /// A tick-bounded wait ran out: includes position, target and ticks.
     Timeout(String),
+    /// The bot kept moving for the whole settle bound before a plan
+    /// (`wait_until_still`): no plan was drawn. Not a dead stand, not a
+    /// stalled leg, not an impossible route.
+    NeverStill(String),
     /// Operator asked the run to stop (unload/close): unwinds the script
     /// to the next pump instead of finishing the current action.
     Interrupted(String),
@@ -60,6 +64,7 @@ pub enum TravelErrorKind {
     RideWrongDestination,
     NeedsDialogueChoice,
     Timeout,
+    NeverStill,
     Interrupted,
     Io,
 }
@@ -74,6 +79,7 @@ impl TravelErrorKind {
             TravelErrorKind::RideWrongDestination => "RideWrongDestination",
             TravelErrorKind::NeedsDialogueChoice => "NeedsDialogueChoice",
             TravelErrorKind::Timeout => "Timeout",
+            TravelErrorKind::NeverStill => "NeverStill",
             TravelErrorKind::Interrupted => "Interrupted",
             TravelErrorKind::Io => "Io",
         }
@@ -90,6 +96,7 @@ impl TravelErrorKind {
             Error::RideWrongDestination(_) => TravelErrorKind::RideWrongDestination,
             Error::NeedsDialogueChoice(_) => TravelErrorKind::NeedsDialogueChoice,
             Error::Timeout(_) => TravelErrorKind::Timeout,
+            Error::NeverStill(_) => TravelErrorKind::NeverStill,
             Error::Interrupted(_) => TravelErrorKind::Interrupted,
             Error::Io(_) | Error::Login(_) => TravelErrorKind::Io,
             _ => TravelErrorKind::NoRoute,
@@ -131,6 +138,7 @@ impl std::fmt::Display for Error {
             Error::Unreachable(detail) => write!(formatter, "unreachable: {detail}"),
             Error::State(detail) => write!(formatter, "state: {detail}"),
             Error::Timeout(detail) => write!(formatter, "timeout: {detail}"),
+            Error::NeverStill(detail) => write!(formatter, "never still: {detail}"),
             Error::Interrupted(detail) => write!(formatter, "interrupted: {detail}"),
             Error::Travel(detail) => write!(formatter, "travel: {detail}"),
             Error::StepRefused(detail) => write!(formatter, "step refused: {detail}"),

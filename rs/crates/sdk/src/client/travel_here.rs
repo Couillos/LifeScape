@@ -34,19 +34,34 @@ impl Bot {
         if !self.conn.is_open() {
             return Ok(());
         }
-        let deadline = self.world.ticks + SETTLE_MAX_TICKS;
+        // Already visibly still: the trail holds the previous tick at the
+        // same tile (no extra tick to wait).
+        let here = (self.world.x, self.world.z, self.world.level);
+        let previous_tick = self.world.ticks.checked_sub(1);
+        if self.trail.iter().rev().find(|mark| Some(mark.0) == previous_tick).is_some_and(|mark| (mark.1, mark.2, mark.3) == here) {
+            return Ok(());
+        }
+        let mut deadline = self.world.ticks + SETTLE_MAX_TICKS;
         loop {
             let before = (self.world.x, self.world.z, self.world.level);
             let tick = self.world.ticks;
+            let pauses = self.pauses_done;
             while self.world.ticks == tick {
                 self.pump(1)?;
+            }
+            // A market pause ran inside the pump (travel, bank, trade: any
+            // number of ticks, the bot elsewhere): the wait starts over
+            // from where it left us, never a failure.
+            if self.pauses_done != pauses {
+                deadline = self.world.ticks + SETTLE_MAX_TICKS;
+                continue;
             }
             let after = (self.world.x, self.world.z, self.world.level);
             if before == after {
                 return Ok(());
             }
             if self.world.ticks >= deadline {
-                return Err(Error::Timeout(format!(
+                return Err(Error::NeverStill(format!(
                     "bot never stood still for {SETTLE_MAX_TICKS} ticks before planning: {before:?} -> {after:?}"
                 )));
             }

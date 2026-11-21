@@ -320,7 +320,7 @@ l'aller-retour (0,2-0,5 s) et le plan part 2 à 14 tuiles derrière le bot
 marche ne se planifie qu'une fois le bot immobile, c'est-à-dire sa tuile
 inchangée sur un tick entier (le paquet player-info porte les pas serveur).
 L'attente est bornée à `SETTLE_MAX_TICKS` (30) : un bot toujours en
-mouvement ensuite donne `Error::Timeout` (« never stood still »), jamais un
+mouvement ensuite donne `Error::NeverStill` (jamais pris pour un stand mort ni une route impossible), jamais un
 plan tiré d'un départ mobile. Même règle avant l'unique replanification
 après dérive (bot parti pendant l'aller-retour) : attendre l'immobilité,
 puis replanifier depuis la tuile d'arrêt. Jamais de clic sur sa propre
