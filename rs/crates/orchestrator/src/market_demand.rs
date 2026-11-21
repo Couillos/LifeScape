@@ -190,7 +190,13 @@ fn kind_demand_seen_by(account: Option<&str>) -> DrawDemand {
 /// (`investment::priced_items`, the surplus objects, the runes of the
 /// spells), one store read for the whole table.
 fn value_inputs(orders: &[Order], account: Option<&str>, surplus: &[(String, f64)]) -> ValueInputs {
-    value_inputs_from(orders, account, surplus, &|wanted: &[String]| match lifescape_store::Store::open(&crate::market_service::db_path()) {
+    let now = crate::market_service::MarketService::now_clock();
+    let volumes = match crate::market_service::shared() {
+        Some(service) => service.lock_store().volumes_since(now - 86_400).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let days = lifescape_planner::investment::INVESTMENT_HORIZON_TICKS * crate::market_eta::live_tick_ms() as f64 / 86_400_000.0;
+    value_inputs_from(orders, account, surplus, &volumes, days, &|wanted: &[String]| match lifescape_store::Store::open(&crate::market_service::db_path()) {
         Ok(store) => price_table(&store, wanted),
         Err(error) => {
             crate::logln!("market_demand: store unreadable, the A4 value carries no price: {error}");
@@ -199,23 +205,77 @@ fn value_inputs(orders: &[Order], account: Option<&str>, surplus: &[(String, f64
     })
 }
 
-/// `value_inputs` with the price table read by `prices` (the store a
-/// caller holds: the live daemon's, or a copy for an offline simulation).
-pub fn value_inputs_from(orders: &[Order], account: Option<&str>, surplus: &[(String, f64)], prices: &dyn Fn(&[String]) -> Vec<(String, f64)>) -> ValueInputs {
+/// Share of a day's traded volume a new seller places at the current
+/// price (`market_value::SALES_SHARE_PCT`).
+pub const SALES_SHARE: f64 = lifescape_planner::market_value::SALES_SHARE_PCT as f64 / 100.0;
+
+/// The market's SALES as demand lines (plan progression A4, « ventes
+/// absorbées au prix courant × volume du jour »): per object traded in
+/// the last 24 h (`volumes`: object id, units) that some production way
+/// makes and whose current price is known, the units a new seller places
+/// over the horizon (`days` of it × `SALES_SHARE` of the day's volume)
+/// less the asks already resting at or under that price, at the current
+/// price. An object with a bid keeps its bid line only (`skip`). Pure.
+pub fn sale_lines(volumes: &[(i64, i64)], orders: &[Order], price: &dyn Fn(&str) -> Option<f64>, name_of: &dyn Fn(i64) -> Option<String>, days: f64, skip: &[String]) -> Vec<UnservedBid> {
+    let base = |item_id: i64| usize::try_from(item_id).map(|id| lifescape_gamedata::base_obj_id(id) as i64).unwrap_or(item_id);
+    let mut by_item: BTreeMap<i64, i64> = BTreeMap::new();
+    for (item_id, units) in volumes {
+        *by_item.entry(base(*item_id)).or_default() += units.max(&0);
+    }
+    let mut out = Vec::new();
+    for (item_id, units) in by_item {
+        let Some(item) = name_of(item_id) else { continue };
+        if skip.contains(&item) || lifescape_planner::obtain_legs::production_legs(&item).is_empty() {
+            continue;
+        }
+        let Some(unit_price) = price(&item).filter(|known| *known > 0.0) else { continue };
+        let resting: f64 = orders
+            .iter()
+            .filter(|order| order.side == OrderSide::Sell && order.remaining > 0 && base(order.item_id) == item_id && crate::market_units::to_unit_exact(order.item_id, order.price) <= unit_price)
+            .map(|order| order.remaining as f64)
+            .sum();
+        let capacity = (units as f64 * SALES_SHARE * days - resting).floor();
+        if capacity >= 1.0 {
+            out.push(UnservedBid { item, unit_price, unmet: capacity as i64, asked: false });
+        }
+    }
+    out
+}
+
+/// Objects whose sales `sale_lines` may read: traded in the last 24 h and
+/// made by some production way.
+pub fn sale_candidates(volumes: &[(i64, i64)], name_of: &dyn Fn(i64) -> Option<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (item_id, _) in volumes {
+        let base = usize::try_from(*item_id).map(|id| lifescape_gamedata::base_obj_id(id) as i64).unwrap_or(*item_id);
+        if let Some(item) = name_of(base) {
+            if !out.contains(&item) && !lifescape_planner::obtain_legs::production_legs(&item).is_empty() {
+                out.push(item);
+            }
+        }
+    }
+    out
+}
+
+/// `value_inputs` with the volumes handed in and the price table read by
+/// `prices` (the store a caller holds: the live daemon's, or a copy for
+/// an offline simulation).
+pub fn value_inputs_from(orders: &[Order], account: Option<&str>, surplus: &[(String, f64)], volumes: &[(i64, i64)], days: f64, prices: &dyn Fn(&[String]) -> Vec<(String, f64)>) -> ValueInputs {
     let now = crate::market_service::MarketService::now_clock();
     let signals = signals_seen_from(orders.to_vec(), account, now, &name_of, &crate::brain_stuck::seconds_to_ticks);
-    let bids: Vec<UnservedBid> =
+    let mut bids: Vec<UnservedBid> =
         signals.iter().map(|signal| UnservedBid { item: signal.item.clone(), unit_price: signal.best_bid.max(0) as f64, unmet: signal.unmet_qty, asked: signal.asks > 0 }).collect();
     let alch_offers = alch_offers_from(orders, &name_of);
+    let candidates = sale_candidates(volumes, &name_of);
     let mut wanted: Vec<String> = Vec::new();
     let mut want = |name: &str| {
         if !wanted.iter().any(|known| known == name) {
             wanted.push(name.to_string());
         }
     };
-    for bid in &bids {
-        for name in lifescape_planner::investment::priced_items(&bid.item) {
-            want(&name);
+    for name in bids.iter().map(|bid| bid.item.clone()).chain(candidates) {
+        for needed in lifescape_planner::investment::priced_items(&name) {
+            want(&needed);
         }
     }
     for offer in &alch_offers {
@@ -227,7 +287,11 @@ pub fn value_inputs_from(orders: &[Order], account: Option<&str>, surplus: &[(St
     for rune in ["naturerune", "firerune"] {
         want(rune);
     }
-    ValueInputs { bids, alch_offers, prices: prices(&wanted) }
+    let table = prices(&wanted);
+    let price_of = |item: &str| table.iter().find(|(name, _)| name == item).map(|(_, price)| *price);
+    let skip: Vec<String> = bids.iter().map(|bid| bid.item.clone()).collect();
+    bids.extend(sale_lines(volumes, orders, &price_of, &name_of, days, &skip));
+    ValueInputs { bids, alch_offers, prices: table }
 }
 
 /// Market price per unit of each object that a trade or a resting book
@@ -603,5 +667,38 @@ mod tests {
         assert!(margin("bronze_platebody").is_some_and(|value| (value - 150.0).abs() < 1e-6), "{items:?}");
         assert!(margin("raw_shrimp").is_some_and(|value| value > 0.0), "{items:?}");
         assert_eq!(margin("shears"), None, "bought from shops only: no production margin");
+    }
+}
+
+#[cfg(test)]
+mod sale_tests {
+    use super::{sale_lines, SALES_SHARE};
+    use lifescape_store::{Order, OrderSide, OrderStatus};
+
+    fn ask(item: i64, remaining: i64, price: i64) -> Order {
+        Order { order_id: 1, account: "seller".to_string(), side: OrderSide::Sell, item_id: item, quantity: remaining, remaining, price, status: OrderStatus::Open, ..Order::default() }
+    }
+
+    /// The market's sales are demand lines (A4): the day's volume, the
+    /// share a new seller places over the horizon, less the asks resting
+    /// at or under the current price; a bid's object, an unpriced one or
+    /// one nothing makes leaves no line.
+    #[test]
+    fn the_sales_of_the_day_are_demand_lines_net_of_the_asks() {
+        let id_of = |name: &str| lifescape_gamedata::objs_by_name(name).into_iter().next().map(|obj| obj.obj_id as i64).expect("an object");
+        let logs = id_of("logs");
+        let unmade = lifescape_gamedata::all_objs().into_iter().find(|obj| obj.name.is_some_and(|name| lifescape_planner::obtain_legs::production_legs(name).is_empty())).expect("an object nothing makes");
+        let (shears, unmade_name) = (unmade.obj_id as i64, unmade.name.unwrap_or_default().to_string());
+        let name = |id: i64| lifescape_gamedata::obj_by_id(id as usize).and_then(|obj| obj.name).map(str::to_string);
+        let price = |item: &str| if item == "logs" || item == unmade_name { Some(4.0) } else { None };
+        let volumes = vec![(logs, 1000), (shears, 1000)];
+        let orders = vec![ask(logs, 100, 3), ask(logs, 50, 9)];
+        let lines = sale_lines(&volumes, &orders, &price, &name, 2.0, &[]);
+        assert_eq!(lines.len(), 1, "an object no production way makes leaves no line: {lines:?}");
+        assert_eq!(lines[0].item, "logs");
+        let expected = (1000.0 * SALES_SHARE * 2.0 - 100.0) as i64;
+        assert_eq!((lines[0].unmet, lines[0].unit_price, lines[0].asked), (expected, 4.0, false), "only the ask at 3 rests under the price 4");
+        assert!(sale_lines(&volumes, &orders, &price, &name, 2.0, &["logs".to_string()]).is_empty(), "a bid keeps its own line");
+        assert!(sale_lines(&volumes, &orders, &|_: &str| None, &name, 2.0, &[]).is_empty(), "no price, no line");
     }
 }

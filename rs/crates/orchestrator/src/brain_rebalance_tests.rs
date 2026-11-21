@@ -117,7 +117,7 @@ fn the_plan_rows_leave_out_the_protected_and_the_operators() {
     let moved = lifescape_planner::rebalance(&bots, &context);
     let rows = rows_of(&moved);
     assert_eq!(rows.iter().map(|found| found.account.as_str()).collect::<Vec<_>>(), vec!["worker"]);
-    let _ = Reassignment { account: String::new(), from: None, pick: Pick { kind: String::new(), score: 0.0, value_6000: 0.0, outlet_6000: 0.0, holders: 0, driver: None, climb_ticks: 0.0 } };
+    let _ = Reassignment { account: String::new(), from: None, pick: Pick { kind: String::new(), score: 0.0, value_6000: 0.0, outlet_6000: 0.0, kept: false, holders: 0, driver: None, climb_ticks: 0.0 } };
 }
 
 /// A bot applies its row to ITS life: the kind changes, with a revision

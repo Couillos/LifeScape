@@ -1342,26 +1342,37 @@ fin de la double compression `compress` / `need_mass` pour ce choix (elles
 restent pour les exceptions de niveau, `draw_kind`).
 
 ```text
-valeur(bot, métier) = Σ offres non servies P : serves(métier, P) × asked(P) × valeur_6000(P)
-                    + alchimie (le mage) + débouché (consommation des tas, au prix du marché)
-score = valeur, chaque offre comptée sur sa capacité RESTANTE :
-        non servi − Σ métiers tenus k : tenants(k) × serves(k, P) × unités_par_tick(P) × H
+valeur(bot, métier) = Σ lignes de demande P : serves(métier, P) × asked(P) × valeur_6000(P)   (montée DU BOT)
+                    + alchimie (le mage)
+score = valeur / (tenants du métier + 1), chaque ligne comptée sur sa capacité RESTANTE
+        (non servi − unités déjà couvertes par les bots affectés pendant la passe)
+débouché des tas (consommation, au prix du marché) : DÉPARTAGE seulement, hors score
 ```
-- demande non servie = offres d'achat ouvertes (prix unitaire, unités restantes)
-  et « produits manquants à la vente » : une offre sans aucune vente posée
-  pèse 1, une offre avec ventes posées pèse `ASKED_SHARE` = 0,5 (même rapport
-  que l'ancien `UNASKED_FACTOR`) ;
-- **partage** (« tout autre partage justifié ») : diviser par `tenants + 1`
-  empilait 28 bots sur le mage sur l'état live (une offre d'amulette à 1 M
-  l'unité alors qu'un mage en fait 0,3 par tick pour 66 unités demandées) ; une
-  demande que les tenants couvrent déjà n'est plus « non servie » : la
-  capacité restante tombe à zéro après quelques bots et les suivants vont à la
-  demande suivante ; idem pour l'alchimie et le débouché des tas ;
-- adéquation du bot = ses niveaux dans les compétences du métier (montée courte
-  si avancé) ; rien d'autre ;
-- meilleur score gagne, déterministe, sans graine ; aucune demande ou tout
-  couvert (scores nuls) : le métier qui a le moins de tenants, puis le meilleur
-  ajustement de compétences (`ambition_catalog::fit`), puis le nom ;
+- lignes de demande (toutes les sources de valeur du marché déjà lues par le
+  cerveau, economy.md § Rentabilité) : les offres d'achat ouvertes (prix
+  unitaire, unités restantes ; sans vente posée elles pèsent 1, avec ventes
+  posées `ASKED_SHARE` = 0,5), les VENTES du marché (`market_demand::sale_lines` :
+  par objet échangé dans les 24 h et fabriqué par une voie, les unités qu'un
+  nouveau vendeur place sur l'horizon, `SALES_SHARE` 50 % du volume du jour,
+  moins les ventes déjà posées au prix courant ou en dessous, au prix courant ;
+  un objet qui a une offre garde sa seule ligne d'offre), l'alchimie des
+  natures posées aux ventes ;
+- **partage** : les bots déjà sur le métier au départ divisent sa valeur par
+  `tenants + 1` (formule de l'utilisateur) ; les bots affectés PENDANT la passe
+  couvrent la demande qu'on leur donne (diviser par `tenants + 1` seul
+  empilait 28 bots sur le mage : une offre d'amulette à 1 M l'unité, un mage en
+  fait 0,3 par tick pour 66 unités). Un bot ne fait qu'une chose à la fois
+  (`cover`) : son temps (l'horizon) va aux lignes les plus denses de son
+  métier d'abord, chacune prend les ticks que sa capacité restante demande ;
+  quand les lignes sont couvertes, le bot suivant va à la demande suivante ;
+- avance du bot DANS le score : la valeur A1 se calcule par bot, le temps de
+  montée part de SES niveaux actuels jusqu'aux paliers de la voie (un forgeron
+  73-75 a une montée courte vers la forge, un débutant la paie entière) ;
+- meilleur score gagne, déterministe, sans graine ; égalité (aucune demande ou
+  tout couvert, scores nuls) : le moins de tenants, puis le débouché des tas
+  (tas de plumes, os, bûches brûlés par l'entraînement : jamais dans le
+  score, un million de plumes à 1 pièce y envoyait 38 bots à la pêche), puis
+  le meilleur ajustement de compétences (`ambition_catalog::fit`), puis le nom ;
 - **s'applique** (1) à chaque nouvelle ambition (`brain_value::draw` depuis
   `redraw`, `redraw_by_need`, `build`, `assign_kind` ; `ensure` :
   `assign_by_value`) pour tout bot hors exceptions ; (2) une passe unique de
@@ -1375,7 +1386,10 @@ score = valeur, chaque offre comptée sur sa capacité RESTANTE :
 `orchestrator/src/brain_rebalance.rs`, appelée dans `brain_launch` après
 `ensure`. Au premier passage sans marqueur `run/ambition_rebalance_a4.json` :
 plan de toute la flotte (`planner::rebalance` : meilleure paire (bot, métier)
-d'abord, chaque affectation compte comme tenant), attente que chaque vie active
+d'abord ; un bot ne change que si le meilleur métier bat de plus de
+`MIN_GAIN_TO_CHANGE` = +25 % la valeur de garder le sien, évaluée de même
+(son métier partagé par ses tenants, sans la couverture des autres affectés) ;
+chaque affectation compte comme tenant), attente que chaque vie active
 (écrite depuis moins d'une heure) ait son job (`covers`), marqueur écrit avec
 le plan, une ligne de log par bot avec sa raison chiffrée
 (`brain rebalance <compte>: <avant> -> <après> (valeur …)`). Chaque bot applique
@@ -1387,10 +1401,9 @@ Simulation hors ligne sur une copie de l'état live : test ignoré
 `simulate_rebalance_on_the_live_state` (`brain_rebalance_sim_tests.rs`,
 variables `SIM_LIVES`, `SIM_DB`, `LIFESCAPE_SAVE_DIR`).
 
-Limite connue : le débouché des tas pèse peu en pièces (245 par 6000 ticks et
-par pêcheur pour les plumes à 1 pièce) mais, quand toutes les offres sont
-couvertes, il décide seul : un tas d'un million de plumes appelle ~38 pêcheurs
-à l'horizon de 120 heures (voir le rapport de simulation).
+Les ventes sont lues dans la fenêtre des 24 h du carnet
+(`Store::volumes_since`) ; l'horizon en jours = `H` × durée du tick
+(`market_eta::live_tick_ms`).
 
 ## L7 : précisions d'implémentation
 

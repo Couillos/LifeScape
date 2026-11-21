@@ -29,7 +29,9 @@ fn simulate_rebalance_on_the_live_state() {
     let orders = store.resting_orders().expect("orders");
     let holdings = store.holdings_at_or_before(i64::MAX).expect("holdings").map(|(_, rows)| rows).unwrap_or_default();
     let surplus = crate::market_demand::fleet_surplus_from(&holdings, &orders, &crate::market_demand::name_of);
-    let inputs = crate::market_demand::value_inputs_from(&orders, None, &surplus, &|wanted: &[String]| crate::market_demand::price_table(&store, wanted));
+    let volumes = store.volumes_since(crate::market_service::MarketService::now_clock() - 86_400).expect("volumes");
+    let days = lifescape_planner::investment::INVESTMENT_HORIZON_TICKS * 60.0 / 86_400_000.0;
+    let inputs = crate::market_demand::value_inputs_from(&orders, None, &surplus, &volumes, days, &|wanted: &[String]| crate::market_demand::price_table(&store, wanted));
     println!("unserved bids: {}, alch offers: {}, prices: {}", inputs.bids.len(), inputs.alch_offers.len(), inputs.prices.len());
     let rate = |method: &str, level: u8| lifescape_planner::work_rate::prior_rate(method, level);
     let price = |item: &str| inputs.price_of(item);
@@ -50,6 +52,10 @@ fn simulate_rebalance_on_the_live_state() {
             None => println!("KEPT {} | {} | protected or operator", bot.account, bot.kind.clone().unwrap_or_default()),
         }
     }
+    let changed = moved.iter().filter(|row| row.from.as_deref() != Some(row.pick.kind.as_str())).count();
+    let by_value = moved.iter().filter(|row| row.pick.value_6000 > 0.0).count();
+    let kept = moved.iter().filter(|row| row.pick.kept).count();
+    println!("COUNTS movable {} | changed {changed} | kept by margin {kept} | by value {by_value} | by tie-break {}", moved.len(), moved.len() - by_value);
     println!("BEFORE {before:?}");
     println!("AFTER  {after:?}");
 }

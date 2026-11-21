@@ -232,3 +232,68 @@ fn a_pick_states_its_numbers() {
     assert!(pick.why().starts_with("value:"), "{}", pick.why());
     assert!(pick.numbers().contains("per 6000 ticks"), "{}", pick.numbers());
 }
+
+/// Only the climb separates two bots (A4 point 2): the same unserved bid,
+/// capacity so large that the gain over the horizon binds, one mage a few
+/// levels from the enchant (57), the other from level 1: the advanced bot's
+/// value is higher, and a bot already past the gate is worth the most.
+#[test]
+fn only_the_climb_time_separates_an_advanced_bot_from_a_beginner() {
+    let bids = vec![bid("amulet_of_power", 1_000_000.0, 1_000_000_000, false)];
+    let ctx = context(&bids, &[]);
+    let value = |level: u8| kind_value(&bot("b", &[("magic", level)]), "mage", &ctx);
+    let (beginner, advanced, done) = (value(1), value(50), value(60));
+    assert!(beginner.value_6000 < advanced.value_6000 && advanced.value_6000 < done.value_6000, "{beginner:?} {advanced:?} {done:?}");
+    let climb = |row: &KindValue| row.driver.as_ref().map(|(_, ticks)| *ticks).unwrap_or(0.0);
+    assert!(climb(&beginner) > climb(&advanced) && climb(&advanced) > 0.0 && climb(&done) == 0.0);
+}
+
+/// The rebalance is not brutal: a bot keeps its kind unless the best one
+/// beats it by `MIN_GAIN_TO_CHANGE`, both measured alike (logs for the
+/// woodcutter against coal for the miner, 10 % then 50 % better).
+#[test]
+fn a_bot_changes_only_when_the_gain_beats_the_margin() {
+    let holder = holding("w1", "woodcutter", &[("mining", 30)]);
+    let run = |coal_units: i64| {
+        let bids = vec![bid("logs", 4.0, 1500, false), bid("coal", 150.0, coal_units, false)];
+        let ctx = context(&bids, &[]);
+        rebalance(&[holder.clone()], &ctx).remove(0).pick
+    };
+    let slight = run(44);
+    assert_eq!(slight.kind, "woodcutter", "+10 % is not enough: {slight:?}");
+    assert!(slight.kept);
+    let clear = run(60);
+    assert_eq!(clear.kind, "miner", "+50 % changes it: {clear:?}");
+    assert!(!clear.kept);
+    assert!((MIN_GAIN_TO_CHANGE - 0.25).abs() < 1e-12);
+}
+
+/// The outlet of a consumer skill (the piles its training burns, at the
+/// market price) is read, but only breaks ties: it is no part of the score
+/// (burning feathers is no gain; it drew 38 of 74 bots on the live state).
+#[test]
+fn the_outlet_of_a_pile_breaks_ties_never_the_score() {
+    let surplus = vec![("feather".to_string(), 1_000_000.0)];
+    let priced = |name: &str| if name == "feather" { Some(2.0) } else { price(name) };
+    let ctx = ValueContext { bids: &[], alch_offers: &[], surplus: &surplus, price: &priced, xp_rate: &xp_rate, rate: &rate };
+    let row = kind_value(&bot("f1", &[]), "fisher", &ctx);
+    assert!(row.outlet_6000 > 0.0 && row.value_6000 == 0.0, "{row:?}");
+    let pick = pick_by_value(&bot("f1", &[]), &["cook", "crafter", "miner", "smith", "woodcutter", "ranger", "warrior", "priest", "mage", "runecrafter", "firemaker"], &ctx, &[]).expect("pick");
+    assert_eq!(pick.kind, "fisher", "the only kind nobody holds, and the pile leans it: {pick:?}");
+}
+
+/// A bot works one thing at a time: one assigned miner covers only its
+/// share of each of the two ore lines it answers, so the second bot still
+/// finds unserved demand on the ore and takes it too (were one miner to
+/// cover both lines in full, the second would see none).
+#[test]
+fn an_assigned_bot_covers_its_share_of_each_line_it_answers() {
+    let level_of = |_: &str| 40u8;
+    let output = |item: &str| investment(item, 100.0, 1e12, &["mining"], &level_of, &price, &xp_rate, &rate).expect("ore").units_per_tick * INVESTMENT_HORIZON_TICKS;
+    let wanted = |item: &str| (0.75 * output(item)) as i64;
+    let bids = vec![bid("coal", 100.0, wanted("coal"), false), bid("copper_ore", 100.0, wanted("copper_ore"), false)];
+    let ctx = context(&bids, &[]);
+    let bots = vec![bot("a1", &[("mining", 40)]), bot("a2", &[("mining", 40)])];
+    let moved = rebalance(&bots, &ctx);
+    assert!(moved.iter().all(|row| row.pick.kind == "miner" && row.pick.value_6000 > 0.0), "{moved:?}");
+}
