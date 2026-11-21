@@ -126,13 +126,37 @@ fn read_marker() -> Option<Marker> {
     }
 }
 
-fn write_marker(marker: &Marker) {
-    let path = marker_path();
-    let temporary = path.with_extension("json.tmp");
-    let written = std::fs::write(&temporary, stringify_pretty(&marker.to_value())).and_then(|()| std::fs::rename(&temporary, &path));
-    if let Err(error) = written {
-        crate::logln!("brain rebalance: marker {} not written: {error}", path.display());
+/// The marker could not be written: nothing is applied (typed, no fallback).
+#[derive(Debug, Clone, PartialEq)]
+pub enum MarkerError {
+    Write { path: String, cause: String },
+}
+
+impl std::fmt::Display for MarkerError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MarkerError::Write { path, cause } => write!(formatter, "rebalance marker {path} not written: {cause}"),
+        }
     }
+}
+
+/// Writes the marker next to its final name, then renames it.
+pub fn write_marker_at(path: &std::path::Path, marker: &Marker) -> Result<(), MarkerError> {
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(&temporary, stringify_pretty(&marker.to_value()))
+        .and_then(|()| std::fs::rename(&temporary, path))
+        .map_err(|error| MarkerError::Write { path: path.display().to_string(), cause: error.to_string() })
+}
+
+fn write_marker(marker: &Marker) -> Result<(), MarkerError> {
+    write_marker_at(&marker_path(), marker)
+}
+
+/// Set once the marker cannot be written: the pass stops for this process
+/// (the plan is never recomputed at every step).
+fn blocked() -> &'static std::sync::atomic::AtomicBool {
+    static BLOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    &BLOCKED
 }
 
 /// Active lives on disk (saved within `ACTIVE_LIFE_SECS`), their accounts.
@@ -181,13 +205,21 @@ pub(crate) fn pass(orch: &Orchestrator, life: &mut Life, live: &Value) -> bool {
     if life.ambition.is_none() {
         return false;
     }
+    if blocked().load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
     let _guard = marker_guard().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let existing = read_marker();
     let fresh = existing.is_none();
     let outcome = step(existing, &|| plan_fleet(orch, life, live), &life.account);
     if let Some(marker) = &outcome.persist {
         if fresh || outcome.row.is_some() {
-            write_marker(marker);
+            if let Err(error) = write_marker(marker) {
+                // Nothing applies without its marker: the pass stops here.
+                crate::logln!("brain rebalance: {error}; nothing applied, the pass stops for this run");
+                blocked().store(true, std::sync::atomic::Ordering::Relaxed);
+                return false;
+            }
         }
     }
     let Some(row) = outcome.row else { return false };
@@ -233,6 +265,12 @@ fn apply_row(life: &mut Life, live: &Value, row: &PlanRow) -> bool {
     let Some(held) = life.ambition.as_ref() else { return false };
     if lifescape_planner::pinned(held) || lifescape_planner::maker_role(life).is_some() || lifescape_planner::protected(&account) {
         crate::logln!("brain rebalance {account}: kept {} (operator or protected, never touched)", held.kind);
+        return false;
+    }
+    // The row was planned for the ambition the bot held then: when A4 or
+    // anything else changed it since, the row is stale and applies nothing.
+    if held.kind != row.from {
+        crate::logln!("brain rebalance {account}: row stale (planned from {:?}, the bot holds {}), nothing applied", row.from, held.kind);
         return false;
     }
     if held.kind == row.kind {
