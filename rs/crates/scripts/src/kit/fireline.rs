@@ -75,16 +75,23 @@ impl FireGrid {
         length
     }
 
+    /// `run_west` that also ends before a banned tile (refused live: a
+    /// fire another player lit, a tile the server said no to).
+    pub fn run_west_clear(&self, x: i32, z: i32, want: u32, banned: &HashSet<(i32, i32)>) -> u32 {
+        let length = self.run_west(x, z, want);
+        (0..length as i32).take_while(|step| !banned.contains(&(x - step, z))).count() as u32
+    }
+
     /// Best start near `from`: a full row (`want` fires) nearest first;
     /// else the longest row of at least `min` (nearest on ties). Banned
-    /// starts (refused live) are skipped. `(x, z, length)`.
+    /// tiles (refused live) neither start nor carry a row. `(x, z, length)`.
     pub fn best_line(&self, from: (i32, i32), want: u32, min: u32, banned: &HashSet<(i32, i32)>) -> Option<(i32, i32, u32)> {
         let mut best: Option<((bool, u32, i32), (i32, i32, u32))> = None;
         for (&(x, z), _) in &self.tiles {
             if (x - from.0).abs().max((z - from.1).abs()) > START_RADIUS || banned.contains(&(x, z)) {
                 continue;
             }
-            let length = self.run_west(x, z, want);
+            let length = self.run_west_clear(x, z, want, banned);
             if length < min.min(want) {
                 continue;
             }
@@ -184,6 +191,30 @@ const CATCH_TICKS: u64 = 200;
 const CATCH_LINE: &str = "the fire catches";
 const REFUSED_LINE: &str = "can't light a fire here";
 
+/// A refused row is left whole: every tile it planned is banned, so the
+/// next plan takes another line. Banning only the start and the refused
+/// tile replanned one step west on the same line, right where a second
+/// firemaker of the same bank (same plan) lit next: refused again, 12
+/// plans spent (live 2026-11-21, noah_hill and rae_tanner on (3199,3429)).
+pub fn ban_refused_row(banned: &mut HashSet<(i32, i32)>, start: (i32, i32), length: u32) {
+    for step in 0..length.max(1) as i32 {
+        banned.insert((start.0 - step, start.1));
+    }
+}
+
+/// Server lines since a click: by index while the history still holds
+/// the cursor `seen`, else (the history dropped its oldest half past
+/// `MESSAGE_CAP`, the cursor now points past its end) the lines stamped
+/// at or after `click_tick`. A cursor read across a drain otherwise sees
+/// nothing for the whole wait (live 2026-11-21: every « log did not
+/// catch fire » followed such a drain).
+pub fn lines_since(messages: &[String], ticks: &[u64], seen: usize, click_tick: u64) -> Vec<String> {
+    if seen <= messages.len() {
+        return messages[seen..].to_vec();
+    }
+    messages.iter().zip(ticks).filter(|(_, tick)| **tick >= click_tick).map(|(line, _)| line.clone()).collect()
+}
+
 /// One light attempt's verdict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LightOutcome {
@@ -237,8 +268,8 @@ pub fn burn_load(bot: &mut Bot, log: u16, tinderbox: u16) -> Result<u32, ScriptE
                     }
                 }
                 LightOutcome::Refused => {
-                    bot.log(&format!("fire refused at ({at_x},{at_z}), banning the row start ({start_x},{start_z})"));
-                    banned.insert((start_x, start_z));
+                    bot.log(&format!("fire refused at ({at_x},{at_z}), banning the row ({start_x},{start_z}) x{length}"));
+                    ban_refused_row(&mut banned, (start_x, start_z), length);
                     banned.insert((at_x, at_z));
                     break;
                 }
@@ -254,6 +285,7 @@ pub fn burn_load(bot: &mut Bot, log: u16, tinderbox: u16) -> Result<u32, ScriptE
 pub fn light_here(bot: &mut Bot, log: u16, tinderbox: u16) -> Result<LightOutcome, ScriptError> {
     let here = (bot.world.x, bot.world.z);
     let seen = bot.world.messages.len();
+    let click_tick = bot.world.ticks;
     let (com, slot) = crate::quests::common::inv_slot(bot, log)?;
     let (use_com, use_slot) = crate::quests::common::inv_slot(bot, tinderbox)?;
     bot.op_held_u(log, slot, com, tinderbox, use_slot, use_com)?;
@@ -261,7 +293,7 @@ pub fn light_here(bot: &mut Bot, log: u16, tinderbox: u16) -> Result<LightOutcom
     let mut caught_at: Option<u64> = None;
     while bot.world.ticks < deadline {
         bot.pump(2)?;
-        let fresh: Vec<String> = bot.world.messages.iter().skip(seen).map(|line| line.to_lowercase()).collect();
+        let fresh: Vec<String> = lines_since(&bot.world.messages, &bot.world.message_ticks, seen, click_tick).iter().map(|line| line.to_lowercase()).collect();
         if fresh.iter().any(|line| line.contains(REFUSED_LINE)) {
             return Ok(LightOutcome::Refused);
         }
@@ -344,6 +376,43 @@ mod tests {
         refused.insert((x, z));
         let (other_x, other_z, _) = grid.best_line((3092, 3243), 27, 5, &refused).expect("another row");
         assert_ne!((other_x, other_z), (x, z), "a refused start is skipped");
+    }
+
+    /// Live 2026-11-21 (noah_hill and rae_tanner at 07:53:14, both « 26
+    /// tiles west from (3199,3429) »): two firemakers of the same bank plan
+    /// the same row; the follower is refused on every tile the leader
+    /// lights a tick before it. A refusal bans the whole planned row, and
+    /// a row never runs through a banned tile: the next plan takes another
+    /// line, never the same one a step behind the leader.
+    #[test]
+    fn a_refused_row_is_left_whole() {
+        let grid = open_grid(0, 3150, 3210, 3420, 3440);
+        let mut banned = HashSet::new();
+        let (x, z, length) = grid.best_line((3185, 3436), 27, super::MIN_ROW, &banned).expect("a row");
+        super::ban_refused_row(&mut banned, (x, z), length);
+        let (next_x, next_z, next_length) = grid.best_line((3185, 3436), 27, super::MIN_ROW, &banned).expect("another row");
+        assert_ne!(next_z, z, "another line, not ({next_x},{next_z}) one step behind on z={z}");
+        assert_eq!(next_length, 27);
+        // A start east of the banned stretch stops before it.
+        let mut cut = HashSet::new();
+        cut.insert((3190, 3430));
+        assert_eq!(grid.run_west_clear(3195, 3430, 27, &cut), 5, "3195..3191, the banned 3190 ends the row");
+    }
+
+    /// Live 2026-11-21: 12 « log did not catch fire » in 6 h, each right
+    /// after the message history dropped its oldest half (`MESSAGE_CAP`,
+    /// ~3 800 old lines replayed in the worker log): a cursor taken before
+    /// the drain read nothing for the whole wait. Lines since the click are
+    /// read by index while the history holds them, by tick after a drain.
+    #[test]
+    fn lines_since_a_click_survive_a_history_drain() {
+        let messages: Vec<String> = vec!["old".into(), "You attempt to light the logs.".into(), "The fire catches and the logs begin to burn.".into()];
+        let ticks: Vec<u64> = vec![90, 100, 104];
+        let plain = super::lines_since(&messages, &ticks, 1, 100);
+        assert_eq!(plain.len(), 2, "no drain: by index");
+        // Drain: the cursor (8 000) is past the kept history.
+        let drained = super::lines_since(&messages, &ticks, 8000, 100);
+        assert_eq!(drained, vec!["You attempt to light the logs.".to_string(), "The fire catches and the logs begin to burn.".to_string()]);
     }
 
     /// Real map (nav service on the repo dumps): a bot banking at Draynor
