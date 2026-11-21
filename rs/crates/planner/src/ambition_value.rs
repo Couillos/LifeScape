@@ -122,6 +122,10 @@ pub struct ValueContext<'a> {
     /// Best XP per tick of a skill at a level (`investment::best_xp_rate`).
     pub xp_rate: &'a dyn Fn(&str, u8) -> Option<f64>,
     pub rate: RateReader<'a>,
+    /// The fleet as it stands (kinds and levels): the coverage of the
+    /// steps of a chain (`chain_coverage`). `None`: not read (offline
+    /// callers that value a single kind), every step counts covered.
+    pub roster: Option<&'a [FleetBot]>,
 }
 
 /// The value of one kind for one bot, with what drives it.
@@ -188,7 +192,7 @@ fn drawable_kinds() -> Vec<&'static str> {
 }
 
 /// Skills a kind's groups train.
-fn own_skills(kind: &str) -> Vec<&'static str> {
+pub(crate) fn own_skills(kind: &str) -> Vec<&'static str> {
     spec(kind).map(|entry| entry.groups.iter().flat_map(|group| group_skills(group)).collect()).unwrap_or_default()
 }
 
@@ -199,6 +203,9 @@ struct Prepared<'a, 'ctx> {
     kinds: Vec<&'static str>,
     /// `serves[bid][kind]`, 0 for a bid with no price or no unit unmet.
     serves: Vec<Vec<f64>>,
+    /// Coverage of a step by the others of one bot: (account, skill,
+    /// level) -> share (`chain_coverage::coverage`).
+    coverage: std::cell::RefCell<std::collections::HashMap<(String, String, u8), f64>>,
 }
 
 impl<'a, 'ctx> Prepared<'a, 'ctx> {
@@ -209,7 +216,20 @@ impl<'a, 'ctx> Prepared<'a, 'ctx> {
             .iter()
             .map(|bid| kinds.iter().map(|kind| if bid.unit_price > 0.0 && bid.unmet > 0 { serves(kind, &bid.item) } else { 0.0 }).collect())
             .collect();
-        Prepared { ctx, kinds, serves }
+        Prepared { ctx, kinds, serves, coverage: Default::default() }
+    }
+
+    /// Coverage of the step `(skill, level)` by the bots other than
+    /// `bot` (1 when the roster is not read).
+    fn covered(&self, bot: &FleetBot, skill: &str, level: u8) -> f64 {
+        let Some(roster) = self.ctx.roster else { return 1.0 };
+        let key = (bot.account.clone(), skill.to_string(), level);
+        if let Some(known) = self.coverage.borrow().get(&key) {
+            return *known;
+        }
+        let share = crate::chain_coverage::coverage(roster, &bot.account, skill, level);
+        self.coverage.borrow_mut().insert(key, share);
+        share
     }
 }
 
@@ -252,7 +272,22 @@ fn terms_of(bot: &FleetBot, kind_index: usize, prep: &Prepared) -> KindTerms {
             continue;
         }
         let Some(found) = investment_ladder(&bid.item, &bid.offers(), &own, &level_of, ctx.price, ctx.xp_rate, ctx.rate) else { continue };
-        let weight = share * if bid.asked { ASKED_SHARE } else { 1.0 };
+        // Chain coverage (`chain_coverage`): the steps the kind does not
+        // train must be covered by someone, else the demand is not
+        // served through this kind; a step it trains that nobody covers
+        // carries the whole demand (serves 1).
+        let mut upstream = 1.0;
+        let mut own_open = false;
+        for (skill, level) in crate::chain_coverage::chain_steps(&bid.item) {
+            let share_covered = prep.covered(bot, &skill, level);
+            if own.contains(&skill.as_str()) {
+                own_open |= share_covered < 0.5;
+            } else {
+                upstream *= share_covered;
+            }
+        }
+        let share = if own_open { 1.0 } else { share };
+        let weight = share * upstream * if bid.asked { ASKED_SHARE } else { 1.0 };
         terms.push(Term {
             item: bid.item.clone(),
             bid: index,

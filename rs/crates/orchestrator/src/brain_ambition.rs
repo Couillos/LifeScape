@@ -133,7 +133,7 @@ fn refresh_fleet(orch: &Orchestrator) {
 }
 
 /// Every other fleet life on disk (unreadable files are skipped and logged).
-fn other_lives(account: &str) -> Vec<Life> {
+pub(crate) fn other_lives(account: &str) -> Vec<Life> {
     let mut out = Vec::new();
     let fleet = fleet_accounts().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let Ok(entries) = std::fs::read_dir(lives_dir()) else { return out };

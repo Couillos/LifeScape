@@ -510,7 +510,7 @@ pub fn brain_response_in(
 /// the A1 value of time for the skill of its goal.
 fn progression_sources(run_dir: &std::path::Path, account: &str, life_value: &Value, live: &Value) -> (Option<PlanInfo>, Option<LoggedValue>, Option<TrainingInput>) {
     let Some(life) = life_from_value(life_value) else { return (None, None, None) };
-    let plan = std::fs::read_to_string(run_dir.join("ambition_rebalance_a4.json"))
+    let plan = std::fs::read_to_string(run_dir.join("ambition_rebalance_a4b.json"))
         .ok()
         .and_then(|text| json::parse(&text).ok())
         .and_then(|value| crate::brain_rebalance::Marker::from_value(&value))

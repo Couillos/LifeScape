@@ -113,7 +113,7 @@ fn the_plan_rows_leave_out_the_protected_and_the_operators() {
     let price = |_: &str| None;
     let xp = |_: &str, _: u8| None;
     let rate = |_: &str, _: u8| None;
-    let context = lifescape_planner::ValueContext { bids: &[], alch_offers: &[], surplus: &[], price: &price, xp_rate: &xp, rate: &rate };
+    let context = lifescape_planner::ValueContext { bids: &[], alch_offers: &[], surplus: &[], price: &price, xp_rate: &xp, rate: &rate, roster: None };
     let moved = lifescape_planner::rebalance(&bots, &context);
     let rows = rows_of(&moved);
     assert_eq!(rows.iter().map(|found| found.account.as_str()).collect::<Vec<_>>(), vec!["worker"]);

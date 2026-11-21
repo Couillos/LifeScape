@@ -16,6 +16,7 @@ pub mod ambition_ladder;
 pub mod ambition_review;
 pub mod ambition_supply;
 pub mod ambition_value;
+pub mod chain_coverage;
 pub mod bans;
 pub mod alchemy;
 pub mod investment;
