@@ -420,6 +420,12 @@ fn replace(life: &mut Life, live: &Value, bot: &FleetBot, first: (String, String
 /// another bot holds its group; otherwise its ladder extends (the sole
 /// holder never leaves its group, the throttle is the user's rule).
 pub(crate) fn before_draw(life: &mut Life, live: &Value) {
+    // Protected accounts always hold the overall ambition (never a draw).
+    if lifescape_planner::protected(&life.account) && life.ambition.as_ref().is_some_and(|held| held.kind != lifescape_planner::OVERALL) {
+        crate::logln!("brain {}: protected account, ambition set to overall", life.account);
+        assign_kind(life, live, lifescape_planner::OVERALL, lifescape_planner::PROTECTED_WHY);
+        return;
+    }
     let (items, surplus) = crate::market_demand::refresh_inputs_for(&life.account);
     let seed = life.seed;
     let account = life.account.clone();

@@ -80,7 +80,8 @@ pub fn draw_rule_for(bot: &FleetBot) -> &'static str {
 
 /// Stamp the rule this bot's draw followed on a freshly built ambition.
 pub fn mark_rule(ambition: &mut Ambition, bot: &FleetBot) {
-    ambition.draw_rule = draw_rule_for(bot).to_string();
+    // The overall ambition is an operator's: never reviewed.
+    ambition.draw_rule = if ambition.kind == crate::ambition::OVERALL { OPERATOR_RULE } else { draw_rule_for(bot) }.to_string();
 }
 
 /// True when the ambition must be redrawn by need now: a need-led bot

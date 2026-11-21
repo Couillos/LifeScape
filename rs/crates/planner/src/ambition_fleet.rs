@@ -36,6 +36,11 @@ pub struct FleetBot {
 /// D3, docs/plan-equilibre.txt step 6). Matched without case.
 pub const LEVEL_LED_ACCOUNTS: [&str; 3] = ["Zezima", "N0valyfe", "Yogosun"];
 
+/// `why` of the overall ambition a protected account is given
+/// (`ambition_value::PROTECTED_ACCOUNTS`, user 2026-11-21: they always
+/// hold the first place of the overall ranking, whatever the draw).
+pub const PROTECTED_WHY: &str = "protected:overall";
+
 /// True when the bot keeps the level-led draw (`LEVEL_LED_ACCOUNTS`, a
 /// market maker); false: its ambition follows the need alone.
 pub fn level_led(bot: &FleetBot) -> bool {
@@ -136,6 +141,14 @@ pub fn assign_fleet(bots: &[FleetBot], demand: &[KindDemand]) -> Vec<Assignment>
     let mut free: Vec<&FleetBot> = bots.iter().filter(|bot| bot.kind.is_none()).collect();
     free.sort_by(|left, right| left.account.cmp(&right.account));
     let mut out = Vec::new();
+    // A protected account never covers a gap: overall, always.
+    free.retain(|bot| {
+        let keeps_overall = crate::ambition_value::protected(&bot.account);
+        if keeps_overall {
+            out.push(Assignment { account: bot.account.clone(), kind: crate::ambition::OVERALL.to_string(), why: PROTECTED_WHY.to_string() });
+        }
+        !keeps_overall
+    });
     while !gaps.is_empty() && !free.is_empty() {
         let mut best: Option<(f64, u64, usize, usize)> = None;
         for (bot_at, bot) in free.iter().enumerate() {
@@ -181,6 +194,9 @@ pub fn assign_fleet(bots: &[FleetBot], demand: &[KindDemand]) -> Vec<Assignment>
 ///   product), else `random`.
 /// `exclude` keeps kinds out (the one just blocked).
 pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude: &[&str]) -> (String, String) {
+    if crate::ambition_value::protected(&bot.account) {
+        return (crate::ambition::OVERALL.to_string(), PROTECTED_WHY.to_string());
+    }
     let mut best_gap: Option<(f64, u64, &str)> = None;
     for gap in gaps {
         let Some(kind) = kind_for_group(gap) else { continue };
@@ -222,6 +238,9 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
 /// ces 11 comptes »); `demand` saturated by the kinds already held, so
 /// successive retirements spread. `None` when nothing is drawable.
 pub fn neediest_kind(bot: &FleetBot, demand: &[KindDemand], exclude: &[&str]) -> Option<(String, String)> {
+    if crate::ambition_value::protected(&bot.account) {
+        return Some((crate::ambition::OVERALL.to_string(), PROTECTED_WHY.to_string()));
+    }
     let operator_only = |kind: &str| crate::ambition::ladderless(kind) || kind == crate::market_maker::MARKET_MAKER_KIND;
     let drawable: Vec<&str> = specs().iter().map(|entry| entry.kind).filter(|kind| !operator_only(kind) && !exclude.contains(kind)).collect();
     need_weights(bot, &drawable, demand).into_iter().max_by(|left, right| left.1.total_cmp(&right.1)).map(|(kind, _, why)| (kind.to_string(), why))
@@ -272,3 +291,7 @@ mod market_tests;
 #[cfg(test)]
 #[path = "ambition_need_tests.rs"]
 mod need_tests;
+
+#[cfg(test)]
+#[path = "ambition_protected_tests.rs"]
+mod protected_tests;

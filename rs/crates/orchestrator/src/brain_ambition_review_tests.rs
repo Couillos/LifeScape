@@ -60,22 +60,32 @@ fn achieved_woodcutter(account: &str) -> Life {
 }
 
 /// Ladder end, need-led bot: redrawn by need (`achieved`), marked, never
-/// the same ambition extended; the D3 exception (Zezima) keeps the
-/// extension.
+/// the same ambition extended (the protected accounts: see below).
 #[test]
-fn a_need_led_ladder_end_redraws_and_an_exception_extends() {
+fn a_need_led_ladder_end_redraws() {
     let mut jane = achieved_woodcutter("b0");
     super::before_draw(&mut jane, &live());
     let held = jane.ambition.as_ref().expect("an ambition");
     assert_eq!(held.revisions.last().map(|revision| revision.why.as_str()), Some("achieved"), "redrawn, not extended: {}", lifescape_planner::describe_ambition(held));
     assert_eq!(held.draw_rule, NEED_RULE, "drawn by need");
     assert_eq!(held.kind, "woodcutter", "no other bot holds woodcutting here: the sole holder keeps its group");
-    let mut zezima = achieved_woodcutter("Zezima");
-    super::before_draw(&mut zezima, &live());
-    let kept = zezima.ambition.as_ref().expect("an ambition");
-    assert!(kept.revisions.is_empty(), "the exception keeps its ambition");
-    assert_eq!(kept.kind, "woodcutter");
-    assert!(kept.milestones.iter().any(|stone| stone.origin == lifescape_planner::ambition::EXTEND_ORIGIN), "extended past the ladder");
+}
+
+/// Protected accounts (user 2026-11-21): a ladder end, an old life or any
+/// other ambition gives Zezima, N0valyfe and Yogosun the overall ambition
+/// (never a level draw); once held, a pass never replaces it.
+#[test]
+fn a_protected_account_always_ends_up_overall() {
+    for name in ["Zezima", "n0valyfe", "YOGOSUN"] {
+        let mut protected = achieved_woodcutter(name);
+        super::before_draw(&mut protected, &live());
+        let held = protected.ambition.as_ref().expect("an ambition");
+        assert_eq!(held.kind, lifescape_planner::OVERALL, "{name}");
+        assert_eq!(held.revisions.last().map(|revision| revision.why.as_str()), Some("protected:overall"), "{name}");
+        super::before_draw(&mut protected, &live());
+        let kept = protected.ambition.as_ref().expect("an ambition");
+        assert_eq!((kept.kind.as_str(), kept.revisions.len()), (lifescape_planner::OVERALL, 1), "{name}: kept, never replaced");
+    }
 }
 
 /// A2 review (user 2026-11-21): the one-time review never retires a

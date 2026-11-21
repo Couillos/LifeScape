@@ -848,6 +848,10 @@ pub fn may_change(ambition: &Ambition, ticks_since: &dyn Fn(i64) -> u64) -> bool
 /// the brain replaces a goal the old ambition drew,
 /// `ambition_review::goal_from_earlier_ambition`).
 pub fn revise(life: &mut Life, mut next: Ambition, why: &str, stamp: Stamp) {
+    // A protected account's overall ambition is never replaced.
+    if next.kind != OVERALL && crate::ambition_value::protected(&life.account) && life.ambition.as_ref().is_some_and(|held| held.kind == OVERALL) {
+        return;
+    }
     let (from, mut revisions) = match life.ambition.take() {
         Some(old) => (old.kind, old.revisions),
         None => (String::new(), Vec::new()),

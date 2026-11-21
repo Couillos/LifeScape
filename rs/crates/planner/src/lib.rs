@@ -127,7 +127,7 @@ pub use ambition::{
 pub use ambition_catalog::{kind_weights, DemandItem, KindDemand, GROUPS};
 pub use market_maker::{become_quoting, maker_post, maker_role, quoting, switch_due, MakerPhase, MakerRole, MAKER_POSTS, MAKE_METHOD, MAKERS_ACTIVE, MAKER_RETIRED_CAUSE, MARKET_MAKER_KIND, MAKER_ROLE_CAUSE};
 pub use ambition_review::{adopt_need_mark, redraw_gaps, OPERATOR_RULE, draw_rule_for, goal_from_earlier_ambition, is_milestone_origin, keeps_ladder_end, mark_rule, needs_review, review_slot_ticks, LEVEL_RULE, NEED_RULE, REVIEW_SPREAD_TICKS, STALE_GOAL_CAUSE};
-pub use ambition_fleet::{assign_fleet, coverage_gaps, draw_kind, level_led, neediest_kind, saturate, Assignment, FleetBot, LEVEL_LED_ACCOUNTS};
+pub use ambition_fleet::{assign_fleet, coverage_gaps, draw_kind, level_led, neediest_kind, saturate, Assignment, FleetBot, LEVEL_LED_ACCOUNTS, PROTECTED_WHY};
 pub use ambition_value::{assign_by_value, kind_value, pick_by_value, protected, rebalance, KindValue, Pick, Reassignment, UnservedBid, ValueContext, ASKED_SHARE, PROTECTED_ACCOUNTS};
 pub use mapping::map_method;
 pub use model::{
