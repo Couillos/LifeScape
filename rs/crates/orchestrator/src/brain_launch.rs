@@ -172,6 +172,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if !quoting && crate::brain_serve_value::release_unpaying(&mut life, &live) {
         dirty = true;
     }
+    // A demand milestone whose serving does not pay the bot's time is set
+    // aside, persisted lives included (2026-11-21: gem farms of crafters).
+    if !quoting && crate::brain_milestone_value::set_aside_unpaying(&mut life, &live) {
+        dirty = true;
+    }
     // After a daemon restart, an open bid answer holds its seats again.
     if !quoting {
         crate::brain_bid_release::reengage_after_restart(&life, &live);
