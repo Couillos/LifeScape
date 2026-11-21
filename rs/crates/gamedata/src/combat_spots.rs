@@ -289,8 +289,16 @@ pub fn best_catalogue_spot(melee_level: i64) -> CombatSpot {
     chosen
 }
 
-/// F2P spawn positions for one spot (all NPC names, zone-filtered).
+/// F2P spawn positions for one spot (all NPC names, zone-filtered),
+/// never a spawn no stand reaches (`site_reach::unreachable_spawn`: the
+/// caged lesser demon of the Wizards' Tower, live 2026-11-21).
 pub fn positions(key: &str) -> Vec<(i64, i64, i64)> {
+    raw_positions(key).into_iter().filter(|(x, z, level)| crate::site_reach::unreachable_spawn(*x, *z, *level).is_none()).collect()
+}
+
+/// Every F2P spawn of a spot, reachable or not (the reach dump's input,
+/// `rs/crates/nav/tests/fight_sites.rs`).
+pub fn raw_positions(key: &str) -> Vec<(i64, i64, i64)> {
     let Some(spot) = by_key(key) else {
         return Vec::new();
     };
@@ -401,5 +409,19 @@ mod tests {
         assert_eq!(risk_floor("lesser_demons"), Some(80));
         assert_eq!(risk_floor("greater_demons"), Some(90));
         assert_eq!(risk_floor("hill_giants"), None);
+    }
+
+    /// Live 2026-11-21: the caged lesser demon at the top of the Wizards'
+    /// Tower (3110,3157,2) was the camp's site the brain priced, and
+    /// every walk there ended `Disconnected` (25 failures in 6 h). A spawn
+    /// no stand reaches is no position of its camp
+    /// (`site_reach::unreachable_spawn`); the volcano's six stay.
+    #[test]
+    fn a_sealed_spawn_is_no_position() {
+        let lesser = positions("lesser_demons");
+        assert!(!lesser.contains(&(3110, 3157, 2)), "the caged demon is out: {lesser:?}");
+        assert_eq!(crate::site_reach::unreachable_spawn(3110, 3157, 2), Some("sealed"));
+        let volcano = lesser.iter().filter(|(x, z, level)| *level == 0 && (2820..=2850).contains(x) && (9548..=9570).contains(z)).count();
+        assert_eq!(volcano, 6, "the volcano's six: {lesser:?}");
     }
 }
