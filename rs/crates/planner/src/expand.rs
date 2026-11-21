@@ -588,6 +588,7 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
         _ => crate::combat::BANK_LOADS,
     };
     for method in &candidates {
+        let loads = crate::combat::site_loads(method, loads);
         match crate::combat::pick_site_for_loads(method, ctx, loads) {
             crate::combat::SitePick::Anywhere => {
                 node.method = Some(method.clone());

@@ -313,8 +313,24 @@ pub fn bank_weight(method: &str, site: (i64, i64, i64), loads: i64) -> i64 {
     if !(station || gathers) {
         return 0;
     }
-    // The first load rides in the pack: only the next ones walk back.
-    crate::method_rate_trip::bank_walk_tiles(site).map_or(0, |tiles| (loads.min(BANK_LOADS) - 1).max(0) * 2 * tiles)
+    let loads = loads.clamp(1, BANK_LOADS);
+    // The first load rides in the pack: every load walks back to the
+    // bank (its deposit), every load but the last walks out again.
+    crate::method_rate_trip::bank_walk_tiles(site).map_or(0, |tiles| (2 * loads - 1) * tiles)
+}
+
+/// Bank loads a node's site pick weighs for `method`: a station always
+/// `BANK_LOADS` (user 2026-11-21: « les smelters et cookers doivent
+/// aller aux spots les moins loin de la bank »): its one-load orders
+/// follow one another at the same station, so the node's own size never
+/// shrinks the bank walk; any other method its node's `loads`.
+pub fn site_loads(method: &str, loads: i64) -> i64 {
+    let inner = crate::trade_craft::inner(method);
+    if STATION_FAMILIES.iter().any(|family| inner.starts_with(family)) {
+        BANK_LOADS
+    } else {
+        loads
+    }
 }
 
 /// Rows of one method, computed once from the data: each site's combat
@@ -826,7 +842,33 @@ mod tests {
         };
         assert!((site.0 - 3272).abs() <= 2 && (site.1 - 3185).abs() <= 2, "al kharid's furnace, got {site:?}");
         assert_eq!(bank_weight("fight:melee/cows", (3255, 3270, 0), BANK_LOADS), 0, "a fight weighs no bank");
-        assert_eq!(bank_weight("smelt:iron_bar", (3225, 3256, 0), 1), 0, "one load rides in the pack");
+    }
+
+    /// Live 2026-11-21 (user: « les smelters et cookers doivent aller aux
+    /// spots les moins loin de la bank ») : paul_rhodes smelted 25 gold
+    /// bars, one load, at the Lumbridge furnace from the Draynor market
+    /// and walked 139 tiles back to the Draynor bank — 6738 such trips in
+    /// the logs. One-load orders follow one another, so a station weighs
+    /// a whole run of loads whatever the node's size, and every banking
+    /// site counts the deposit walk that ends its last load.
+    #[test]
+    fn a_one_load_station_order_takes_the_station_beside_a_bank() {
+        use super::{bank_weight, pick_site_weighed, site_loads, Fare, Pass, SitePick, BANK_LOADS};
+        let draynor_market = Some((3092, 3245, 0));
+        let lumbridge = (3225, 3256, 0);
+        let free = Fare { wallet: 0, free_pass: false };
+        for method in ["smelt:gold_bar", "cook:tuna"] {
+            let pick = pick_site_weighed(method, 60, draynor_market, free, &Pass::default(), &[], &[], &[], site_loads(method, 1));
+            let SitePick::At(site) = pick else { panic!("{method}: a free station, got {pick:?}") };
+            let tiles = crate::method_rate_trip::bank_walk_tiles(site).expect("bank of the pick");
+            assert!(tiles <= 60, "{method}: {site:?} stands {tiles} tiles from its bank");
+        }
+        assert_eq!(site_loads("smelt:gold_bar", 1), BANK_LOADS, "a station weighs a run of loads");
+        assert_eq!(site_loads("farm:coal", 1), 1, "a gathering order its own loads");
+        assert!(bank_weight("smelt:gold_bar", lumbridge, 1) > 0, "the deposit walk of the one load");
+        let gather_one = bank_weight("farm:coal", (3304, 3300, 0), 1);
+        assert!(gather_one > 0, "the last load still walks to the bank");
+        assert!(gather_one < bank_weight("farm:coal", (3304, 3300, 0), BANK_LOADS), "a small gathering order weighs fewer loads");
     }
 
     /// Live 2026-11-21 (jim_ford, attack 48, combat 59): the lesser

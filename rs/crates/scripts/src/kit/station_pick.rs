@@ -12,6 +12,10 @@ use lifescape_sdk::Bot;
 /// Manhattan radius of the station search around the anchor.
 const STATION_RADIUS: i32 = 150;
 
+/// Manhattan radius of the brain's site: the station it names (a site
+/// is a station tile; a range or furnace spans a few tiles).
+const SITE_STATION_RADIUS: i32 = 8;
+
 /// Lowercase debugname of a loc id, empty when the dump does not know it.
 pub(crate) fn station_debugname(loc: u16) -> String {
     knowledge::loc_by_id(usize::from(loc)).and_then(|entry| entry.name).unwrap_or_default().to_lowercase()
@@ -30,8 +34,17 @@ const STATION_SHORTLIST: usize = 8;
 /// 2026-11-17: 9 cooks from Edgeville sent to the Black Knights' banquet
 /// fireplace (3030,3514), sealed from outside: door loops, then
 /// "consumed nothing"). Nav unwired: Manhattan order, as before.
+///
+/// With a brain site (`--site`), only the station of that site: the
+/// brain weighed its bank walks (`planner::combat::site_loads`), the
+/// nearest station to the bot would undo it (user 2026-11-21: cooks
+/// banked at Draynor and walked to the Lumbridge range). None reached
+/// there is `None`, the caller's typed failure.
 pub(crate) fn reachable_station(bot: &mut Bot, name: &str, near: (i32, i32), level: i32) -> Option<(i32, i32, i32, u16)> {
-    let cands = site_tiles(bot, name, near, level);
+    let mut cands = site_tiles(bot, name, near, level);
+    if bot.assigned_site.is_some() {
+        cands.retain(|(x, z, _, _)| (x - near.0).abs() + (z - near.1).abs() <= SITE_STATION_RADIUS);
+    }
     let ranked = crate::skill_walk::refine_walking(bot, cands, STATION_SHORTLIST, name, |tile| lifescape_nav::plan::Tile { x: tile.0, z: tile.1, level: tile.2 });
     ranked.into_iter().next().map(|(_, tile)| tile)
 }
@@ -130,6 +143,38 @@ mod tests {
         bot.last_keepalive = Some(std::time::Instant::now());
         let hatted = super::reachable_station(&mut bot, "range", (3081, 3508), 1);
         assert!(guild(hatted), "cooking 52 and the hat worn: the nearer guild range, got {hatted:?}");
+    }
+
+    /// User 2026-11-21: the brain's site names the station. Hat worn, the
+    /// guild range is the nearer walk from Varrock, yet the brain's
+    /// Edgeville range (3081,3508,1) is the one worked; without a site the
+    /// nearest walk still wins.
+    #[test]
+    fn the_brain_site_station_beats_a_nearer_one() {
+        let mut bot = offline_bot();
+        crate::wire_nav(&mut bot);
+        let world = bot.nav_world.clone().expect("wired");
+        let tables = bot.nav_tables.clone().expect("wired");
+        let service = lifescape_nav::service::Service::start(
+            lifescape_nav::service::Snapshot::new(world, tables, "test-site-range".to_string()),
+            &lifescape_nav::service::test_socket("site-range"),
+            1,
+        )
+        .expect("service starts");
+        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), "site-range"));
+        bot.plan_data_version = Some("test-site-range".to_string());
+        bot.last_keepalive = Some(std::time::Instant::now());
+        (bot.world.x, bot.world.z, bot.world.level) = (3185, 3442, 0);
+        bot.world.stats.insert(crate::activities::cook::COOK_STAT, (52, 130_000));
+        let hat = crate::kit::pack::obj_id(&bot, "chefs_hat").expect("chef's hat in the dumps");
+        let worn_com = (bot.tables.com_id)(crate::kit::gear::WORN_COM_NAME).expect("worn com in the dumps");
+        bot.world.inv.insert(worn_com, [(0u8, (hat, 1u32))].into_iter().collect());
+        let free = super::reachable_station(&mut bot, "range", (3081, 3508), 1);
+        assert!(free.is_some_and(|(x, z, _, _)| (x - 3081).abs() + (z - 3508).abs() > 8), "no site: the nearest walk, got {free:?}");
+        bot.assigned_site = Some((3081, 3508, 1));
+        bot.last_keepalive = Some(std::time::Instant::now());
+        let sited = super::reachable_station(&mut bot, "range", (3081, 3508), 1);
+        assert!(sited.is_some_and(|(x, z, _, _)| (x - 3081).abs() + (z - 3508).abs() <= 8), "the brain's range, got {sited:?}");
     }
 
     /// Live station scan: a streamed range tile resolves by exact
