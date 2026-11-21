@@ -95,6 +95,20 @@
       "requires": ["qp:32"],
       "reason": "championdoor: the content script turns away anyone under 32 quest points (area_varrock champions_guild.rs2)",
       "verified": "2026-11-06"
+    },
+    {
+      "loc": 2712,
+      "at": [3143, 3444, 0],
+      "requires": ["skill:cooking:32", "worn:1949"],
+      "reason": "chefdoor (m49_53 '0 7 52: 2712 0 3'): cooking_guild.rs2 [oploc1,chefdoor] turns away anyone outside under cooking 32 or without chefs_hat (1949) WORN (head chef chatnpc, door stays shut); leaving is free. Live 2026-11-21: ida_reed/ray_79/james_mason (cooking 52/60/87, no hat worn) sent to the guild range (3143,3452,1) by the station walk-cost pick, 20 DoorDidNotOpen and 10 'cooking consumed nothing' in 6 h",
+      "verified": "2026-11-21"
+    },
+    {
+      "loc": 2647,
+      "at": [2933, 3289, 0],
+      "requires": ["skill:crafting:40", "worn:1757"],
+      "reason": "crafting_guild_door (m45_51 '0 53 25: 2647 0 3'): crafting_guild.rs2 [oploc1,crafting_guild_door] turns away anyone outside under crafting 40 or without brown_apron (1757) WORN (master crafter chatnpc); leaving is free. Live 2026-11-19: pottery sent to the guild wheels below crafting 40",
+      "verified": "2026-11-21"
     }
   ],
   "sky_floors": [

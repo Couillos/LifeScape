@@ -348,3 +348,16 @@ forteresse_noire_corridor_refuse | 3094,3489,0 | 3016,3515,0 | f2p | unreachable
 # flanc est (3284,3365) marche. Les kits ne marchent que les flancs routes.
 mine_varrock_flanc_mure | 3285,3364,0 | 3283,3364,0 | - | unreachable=Disconnected
 mine_varrock_flanc_est | 3285,3364,0 | 3284,3365,0 | - | reachable ; walk_tiles<=2
+# Portes de guilde a exigence (live 2026-11-21, ida_reed/ray_79/
+# james_mason : 20 « door did not open » sur chefdoor 2712, cuisine >= 32
+# mais aucun chapeau porte). cooking_guild.rs2 [oploc1,chefdoor] : dehors,
+# stat(cooking) >= 32 ET chefs_hat (1949) porte ; crafting_guild.rs2
+# [oploc1,crafting_guild_door] (2647, (2933,3289)) : crafting >= 40 ET
+# brown_apron (1757) porte. Sans les deux tags, la cuisiniere de l'etage
+# (3143,3452,1) et les tours de la guilde ne se tracent pas.
+cuisiniers_sans_rien | 3143,3443,0 | 3143,3451,1 | - | unreachable=NeedsRequirement
+cuisiniers_sans_chapeau | 3143,3443,0 | 3143,3451,1 | has=skill:cooking:32 | unreachable=NeedsRequirement
+cuisiniers_sans_niveau | 3143,3443,0 | 3143,3451,1 | has=worn:1949 | unreachable=NeedsRequirement
+cuisiniers_avec_chapeau | 3143,3443,0 | 3143,3451,1 | has=skill:cooking:32,has=worn:1949 | reachable ; uses_loc=2712 ; levels=0>1
+artisans_sans_tablier | 2933,3295,0 | 2936,3290,0 | has=skill:crafting:40 | unreachable=NeedsRequirement
+artisans_avec_tablier | 2933,3295,0 | 2936,3290,0 | has=skill:crafting:40,has=worn:1757 | reachable ; uses_loc=2647

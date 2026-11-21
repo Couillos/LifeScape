@@ -170,6 +170,14 @@ talismans dans `Way.tools` (portés, jamais consommés), les voies de sort
 portent leurs runes, les teintures d'Aggie leurs intrants (`aggie.rs2`).
 `quest_requirements` porte `reward_points` (`^<clé>_questpoints`) et
 `blocker` (quête impossible en solo aujourd'hui).
+Les mêmes portes sont des `requirements` de `nav_overrides.json` (2026-11-21 :
+`chefdoor` 2712 `skill:cooking:32` + `worn:1949`, `crafting_guild_door` 2647
+`skill:crafting:40` + `worn:1757`, en plus de la clé et des 32 points) : la nav
+ne trace jamais la porte sans les tags. Côté scripts, `kit::gates::tile_open`
+lit `gates_at` avec l'état live (niveau, uniforme PORTÉ, clé en sac, varp `qp`)
+et le choix de station de `kit::produce` écarte toute station derrière une
+porte non franchie (le coût de marche seul évalue une station bloquée à sa tuile
+atteignable la plus proche, parfois un autre étage ailleurs).
 
 ## Banque d'un site par coût de route (`site_banks.rs`, tour 3, point 2)
 
