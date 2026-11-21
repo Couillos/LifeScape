@@ -33,17 +33,58 @@ pub fn ordered_rock_tiers(resource: Option<&str>, level: i64) -> Result<Vec<know
     Ok(ordered)
 }
 
-/// Mine banked loads in the open session (0 = forever).
 /// Hurt on the site (D3): bank (the pickaxe and the task's objects kept),
-/// heal by the meal rules, then the next load walks back.
+/// heal by the meal rules, then the next load walks back. The heal clears
+/// the hurt line (`survival::hurt_heal_target`), never the bank heal's
+/// 12 hp alone (live 2026-11-21: 104 « hurt on the site » failures at
+/// the Edgeville booth, the heal a no-op and both returns spent in the
+/// same tick): banked food first (the bites that fill the missing
+/// hitpoints, `meals::heal_plan`), then regen up to the line.
 fn heal_hurt(bot: &mut Bot, bank: &knowledge::banks::Bank, pick: &crate::kit::tools::ToolSpec, task_keep: &[u16]) -> Result<(), ScriptError> {
     let mut keep: Vec<u16> = pick.known_ids(bot).into_iter().collect();
     keep.extend(task_keep.iter().copied());
     bank_trip(bot, bank, &keep, 0)?;
     crate::kit::bank::heal_at_bank(bot)?;
+    if hurt_now(bot) && crate::kit::survival::bank_stocks_food(bot) {
+        withdraw_heal_bites(bot, bank)?;
+    }
     crate::kit::meals::eat_to_full(bot)?;
+    let (hp, max_hp) = (crate::kit::survival::hitpoints(bot), crate::kit::survival::max_hitpoints(bot));
+    let target = crate::kit::survival::hurt_heal_target(max_hp);
+    if hp < target {
+        let start = bot.world.ticks;
+        let bound = u64::from(target - hp) * crate::kit::survival::REGEN_TICKS_PER_HP + crate::kit::survival::REGEN_TICKS_PER_HP;
+        bot.log(&format!("regen at the bank: hp {hp}->{target} (bound {bound} ticks)"));
+        lifescape_sdk::waits::wait_hitpoints(bot, target, bound)?;
+        bot.log(&format!("regen ended at hp {} in {} ticks", crate::kit::survival::hitpoints(bot), bot.world.ticks - start));
+    }
     Ok(())
 }
+
+/// Open a booth of `bank` and withdraw the banked bites that fill the
+/// missing hitpoints without waste (`meals::heal_plan`, at least one).
+fn withdraw_heal_bites(bot: &mut Bot, bank: &knowledge::banks::Bank) -> Result<(), ScriptError> {
+    let missing = i64::from(crate::kit::survival::max_hitpoints(bot).saturating_sub(crate::kit::survival::hitpoints(bot)));
+    let bites: u32 = crate::kit::meals::heal_plan(missing, &crate::kit::meals::food_stock(bot)).iter().map(|(_, bites)| *bites).sum();
+    let mut opened = false;
+    for (booth_x, booth_z, booth_loc) in crate::kit::bank::live_bank_booths(bot, bank.x as i32, bank.z as i32) {
+        if bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
+            opened = true;
+            break;
+        }
+    }
+    if !opened {
+        bot.log(&format!("hurt heal: no booth opened near ({},{}), regen only", bank.x, bank.z));
+        return Ok(());
+    }
+    let carried = crate::kit::survival::food_count(bot);
+    crate::kit::survival::withdraw_food_to(bot, carried + bites.max(1))?;
+    bot.close_modal()?;
+    bot.pump(5)?;
+    Ok(())
+}
+
+/// Mine banked loads in the open session (0 = forever).
 
 /// Ores of the run's tiers in the pack.
 fn ores_held(bot: &Bot, tiers: &[lifescape_gamedata::rocks::RockTier]) -> u32 {

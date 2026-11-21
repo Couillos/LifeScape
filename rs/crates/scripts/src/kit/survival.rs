@@ -287,6 +287,19 @@ pub fn hurt_return(hp: u8, max_hp: u8, streak: u32) -> HurtReturn {
     }
 }
 
+/// Smallest hp a hurt gatherer heals to before it walks back: the first
+/// hp above the eat line `hurt_return` reads (never above full health).
+/// The bank heal's `HEAL_TARGET_HP` (12) sits under that line for any
+/// bot past 21 max hp, so a heal to it left the next check as hurt.
+pub fn hurt_heal_target(max_hp: u8) -> u8 {
+    let max_hp = max_hp.max(1);
+    (1..=max_hp).find(|hp| !should_eat(*hp, max_hp, EAT_FRACTION)).unwrap_or(max_hp)
+}
+
+/// Regen ticks of one hitpoint (content `health_regen` 100, measured
+/// live 9->12 in 300 ticks, see `kit::bank::HEAL_TARGET_HP`).
+pub const REGEN_TICKS_PER_HP: u64 = 100;
+
 /// True when the server announced death since `seen`: "Oh dear you are
 /// dead!" arrives even when the hitpoints stream lags behind.
 pub fn death_message_seen(bot: &Bot, seen: usize) -> bool {
@@ -356,6 +369,24 @@ mod hurt_tests {
         // Tour 3 point 8 (tim_wolfe 12:54): 22/42 is under the eat line
         // (0.55): heal now, not at 12.
         assert_eq!(hurt_return(22, 42, 0), HurtReturn::HealAndReturn);
+    }
+
+    /// Live 2026-11-21 (lily_brook, hill_eric, rae_stone: 104 « hurt on
+    /// the site » failures at the Edgeville booth): the heal of a hurt
+    /// load stopped at the bank heal's 12 hp, under the hurt line, so
+    /// the next check saw the same hp and gave the site up in the same
+    /// tick. The heal target clears the line, the bank's 12 does not.
+    #[test]
+    fn the_hurt_heal_clears_the_hurt_line() {
+        for max_hp in [10u8, 25, 42, 43, 47, 50, 73, 99] {
+            let target = super::hurt_heal_target(max_hp);
+            assert_eq!(hurt_return(target, max_hp, HURT_RETURNS), HurtReturn::NotHurt, "{target}/{max_hp} clears");
+            assert_ne!(hurt_return(target - 1, max_hp, 0), HurtReturn::NotHurt, "{target} is the smallest clear hp of {max_hp}");
+            assert!(target <= max_hp);
+        }
+        assert_eq!(super::hurt_heal_target(47), 26, "lily_brook 20/47 heals to 26");
+        let bank_heal = crate::kit::bank::heal_target(47);
+        assert_ne!(hurt_return(bank_heal, 47, 0), HurtReturn::NotHurt, "the bank's 12 leaves a 47-hp miner hurt");
     }
 }
 
