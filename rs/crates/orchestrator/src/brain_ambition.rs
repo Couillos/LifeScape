@@ -242,7 +242,13 @@ fn build(account: &str, bot: &FleetBot, now: &BotNow, first: (String, String), i
                 crate::logln!("brain {account}: {error} ({why}), drawing again without it");
                 excluded.push(kind.clone());
                 let refs: Vec<&str> = excluded.iter().map(String::as_str).collect();
-                (kind, why) = crate::brain_value::draw(account, bot, &inputs.gaps, &inputs.weights, &inputs.value, &inputs.surplus, &inputs.held, &refs);
+                match crate::brain_value::draw(account, bot, &inputs.gaps, &inputs.weights, &inputs.value, &inputs.surplus, &inputs.held, &refs) {
+                    Ok(next) => (kind, why) = next,
+                    Err(error) => {
+                        crate::logln!("brain {account}: {error}");
+                        return None;
+                    }
+                }
             }
         }
     }
@@ -341,7 +347,13 @@ fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str) {
     let (gaps, _, held) = fleet_view(life);
     let demand = need_demand(&life.account, &held);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
-    let first = crate::brain_value::draw(&life.account, &bot, &gaps, &demand.weights, &demand.value, &demand.surplus, &held, exclude);
+    let first = match crate::brain_value::draw(&life.account, &bot, &gaps, &demand.weights, &demand.value, &demand.surplus, &held, exclude) {
+        Ok(first) => first,
+        Err(error) => {
+            crate::logln!("brain {}: {error}, the current ambition is kept", life.account);
+            return;
+        }
+    };
     let inputs = DrawInputs::from_demand(demand, gaps, held);
     replace(life, live, &bot, first, &inputs, exclude, revision_why);
 }
@@ -356,7 +368,13 @@ fn redraw_by_need(life: &mut Life, live: &Value, revision_why: &str) {
     let gaps = lifescape_planner::redraw_gaps(&kind, &others);
     let demand = need_demand(&life.account, &held);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
-    let first = crate::brain_value::draw(&life.account, &bot, &gaps, &demand.weights, &demand.value, &demand.surplus, &held, &[]);
+    let first = match crate::brain_value::draw(&life.account, &bot, &gaps, &demand.weights, &demand.value, &demand.surplus, &held, &[]) {
+        Ok(first) => first,
+        Err(error) => {
+            crate::logln!("brain {}: {error}, the current ambition is kept", life.account);
+            return;
+        }
+    };
     let inputs = DrawInputs::from_demand(demand, gaps, held);
     replace(life, live, &bot, first, &inputs, &[], revision_why);
 }

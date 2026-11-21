@@ -291,6 +291,8 @@ fn a_lucrative_target_makes_the_bot_pay_for_a_faster_climb() {
         margin: 900_000.0,
         capacity: 66.0,
         units_per_tick: 0.3,
+        ladder: vec![(1_000_000.0, 66.0)],
+        cost_per_unit: 100_000.0,
         value_6000: 30_000.0,
     }];
     let pulled = crate::investment::time_value(poor, &pending);

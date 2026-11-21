@@ -3,7 +3,7 @@
 //! included (A1).
 
 use super::*;
-use crate::investment::{best_xp_rate, investment, AlchOffer, INVESTMENT_HORIZON_TICKS};
+use crate::investment::{best_xp_rate, investment, investment_ladder, AlchOffer, INVESTMENT_HORIZON_TICKS};
 use crate::work_rate::prior_rate;
 
 fn bot(account: &str, levels: &[(&str, u8)]) -> FleetBot {
@@ -24,7 +24,7 @@ fn holding(account: &str, kind: &str, levels: &[(&str, u8)]) -> FleetBot {
 }
 
 fn bid(item: &str, unit_price: f64, unmet: i64, asked: bool) -> UnservedBid {
-    UnservedBid { item: item.to_string(), unit_price, unmet, asked }
+    UnservedBid { item: item.to_string(), unit_price, unmet, asked, ladder: Vec::new() }
 }
 
 /// Market prices of the fixtures (coins per unit); the strung diamond
@@ -309,4 +309,25 @@ fn an_assigned_bot_covers_its_share_of_each_line_it_answers() {
     let bots = vec![bot("a1", &[("mining", 40)]), bot("a2", &[("mining", 40)])];
     let moved = rebalance(&bots, &ctx);
     assert!(moved.iter().all(|row| row.pick.kind == "miner" && row.pick.value_6000 > 0.0), "{moved:?}");
+}
+
+/// Each buyer pays HIS price (review): one offer at 1 M and 64 at 3 000 are
+/// worth their sum, about 1.2 M above the cost, never 65 x 1 M.
+#[test]
+fn each_buyer_pays_his_own_price() {
+    let level_of = |_: &str| 99u8;
+    let mut ladder = vec![(1_000_000.0, 1.0)];
+    ladder.extend(std::iter::repeat_n((3_000.0, 1.0), 64));
+    let sum = investment_ladder("amulet_of_power", &ladder, &["magic"], &level_of, &price, &xp_rate, &rate).expect("ladder");
+    let naive = investment("amulet_of_power", 1_000_000.0, 65.0, &["magic"], &level_of, &price, &xp_rate, &rate).expect("naive");
+    let paid: f64 = sum.ladder.iter().map(|(unit, units)| (unit - sum.cost_per_unit) * units).sum();
+    assert!(paid < 1_300_000.0 && paid > 1_100_000.0, "1 M + 64 x 3 000 minus costs: {paid}");
+    assert!(sum.value_6000 * 10.0 < naive.value_6000, "the ladder value {sum:?} against 65 x 1 M {naive:?}");
+    // Through the kind: a bid carrying its ladder is worth less than one that claims the best price for all.
+    let flat = vec![bid("amulet_of_power", 1_000_000.0, 65, false)];
+    let laddered = vec![UnservedBid { ladder: ladder.iter().map(|(unit, units)| (*unit, *units as i64)).collect(), ..bid("amulet_of_power", 1_000_000.0, 65, false) }];
+    let who = bot("m1", &[("magic", 60)]);
+    let flat_value = kind_value(&who, "mage", &context(&flat, &[])).value_6000;
+    let laddered_value = kind_value(&who, "mage", &context(&laddered, &[])).value_6000;
+    assert!(laddered_value * 10.0 < flat_value, "{laddered_value} against {flat_value}");
 }

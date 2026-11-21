@@ -16,7 +16,8 @@
 //! gain_tick  = (unit_price × made − Σ inputs bought at market) per tick       [coins]
 //!              (the way's flows per 6000 ticks, `work_rate`, priced like
 //!               `profit::chain_profit`; units made per tick from the rate)
-//! total      = min( gain_tick × (H − climb) , capacity × margin )             [coins]
+//! total      = min( gain_tick × (H − climb) , Σ offers (price − cost) × units )  [coins]
+//!              (each buyer pays HIS price: `ladder_value`, never the best for all)
 //! value_6000 = total / (H / 6000)                    (0 when climb ≥ H)
 //! ```
 //!
@@ -70,6 +71,12 @@ pub struct Investment {
     pub capacity: f64,
     /// Units one bot makes per tick (what a holder covers of the demand).
     pub units_per_tick: f64,
+    /// The offers served, best price first: (unit price, units). Each
+    /// buyer pays HIS price: the cap on the total is their sum, never the
+    /// best price times the whole quantity.
+    pub ladder: Vec<(f64, f64)>,
+    /// Coins one unit costs to make (inputs at market): price - margin.
+    pub cost_per_unit: f64,
     /// Amortized value per 6000 ticks (module doc), 0 when it never pays.
     pub value_6000: f64,
 }
@@ -165,9 +172,22 @@ fn flows_value(rate: &WorkRate, product: &str, unit_price: f64, price: &dyn Fn(&
     (coins, made)
 }
 
+/// Coins the offers of `ladder` (unit price, units; best price first) pay
+/// above `cost` per unit, once the best `covered` units are served: every
+/// buyer at his own price, never the best price for all.
+pub fn ladder_value(ladder: &[(f64, f64)], cost: f64, covered: f64) -> f64 {
+    let mut skip = covered.max(0.0);
+    let mut total = 0.0;
+    for (unit_price, units) in ladder {
+        let taken = skip.min(*units);
+        skip -= taken;
+        total += (unit_price - cost).max(0.0) * (units - taken);
+    }
+    total
+}
+
 /// Investment of producing `item` for a demand of `capacity` units at
-/// `unit_price` (module doc; `own`: the skills whose gates count); `None` when no production way is open to
-/// F2P bots, no rate reads, or a climb has no method.
+/// `unit_price` (one offer: `investment_ladder` of one rung).
 pub fn investment(
     item: &str,
     unit_price: f64,
@@ -178,6 +198,25 @@ pub fn investment(
     xp_rate: &dyn Fn(&str, u8) -> Option<f64>,
     rate: RateReader,
 ) -> Option<Investment> {
+    investment_ladder(item, &[(unit_price, capacity)], own, level_of, price, xp_rate, rate)
+}
+
+/// Investment of producing `item` for the offers of `ladder` (unit price,
+/// units; best price first; module doc; `own`: the skills whose gates
+/// count); the gain per tick is read at the best price, the total capped
+/// by what the offers pay (`ladder_value`). `None` when no production way
+/// is open to F2P bots, no rate reads, or a climb has no method.
+pub fn investment_ladder(
+    item: &str,
+    ladder: &[(f64, f64)],
+    own: &[&str],
+    level_of: &dyn Fn(&str) -> u8,
+    price: &dyn Fn(&str) -> Option<f64>,
+    xp_rate: &dyn Fn(&str, u8) -> Option<f64>,
+    rate: RateReader,
+) -> Option<Investment> {
+    let unit_price = ladder.first().map(|(best, _)| *best)?;
+    let capacity: f64 = ladder.iter().map(|(_, units)| *units).sum();
     let legs: Vec<crate::obtain_legs::ProductionLeg> =
         crate::obtain_legs::production_legs(item).into_iter().filter(|leg| leg.skill.is_some() && leg.quest.is_none() && !leg.method.starts_with("ground:")).collect();
     let mut best: Option<Investment> = None;
@@ -206,9 +245,22 @@ pub fn investment(
         let gain_per_tick = (coins_6000 / WINDOW_TICKS).max(0.0);
         let margin = coins_6000 / made_6000;
         let open = (INVESTMENT_HORIZON_TICKS - climb).max(0.0);
-        let total = (gain_per_tick * open).min((margin * capacity).max(0.0));
+        let cost_per_unit = unit_price - margin;
+        let total = (gain_per_tick * open).min(ladder_value(ladder, cost_per_unit, 0.0));
         let value_6000 = total / (INVESTMENT_HORIZON_TICKS / WINDOW_TICKS);
-        let found = Investment { item: item.to_string(), method: leg.method.clone(), gates, climb_ticks: climb, gain_per_tick, margin, capacity, units_per_tick: made_6000 / WINDOW_TICKS, value_6000 };
+        let found = Investment {
+            item: item.to_string(),
+            method: leg.method.clone(),
+            gates,
+            climb_ticks: climb,
+            gain_per_tick,
+            margin,
+            capacity,
+            units_per_tick: made_6000 / WINDOW_TICKS,
+            ladder: ladder.to_vec(),
+            cost_per_unit,
+            value_6000,
+        };
         if best.as_ref().is_none_or(|known| found.value_6000 > known.value_6000) {
             best = Some(found);
         }
@@ -258,6 +310,8 @@ pub fn alchemy_investment(
             margin: top,
             capacity,
             units_per_tick: 1.0 / crate::alchemy::CAST_TICKS,
+            ladder: paying.clone(),
+            cost_per_unit: 0.0,
             value_6000: total / (INVESTMENT_HORIZON_TICKS / WINDOW_TICKS),
         };
         if best.as_ref().is_none_or(|known| found.value_6000 > known.value_6000) {

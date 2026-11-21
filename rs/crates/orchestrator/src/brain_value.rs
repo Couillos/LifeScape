@@ -26,24 +26,40 @@ pub(crate) fn with_context<T>(inputs: &ValueInputs, surplus: &[(String, f64)], b
     body(&context)
 }
 
-/// The kind `bot` is given and its `why` (A4): a bot of the D3 exceptions
-/// or a market maker keeps its level-led draw over `gaps` and `weights`;
-/// any other the best value score given the kinds `held` by the others.
-/// `exclude`: kinds kept out (the one just refused). Logs the numbers of
-/// a value pick.
-pub(crate) fn draw(account: &str, bot: &FleetBot, gaps: &[String], weights: &[KindDemand], inputs: &ValueInputs, surplus: &[(String, f64)], held: &[String], exclude: &[&str]) -> (String, String) {
+/// Why no kind could be given (typed, logged by the caller; no fallback).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum DrawError {
+    /// Every drawable kind was excluded (the ones just refused).
+    NothingDrawable { account: String, excluded: usize },
+}
+
+impl std::fmt::Display for DrawError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DrawError::NothingDrawable { account, excluded } => write!(formatter, "{account}: no kind left to give by value ({excluded} excluded)"),
+        }
+    }
+}
+
+/// The kind `bot` is given and its `why` (A4). A bot of the D3 exceptions
+/// (`LEVEL_LED_ACCOUNTS`, market makers) keeps its level-led draw over
+/// `gaps` and `weights`: that is the D3 rule the user kept for them
+/// (docs/plan-progression.txt A4), not a fallback. Any other bot gets the
+/// best value score given the kinds `held` by the others; with nothing
+/// drawable (every kind excluded) the draw ends in a typed error, never
+/// another rule. `exclude`: kinds kept out (the one just refused). Logs
+/// the numbers of a value pick.
+pub(crate) fn draw(account: &str, bot: &FleetBot, gaps: &[String], weights: &[KindDemand], inputs: &ValueInputs, surplus: &[(String, f64)], held: &[String], exclude: &[&str]) -> Result<(String, String), DrawError> {
     if level_led(bot) {
-        return draw_kind(bot, gaps, weights, exclude);
+        return Ok(draw_kind(bot, gaps, weights, exclude));
     }
     let refs: Vec<&str> = held.iter().map(String::as_str).collect();
     match with_context(inputs, surplus, |context| pick_by_value(bot, &refs, context, exclude)) {
         Some(pick) => {
             crate::logln!("brain {account}: ambition {} given by value ({})", pick.kind, pick.numbers());
-            (pick.kind.clone(), pick.why())
+            Ok((pick.kind.clone(), pick.why()))
         }
-        // Nothing drawable (every kind excluded): the draw's own end, the
-        // generalist, as `draw_kind` gives it.
-        None => draw_kind(bot, gaps, weights, exclude),
+        None => Err(DrawError::NothingDrawable { account: account.to_string(), excluded: exclude.len() }),
     }
 }
 

@@ -64,7 +64,7 @@
 
 use crate::ambition_catalog::{consumption_of, fit, group_skills, serves, spec, specs};
 use crate::ambition_fleet::{Assignment, FleetBot};
-use crate::investment::{alchemy_investment, investment, AlchOffer, INVESTMENT_HORIZON_TICKS};
+use crate::investment::{alchemy_investment, investment_ladder, ladder_value, AlchOffer, INVESTMENT_HORIZON_TICKS};
 use crate::work_rate::{RateReader, WINDOW_TICKS};
 
 /// Accounts the A4 rebalance NEVER touches (user 2026-11-21): the three
@@ -91,9 +91,24 @@ pub fn protected(account: &str) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnservedBid {
     pub item: String,
+    /// The best offer's unit price.
     pub unit_price: f64,
     pub unmet: i64,
     pub asked: bool,
+    /// The offers one by one, best price first: (unit price, units). Each
+    /// buyer pays HIS price (empty: one offer, `unit_price` x `unmet`).
+    pub ladder: Vec<(f64, i64)>,
+}
+
+impl UnservedBid {
+    /// The offers as (unit price, units), best first.
+    pub fn offers(&self) -> Vec<(f64, f64)> {
+        if self.ladder.is_empty() {
+            vec![(self.unit_price, self.unmet as f64)]
+        } else {
+            self.ladder.iter().map(|(price, units)| (*price, *units as f64)).collect()
+        }
+    }
 }
 
 /// Everything the value reads besides the bot (module doc).
@@ -208,8 +223,9 @@ struct Term {
     /// `serves` of the kind × `ASKED_SHARE` when an ask rests.
     weight: f64,
     gain_per_tick: f64,
-    margin: f64,
-    capacity: f64,
+    /// The offers served (best price first) and the cost of one unit.
+    ladder: Vec<(f64, f64)>,
+    cost: f64,
     units_per_tick: f64,
     climb_ticks: f64,
 }
@@ -235,7 +251,7 @@ fn terms_of(bot: &FleetBot, kind_index: usize, prep: &Prepared) -> KindTerms {
         if share <= 0.0 {
             continue;
         }
-        let Some(found) = investment(&bid.item, bid.unit_price, bid.unmet as f64, &own, &level_of, ctx.price, ctx.xp_rate, ctx.rate) else { continue };
+        let Some(found) = investment_ladder(&bid.item, &bid.offers(), &own, &level_of, ctx.price, ctx.xp_rate, ctx.rate) else { continue };
         let weight = share * if bid.asked { ASKED_SHARE } else { 1.0 };
         terms.push(Term {
             item: bid.item.clone(),
@@ -243,8 +259,8 @@ fn terms_of(bot: &FleetBot, kind_index: usize, prep: &Prepared) -> KindTerms {
             serves: share,
             weight,
             gain_per_tick: found.gain_per_tick,
-            margin: found.margin,
-            capacity: found.capacity,
+            ladder: found.ladder.clone(),
+            cost: found.cost_per_unit,
             units_per_tick: found.units_per_tick,
             climb_ticks: found.climb_ticks,
         });
@@ -255,8 +271,8 @@ fn terms_of(bot: &FleetBot, kind_index: usize, prep: &Prepared) -> KindTerms {
         serves: 1.0,
         weight: 1.0,
         gain_per_tick: found.gain_per_tick,
-        margin: found.margin,
-        capacity: found.capacity,
+        ladder: found.ladder.clone(),
+        cost: found.cost_per_unit,
         units_per_tick: found.units_per_tick,
         climb_ticks: found.climb_ticks,
     });
@@ -289,9 +305,9 @@ fn evaluate(terms: &KindTerms, existing: &[usize], assigned: &[usize], covered: 
     // the capacity they make (below).
     let share = 1.0 / (1 + existing[terms.kind_index]) as f64;
     let mut count = |term: &Term, covered: f64| {
-        let residual = (term.capacity - covered).max(0.0);
         let open = (horizon - term.climb_ticks).max(0.0);
-        let value = share * term.weight * (term.gain_per_tick * open).min((term.margin * residual).max(0.0)) / windows;
+        let paying = ladder_value(&term.ladder, term.cost, covered);
+        let value = share * term.weight * (term.gain_per_tick * open).min(paying) / windows;
         total += value;
         if value > 0.0 && driver.as_ref().is_none_or(|(_, known, _)| value > *known) {
             driver = Some((term.item.clone(), value, term.climb_ticks));
@@ -401,7 +417,7 @@ fn cover(terms: &KindTerms, covered: &mut [f64]) {
         if remaining <= 0.0 {
             break;
         }
-        let residual = (term.capacity - covered[term.bid]).max(0.0);
+        let residual = (term.ladder.iter().map(|(_, units)| units).sum::<f64>() - covered[term.bid]).max(0.0);
         let output = term.serves * term.units_per_tick;
         let used = (residual / output).min(remaining);
         covered[term.bid] += used * output;

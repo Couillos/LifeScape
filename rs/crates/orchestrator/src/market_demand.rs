@@ -59,6 +59,9 @@ pub struct DemandSignal {
     /// Units on resting sell offers of the item (public book, any seller,
     /// market makers included): 0 = wanted and missing from the asks.
     pub asks: i64,
+    /// The resting bids one by one, best unit price first: (unit price,
+    /// units). Each buyer pays HIS price.
+    pub ladder: Vec<(i64, i64)>,
 }
 
 /// Units on resting sell offers per item id (every seller, makers too).
@@ -91,6 +94,8 @@ pub fn signals_from(orders: &[Order], now_secs: i64, name_of: &dyn Fn(i64) -> Op
         let oldest_age_secs = bids.iter().map(|order| (now_secs - order.lineage_clock()).max(0)).max().unwrap_or(0);
         let oldest_age_ticks = to_ticks(oldest_age_secs);
         let age_factor = 1.0 + (oldest_age_ticks as f64 / AGE_UNIT_TICKS as f64).min(5.0);
+        let mut ladder: Vec<(i64, i64)> = bids.iter().map(|order| (crate::market_units::to_unit(item_id, order.price), order.remaining)).collect();
+        ladder.sort_by(|left, right| right.0.cmp(&left.0));
         out.push(DemandSignal {
             item,
             item_id,
@@ -102,6 +107,7 @@ pub fn signals_from(orders: &[Order], now_secs: i64, name_of: &dyn Fn(i64) -> Op
             oldest_age_ticks,
             weight: best_bid.max(1) as f64 * unmet_qty as f64 * age_factor,
             asks: asked.get(&item_id).copied().unwrap_or(0),
+            ladder,
         });
     }
     out.sort_by(|left, right| right.weight.total_cmp(&left.weight));
@@ -236,7 +242,7 @@ pub fn sale_lines(volumes: &[(i64, i64)], orders: &[Order], price: &dyn Fn(&str)
             .sum();
         let capacity = (units as f64 * SALES_SHARE * days - resting).floor();
         if capacity >= 1.0 {
-            out.push(UnservedBid { item, unit_price, unmet: capacity as i64, asked: false });
+            out.push(UnservedBid { item, unit_price, unmet: capacity as i64, asked: false, ladder: Vec::new() });
         }
     }
     out
@@ -264,7 +270,7 @@ pub fn value_inputs_from(orders: &[Order], account: Option<&str>, surplus: &[(St
     let now = crate::market_service::MarketService::now_clock();
     let signals = signals_seen_from(orders.to_vec(), account, now, &name_of, &crate::brain_stuck::seconds_to_ticks);
     let mut bids: Vec<UnservedBid> =
-        signals.iter().map(|signal| UnservedBid { item: signal.item.clone(), unit_price: signal.best_bid.max(0) as f64, unmet: signal.unmet_qty, asked: signal.asks > 0 }).collect();
+        signals.iter().map(|signal| bid_line(signal)).collect();
     let alch_offers = alch_offers_from(orders, &name_of);
     let candidates = sale_candidates(volumes, &name_of);
     let mut wanted: Vec<String> = Vec::new();
@@ -292,6 +298,18 @@ pub fn value_inputs_from(orders: &[Order], account: Option<&str>, surplus: &[(St
     let skip: Vec<String> = bids.iter().map(|bid| bid.item.clone()).collect();
     bids.extend(sale_lines(volumes, orders, &price_of, &name_of, days, &skip));
     ValueInputs { bids, alch_offers, prices: table }
+}
+
+/// One unserved bid from a signal: every resting offer at its own price
+/// (best first), never the best price for the whole quantity.
+pub fn bid_line(signal: &DemandSignal) -> UnservedBid {
+    UnservedBid {
+        item: signal.item.clone(),
+        unit_price: signal.best_bid.max(0) as f64,
+        unmet: signal.unmet_qty,
+        asked: signal.asks > 0,
+        ladder: signal.ladder.iter().map(|(price, units)| (*price as f64, *units)).collect(),
+    }
 }
 
 /// Market price per unit of each object that a trade or a resting book
@@ -655,6 +673,7 @@ mod tests {
             oldest_age_ticks: 0,
             weight: 1.0,
             asks: 0,
+            ladder: Vec::new(),
         };
         let reference = |item: &str| match item {
             "bronze_bar" => 10.0,
@@ -700,5 +719,31 @@ mod sale_tests {
         assert_eq!((lines[0].unmet, lines[0].unit_price, lines[0].asked), (expected, 4.0, false), "only the ask at 3 rests under the price 4");
         assert!(sale_lines(&volumes, &orders, &price, &name, 2.0, &["logs".to_string()]).is_empty(), "a bid keeps its own line");
         assert!(sale_lines(&volumes, &orders, &|_: &str| None, &name, 2.0, &[]).is_empty(), "no price, no line");
+    }
+}
+
+#[cfg(test)]
+mod ladder_tests {
+    use super::{bid_line, signals_from};
+    use lifescape_store::{Order, OrderSide, OrderStatus};
+
+    fn bid(account: &str, remaining: i64, price: i64) -> Order {
+        Order { order_id: 1, account: account.to_string(), side: OrderSide::Buy, item_id: 314, quantity: remaining, remaining, price, status: OrderStatus::Open, ..Order::default() }
+    }
+
+    /// Each buyer pays HIS price (review): one bid at 1 M and 64 at 3 000
+    /// reach the value as a ladder of 65 units, not 65 units at 1 M.
+    #[test]
+    fn the_bids_reach_the_value_one_by_one() {
+        let mut orders = vec![bid("rich", 1, 1_000_000)];
+        orders.extend((0..64).map(|index| bid(&format!("poor{index}"), 1, 3_000)));
+        let name = |id: i64| Some(format!("item{id}"));
+        let signals = signals_from(&orders, 100, &name, &|secs| secs as u64);
+        let line = bid_line(&signals[0]);
+        assert_eq!(line.unmet, 65);
+        assert_eq!(line.ladder.first(), Some(&(1_000_000.0, 1)), "best first: {:?}", line.ladder.first());
+        let paid: f64 = line.ladder.iter().map(|(price, units)| price * *units as f64).sum();
+        assert!(paid < 1_200_000.0, "1 M + 64 x 3 000, not 65 M: {paid}");
+        assert_eq!(line.ladder.len(), 65);
     }
 }

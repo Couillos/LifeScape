@@ -157,3 +157,29 @@ fn after_the_pass_a_running_ambition_is_not_modified_again() {
     super::super::brain_ambition::before_draw(&mut mover, &live());
     assert_eq!(mover.ambition.as_ref().map(|held| (&held.kind, held.revisions.len())), after.as_ref().map(|held| (&held.kind, held.revisions.len())), "an ambition changes only once achieved");
 }
+
+/// A marker that cannot be written is a typed error (the pass then applies
+/// nothing and stops, never replanning at every step).
+#[test]
+fn an_unwritable_marker_is_a_typed_error() {
+    let missing = std::env::temp_dir().join("lifescape-no-such-dir-a4").join("marker.json");
+    let error = super::write_marker_at(&missing, &marker()).expect_err("the directory is missing");
+    assert!(matches!(&error, super::MarkerError::Write { path, .. } if path.ends_with("marker.json")), "{error:?}");
+    assert!(error.to_string().contains("not written"), "{error}");
+    let good = std::env::temp_dir().join(format!("lifescape-marker-{}.json", std::process::id()));
+    super::write_marker_at(&good, &marker()).expect("written");
+    assert!(good.exists());
+    let _ = std::fs::remove_file(&good);
+}
+
+/// A row planned from an ambition the bot no longer holds is stale: the bot
+/// was changed meanwhile (A4), the row applies nothing.
+#[test]
+fn a_stale_row_applies_nothing() {
+    let mut moved_on = life("a1", ambition("fisher", "value"));
+    assert!(!apply_row(&mut moved_on, &live(), &row("a1", "woodcutter", "crafter")), "planned from woodcutter, the bot holds fisher");
+    assert_eq!(moved_on.ambition.as_ref().map(|held| held.kind.as_str()), Some("fisher"));
+    assert!(moved_on.ambition.as_ref().is_some_and(|held| held.revisions.is_empty()));
+    let mut empty_from = life("a2", ambition("fisher", "value"));
+    assert!(!apply_row(&mut empty_from, &live(), &row("a2", "", "crafter")), "planned with no ambition, the bot holds one now");
+}
