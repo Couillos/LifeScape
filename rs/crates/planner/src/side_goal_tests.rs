@@ -64,10 +64,10 @@ fn a_demand_whose_every_leg_is_sick_is_never_drawn() {
     let demand = vec![bid("leather", 900.0, 5.0), bid("bronze_dagger", 100.0, 2.0)];
     let legs: Vec<String> = crate::obtain_legs::production_legs("leather").into_iter().map(|leg| leg.method).collect();
     assert!(legs.iter().any(|method| method == "tan:cow_hide"), "leather is tanned: {legs:?}");
-    let healthy = super::side_goal_with(&fresh, &avoid, &demand, &nothing_held, false, &|_| false).expect("a side goal");
+    let healthy = super::side_goal_with(&fresh, &avoid, &demand, &nothing_held, false, &|_| false, &|_| true).expect("a side goal");
     assert_eq!(healthy.0, GoalKind::Produce { item: "leather".to_string(), count: 40 }, "leather pays best while its leg works");
     let quarantine = |method: &str| legs.iter().any(|leg| leg == method);
-    let (goal, origin) = super::side_goal_with(&fresh, &avoid, &demand, &nothing_held, false, &quarantine).expect("a side goal");
+    let (goal, origin) = super::side_goal_with(&fresh, &avoid, &demand, &nothing_held, false, &quarantine, &|_| true).expect("a side goal");
     assert_eq!(goal, GoalKind::Produce { item: "bronze_dagger".to_string(), count: 40 }, "the next feasible demand");
     assert_eq!(origin, format!("{SIDE_PREFIX}demand:bronze_dagger"));
 }
@@ -127,4 +127,27 @@ fn a_money_window_works_through_a_ban_rather_than_idling() {
     assert_eq!(node.method.as_deref(), Some("gather:woodcut/logs"));
     node.method = Some("fight:melee/men".to_string());
     assert!(steer_for_work(&mut node, &ctx, &none, &banned(&["attack", "woodcutting"])).is_err(), "nothing outside the failed fillers");
+}
+
+/// Live 2026-11-21: uncut gems (no inputs, so a margin equal to the bid)
+/// were farmed by ~20 bots at a few hundredths of a coin per tick. A
+/// demand that does not pay for the bot's time is not drawn; the next
+/// one that does is; a better price brings the first one back.
+#[test]
+fn a_demand_that_does_not_pay_for_the_time_is_not_drawn() {
+    let fresh = |_: &str| 1u8;
+    let avoid = banned(&["cooking", "fishing"]);
+    let demand = vec![bid("leather", 900.0, 179.0), bid("bronze_dagger", 100.0, 2.0)];
+    let time_value = 0.5;
+    // Units per tick of the best way: leather 0.0001 (0.018 coins/tick), dagger 0.5 (1 coin/tick).
+    let yield_of = |item: &str| if item == "leather" { 0.0001 } else { 0.5 };
+    let pays = |wanted: &DemandItem| super::pays_its_way(wanted.margin.unwrap_or(0.0), yield_of(&wanted.item), time_value);
+    let (goal, _) = super::side_goal_with(&fresh, &avoid, &demand, &nothing_held, false, &|_| false, &pays).expect("a side goal");
+    assert_eq!(goal, GoalKind::Produce { item: "bronze_dagger".to_string(), count: 40 }, "the crashed gem price pays less than the time");
+    let dearer = vec![bid("leather", 900.0, 6469.0), bid("bronze_dagger", 100.0, 2.0)];
+    let (goal, _) = super::side_goal_with(&fresh, &avoid, &dearer, &nothing_held, false, &|_| false, &pays).expect("a side goal");
+    assert_eq!(goal, GoalKind::Produce { item: "leather".to_string(), count: 40 }, "a price that pays brings it back");
+    let nothing = |_: &DemandItem| false;
+    let (goal, origin) = super::side_goal_with(&fresh, &avoid, &demand, &nothing_held, false, &|_| false, &nothing).expect("money");
+    assert_eq!((goal, origin.as_str()), (GoalKind::MakeMoney, "side:money"));
 }

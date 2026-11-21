@@ -507,15 +507,39 @@ pub fn demand_items_with(signals: &[DemandSignal], reference: &dyn Fn(&str) -> f
 }
 
 fn bid_margin(signal: &DemandSignal, reference: &dyn Fn(&str) -> f64) -> Option<f64> {
-    let mut prices = vec![(signal.item.clone(), signal.best_bid.max(0) as f64)];
-    for way in lifescape_gamedata::obtain::ways(&signal.item).into_iter().filter(|way| way.is_production()) {
+    margin_at(&signal.item, signal.best_bid.max(0) as f64, reference)
+}
+
+/// Per-unit margin of making `item` sold at `sale_price` against its
+/// inputs at `reference` (`planner::chain_profit`).
+fn margin_at(item: &str, sale_price: f64, reference: &dyn Fn(&str) -> f64) -> Option<f64> {
+    let mut prices = vec![(item.to_string(), sale_price)];
+    for way in lifescape_gamedata::obtain::ways(item).into_iter().filter(|way| way.is_production()) {
         for (input, _) in &way.inputs {
             if !prices.iter().any(|(known, _)| known == input) {
                 prices.push((input.clone(), reference(input)));
             }
         }
     }
-    lifescape_planner::chain_profit(&signal.item, &prices, 1.0).ok().map(|verdict| verdict.margin)
+    lifescape_planner::chain_profit(item, &prices, 1.0).ok().map(|verdict| verdict.margin)
+}
+
+/// Per-unit margin of serving `item` now: the best resting bid of
+/// `signals` (the demand the bot answers), else the market reference
+/// when no bid rests, against the inputs at the reference. `None`: no
+/// price or no production way (no data, no decision); a store that
+/// cannot be read is logged.
+pub(crate) fn serving_margin(item: &str, signals: &[DemandSignal]) -> Option<f64> {
+    let store = match lifescape_store::Store::open(&crate::market_service::db_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            crate::logln!("market_demand: store unreadable, serving margin of {item} unknown: {error}");
+            return None;
+        }
+    };
+    let reference = |name: &str| crate::rates_service::price_estimate(&store, &display_of(name)).0;
+    let price = signals.iter().find(|signal| signal.item == item).map(|signal| signal.best_bid.max(0) as f64).unwrap_or_else(|| reference(item));
+    margin_at(item, price, &reference)
 }
 
 fn display_of(item: &str) -> String {

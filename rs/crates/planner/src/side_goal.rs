@@ -42,7 +42,18 @@ pub fn method_banned(method: &str, avoid: &[String]) -> bool {
 /// `(goal, origin)`, or `None` when nothing is workable. `ironman` skips
 /// the market demand (Iron never sells).
 pub fn side_goal(level_of: &dyn Fn(&str) -> u8, avoid: &[String], demand: &[DemandItem], held_of: &dyn Fn(&str) -> i64, ironman: bool) -> Option<(GoalKind, String)> {
-    side_goal_with(level_of, avoid, demand, held_of, ironman, &|_| false)
+    side_goal_with(level_of, avoid, demand, held_of, ironman, &|_| false, &|_| true)
+}
+
+/// True when serving a demand beats the bot's own time (2026-11-21: a
+/// gem bid with no inputs always showed a positive margin, and ~20 bots
+/// farmed uncut gems at 0.02 coins per tick): the margin of a unit times
+/// the units one tick of the best way yields must reach what a tick of
+/// the bot's time is worth (`coin_rate`, floored at
+/// `market_fit::MIN_COIN_RATE` like `bid_response::preempts`). A value
+/// comparison, no floor on prices, no item list.
+pub fn pays_its_way(margin_per_unit: f64, units_per_tick: f64, coin_rate: f64) -> bool {
+    margin_per_unit.is_finite() && units_per_tick.is_finite() && margin_per_unit * units_per_tick >= coin_rate.max(crate::market_fit::MIN_COIN_RATE)
 }
 
 /// `side_goal` knowing which methods never launch for this bot now
@@ -57,11 +68,12 @@ pub fn side_goal_with(
     held_of: &dyn Fn(&str) -> i64,
     ironman: bool,
     sick: &dyn Fn(&str) -> bool,
+    pays: &dyn Fn(&DemandItem) -> bool,
 ) -> Option<(GoalKind, String)> {
     if !ironman {
         let mut best: Option<&DemandItem> = None;
         for wanted in demand.iter().filter(|entry| entry.unmet > 0 && entry.weight > 0.0 && entry.margin.is_some_and(|margin| margin > 0.0)) {
-            if held_of(&wanted.item) >= wanted.unmet.clamp(5, 100) || !goal_feasible(&wanted.item, level_of, avoid, sick) {
+            if held_of(&wanted.item) >= wanted.unmet.clamp(5, 100) || !goal_feasible(&wanted.item, level_of, avoid, sick) || !pays(wanted) {
                 continue;
             }
             if best.is_none_or(|known| wanted.weight > known.weight) {

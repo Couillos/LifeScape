@@ -167,6 +167,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if !quoting && crate::brain_bid_release::release_beyond_reach(&mut life, &live) {
         dirty = true;
     }
+    // A demand goal (side or bid) whose value fell below the bot's time
+    // is given back (2026-11-21: gem farms while the price crashed).
+    if !quoting && crate::brain_serve_value::release_unpaying(&mut life, &live) {
+        dirty = true;
+    }
     // After a daemon restart, an open bid answer holds its seats again.
     if !quoting {
         crate::brain_bid_release::reengage_after_restart(&life, &live);

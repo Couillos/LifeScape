@@ -277,7 +277,10 @@ fn side_goal_for(life: &Life, live: &Value, banned: &[String]) -> Option<(GoalKi
     let quarantined = crate::method_health::quarantined();
     let cooled = crate::brain_cool::active(life);
     let sick = |method: &str| quarantined.iter().any(|known| known == method) || lifescape_planner::cooldown::method_cooled(&cooled, method);
-    lifescape_planner::side_goal_with(&level_of, banned, &demand, &held_of, life.profile.ironman, &sick)
+    // Only a demand that pays for the bot's time (A1 value comparison).
+    let paying = crate::brain_serve_value::paying_demand(life, live, &demand);
+    let pays = |wanted: &lifescape_planner::ambition_catalog::DemandItem| paying.contains(&wanted.item);
+    lifescape_planner::side_goal_with(&level_of, banned, &demand, &held_of, life.profile.ironman, &sick, &pays)
 }
 
 /// Close the current goal (done or stuck) and append the next one.
