@@ -423,18 +423,66 @@ pub fn buy_stock_at(bot: &mut Bot, obj_name: &str, count: u32, shop: Option<&str
             return Err(ScriptError::Blocked { missing: vec![format!("{}{x},{z},{level}", crate::kit::site::CONTENDED_TAG)] });
         }
     };
+    // The server's refusal ends the clicks (live 2026-11-21: 65 Buy-10
+    // clicks, 65 « You don't have enough coins », Yogosun, ida_reed).
+    let seen = bot.world.messages.len();
     for (op, _) in sell_batches(count) {
         bot.inv_button(op, wanted, shop_slot, main_com)?;
         bot.pump(5)?;
+        if shop_refusal(&bot.world.messages, seen).is_some() {
+            break;
+        }
     }
     let target = bot.world.ticks + 60;
-    while bot.world.ticks < target && pack_total(bot, wanted) <= before {
+    while bot.world.ticks < target && pack_total(bot, wanted) <= before && shop_refusal(&bot.world.messages, seen).is_none() {
         bot.pump(5)?;
     }
-    let gained = pack_total(bot, wanted) - before;
+    let gained = pack_total(bot, wanted).saturating_sub(before);
     bot.close_modal()?;
     bot.pump(5)?;
+    let refusal = shop_refusal(&bot.world.messages, seen);
+    if gained == 0 && refusal == Some(ShopRefusal::Stock) {
+        // Bought out between the stock read and the click: contention.
+        bot.log(&format!("{obj_name}: the shop ran out of stock at {:?}, contended", bot.position()));
+        let (x, z, level) = bot.assigned_site.unwrap_or((bot.world.x, bot.world.z, bot.world.level));
+        return Err(ScriptError::Blocked { missing: vec![format!("{}{x},{z},{level}", crate::kit::site::CONTENDED_TAG)] });
+    }
+    if gained == 0 {
+        if let Some(refusal) = refusal {
+            return Err(ScriptError::Failed(format!("trade gave no {obj_name} at {:?}: {}", bot.position(), refusal.line())));
+        }
+    }
     require_trade_gain(gained, obj_name, bot)
+}
+
+/// A shop's refusal of a buy (`shop.rs2` `buy_item`): every one ends the
+/// purchase on the server side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopRefusal {
+    /// « You don't have enough coins. »
+    Coins,
+    /// « You don't have enough inventory space. »
+    Room,
+    /// « The shop has run out of stock. »
+    Stock,
+}
+
+impl ShopRefusal {
+    /// The server's line, for the error text.
+    pub fn line(self) -> &'static str {
+        match self {
+            ShopRefusal::Coins => "You don't have enough coins.",
+            ShopRefusal::Room => "You don't have enough inventory space.",
+            ShopRefusal::Stock => "The shop has run out of stock.",
+        }
+    }
+}
+
+/// Pure: the first shop refusal among the game messages since `seen`.
+pub fn shop_refusal(messages: &[String], seen: usize) -> Option<ShopRefusal> {
+    messages.get(seen..).unwrap_or(&[]).iter().find_map(|message| {
+        [ShopRefusal::Coins, ShopRefusal::Room, ShopRefusal::Stock].into_iter().find(|refusal| message.contains(refusal.line()))
+    })
 }
 
 /// One upgrade buy attempt with bronze-first fallback: tries the affordable
@@ -587,6 +635,21 @@ mod tests {
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::world::NpcInfo;
     use lifescape_sdk::Bot;
+
+    /// Live 2026-11-21 (Yogosun, ida_reed: 65 Buy-10 clicks on Aubury's
+    /// earth runes, 65 « You don't have enough coins »): the server's
+    /// refusal (`shop.rs2` `buy_item`) ends the clicks and names the
+    /// cause; only the lines since the clicks count.
+    #[test]
+    fn a_shop_refusal_ends_the_buy_and_names_its_cause() {
+        use super::{shop_refusal, ShopRefusal};
+        let lines = |texts: &[&str]| texts.iter().map(|text| text.to_string()).collect::<Vec<String>>();
+        assert_eq!(shop_refusal(&lines(&["Welcome!", "You don't have enough coins."]), 0), Some(ShopRefusal::Coins));
+        assert_eq!(shop_refusal(&lines(&["You don't have enough inventory space."]), 0), Some(ShopRefusal::Room));
+        assert_eq!(shop_refusal(&lines(&["The shop has run out of stock."]), 0), Some(ShopRefusal::Stock));
+        assert_eq!(shop_refusal(&lines(&["You don't have enough coins.", "Harpoon: currently costs 5gp."]), 1), None, "an older refusal is not this buy's");
+        assert_eq!(shop_refusal(&lines(&[]), 0), None);
+    }
 
     /// Lot 8 re-review: a pause in a sale batch's wait banks the pack; the
     /// units gone are never counted as sold (no negative coins, the lot's
