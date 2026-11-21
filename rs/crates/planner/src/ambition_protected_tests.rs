@@ -65,16 +65,17 @@ fn an_overall_ambition_of_a_protected_account_is_never_replaced() {
     let now = BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 };
     let woodcutter = new_ambition("woodcutter", "random", &now, 7, &[], ZERO).expect("woodcutter");
     let mut zezima = life("N0valyfe", OVERALL);
-    revise(&mut zezima, woodcutter.clone(), "achieved", Stamp { tick: 5, secs: 5 });
+    assert!(!revise(&mut zezima, woodcutter.clone(), "achieved", Stamp { tick: 5, secs: 5 }), "refused: false");
     let held = zezima.ambition.as_ref().expect("ambition");
     assert_eq!((held.kind.as_str(), held.revisions.len()), (OVERALL, 0), "refused, no revision");
     let mut other = life("jane_doe", OVERALL);
-    revise(&mut other, woodcutter, "achieved", Stamp { tick: 5, secs: 5 });
+    assert!(revise(&mut other, woodcutter, "achieved", Stamp { tick: 5, secs: 5 }));
     assert_eq!(other.ambition.as_ref().map(|held| held.kind.as_str()), Some("woodcutter"), "an ordinary account is revised");
     // Giving overall to a protected account holding something else works.
     let mut old = life("Yogosun", "woodcutter");
     let overall = new_ambition(OVERALL, PROTECTED_WHY, &now, 7, &[], ZERO).expect("overall");
-    revise(&mut old, overall, PROTECTED_WHY, Stamp { tick: 6, secs: 6 });
+    assert!(revise(&mut old, overall, PROTECTED_WHY, Stamp { tick: 6, secs: 6 }));
+    assert_eq!(crate::ambition_fleet::LEVEL_LED_ACCOUNTS, crate::ambition_value::PROTECTED_ACCOUNTS, "one list of protected accounts");
     assert_eq!(old.ambition.as_ref().map(|held| held.kind.as_str()), Some(OVERALL));
 }
 

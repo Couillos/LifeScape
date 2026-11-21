@@ -13,6 +13,10 @@ use crate::model::Life;
 /// History cause of the nodes the switch abandons.
 pub const ALCHER_ROLE_CAUSE: &str = "role:alcher";
 
+/// Cause of the nodes an operator switch to a trade or to the natural
+/// balance abandons (`brain_operator`): its bans lift like the alchemist's.
+pub const OPERATOR_ROLE_CAUSE: &str = "role: operator ambition";
+
 /// True for a life whose ambition is the alchemist.
 pub fn is_alcher(life: &Life) -> bool {
     life.ambition.as_ref().is_some_and(|ambition| ambition.kind == ALCHER)
@@ -22,6 +26,9 @@ pub fn is_alcher(life: &Life) -> bool {
 /// role switch, `lifecycle::abandon_for_role`), the ambition replaced,
 /// the goal left for the brain's next draw. Returns the abandoned ids.
 pub fn become_alcher(life: &mut Life, now: &BotNow, stamp: Stamp) -> Result<Vec<String>, AmbitionError> {
+    if crate::ambition_value::protected(&life.account) {
+        return Err(AmbitionError::ProtectedAccount(life.account.clone()));
+    }
     let mut ambition = new_ambition(ALCHER, "operator:alcher", now, life.seed, &[], stamp)?;
     // An operator's ambition: never undone by the D3 review.
     ambition.draw_rule = crate::ambition_review::OPERATOR_RULE.to_string();
@@ -39,7 +46,7 @@ pub fn role_lifted_bans(history: &[crate::model::HistoryEntry], ticks_since: &dy
     crate::bans::ban_states(history, ticks_since)
         .into_iter()
         .filter_map(|(skill, state)| match state {
-            crate::bans::BanState::Active { cause, .. } if cause.contains(ALCHER_ROLE_CAUSE) => Some(skill),
+            crate::bans::BanState::Active { cause, .. } if cause.contains(ALCHER_ROLE_CAUSE) || cause.contains(OPERATOR_ROLE_CAUSE) => Some(skill),
             _ => None,
         })
         .collect()

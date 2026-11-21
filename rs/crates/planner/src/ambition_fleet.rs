@@ -34,7 +34,9 @@ pub struct FleetBot {
 /// (`FleetBot::market_maker` or a `market_maker` ambition). Every other
 /// bot draws by need alone. Decided by the user on 2026-11-19 (decision
 /// D3, docs/plan-equilibre.txt step 6). Matched without case.
-pub const LEVEL_LED_ACCOUNTS: [&str; 3] = ["Zezima", "N0valyfe", "Yogosun"];
+/// The same three accounts as `ambition_value::PROTECTED_ACCOUNTS` (one
+/// list): they now hold overall, the level-led draw is the makers' alone.
+pub const LEVEL_LED_ACCOUNTS: [&str; 3] = crate::ambition_value::PROTECTED_ACCOUNTS;
 
 /// `why` of the overall ambition a protected account is given
 /// (`ambition_value::PROTECTED_ACCOUNTS`, user 2026-11-21: they always

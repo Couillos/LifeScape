@@ -343,7 +343,7 @@ pub(crate) fn assign_rebalanced(life: &mut Life, live: &Value, kind: &str, why: 
 
 /// Redraw this life's ambition now (blocked, achieved past the throttle):
 /// the fleet's open gaps first, never back to `exclude`.
-fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str) {
+fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str) -> bool {
     let (gaps, _, held) = fleet_view(life);
     let demand = need_demand(&life.account, &held);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
@@ -351,18 +351,18 @@ fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str) {
         Ok(first) => first,
         Err(error) => {
             crate::logln!("brain {}: {error}, the current ambition is kept", life.account);
-            return;
+            return false;
         }
     };
     let inputs = DrawInputs::from_demand(demand, gaps, held);
-    replace(life, live, &bot, first, &inputs, exclude, revision_why);
+    replace(life, live, &bot, first, &inputs, exclude, revision_why)
 }
 
 /// `ambition <compte> natural` (operator): the pin and operator type are
 /// already gone; the kind comes from the A4 value (`brain_value::draw`,
 /// the tenants of the other bots sharing the demand), nothing excluded.
-pub(crate) fn assign_natural(life: &mut Life, live: &Value) {
-    redraw(life, live, &[], "operator:natural");
+pub(crate) fn assign_natural(life: &mut Life, live: &Value) -> bool {
+    redraw(life, live, &[], "operator:natural")
 }
 
 /// Redraw by need (D3 review, need-led ladder end), nothing excluded: the
@@ -401,24 +401,31 @@ pub(crate) fn redraw_neediest(life: &mut Life, live: &Value, revision_why: &str)
 
 /// An operator's trade for this life (`brain_operator`): `kind` built
 /// like a redraw over the fleet's demand and surplus.
-pub(crate) fn assign_kind(life: &mut Life, live: &Value, kind: &str, revision_why: &str) {
+pub(crate) fn assign_kind(life: &mut Life, live: &Value, kind: &str, revision_why: &str) -> bool {
     let (gaps, _, held) = fleet_view(life);
     let demand = need_demand(&life.account, &held);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
     let inputs = DrawInputs::from_demand(demand, gaps, held);
-    replace(life, live, &bot, (kind.to_string(), revision_why.to_string()), &inputs, &[], revision_why);
+    replace(life, live, &bot, (kind.to_string(), revision_why.to_string()), &inputs, &[], revision_why)
 }
 
-fn replace(life: &mut Life, live: &Value, bot: &FleetBot, first: (String, String), inputs: &DrawInputs, exclude: &[&str], revision_why: &str) {
+/// True when the ambition was replaced; false (nothing written, logged)
+/// when none could be built or the change is refused (`revise`).
+fn replace(life: &mut Life, live: &Value, bot: &FleetBot, first: (String, String), inputs: &DrawInputs, exclude: &[&str], revision_why: &str) -> bool {
     let stamp = stamp_now();
     let built = with_now(live, |now| build(&life.account, bot, now, first, inputs, exclude, stamp));
     let Some((next, _)) = built else {
         crate::logln!("brain {}: no ambition buildable, kept the current one", life.account);
-        return;
+        return false;
     };
     let from = life.ambition.as_ref().map(|ambition| ambition.kind.clone()).unwrap_or_default();
-    crate::logln!("brain {}: ambition {from} -> {} [{revision_why}]", life.account, describe_ambition(&next));
-    revise(life, next, revision_why, stamp);
+    let line = format!("ambition {from} -> {} [{revision_why}]", describe_ambition(&next));
+    if !revise(life, next, revision_why, stamp) {
+        crate::logln!("brain {}: change refused, kept the current one ({line})", life.account);
+        return false;
+    }
+    crate::logln!("brain {}: {line}", life.account);
+    true
 }
 
 /// Before a draw: milestones read live levels, coins and holdings, open

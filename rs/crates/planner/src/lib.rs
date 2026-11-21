@@ -139,4 +139,4 @@ pub use space::{
     Fallback, ItemEcon, cleanup_cooling, cleanup_needed, cleanup_stalled, janitor_stalled, d17_order, fallback_for, iron_may_use, launch_allowed,
     market_leg, needs_cleanup, reserve_floor, triage_bank, BANK_TYPE_LIMIT, CLEANUP_RETRY_SECS, CLEANUP_SHORT_TAG, FOOD_KEEP_MIN,
 };
-pub use alcher::{become_alcher, is_alcher, role_lifted_bans, ALCHER_ROLE_CAUSE};
+pub use alcher::{become_alcher, is_alcher, role_lifted_bans, ALCHER_ROLE_CAUSE, OPERATOR_ROLE_CAUSE};

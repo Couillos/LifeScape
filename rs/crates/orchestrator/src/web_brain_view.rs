@@ -84,17 +84,62 @@ pub fn logged_value_in(log: &str, account: &str, kind: &str) -> Option<LoggedVal
     Some(LoggedValue { kind: kind.to_string(), numbers, at })
 }
 
-/// The tail of `orchestrator.log` (4 MB at most) searched for the line of
-/// `logged_value_in`. `None`: no log or no such line.
-pub fn logged_value(run_dir: &std::path::Path, account: &str, kind: &str) -> Option<LoggedValue> {
+/// Longest stretch of the log looked at, bytes from the end.
+const LOG_TAIL_BYTES: u64 = 4_000_000;
+/// Block of the backward read, and the overlap that keeps a line cut at a
+/// block edge whole in the next one.
+const LOG_BLOCK_BYTES: u64 = 256 * 1024;
+const LOG_OVERLAP_BYTES: u64 = 4096;
+/// Seconds a lookup is reused (the log grows every second; the line of an
+/// ambition does not change once written).
+const LOG_REUSE_SECS: u64 = 30;
+
+/// The log read backward by blocks (`block` bytes) from its end, within
+/// `LOG_TAIL_BYTES`, stopping at the first block that holds the line.
+pub fn scan_log_backwards(path: &std::path::Path, account: &str, kind: &str, block: u64) -> Option<LoggedValue> {
     use std::io::{Read, Seek, SeekFrom};
-    const TAIL_BYTES: u64 = 4_000_000;
-    let mut file = std::fs::File::open(run_dir.join("orchestrator.log")).ok()?;
+    let mut file = std::fs::File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
-    file.seek(SeekFrom::Start(length.saturating_sub(TAIL_BYTES))).ok()?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).ok()?;
-    logged_value_in(&String::from_utf8_lossy(&bytes), account, kind)
+    let mut end = length;
+    loop {
+        let start = end.saturating_sub(block);
+        file.seek(SeekFrom::Start(start)).ok()?;
+        let mut bytes = vec![0u8; (end - start) as usize];
+        file.read_exact(&mut bytes).ok()?;
+        if let Some(found) = logged_value_in(&String::from_utf8_lossy(&bytes), account, kind) {
+            return Some(found);
+        }
+        if start == 0 || length - start >= LOG_TAIL_BYTES {
+            return None;
+        }
+        end = start + LOG_OVERLAP_BYTES.min(block / 2).min(end - start);
+    }
+}
+
+type LogCache = std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Option<LoggedValue>)>>;
+
+/// `scan_log_backwards` on `orchestrator.log`, reused `LOG_REUSE_SECS` per
+/// (log, account, kind): a poll never rereads the log.
+pub fn logged_value(run_dir: &std::path::Path, account: &str, kind: &str) -> Option<LoggedValue> {
+    static CACHE: std::sync::OnceLock<LogCache> = std::sync::OnceLock::new();
+    let path = run_dir.join("orchestrator.log");
+    let key = format!("{}|{account}|{kind}", path.display());
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some((read_at, found)) = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&key) {
+        if read_at.elapsed().as_secs() < LOG_REUSE_SECS {
+            return found.clone();
+        }
+    }
+    let found = scan_log_backwards(&path, account, kind, LOG_BLOCK_BYTES);
+    cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(key, (std::time::Instant::now(), found.clone()));
+    found
+}
+
+/// True when the ambition's figures are worth a look in the log: it was
+/// chosen by a value draw (not the rebalance marker, a pin, a protected
+/// account or an old draw).
+pub fn is_value_draw(account: &str, ambition: &Ambition, plan: Option<&PlanInfo>) -> bool {
+    given_view(account, ambition, plan, None).get("source").as_str() == Some("a4_draw")
 }
 
 /// A cooldown active now: its key (`method@x,z,level`, `method`,
@@ -153,9 +198,9 @@ pub fn cooling_view(cools: &[Cool]) -> Value {
 pub fn revision_text(why: &str) -> (String, bool) {
     let rule = |text: &str| (text.to_string(), true);
     match why {
-        "rebalance" => ("rééquilibrage A4 : le métier dont la demande non servie rapporte le plus".to_string(), false),
-        "achieved" => ("ambition atteinte : nouvelle ambition choisie par la valeur".to_string(), false),
-        "operator:natural" => ("opérateur : retour à l'équilibre naturel (valeur A4)".to_string(), false),
+        "rebalance" => ("rééquilibrage du 21/11 : le métier dont la demande non servie rapporte le plus".to_string(), false),
+        "achieved" => ("ambition atteinte : nouvelle ambition choisie par la valeur du marché".to_string(), false),
+        "operator:natural" => ("opérateur : retour à l'équilibre naturel (valeur du marché)".to_string(), false),
         "protected:overall" => ("compte protégé : overall pour de bon".to_string(), false),
         "market maker retired" => ("teneur de marché retiré : le métier le plus demandé".to_string(), false),
         _ if why.starts_with("operator:") => (format!("donnée par l'opérateur ({})", &why["operator:".len()..]), false),
@@ -212,10 +257,10 @@ pub fn given_view(account: &str, ambition: &Ambition, plan: Option<&PlanInfo>, l
             _ => "Choisie par la valeur de la demande non servie",
         };
         let figures = logged.filter(|line| line.kind == ambition.kind).map(|line| numbers_view(&line.numbers));
-        let tail = if figures.is_some() { " (chiffres du journal du daemon)." } else { ". Chiffres non retrouvés dans le journal récent." };
+        let tail = if figures.is_some() { " (chiffres du journal)." } else { ". Chiffres non retrouvés dans le journal récent." };
         ("a4_draw", format!("{heading}{by_item}{tail}"), figures)
     } else {
-        ("legacy", format!("Tirée avant A4 ({}). Ni rééquilibrée ni remplacée tant qu'elle n'est pas atteinte.", ambition.why), None)
+        ("legacy", format!("Tirée avant le rééquilibrage du 21/11 ({}). Elle ne change plus tant qu'elle n'est pas atteinte.", ambition.why), None)
     };
     object(vec![("source", str_value(source)), ("text", str_value(&text)), ("numbers", numbers.unwrap_or(Value::Null))])
 }

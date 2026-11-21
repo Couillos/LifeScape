@@ -88,6 +88,17 @@ fn a_protected_account_always_ends_up_overall() {
     }
 }
 
+/// A refused change (the overall of a protected account) is reported:
+/// the operator paths stop, they abandon nothing.
+#[test]
+fn a_refused_change_is_reported() {
+    let overall = ambition(lifescape_planner::OVERALL, "protected:overall", 0);
+    let mut zezima = life("Zezima", overall);
+    let before = zezima.clone();
+    assert!(!super::assign_kind(&mut zezima, &live(), "cook", "operator:cook"));
+    assert_eq!(zezima, before);
+}
+
 /// A2 review (user 2026-11-21): the one-time review never retires a
 /// running ambition any more. An unmarked (old-rule) ambition of a
 /// need-led bot is only marked `need`; its kind, goal and revisions stay.

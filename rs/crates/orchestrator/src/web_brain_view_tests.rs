@@ -68,6 +68,51 @@ fn the_last_logged_value_line_of_the_account_and_kind_is_found() {
     assert!(logged_value_in(log, "other", "mage").is_none());
 }
 
+/// The page never rereads the whole log: a backward block scan stops at
+/// the first block holding the line (found across a block edge too), and
+/// the lookup is reused.
+#[test]
+fn the_log_is_scanned_backwards_by_blocks_and_reused() {
+    let dir = std::env::temp_dir().join(format!("lifescape-brain-log-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let mut text = String::new();
+    text.push_str("[10:00:00] brain old_one: ambition mage given by value (value 5 per 6000 ticks)\n");
+    for index in 0..400 {
+        text.push_str(&format!("[10:01:{:02}] brain filler{index}: something happened here and there on the world\n", index % 60));
+    }
+    text.push_str("[11:00:00] brain amber_moore: ambition smith given by value (value 9576 per 6000 ticks, 11 bots already on smith)\n");
+    for index in 0..40 {
+        text.push_str(&format!("[11:01:{:02}] brain tail{index}: more lines after the one we look for, to cross blocks\n", index % 60));
+    }
+    std::fs::write(dir.join("orchestrator.log"), &text).expect("log");
+    let path = dir.join("orchestrator.log");
+    let found = scan_log_backwards(&path, "amber_moore", "smith", 512).expect("found across small blocks");
+    assert_eq!((found.at.as_str(), found.numbers.starts_with("value 9576")), ("11:00:00", true));
+    let old = scan_log_backwards(&path, "old_one", "mage", 512).expect("an older line is still within the tail");
+    assert_eq!(old.at, "10:00:00");
+    assert!(scan_log_backwards(&path, "nobody", "mage", 512).is_none());
+    // Reused: the file may vanish, the answer stays for the next polls.
+    assert!(logged_value(&dir, "amber_moore", "smith").is_some());
+    std::fs::remove_file(&path).expect("remove");
+    assert!(logged_value(&dir, "amber_moore", "smith").is_some(), "served from the reuse");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Only a value draw looks in the log.
+#[test]
+fn only_a_value_draw_reads_the_log() {
+    let mut drawn = held("mage", "value:amulet_of_power");
+    drawn.revisions.push(revision("achieved"));
+    assert!(is_value_draw("mila_wade", &drawn, None));
+    let mut rebalanced = held("miner", "value:iron_ore");
+    rebalanced.revisions.push(revision("rebalance"));
+    let plan = PlanInfo { from: "priest".to_string(), kind: "miner".to_string(), numbers: "value 1 per 6000 ticks".to_string(), applied: true, computed_secs: 100 };
+    assert!(!is_value_draw("felix_rook", &rebalanced, Some(&plan)), "the marker has the figures");
+    assert!(!is_value_draw("amber_moore", &held("smith", "need:rune_axe"), None), "old draw");
+    assert!(!is_value_draw("Zezima", &held(lifescape_planner::OVERALL, "protected:overall"), None));
+}
+
 #[test]
 fn revisions_name_the_retired_rules() {
     for why in ["blocked:m15x3", "change:need:rune_axe", "repair:coverage:prayer", "review:need"] {
@@ -77,7 +122,7 @@ fn revisions_name_the_retired_rules() {
     for why in ["rebalance", "achieved", "operator:natural", "protected:overall", "operator:alcher", "market maker retired"] {
         assert!(!revision_text(why).1, "{why}");
     }
-    assert!(revision_text("rebalance").0.contains("A4"));
+    assert!(revision_text("rebalance").0.contains("21/11"));
 }
 
 #[test]

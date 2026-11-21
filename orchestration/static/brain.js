@@ -224,7 +224,7 @@ var BrainLayout = (function () {
   // HTML string; every value goes through escapeHtml.
   var SOURCE_LABEL = {
     protected: 'Compte protégé', pin: 'Épinglée par l\'opérateur', operator: 'Type opérateur',
-    a4_rebalance: 'Rééquilibrage A4', a4_kept: 'Gardée par la passe A4', a4_draw: 'Choisie par la valeur', legacy: 'Tirée avant A4',
+    a4_rebalance: 'Rééquilibrage du 21/11', a4_kept: 'Gardée au rééquilibrage du 21/11', a4_draw: 'Choisie par la valeur du marché', legacy: 'Tirée avant le 21/11',
   };
   var STATE_LABEL = { open: 'ouvert', active: 'en cours', waiting: 'en attente', done: 'fait', set_aside: 'mis de côté' };
   var ORIGIN_LABEL = {

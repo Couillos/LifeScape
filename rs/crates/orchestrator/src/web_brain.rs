@@ -20,7 +20,7 @@ use lifescape_planner::{ban_states, life_from_value, BanState, HistoryEntry, Lif
 
 use crate::web::{err_json, Dispatch};
 use crate::web_brain_view::{
-    ambition_view, cooling, cooling_view, filler_view, goal_origin_view, logged_value, training_view, LoggedValue, PlanInfo, TrainingInput,
+    ambition_view, cooling, cooling_view, filler_view, goal_origin_view, is_value_draw, logged_value, training_view, LoggedValue, PlanInfo, TrainingInput,
 };
 
 /// Every source besides the life file, gathered by `brain_response_in`
@@ -518,7 +518,7 @@ fn progression_sources(run_dir: &std::path::Path, account: &str, life_value: &Va
             let applied = marker.applied.iter().any(|name| name.eq_ignore_ascii_case(account));
             marker.plan.iter().find(|row| row.account.eq_ignore_ascii_case(account)).map(|row| PlanInfo { from: row.from.clone(), kind: row.kind.clone(), numbers: row.numbers.clone(), applied, computed_secs: marker.computed_secs })
         });
-    let logged = life.ambition.as_ref().and_then(|ambition| logged_value(run_dir, account, &ambition.kind));
+    let logged = life.ambition.as_ref().filter(|ambition| is_value_draw(account, ambition, plan.as_ref())).and_then(|ambition| logged_value(run_dir, account, &ambition.kind));
     let training = match &life.goal {
         lifescape_planner::GoalKind::MaxSkills { skills, .. } if skills.len() == 1 && !live.is_null() => {
             let levels = crate::brain_market::live_levels(live);

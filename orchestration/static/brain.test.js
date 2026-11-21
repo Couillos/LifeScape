@@ -152,7 +152,7 @@ test('durations read in ticks and in minutes with the server tick length', () =>
 test('the ambition shows how it was given, its value and the revisions', () => {
   const html = BrainLayout.ambitionHtml({ ambition_view: VIEW, tick_ms: 600 });
   assert.match(html, /mineur : minerais et barres/);
-  assert.match(html, /Rééquilibrage A4/);
+  assert.match(html, /Rééquilibrage du 21\/11/);
   assert.match(html, /valeur 909 pièces par 6000 ticks/);
   assert.match(html, /14 bots déjà sur ce métier/);
   assert.match(html, /portée par iron_ore/);
@@ -163,7 +163,7 @@ test('the ambition shows how it was given, its value and the revisions', () => {
 });
 
 test('every protected, pinned and operator source has its label', () => {
-  for (const [source, label] of [['protected', 'Compte protégé'], ['pin', 'Épinglée'], ['operator', 'Type opérateur'], ['a4_kept', 'Gardée'], ['a4_draw', 'valeur'], ['legacy', 'avant A4']]) {
+  for (const [source, label] of [['protected', 'Compte protégé'], ['pin', 'Épinglée'], ['operator', 'Type opérateur'], ['a4_kept', 'Gardée'], ['a4_draw', 'valeur du marché'], ['legacy', 'avant le 21/11']]) {
     const html = BrainLayout.ambitionHtml({ ambition_view: Object.assign({}, VIEW, { given: { source: source, text: 't', numbers: null } }) });
     assert.match(html, new RegExp(label, 'i'), source);
   }
@@ -221,4 +221,15 @@ test('the graph reads the enriched ambition and drops no milestone', () => {
   assert.deepEqual(ids, ['ambition', 'goal', 'm:m1', 'm:m2', 'm:m3', 'm:m4']);
   const stone = model.boxes.find((box) => box.id === 'm:m2');
   assert.equal(stone.data.state, 'waiting');
+});
+
+test('texts a life file carries are escaped in every section', () => {
+  const evil = '<img src=x onerror=alert(1)>';
+  const view = Object.assign({}, VIEW, { label: evil, given: { source: 'legacy', text: evil, numbers: { text: evil } },
+    milestones: [{ id: 'm1', label: evil, state: 'open', state_text: evil, progress: [0, 1], origin: 'ladder' }] });
+  const payload = { ambition_view: view, goal: { label: evil, origin: { kind: 'bid', text: evil } }, filler: { method: evil, parked: evil },
+    cooling: [{ method: evil, site: evil, ticks_left: 1, cause: evil }], training: { skill: evil, own_rate: 1, pull_per_tick: 0, time_value: 1, lifted: false, pending: [] } };
+  const html = BrainLayout.progressionHtml(payload);
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /&lt;img/);
 });

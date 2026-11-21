@@ -176,11 +176,14 @@ async function loadProgress() {
   } catch (e) { /* keep the last frame */ }
 }
 
+// Every text a life file carries goes through esc before innerHTML.
+function esc(value) { return BrainLayout.escapeHtml(value); }
+
 function altText(alternatives) {
   if (!alternatives || !alternatives.length) return '<span class="muted">-</span>';
   return alternatives.map(alt =>
-    '<div class="alt">' + alt.method + ' · ' + alt.est_ticks + 't' +
-    (alt.est_coins ? ' · ' + alt.est_coins + 'c' : '') + '</div>').join('');
+    '<div class="alt">' + esc(alt.method) + ' · ' + esc(alt.est_ticks) + 't' +
+    (alt.est_coins ? ' · ' + esc(alt.est_coins) + 'c' : '') + '</div>').join('');
 }
 
 async function loadDetail() {
@@ -209,11 +212,11 @@ async function loadDetail() {
   const rows = (life.nodes || []).map(node => {
     const progress = node.progress && node.progress.target
       ? node.progress.current + '/' + node.progress.target : '-';
-    const method = node.method ? '<div>' + node.method + '</div>' : '<span class="muted">pas encore choisie</span>';
-    return '<tr><td class="left">' + node.id + '</td><td class="left">' + kindText(node) + '</td>' +
+    const method = node.method ? '<div>' + esc(node.method) + '</div>' : '<span class="muted">pas encore choisie</span>';
+    return '<tr><td class="left">' + esc(node.id) + '</td><td class="left">' + esc(kindText(node)) + '</td>' +
       '<td class="left">' + statusChip(node.status) + '</td>' +
       '<td class="left">' + method + altText(node.alternatives) + '</td>' +
-      '<td>' + progress + '</td><td>' + (node.spent_ticks || 0) + '</td></tr>';
+      '<td>' + esc(progress) + '</td><td>' + esc(node.spent_ticks || 0) + '</td></tr>';
   });
   document.getElementById('nodes').innerHTML = head + rows.join('');
 
@@ -222,8 +225,8 @@ async function loadDetail() {
     const date = new Date(entry.ended * 1000);
     const label = String(date.getDate()).padStart(2, '0') + '/' + String(date.getMonth() + 1).padStart(2, '0') +
       ' ' + String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
-    return '<tr><td class="left">' + entry.node + '</td><td class="left">' + entry.outcome +
-      '</td><td class="left">' + label + '</td></tr>';
+    return '<tr><td class="left">' + esc(entry.node) + '</td><td class="left">' + esc(entry.outcome) +
+      '</td><td class="left">' + esc(label) + '</td></tr>';
   });
   loadProgress();
   document.getElementById('history').innerHTML = hhead +
