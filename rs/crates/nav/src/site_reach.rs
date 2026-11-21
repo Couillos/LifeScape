@@ -58,6 +58,49 @@ pub fn site_verdicts(world: &StaticWorld, tables: &Tables, sites: &[(u16, Tile)]
     Some(sites.iter().map(|(loc_id, origin)| site_verdict(world, tables, &shared, *loc_id, *origin)).collect())
 }
 
+/// Verdicts of many NPC spawn tiles (a combat camp's foes) against one
+/// F2P edge set (`None` when the edges cannot be prepared). A spawn is a
+/// fight site when the tile it stands on, or a walkable neighbour the bot
+/// steps up to, lies in the open world (`pocket::verdict`, the planner's
+/// own `Disconnected` proof). Live 2026-11-21: the caged lesser demon at
+/// the top of the Wizards' Tower (3110,3157,2) was a camp's only site the
+/// brain priced, `Disconnected` on every walk (25 failures in 6 h).
+pub fn spawn_verdicts(world: &StaticWorld, tables: &Tables, spawns: &[Tile]) -> Option<Vec<SiteVerdict>> {
+    let options = NavOptions { f2p_only: true, ..NavOptions::default() };
+    let shared = prepare_shared(world, tables, &options, &mut || true)?;
+    Some(spawns.iter().map(|spawn| spawn_verdict(world, tables, &shared, *spawn)).collect())
+}
+
+/// Verdict of one NPC spawn tile (`spawn_verdicts`).
+fn spawn_verdict(world: &StaticWorld, tables: &Tables, shared: &SharedEdges, spawn: Tile) -> SiteVerdict {
+    let mut get = |x: i32, z: i32| world.get(x, z, spawn.level);
+    let spawn_walkable = tile_walkable(world.get(spawn.x, spawn.z, spawn.level));
+    let mut stands = 0;
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            let stand = Tile { x: spawn.x + dx, z: spawn.z + dz, level: spawn.level };
+            if !tile_walkable(world.get(stand.x, stand.z, stand.level)) {
+                continue;
+            }
+            // Bars, a wall or a fence between the stand and the foe: no
+            // melee exchange from there (a walkable foe tile is stepped
+            // onto by the server's own move rule).
+            if stand != spawn && spawn_walkable && !crate::bfs::can_step(&mut get, stand.x, stand.z, spawn.x, spawn.z) {
+                continue;
+            }
+            stands += 1;
+            if matches!(verdict(world, tables, shared, stand), PocketVerdict::Open) {
+                return SiteVerdict::Reachable;
+            }
+        }
+    }
+    if stands == 0 {
+        SiteVerdict::NoStand
+    } else {
+        SiteVerdict::Sealed
+    }
+}
+
 /// Verdict for loc `loc_id` anchored at `origin`.
 pub(crate) fn site_verdict(world: &StaticWorld, tables: &Tables, shared: &SharedEdges, loc_id: u16, origin: Tile) -> SiteVerdict {
     let Some((_, shape, angle)) = world.locs_at(origin.x, origin.z, origin.level).into_iter().find(|(id, _, _)| *id == loc_id) else {

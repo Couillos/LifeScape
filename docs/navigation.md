@@ -727,6 +727,13 @@ lisait `ride wrong destination` (live 2026-11-21).
   (571 spawns, dont le saule (3168,3350)), exclus de `danger::sites` et des
   choix des scripts ; recalculé par `nav/tests/work_sites.rs`
   (`LIFESCAPE_WRITE_SITES=1`).
+- Spawns de camps de combat qu'aucune case ouverte n'atteint
+  (`site_reach::spawn_verdicts` : barreaux, mur, pièce scellée) :
+  `gamedata/data/unreachable_spawns.json` (28 spawns, dont le démon mineur
+  en cage de la tour des Sorciers (3110,3157,2)), exclus de
+  `combat_spots::positions` (table des sites du cerveau, grappes de
+  l'échelle) ; recalculé par `nav/tests/fight_sites.rs`
+  (`LIFESCAPE_WRITE_SITES=1`).
 - Après une traversée scriptée (péage, porte téléportante, ride), le SDK
   attend 2 ticks avant d'envoyer la marche suivante (`travel_settle`,
   `p_delay(0)` serveur).
