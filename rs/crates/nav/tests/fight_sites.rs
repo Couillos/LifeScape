@@ -8,14 +8,16 @@
 //! 2026-11-21: the caged lesser demon at the top of the Wizards' Tower
 //! (3110,3157,2), `Disconnected` on every walk, 25 failures in 6 h).
 //!
-//! An underground spawn (z >= 6400) must also be routed from the surface
-//! both ways (`lifescape_nav::site_reach::route_verdicts`, seed the
-//! Lumbridge spawn, F2P, fares carried): a hall behind the slashable web
-//! or Elvarg's lair behind the one-way secret door is a large region the
-//! pocket flood calls open, yet no plan enters it (`no_route`). Every
-//! underground camp spawn left in the open world is therefore one the
-//! navigation reaches (user 2026-11-21: the brain fights there,
-//! `access::fight_gates_at`).
+//! A spawn the pocket flood leaves open must also be routed both ways
+//! from the Lumbridge spawn (`lifescape_nav::site_reach::route_verdicts`:
+//! F2P, fares carried, every requirement door of `nav_overrides` open —
+//! the brass key, the guild doors, the Champions' Guild: `access` gates
+//! those per bot): a hall behind the slashable web, Elvarg's lair behind
+//! the one-way secret door, Crandor (Ned's ship) or the fenced Wilderness
+//! ruins are large regions the flood calls open, yet no plan enters them
+//! (`no_route`). Every camp spawn left, underground ones included, is
+//! one the navigation reaches (user 2026-11-21: the brain fights in the
+//! underground camps, `access::fight_gates_at`).
 //! Recomputed here; on mismatch the message prints the table,
 //! `LIFESCAPE_WRITE_SITES=1` writes it.
 
@@ -68,25 +70,29 @@ fn camp_spawns() -> Vec<(i64, i64, i64, &'static str)> {
 const SEED: Tile = Tile { x: 3222, z: 3218, level: 0 };
 
 /// The live walker's view of a fighter carrying its fares (`orchestrator
-/// route --paid`): F2P, paid edges open, the boat's coins held.
+/// route --paid`): F2P, paid edges open, the boat's coins held, and every
+/// requirement door of `nav_overrides` open (its gate is `access`'s, read
+/// per bot: a spawn behind the Champions' Guild door is a site for a bot
+/// with 32 quest points, never `no_route`).
 fn paid_options(tables: &Tables) -> NavOptions {
     let mut options = NavOptions { f2p_only: true, allow_paid: true, ..NavOptions::default() };
     options.satisfied.extend(tables.customs.iter().filter(|edge| edge.fare > 0).map(|edge| format!("coins:{}", edge.fare)));
-    options.satisfied.extend(tables.customs.iter().filter(|edge| edge.fare > 0).flat_map(|edge| edge.requires.iter().filter(|tag| tag.starts_with("coins:")).cloned()));
+    options.satisfied.extend(tables.customs.iter().flat_map(|edge| edge.requires.iter().cloned()));
+    options.satisfied.extend(tables.requirements.iter().flat_map(|door| door.requires.iter().cloned()));
     options
 }
 
 /// Verdict of every camp spawn (`SiteVerdict::reason`, or `no_route`):
-/// the pocket rule, then the route rule for the underground ones the
-/// pocket leaves open.
+/// the pocket rule, then the route rule for the spawns the pocket leaves
+/// open.
 fn camp_verdicts(world: &StaticWorld, tables: &Tables, spawns: &[(i64, i64, i64, &'static str)]) -> Vec<&'static str> {
     let tiles: Vec<Tile> = spawns.iter().map(|(x, z, level, _)| Tile { x: *x as i32, z: *z as i32, level: *level as i32 }).collect();
     let verdicts = spawn_verdicts(world, tables, &tiles).expect("edges");
-    let below: Vec<usize> = (0..tiles.len()).filter(|index| verdicts[*index] == SiteVerdict::Reachable && tiles[*index].z >= 6400).collect();
-    let below_tiles: Vec<Tile> = below.iter().map(|index| tiles[*index]).collect();
-    let routed = route_verdicts(world, tables, &paid_options(tables), SEED, &below_tiles).expect("edges");
+    let open: Vec<usize> = (0..tiles.len()).filter(|index| verdicts[*index] == SiteVerdict::Reachable).collect();
+    let open_tiles: Vec<Tile> = open.iter().map(|index| tiles[*index]).collect();
+    let routed = route_verdicts(world, tables, &paid_options(tables), SEED, &open_tiles).expect("edges");
     let mut out: Vec<&'static str> = verdicts.iter().map(SiteVerdict::reason).collect();
-    for (index, routed) in below.iter().zip(routed) {
+    for (index, routed) in open.iter().zip(routed) {
         if !routed {
             out[*index] = "no_route";
         }
@@ -125,6 +131,10 @@ fn unreachable_fight_sites_match_the_map() {
     assert_eq!(verdict_at((3110, 9845, 0)), Some("reachable"), "a hill giant");
     assert_eq!(verdict_at((3053, 9576, 0)), Some("reachable"), "an ice warrior");
     assert_eq!(verdict_at((3157, 9905, 0)), Some("no_route"), "a moss giant behind the web");
+    // Crandor needs Ned's ship (Dragon Slayer); the Champions' Guild
+    // chickens are behind a modelled door (32 quest points), a site.
+    assert_eq!(verdict_at((2832, 3278, 0)), Some("no_route"), "a Crandor demon");
+    assert_eq!(verdict_at((3197, 3352, 0)), Some("reachable"), "a Champions' Guild chicken");
     let table = format!("{{\"sites\":[\n{}\n]}}\n", computed.join(",\n"));
     let path = data_dir().join("unreachable_spawns.json");
     if std::env::var("LIFESCAPE_WRITE_SITES").is_ok() {

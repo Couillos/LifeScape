@@ -109,9 +109,9 @@ fn spawn_verdict(world: &StaticWorld, tables: &Tables, shared: &SharedEdges, spa
 /// Chebyshev radius (same level) within which a tile borrows the route
 /// verdict of an already judged one: when the planner walks between the
 /// two both ways, they share the seed's answer.
-const ROUTE_SHARE_RADIUS: i32 = 24;
+const ROUTE_SHARE_RADIUS: i32 = 48;
 /// Judged neighbours a tile tries before its own full verdict.
-const ROUTE_SHARE_TRIES: usize = 2;
+const ROUTE_SHARE_TRIES: usize = 3;
 /// Wall budget of one walk between two neighbours: a cut walk only means
 /// "no borrowed verdict", the tile is then judged against the seed.
 const ROUTE_SHARE_BUDGET: std::time::Duration = std::time::Duration::from_millis(400);
