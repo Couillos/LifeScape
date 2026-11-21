@@ -264,6 +264,17 @@ pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx, worth: Option<i6
     let id = obj_id(item).ok_or_else(|| format!("unknown item {item}"))?;
     let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
     let ceiling = lifescape_planner::derived_demand::obtain_ceiling(lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity), reserve);
+    // The wallet the market lets a NEW bid spend is what its ledger holds
+    // net of the account's other resting bids, not the pack's coins
+    // (2026-11-21: "buyer holds 83092 coins, needs 83132", a mage's
+    // second input refused three times, its training abandoned).
+    let resting_bid = service
+        .lock_store()
+        .account_orders(&job.account)
+        .unwrap_or_default()
+        .iter()
+        .any(|row| row.item_id == id && row.side == lifescape_store::OrderSide::Buy && row.remaining > 0 && matches!(row.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched));
+    let (quantity, ceiling) = if resting_bid { (quantity, ceiling) } else { within_free_coins(quantity, ceiling, service.free_coverage(&job.account, lifescape_store::OrderSide::Buy, id).1) };
     let (order, price, kept) = match keep_need_bid(&service, &job.account, id, quantity, worth.unwrap_or(1), ceiling)? {
         crate::market_reprice::StandingBid::Placed { order, price } => (order, price, false),
         crate::market_reprice::StandingBid::Kept { order, price } => (order, price, true),
@@ -273,6 +284,15 @@ pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx, worth: Option<i6
     let reserve_note = reserve.map(|value| format!(", derived reserve {value:.0}")).unwrap_or_default();
     crate::logln!("brain {}: bid {quantity}/{count} {item} @ {price} {how} (ceiling {ceiling}{worth_note}{reserve_note}, held {}), awaiting the fill", job.account, ctx.held);
     Ok(order)
+}
+
+/// A new bid's `quantity` and per-unit `ceiling` brought under what the
+/// market lets the account spend (`free` coins): the units shrink to what
+/// one coin each buys, the ceiling to what `free` covers over them (never
+/// below 1 coin: with nothing free the market still refuses, typed).
+pub(crate) fn within_free_coins(quantity: i64, ceiling: i64, free: i64) -> (i64, i64) {
+    let quantity = quantity.min(free).max(1);
+    (quantity, ceiling.min(free / quantity).max(1))
 }
 
 /// The `need` bid of `account` on `item` for `quantity`, ceiling
@@ -356,8 +376,19 @@ pub fn cancel_open_buys(account: &str, item: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::live_levels;
+    use super::{live_levels, within_free_coins};
     use lifescape_json::{object, Value};
+
+    /// A bid opens under the coins the market lets the account spend:
+    /// 752 units at a ceiling of 8 against 5 000 free coins shrink to a
+    /// ceiling of 6; more units than coins shrink to the coins.
+    #[test]
+    fn a_new_bid_stays_under_the_free_coins() {
+        assert_eq!(within_free_coins(752, 8, 5000), (752, 6));
+        assert_eq!(within_free_coins(752, 5, 5000), (752, 5), "a ceiling already under the wallet stays");
+        assert_eq!(within_free_coins(752, 8, 300), (300, 1));
+        assert_eq!(within_free_coins(10, 8, 0), (1, 1), "nothing free: the market refuses it, typed");
+    }
 
     /// Plan marché §3.5: a need bid whose node is gone goes; one an open
     /// node still wants, a gear bid and a legacy (motive-less) bid stay.
