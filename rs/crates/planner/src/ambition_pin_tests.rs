@@ -7,7 +7,7 @@ use super::{
     ambition_from_value, ambition_to_value, achieved, extend, on_goal_closed, pinned, pinned_ambition, release_pin, AmbitionError, BotNow, CloseOutcome,
     MilestoneStatus, Stamp, Target, MILESTONE_MAX_BLOCKS,
 };
-use crate::ambition_fleet::{coverage_repair, optional_change, FleetBot};
+use crate::ambition_fleet::FleetBot;
 use crate::model::{Archetype, GoalKind, Life, Profile};
 
 const ZERO: Stamp = Stamp { tick: 0, secs: 0 };
@@ -89,13 +89,10 @@ fn unclimbable_pins_are_refused() {
 fn a_pin_blocks_every_change() {
     let life = life_pinned("smithing");
     let ambition = life.ambition.as_ref().expect("ambition");
-    let gaps = vec!["fishing".to_string()];
+    assert!(pinned(ambition), "held by the pin: kept past the 72 000-tick clock");
     let long_ago = |_: i64| u64::MAX;
-    assert_eq!(coverage_repair(ambition, &fleet_bot(), &gaps, true, &[], &long_ago), None);
-    assert_eq!(optional_change(ambition, &fleet_bot(), &gaps, true, &[], &long_ago), None);
-    let mut free = ambition.clone();
-    free.pin = None;
-    assert!(coverage_repair(&free, &fleet_bot(), &gaps, true, &[], &long_ago).is_some(), "the same ambition unpinned fills the gap");
+    assert!(!crate::ambition::may_change(&ambition_free(ambition), &|_| 0), "the clock runs from the draw");
+    assert!(crate::ambition::may_change(&ambition_free(ambition), &long_ago));
 }
 
 /// Blocked `MILESTONE_MAX_BLOCKS` times: the milestone is dropped and the
@@ -164,10 +161,6 @@ fn the_overall_ambition_climbs_the_lowest_skill_for_good() {
     let ambition = super::new_ambition(super::OVERALL, "operator:overall", &fresh_now(), 3, &[], ZERO).expect("ladderless kind");
     assert!(pinned(&ambition), "held like a pin");
     assert!(!achieved(&ambition), "an empty ladder is never achieved");
-    let long_ago = |_: i64| u64::MAX;
-    let gaps = vec!["prayer".to_string()];
-    assert_eq!(coverage_repair(&ambition, &fleet_bot(), &gaps, true, &[], &long_ago), None);
-    assert_eq!(optional_change(&ambition, &fleet_bot(), &gaps, true, &[], &long_ago), None);
     for seed in 0..50 {
         let mut bot = fleet_bot();
         bot.seed = seed;
@@ -181,4 +174,10 @@ fn the_overall_ambition_climbs_the_lowest_skill_for_good() {
     let (goal, origin) = crate::goals::draw_goal_origin(&life, &level_of, &|_| 0).expect("a goal");
     assert_eq!(goal, GoalKind::MaxSkills { skills: vec!["runecraft".to_string()], level: 15 });
     assert_eq!(origin, None);
+}
+
+fn ambition_free(ambition: &crate::ambition::Ambition) -> crate::ambition::Ambition {
+    let mut free = ambition.clone();
+    free.pin = None;
+    free
 }

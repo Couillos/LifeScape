@@ -127,10 +127,10 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if !quoting && crate::cpu_profile::timed("ambition.ensure", || crate::brain_ambition::ensure(orch, &mut life, &live)) {
         dirty = true;
     }
-    // Coverage repair (review 2026-11-13): an uncovered group is logged
-    // and a redundant bot past the change throttle takes it.
-    if !quoting && crate::cpu_profile::timed("ambition.coverage", || crate::brain_ambition::coverage_pass(&mut life, &live)) {
-        dirty = true;
+    // Coverage log (A2, 2026-11-21): an uncovered group is logged; no
+    // running ambition is retired to fill it.
+    if !quoting {
+        crate::cpu_profile::timed("ambition.coverage", || crate::brain_ambition::coverage_pass(&life));
     }
     // One-time D3 review: an old-rule ambition of a need-led bot is
     // redrawn by need (spread over the first ticks after the start).

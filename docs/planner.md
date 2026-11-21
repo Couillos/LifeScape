@@ -1010,9 +1010,31 @@ retour à l'ambition au tirage suivant). Sans ambition : AUCUN but
 (`NoGoal::NoAmbition`, typé et loggé) ; le plus-bas-skill ne sert que le `generalist` explicite. Clôture
 (`brain_succession::close_goal` → `brain_ambition::after_close`) : quota
 ou équipement fait ⇒ jalon `done` ; but bloqué ⇒ `blocked`,
-`blocked_count + 1` ; à `MILESTONE_MAX_BLOCKS` = 3 ⇒ nouveau tirage
-immédiat de l'ambition (politique approuvée, log `milestone mN blocked 3
-times, redrawing ambition`), jamais vers le même type. Échelle épuisée
+`blocked_count + 1`. A2 (décision du 2026-11-21) : une ambition ne change
+JAMAIS avant d'être atteinte. À `MILESTONE_MAX_BLOCKS` = 3 le jalon est
+MIS DE CÔTE (`ambition::set_aside` : statut `blocked`, compteur gardé, la
+trace reste dans la vie ; `CloseOutcome::SetAside`, log `milestone mN
+blocked 3 times, set aside; ambition K kept, next milestone`) : il n'est
+plus tiré (`next_milestone`, `next_feasible_milestone`), ne compte plus
+parmi les jalons ouverts (`open_count` : les rungs suivants se
+matérialisent à sa place) et le bot passe au jalon suivant. La règle lit
+le compteur écrit : une vie déjà écrite avec un jalon `blocked` ×3 la
+suit au chargement, sans rien déclencher de plus. Si TOUS les jalons
+restants sont mis de côté, le tirage ne trouve aucun jalon ouvert : but
+d'appoint (`side_goal`) comme pour des jalons bannis, jamais un
+retirage. A3 (même décision) : un jalon `equip` ne bloque jamais sur un
+objet que personne ne fabrique (`equip_wait::unmade_equip_piece` : un
+`obtain` de la pièce, pas fait, ni détenu (sac, banque, porté) ni
+obtenable maintenant — offre au carnet, boutique ouverte, voie de
+production dont un bot de la flotte a le niveau,
+`gear_plan::obtainable_now` ; règle générale, tout objet d'équipement,
+l'amulette de pouvoir des mages n'étant que le cas vu en direct) : la
+clôture (`GoalEnd::UnmadeGear`) rouvre le jalon sans compter de blocage
+ni bannir de compétence, le met en pause 6000 ticks
+(`MILESTONE_SHORTFALL_COOL_TICKS`, comme un manque du marché) et le bot
+travaille ses autres jalons ; il retente à la fin de la pause (log
+`milestone mN waits: <objet> is neither held, nor on the market, nor made
+by anyone`). Échelle épuisée
 (`achieved`) d'un bot au besoin (D3) : nouveau tirage au besoin, jamais de
 prolongation (voir « D3 dans les vies ») ; pour les exceptions et les
 épingles : nouveau tirage seulement si un autre bot tient le groupe
@@ -1025,19 +1047,17 @@ tirage (loggé). Un tirage qui ne donne aucun jalon ouvert est refusé
 atteinte à la naissance, retirée à chaque passe) ; une ambition de
 couverture se prolonge à la place (`new_ambition_extended`). Une nouvelle
 ambition lit les pièces détenues (un teneur riche ne repart pas à 5 000).
-Changement facultatif (après un jalon fait, à la clôture d'un but OU
-quand `refresh` clôt un jalon niveau/pièces) : au plus une fois toutes
-les `AMBITION_CHANGE_TICKS` = 72 000 ticks (temps mur converti par la
-durée de tick mesurée) ; un bot redondant comble d'abord un trou de
-couverture, sinon une chance sur quatre d'un nouveau tirage ; le seul
-détenteur d'un groupe ne le quitte jamais. Réparation de couverture
+Plus de changement facultatif (A2, 2026-11-21) : ni après un jalon fait,
+ni à la clôture d'un but, ni quand `refresh` clôt un jalon niveau/pièces,
+ni 1 chance sur 4 de retirage, ni « bot redondant comble un trou » :
+`optional_change` et `coverage_repair` n'existent plus. Seules restent
+les révisions de l'opérateur (épingle, teneur de marché retiré,
+opérateur) et le tirage d'une ambition atteinte. Couverture
 (`brain_ambition::coverage_pass`, toutes les 300 s par compte au passage
-de lancement) : les trous de la flotte sont loggés à chaque changement
-(`fleet coverage gap: …` ; un bot fermé laisse son groupe) et un bot
-redondant dont le dernier changement a 72 000 ticks prend le trou tout de
-suite (`coverage_repair`, révision `repair:coverage:<groupe>` ; son but en
-cours, tiré par l'ancienne ambition, est remplacé : voir « D3 dans les
-vies » plus bas).
+de lancement) : les trous de la flotte sont seulement loggés à chaque
+changement (`fleet coverage gap: …` ; un bot fermé laisse son groupe) ;
+aucune ambition en cours n'est retirée pour en combler un, le trou ne
+sert qu'au tirage de la prochaine ambition atteinte.
 
 Couverture de flotte (`assign_fleet`, pur) : au premier passage qui
 rencontre une vie sans ambition, toute la flotte est assignée (fichiers
@@ -1128,8 +1148,8 @@ besoins égaux, tirage uniforme × inclinaison (`why` = `random`). `why`
 = `need:<objet>` quand un objet porte au moins `NEED_LABEL_FLOOR` = 5 %
 du besoin DU TYPE (même parmi des centaines d'offres), sinon `need`.
 Tous les jalons ouverts refroidis : log `every open milestone cools`
-(but d'appoint), jamais « banned skill » sans compétence. Changement facultatif d'un bot au besoin : seulement vers un type
-qui a du besoin (sinon il garde son ambition). Exceptions
+(but d'appoint), jamais « banned skill » sans compétence. (Le changement facultatif d'un bot au besoin, seulement vers un type
+qui a du besoin, est retiré par A2.) Exceptions
 (`ambition_fleet::LEVEL_LED_ACCOUNTS`, `level_led`) : Zezima, N0valyfe,
 Yogosun et tout teneur de marché (archétype `MarketMaker` ou ambition
 `market_maker`, `FleetBot::market_maker`) gardent le tirage d'avant
