@@ -98,11 +98,13 @@ impl Bot {
         if at(self, expect) {
             return Ok(());
         }
-        match edge.kind.as_str() {
-            "loc" => self.exec_custom_loc(edge, expect, deadline),
-            "npc_fare" => self.exec_custom_fare(edge, expect, deadline),
+        // No market pause inside the ride: paid and sailing, every walk is
+        // refused (`p_delay`) and the delivery stalls on the deck.
+        self.with_pause_held(|bot| match edge.kind.as_str() {
+            "loc" => bot.exec_custom_loc(edge, expect, deadline),
+            "npc_fare" => bot.exec_custom_fare(edge, expect, deadline),
             other => Err(Error::Travel(format!("custom edge {} has no live executor (kind {other:?})", edge.name))),
-        }
+        })
     }
 
     /// Gangplank-style loc: one click, then the jump onto `expect`.
@@ -271,6 +273,61 @@ mod tests {
     }
 
     use super::{fare_pick, paid_allowed};
+
+    /// Fake game server: idle ticks (one per 20 ms) until the client
+    /// hangs up.
+    fn idle_server() -> (u16, std::thread::JoinHandle<()>, [i32; 4], [i32; 4]) {
+        use std::io::{Read, Write};
+        let (client_seed, server_seed) = ([3, 1, 4, 1], [5, 9, 2, 6]);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback bind");
+        let port = listener.local_addr().expect("local addr").port();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            sock.set_nonblocking(true).expect("nonblocking");
+            let mut cipher = crate::isaac::Isaac::new(server_seed);
+            let mut sink = [0u8; 256];
+            for _ in 0..200 {
+                let _ = sock.read(&mut sink);
+                let frame = [167u8.wrapping_add(cipher.next_int() as u8), 0, 2, 0x00, 0x00];
+                if sock.write_all(&frame).is_err() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        (port, handle, client_seed, server_seed)
+    }
+
+    /// Live 2026-11-21 (olivia_ellis-280551, tom_king-225281): the fare
+    /// paid ("and board the ship."), the market pause gate ran a delivery
+    /// inside the sail's pump; its walk was refused (`UNSET_MAP_FLAG`, the
+    /// sail's `p_delay`) and stalled on the ship deck (1,2956,3143). A
+    /// hand-added edge (talk, sail, gangplank) holds the pause gate until
+    /// it ends; the pump after it runs the gate again.
+    #[test]
+    fn a_ride_holds_the_pause_gate() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let (port, server, client_seed, server_seed) = idle_server();
+        let client = std::net::TcpStream::connect(("127.0.0.1", port)).expect("loopback dial");
+        client.set_read_timeout(Some(std::time::Duration::from_millis(500))).expect("client read timeout");
+        let mut bot = crate::client::Bot::new("127.0.0.1", port, ".", ".");
+        bot.conn.attach_for_test(client, client_seed, server_seed);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        let calls = std::sync::Arc::new(AtomicU32::new(0));
+        let seen = std::sync::Arc::clone(&calls);
+        bot.pause_gate = Some(std::sync::Arc::new(move |_: &mut crate::client::Bot| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            true
+        }));
+        let inside = bot.with_pause_held(|bot| bot.pump(3).map(|_| ()));
+        assert!(inside.is_ok(), "{inside:?}");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "no pause during the ride");
+        bot.pump(1).expect("pump after the ride");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "the gate runs again once the ride ended");
+        drop(bot);
+        let _ = server.join();
+    }
 
     /// Live 2026-11-13 (bct5rxpg-13908): allow_paid with an empty wallet
     /// planned through the toll the guard then refused. Paid paths need
