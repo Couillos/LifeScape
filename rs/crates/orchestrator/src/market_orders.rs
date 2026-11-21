@@ -69,6 +69,9 @@ impl MarketService {
         // The walk's live ceiling (a buy's limit, following the wallet) is
         // stored with the replacement: a lineage placed before schema 10
         // gains one at its first amend (read before the store lock).
+        // Pressed (blocking need, urgent sale): an auction object serves it
+        // at once after the amend (`pressed_auction`), like a placement.
+        let pressed = row.motive == crate::market_lineage::NEED || crate::market_reprice::bounds_of(self, order_id).is_some_and(|bounds| bounds.pressed);
         let walked_ceiling = crate::market_reprice::bounds_of(self, order_id).filter(|bounds| !bounds.sell && bounds.ceiling < crate::market_reprice::UNSAID_CEILING).map(|bounds| bounds.ceiling);
         // Plan prix lot D: per unit unless the caller says `per_lot`.
         let price = if request.get("per_lot").as_bool() == Some(true) { price } else { crate::market_units::to_lot(item, price) };
@@ -183,6 +186,13 @@ impl MarketService {
             }
         }
         self.refresh_order_rows(replacement as u64, &fills, clock);
+        if pressed {
+            let served = self.pressed_auction(item, &row.motive, true);
+            if !served.is_empty() {
+                let mine = self.lock_store().open_deals_for_account(&account).unwrap_or_default();
+                deal_ids.extend(mine.iter().filter(|deal| served.contains(&deal.deal_id)).map(|deal| Value::Int(deal.deal_id)));
+            }
+        }
         object(vec![
             ("ok", Value::Bool(true)),
             ("order", Value::Int(replacement)),

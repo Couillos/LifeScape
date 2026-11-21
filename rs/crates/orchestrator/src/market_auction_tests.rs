@@ -241,6 +241,28 @@ fn a_need_bid_is_served_at_once_on_an_auction_object() {
     cleanup(&path);
 }
 
+/// The usual path of a need is the resting bid taken over and raised
+/// (`place_obtain_bid`, `keep_bid`): an amend of a pressed order on an
+/// auction object serves it at once too.
+#[test]
+fn a_need_bid_raised_by_amend_is_served_at_once() {
+    let (service, path) = auction_service("pressed_amend");
+    for account in ["seller", "low", "fighter"] {
+        funded(&service, account);
+    }
+    place(&service, "seller", "sell", 2, 5, vec![]);
+    place(&service, "low", "buy", 2, 4, vec![]);
+    auction_round(&service, 1000.0, TICK_MS);
+    let need = place(&service, "fighter", "buy", 2, 3, vec![("motive", str_value("need")), ("ceiling", Value::Int(20))]);
+    assert_eq!(need.get("status").as_str(), Some("open"), "{need:?}");
+    assert!(deals_of(&service, "fighter").is_empty(), "under the ask: nothing to serve yet");
+    let order = need.get("order").as_i64().expect("order");
+    let raised = service.handle(&object(vec![("op", str_value("amend")), ("account", str_value("fighter")), ("order", Value::Int(order)), ("price", Value::Int(10))]));
+    assert_eq!(raised.get("ok").as_bool(), Some(true), "{raised:?}");
+    assert_eq!(deals_of(&service, "fighter"), vec![(2, 7)], "served at once at the single price: {raised:?}");
+    cleanup(&path);
+}
+
 #[test]
 fn an_urgent_sale_is_served_at_once_and_a_gear_bid_waits() {
     let (service, path) = auction_service("urgent");
