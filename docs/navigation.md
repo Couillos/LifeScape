@@ -311,15 +311,21 @@ depuis son départ), borné par l'échéance ; sans drapeau, la veille de
 blocage décide comme avant ; un drapeau suivi d'un pas n'est pas une
 annulation.
 
-Plan revenu alors que le bot marche encore (2026-11-19,
-`Bot::plan_travel`, tests `client/travel_drift_tests.rs`) : la pause
-marché lance sa marche dans le pump d'une jambe en vol ; le serveur
-continue l'ancienne jambe pendant l'aller-retour (0,2-0,5 s) et le plan
-part 2 à 10 tuiles derrière le bot (frank_shaw-50111, ~6 refus/h). Si le
-bot s'est éloigné de plus d'une tuile du départ (ou a changé de niveau),
-le trajet est replanifié depuis la tuile atteinte, une seule fois par
-requête ; ensuite la veille de blocage décide. Jamais de clic sur sa
-propre tuile pour arrêter la marche.
+Plan demandé alors que le bot marche encore (2026-11-19 puis 2026-11-21,
+`Bot::plan_travel` / `Bot::wait_until_still`, tests
+`client/travel_drift_tests.rs`) : la pause marché lance sa marche dans le
+pump d'une jambe en vol ; le serveur continue l'ancienne jambe pendant
+l'aller-retour (0,2-0,5 s) et le plan part 2 à 14 tuiles derrière le bot
+(48 dossiers « step refused live=none » du 2026-11-21). Décision C1 : une
+marche ne se planifie qu'une fois le bot immobile, c'est-à-dire sa tuile
+inchangée sur un tick entier (le paquet player-info porte les pas serveur).
+L'attente est bornée à `SETTLE_MAX_TICKS` (30) : un bot toujours en
+mouvement ensuite donne `Error::Timeout` (« never stood still »), jamais un
+plan tiré d'un départ mobile. Même règle avant l'unique replanification
+après dérive (bot parti pendant l'aller-retour) : attendre l'immobilité,
+puis replanifier depuis la tuile d'arrêt. Jamais de clic sur sa propre
+tuile pour arrêter la marche. Coût : un tick par plan (un bot déjà arrêté
+est confirmé en un tick).
 
 Veille de blocage d'une jambe (`await_leg`, SDK) : une tuile plus loin
 sur la jambe compte comme progrès, pas seulement un rapprochement de sa

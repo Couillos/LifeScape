@@ -190,6 +190,10 @@ impl Bot {
         let options_start = std::time::Instant::now();
         let options = self.nav_options_remote()?;
         let options_ms = options_start.elapsed().as_millis();
+        // The plan is drawn from a bot that stands still: a step of the
+        // previous walk still rolling server-side moves it during the
+        // round trip (`travel_drift_tests`).
+        self.wait_until_still()?;
         let mut from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
         let plan_start = std::time::Instant::now();
         let mut replanned = false;
@@ -212,7 +216,8 @@ impl Bot {
                     from.x, from.z, from.level, here.x, here.z, here.level,
                 ));
                 replanned = true;
-                from = here;
+                self.wait_until_still()?;
+                from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
                 continue;
             }
             break (plan, service_ms);

@@ -14,8 +14,45 @@ use lifescape_nav::plan::{NavOptions, Plan, Tile};
 
 use super::travel::PlanTimings;
 use crate::client::Bot;
+use crate::error::{Error, Result};
+
+/// Ticks a bot may keep moving before a plan is asked: a leg step of the
+/// previous walk (run: two tiles a tick) ends well inside it; past it the
+/// bot never stops and the plan is refused instead of drawn from a moving
+/// start.
+pub(crate) const SETTLE_MAX_TICKS: u64 = 30;
 
 impl Bot {
+    /// Pump until the bot stands still: its tile unchanged over one whole
+    /// tick (the player-info packet carries the server-side steps, so an
+    /// unchanged tile after a tick means the walk of the previous step
+    /// ended). A plan asked before that starts behind the bot
+    /// (`travel_drift_tests`). Bounded by `SETTLE_MAX_TICKS`: a bot still
+    /// moving past it is `Error::Timeout`, never a plan from a moving start.
+    pub(crate) fn wait_until_still(&mut self) -> Result<()> {
+        // No game session (offline plan, bare bot): nothing can move.
+        if !self.conn.is_open() {
+            return Ok(());
+        }
+        let deadline = self.world.ticks + SETTLE_MAX_TICKS;
+        loop {
+            let before = (self.world.x, self.world.z, self.world.level);
+            let tick = self.world.ticks;
+            while self.world.ticks == tick {
+                self.pump(1)?;
+            }
+            let after = (self.world.x, self.world.z, self.world.level);
+            if before == after {
+                return Ok(());
+            }
+            if self.world.ticks >= deadline {
+                return Err(Error::Timeout(format!(
+                    "bot never stood still for {SETTLE_MAX_TICKS} ticks before planning: {before:?} -> {after:?}"
+                )));
+            }
+        }
+    }
+
     /// The trip when `dest` is the bot's own tile, else `None`.
     pub(crate) fn plan_here(&self, dest: Tile) -> Option<(NavOptions, Plan, PlanTimings)> {
         let here = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
