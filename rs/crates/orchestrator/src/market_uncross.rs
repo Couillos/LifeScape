@@ -130,6 +130,28 @@ impl MarketService {
         self.settle_crossed(first, matched)
     }
 
+    /// One grouped auction (B2, `Book::run_auction`) on each of `items`:
+    /// every pair that agrees trades at the object's single clearing
+    /// price, through the normal path (`settle_crossed`: one deal per
+    /// pair, the rendezvous procedure executes it). Returns the deals
+    /// opened.
+    pub(crate) fn auction_books(&self, items: &[i64], now_wall: f64) -> Vec<i64> {
+        let mut deals = Vec::new();
+        for item in items {
+            let matched = {
+                let mut guard = self.lock_engine();
+                let engine: &mut Engine = &mut guard;
+                let guard_fn = kept_apart(&engine.pair_cooldowns, now_wall);
+                let Some(book) = engine.books.get_mut(item) else { continue };
+                let pre = snapshot(book);
+                book.run_auction(&guard_fn).into_iter().map(|fill| (fill.clone(), rows_for_fill(&pre, &fill))).collect::<Vec<_>>()
+            };
+            let Some(first) = matched.first().map(|(fill, _)| fill.buy_id) else { continue };
+            deals.extend(self.settle_crossed(first, matched));
+        }
+        deals
+    }
+
     /// Restores the cooldowns of the deals that failed within the window
     /// (boot: the table died with the previous daemon), each counted from
     /// its failure instant.

@@ -94,6 +94,7 @@ pub mod market_seller;
 pub mod market_units;
 pub mod market_service;
 pub mod market_audit;
+pub mod market_auction;
 pub mod market_merge;
 pub mod market_prints;
 pub mod market_uncross;

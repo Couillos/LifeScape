@@ -15,7 +15,7 @@ fn window(sell: bool, current: i64, curve: Concession, elapsed: u64) -> Window {
         elapsed_ticks: elapsed,
         window_ticks: window_ticks(curve.horizon_ticks),
         filled: false,
-        public_price: None,
+        anchor_price: None,
         own_fill: None,
         best_opposite: None,
         pressed: false,
@@ -135,11 +135,11 @@ fn an_own_fill_backs_off_and_restarts() {
 #[test]
 fn public_prints_pull_the_quote_halfway() {
     let mut seen = window(false, 50, curve(50, 120, 0.5), 2000);
-    seen.public_price = Some(90);
+    seen.anchor_price = Some(90);
     assert_eq!(step(&seen), Step::Amend(70), "others paid 90: halfway, past the 10 % walk");
-    seen.public_price = Some(200);
+    seen.anchor_price = Some(200);
     assert_eq!(step(&seen), Step::Amend(55), "a print over the ceiling never pulls: the walk goes on");
-    seen.public_price = Some(30);
+    seen.anchor_price = Some(30);
     assert_eq!(step(&seen), Step::Amend(55), "a cheaper print never lowers a bid: the walk goes on");
 }
 
@@ -159,6 +159,37 @@ fn pressed_orders_cross_and_any_order_takes_what_its_next_walk_reaches() {
     let mut close = window(true, 60, curve(100, 50, 1.0), 500);
     close.best_opposite = Some(55);
     assert_eq!(step(&close), Step::Amend(55), "its next walk (54) passes the bid: it takes it");
+}
+
+/// B5 (lot 3 marché): near the volume-weighted mean price of the recent
+/// trades the walk shrinks, proportionally to the relative gap, inside
+/// [1 %, 10 %]; without a mean price it is the plain 10 %.
+#[test]
+fn the_step_shrinks_near_the_mean_price() {
+    assert_eq!(step_pct(100, None), WALK_PCT, "no mean price known: 10 %");
+    assert_eq!(step_pct(100, Some(100)), MIN_WALK_PCT, "on it: 1 %");
+    assert_eq!(step_pct(103, Some(100)), 3, "3 % away: 3 %");
+    assert_eq!(step_pct(90, Some(100)), 10);
+    assert_eq!(step_pct(500, Some(100)), WALK_PCT, "far: never over 10 %");
+    assert_eq!(step_pct(40, Some(100)), WALK_PCT);
+    assert_eq!(step_pct(100, Some(0)), WALK_PCT, "a nonsense mean never shrinks the step");
+}
+
+#[test]
+fn a_walk_close_to_the_mean_moves_a_percent_not_ten() {
+    let shape = curve(1000, 1, 1.0);
+    let mut near = window(true, 1000, shape, 500);
+    near.anchor_price = Some(1000);
+    assert_eq!(step(&near), Step::Amend(990), "an ask on the mean price: 1 %");
+    near.anchor_price = Some(950);
+    assert_eq!(step(&near), Step::Amend(940), "5.3 % over the mean: a 6 % step (the pull would only reach 975)");
+    near.anchor_price = None;
+    assert_eq!(step(&near), Step::Amend(900), "no mean: 10 %");
+    let bid_curve = curve(1000, 5000, 1.0);
+    let mut buyer = window(false, 1000, bid_curve, 500);
+    buyer.anchor_price = Some(1000);
+    assert_eq!(step(&buyer), Step::Amend(1010), "a bid on the mean climbs 1 %");
+    assert_eq!(step(&window(true, 5, curve(5, 1, 1.0), 500)), Step::Amend(4), "still at least a coin");
 }
 
 #[test]

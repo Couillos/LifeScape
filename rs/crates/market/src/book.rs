@@ -56,6 +56,9 @@ pub struct Book {
     /// keeps for queue rank. `uncross` makes the later arrival the taker.
     arrivals: std::collections::HashMap<u64, u64>,
     next_arrival: u64,
+    /// Grouped-auction mode (`auction`): orders rest without matching,
+    /// only `run_auction` trades, at one price.
+    batch: bool,
 }
 
 /// Pair guard that keeps nobody apart (plain `place`).
@@ -67,6 +70,70 @@ impl Book {
     /// Empty book.
     pub fn new() -> Self {
         Book::default()
+    }
+
+    /// Switches the grouped-auction mode (`auction` module): in it an
+    /// arriving, relisted or amended order only rests (crossed against
+    /// the other side if it must), `uncross` does nothing and
+    /// `run_auction` is the only match. Back to continuous, the next
+    /// `uncross` heals what still crosses.
+    pub fn set_batch(&mut self, batch: bool) {
+        self.batch = batch;
+    }
+
+    /// True in grouped-auction mode.
+    pub fn is_batch(&self) -> bool {
+        self.batch
+    }
+
+    /// One grouped auction: every resting order trades at the single
+    /// price that maximises the units (`auction::clearing`). Buyers at or
+    /// over it and sellers at or under it, best price first then oldest;
+    /// an account never trades with itself nor a pair `kept_apart`
+    /// refuses (the volume can then fall short of the maximum). The
+    /// later arrival of a pair is its taker. Orders drained leave the
+    /// book; the rest keeps its rank.
+    pub fn run_auction(&mut self, kept_apart: &dyn Fn(&str, &str) -> bool) -> Vec<Fill> {
+        let quote = |orders: &[Order]| orders.iter().map(|order| (order.price, order.remaining)).collect::<Vec<_>>();
+        let Some(found) = crate::auction::clearing(&quote(&self.buys), &quote(&self.sells)) else {
+            return Vec::new();
+        };
+        let mut fills = Vec::new();
+        for bid_index in 0..self.buys.len() {
+            if self.buys[bid_index].price < found.price {
+                break;
+            }
+            for ask_index in 0..self.sells.len() {
+                if self.sells[ask_index].price > found.price {
+                    break;
+                }
+                let (bid, ask) = (&self.buys[bid_index], &self.sells[ask_index]);
+                if bid.remaining == 0 || ask.remaining == 0 || bid.account == ask.account || kept_apart(&bid.account, &ask.account) {
+                    continue;
+                }
+                let take = bid.remaining.min(ask.remaining);
+                let arrival = |order: &Order| self.arrivals.get(&order.id).copied().unwrap_or(0);
+                let taker = if arrival(bid) < arrival(ask) { Side::Sell } else { Side::Buy };
+                fills.push(Fill {
+                    buy_id: bid.id,
+                    sell_id: ask.id,
+                    buyer: bid.account.clone(),
+                    seller: ask.account.clone(),
+                    item: bid.item,
+                    quantity: take,
+                    price: found.price,
+                    taker,
+                });
+                self.buys[bid_index].remaining -= take;
+                self.sells[ask_index].remaining -= take;
+            }
+        }
+        for gone in self.buys.iter().chain(self.sells.iter()).filter(|order| order.remaining == 0) {
+            self.arrivals.remove(&gone.id);
+        }
+        self.buys.retain(|order| order.remaining > 0);
+        self.sells.retain(|order| order.remaining > 0);
+        fills
     }
 
     /// Resting depth for one side: (price, total qty), best first.
@@ -215,7 +282,7 @@ impl Book {
             price,
             seq,
         };
-        let fills = self.take_as_taker(&mut incoming, kept_apart);
+        let fills = if self.batch { Vec::new() } else { self.take_as_taker(&mut incoming, kept_apart) };
         let rests = incoming.remaining > 0;
         if rests {
             self.rest(incoming);
@@ -333,7 +400,7 @@ impl Book {
     pub fn relist_matching(&mut self, order: Order, kept_apart: &dyn Fn(&str, &str) -> bool) -> Vec<Fill> {
         self.next_seq = self.next_seq.max(order.seq.saturating_add(1));
         let mut incoming = order;
-        let fills = self.take_as_taker(&mut incoming, kept_apart);
+        let fills = if self.batch { Vec::new() } else { self.take_as_taker(&mut incoming, kept_apart) };
         if incoming.remaining > 0 {
             self.rest(incoming);
         }
@@ -350,6 +417,9 @@ impl Book {
     /// pairs rest crossed.
     pub fn uncross(&mut self, kept_apart: &dyn Fn(&str, &str) -> bool) -> Vec<Fill> {
         let mut fills = Vec::new();
+        if self.batch {
+            return fills;
+        }
         loop {
             let mut pair: Option<(usize, usize)> = None;
             'bids: for (bid_index, bid) in self.buys.iter().enumerate() {

@@ -177,6 +177,8 @@ pub(crate) struct Engine {
     pub(crate) timeout_streak: HashMap<String, u32>,
     /// Gifts to the market makers, deals of their own kind (`funding_gifts`).
     pub(crate) gifts: crate::funding_gifts::GiftBook,
+    /// Grouped-auction modes and pending walks (`market_auction`).
+    pub(crate) auction: crate::market_auction::AuctionState,
 }
 
 impl Engine {
@@ -210,6 +212,7 @@ impl Engine {
             timeout_streak: HashMap::new(),
             patience: HashMap::new(),
             gifts: Default::default(),
+            auction: Default::default(),
         }
     }
 

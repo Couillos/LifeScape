@@ -2071,3 +2071,38 @@ tant qu'il reste proche, une ligne loin devant fait obtenir son outil
 (collant) se compare aussi à la meilleure ligne toutes classes
 (`brain_train`). Les montées en cours se revoient au prochain tirage.
 Hors périmètre : le choix d'argent (`money_pick`) garde l'ordre strict.
+
+## 2026-11-21 — Marché : valeur propre, enchère groupée, ancrage au prix moyen (lot 3, B1 à B5)
+
+Constat live 2026-11-21 : 9 700 ordres créés et 9 000 annulés par heure pour
+689 échanges ; 21 % des échanges à 1 pièce sur 24 h ; 66 offres « gear » sur
+l'amulette de pouvoir de 1 740 à 2,6 M, montées jusqu'au portefeuille.
+Décisions (aucun plancher ni plafond de prix de référence : l'offre et la
+demande seules ; la limite B1 est la valeur PROPRE de l'acheteur) :
+- B1 : plafond d'un équipement = `min(part de portefeuille du plan,
+  own_value)` ; `own_value = taux de travail (pièces/tick, valeur du temps
+  D1) × hausse relative du score de style × GEAR_VALUE_HORIZON_TICKS`
+  (360 000 ticks, la moitié de la fenêtre de 12 h de mesure du taux). Un
+  intrant garde sa réserve dérivée (`derived_demand::obtain_ceiling`,
+  déjà en place) ; le portefeuille ne borne plus que ce que les pièces
+  libres paient. Le plafond persisté est réécrit à chaque passe du
+  propriétaire (`set_order_ceiling`).
+- B3 : mode enchère quand le temps moyen entre deux échanges (8 derniers,
+  max avec le temps depuis le dernier) dépasse 2 000 ticks (la fenêtre de
+  marche la plus lente) ; retour en continu à 1 000 ticks ou moins (deux
+  fois plus fréquent) ; entre les deux, le mode reste (hystérésis). Moins de
+  deux échanges connus : enchère.
+- B2 : toutes les 6 000 ticks (trois fenêtres lentes, l'ancienne attente de
+  fill) un prix unique par objet en enchère : celui qui échange le plus
+  d'unités, le milieu (arrondi bas) de l'intervalle des prix qui atteignent
+  ce maximum ; priorité prix puis ancienneté ; jamais un compte contre
+  lui-même ni une paire en refroidissement. Entre deux enchères le carnet de
+  l'objet n'apparie rien (`Book::set_batch`) ; la marche de 10 % ne joue
+  qu'une fois, juste après une enchère, pour les ordres restés au carnet.
+- B4 : la marche s'ancre sur le prix moyen pondéré par le volume des
+  échanges réglés des 36 000 derniers ticks (au plus 50, ceux du compte
+  exclus), à la place du dernier prix échangé (tirage à mi-chemin gardé).
+- B5 : pas = écart relatif au prix moyen arrondi au pour cent supérieur,
+  borné [1 % ; 10 %] ; sans prix moyen 10 %.
+Rejeté : seuil brut d'échanges par heure ; plafond de marché sur les
+offres ; déplacer les ordres pendant l'attente d'une enchère.

@@ -36,6 +36,9 @@ pub const SELL_CAP: i64 = i64::MAX / 4;
 #[derive(Clone, Debug)]
 pub struct QuoteBounds {
     pub account: String,
+    /// Object of the order (an auction object's orders walk only after
+    /// its auction, `market_auction`).
+    pub item: i64,
     pub sell: bool,
     pub floor: i64,
     pub ceiling: i64,
@@ -85,6 +88,7 @@ impl QuoteBounds {
         let window = concession::window_ticks(horizon_ticks);
         QuoteBounds {
             account: row.account.clone(),
+            item: row.item_id,
             sell,
             floor,
             ceiling,
@@ -188,6 +192,7 @@ pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i6
     let wall = wall_now();
     Some(QuoteBounds {
         account: account.to_string(),
+        item,
         sell,
         floor,
         ceiling,
@@ -214,7 +219,7 @@ fn resting(row: &lifescape_store::Order) -> bool {
 /// The concession window of one resting order (pure): what it sees at
 /// daemon wall `wall` with the measured tick `tick_ms`.
 #[allow(clippy::too_many_arguments)]
-pub fn window_of(bounds: &QuoteBounds, row_price: i64, filled: bool, wall: f64, tick_ms: f64, public: Option<i64>, best_opposite: Option<i64>, patience: f64) -> Window {
+pub fn window_of(bounds: &QuoteBounds, row_price: i64, filled: bool, wall: f64, tick_ms: f64, anchor: Option<i64>, best_opposite: Option<i64>, patience: f64) -> Window {
     let elapsed = ((wall - bounds.curve_start_wall).max(0.0) * 1000.0 / tick_ms.max(1.0)) as u64;
     Window {
         sell: bounds.sell,
@@ -228,7 +233,7 @@ pub fn window_of(bounds: &QuoteBounds, row_price: i64, filled: bool, wall: f64, 
         elapsed_ticks: elapsed,
         window_ticks: bounds.patience_ticks,
         filled,
-        public_price: public,
+        anchor_price: anchor,
         own_fill: bounds.own_fill,
         best_opposite,
         pressed: bounds.urgency() == Urgency::Pressed,
@@ -242,11 +247,23 @@ pub fn window_of(bounds: &QuoteBounds, row_price: i64, filled: bool, wall: f64, 
 /// an amend; the amends of a pass share one store transaction and the
 /// pass logs one summary line.
 pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize {
+    // B2: an auction object's orders do not walk between two auctions;
+    // after one, the orders it left unserved walk once (`pending`).
+    let (auctioned, pending) = {
+        let mut engine = service.lock_engine();
+        (engine.auction.items.clone(), std::mem::take(&mut engine.auction.walk_items))
+    };
     let due: Vec<(i64, QuoteBounds)> = service
         .lock_engine()
         .quote_bounds
         .iter()
-        .filter(|(_, bounds)| wall - bounds.last_change_wall >= bounds.patience_ticks as f64 * tick_ms.max(1.0) / 1000.0)
+        .filter(|(_, bounds)| {
+            if auctioned.contains(&bounds.item) {
+                pending.contains(&bounds.item)
+            } else {
+                wall - bounds.last_change_wall >= bounds.patience_ticks as f64 * tick_ms.max(1.0) / 1000.0
+            }
+        })
         .map(|(order, bounds)| (*order, bounds.clone()))
         .collect();
     if due.is_empty() {
@@ -254,7 +271,7 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
     }
     let batch = service.lock_store().begin_batch().unwrap_or(false);
     let (mut moved, mut parked, mut refused) = (0usize, 0usize, 0usize);
-    let mut public: HashMap<i64, Option<i64>> = HashMap::new();
+    let mut recent: HashMap<i64, Vec<lifescape_store::prices::SettledFill>> = HashMap::new();
     for (order, mut bounds) in due {
         let row = service.lock_store().get_order(order).ok().flatten();
         let Some(row) = row.filter(resting) else {
@@ -274,10 +291,10 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
             None => account_patience(service, &bounds.account),
         };
         bounds.price_patience = Some(patience);
-        let traded = *public.entry(row.item_id).or_insert_with(|| {
-            let reference = service.reference_lot(row.item_id);
-            reference.traded.then_some(reference.price)
-        });
+        // B4: the volume-weighted mean of the item's recent settled
+        // trades, the asking account's own fills left out.
+        let fills = recent.entry(row.item_id).or_insert_with(|| crate::market_auction::recent_fills(service, row.item_id, tick_ms));
+        let traded = crate::market_auction::anchor_for(fills, &bounds.account);
         let (bid, ask) = service.lock_engine().books.get(&row.item_id).map(|book| book.best()).unwrap_or((None, None));
         let opposite = if bounds.sell { bid } else { ask };
         let decision = concession::step(&window_of(&bounds, row.price, filled, wall, tick_ms, traded, opposite, patience));
@@ -566,6 +583,13 @@ fn amend_resting(service: &MarketService, account: &str, row: &lifescape_store::
         service.lock_engine().quote_bounds.remove(&order);
         order = reply.get("order").as_i64().unwrap_or(order);
         price = next;
+    }
+    // The persisted ceiling follows the owner's limit (B1): a restart
+    // adopts the bid with it, never with a stale wallet-sized one.
+    if order != row.order_id || row.ceiling != Some(ceiling) {
+        if let Err(error) = service.lock_store().set_order_ceiling(order, ceiling) {
+            crate::logln!("market-reprice: ceiling of order {order} not kept: {error}");
+        }
     }
     let mut engine = service.lock_engine();
     let bounds = engine.quote_bounds.entry(order).or_insert_with(|| QuoteBounds::for_row(row, price, ceiling));

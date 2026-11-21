@@ -39,6 +39,36 @@ impl Store {
         Ok(fills)
     }
 
+    /// Clocks of the item's newest `limit` fills, newest first (B3: the
+    /// mean time between two trades; one indexed `LIMIT` read).
+    pub fn fill_clocks(&self, item_id: i64, limit: i64) -> Result<Vec<i64>, Error> {
+        let mut statement = self.connection.prepare_cached("SELECT clock FROM executions WHERE item_id = ?1 ORDER BY clock DESC, exec_id DESC LIMIT ?2")?;
+        let mut rows = statement.query(rusqlite::params![item_id, limit.max(0)])?;
+        let mut clocks = Vec::new();
+        while let Some(row) = rows.next()? {
+            clocks.push(row.get::<_, i64>(0)?);
+        }
+        Ok(clocks)
+    }
+
+    /// The item's newest `limit` settled deals since `since_clock`
+    /// (store clock), newest first, with their parties (B4: the anchor
+    /// leaves out the asking account's own fills; executions carry no
+    /// account). Indexed on `schema::DEAL_ITEM_INDEX`.
+    pub fn settled_fills_since(&self, item_id: i64, since_clock: i64, limit: i64) -> Result<Vec<SettledFill>, Error> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT price, quantity, buyer, seller FROM deals \
+             WHERE item_id = ?1 AND status = 'settled' AND updated_clock >= ?2 \
+             ORDER BY updated_clock DESC LIMIT ?3",
+        )?;
+        let mut rows = statement.query(rusqlite::params![item_id, since_clock, limit.max(0)])?;
+        let mut fills = Vec::new();
+        while let Some(row) = rows.next()? {
+            fills.push(SettledFill { price: row.get(0)?, quantity: row.get(1)?, buyer: row.get(2)?, seller: row.get(3)? });
+        }
+        Ok(fills)
+    }
+
     /// Open (non-dormant) levels of one side of an item, best first,
     /// (price, remaining), until `units` are covered or `IMPACT_ROWS`
     /// orders were read (indexed on `idx_orders_item_status`, `LIMIT`).
@@ -80,6 +110,15 @@ impl Store {
         )?;
         Ok(statement.query_row(rusqlite::params![item_id, from_clock, to_clock], |row| row.get::<_, i64>(0))?)
     }
+}
+
+/// One settled deal as the anchor reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SettledFill {
+    pub price: i64,
+    pub quantity: i64,
+    pub buyer: String,
+    pub seller: String,
 }
 
 #[cfg(test)]

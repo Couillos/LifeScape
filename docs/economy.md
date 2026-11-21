@@ -105,6 +105,58 @@ tôt, prix final 17 à 27 % sous l'équilibre des limites tirées (les
 vendeurs vendent sous leur coût) ; un excès de butin descend sous toutes
 les valeurs de garde.
 
+Lot 3 marché (2026-11-21, plan progression B1 à B5, `decisions.md`) :
+constat live, 9 700 ordres créés et 9 000 annulés par heure pour 689
+échanges, 21 % des échanges à 1 pièce sur 24 h, 66 offres « gear » sur
+l'amulette de pouvoir de 1 740 à 2,6 M. Aucun plancher ni plafond de
+marché : seule la valeur PROPRE de l'acheteur borne sa montée.
+- B1 (`planner::gear_plan::own_value`, `GearWant::own_ceiling`,
+  `brain_gear`) : plafond d'un équipement = `min(part de portefeuille du
+  plan, taux × hausse × horizon)`, `taux` = valeur du temps du bot
+  (`brain_d17::coin_rate`, pièces par tick), `hausse` = gain de score de
+  style de la pièce / (score porté + gain), en millièmes
+  (`uplift_permille`), `horizon` = `GEAR_VALUE_HORIZON_TICKS` = 360 000
+  ticks (moitié de la fenêtre de 12 h du taux). Exemple : 0,3 pièce/tick,
+  3 % → 3 240 pièces, pas 2,6 M. Intrants : la réserve dérivée
+  (`derived_demand::obtain_ceiling`) borne déjà le plafond. Le plafond
+  persisté (colonne `ceiling`) est réécrit à chaque passe du propriétaire
+  (`Store::set_order_ceiling`, `market_reprice::amend_resting`) : une
+  offre existante redescend à la nouvelle limite et un redémarrage
+  l'adopte avec elle. Une offre de compte hors ligne garde son plafond
+  persisté jusqu'à sa prochaine passe.
+- B3 (`lifescape_market::auction::next_mode`, `trade_gap_ticks`,
+  `market_auction::auction_round`) : écart moyen entre les 8 derniers
+  échanges d'un objet (au moins le temps depuis le dernier) ; au-dessus
+  de `ENTER_GAP_TICKS` = 2 000 ticks (fenêtre de marche la plus lente) :
+  enchère ; à `EXIT_GAP_TICKS` = 1 000 ticks (deux fois plus fréquent) ou
+  moins : continu ; entre les deux le mode reste. Moins de deux échanges :
+  enchère. Mémoire du démon, remesuré au premier tour après redémarrage.
+- B2 (`auction::clearing`, `Book::set_batch` / `run_auction`,
+  `MarketService::auction_books`) : toutes les `AUCTION_PERIOD_TICKS` =
+  6 000 ticks (trois fenêtres lentes ; l'ancienne attente de fill), chaque
+  objet en enchère s'échange à UN prix : celui qui fait échanger le plus
+  d'unités (acheteurs au-dessus, vendeurs au-dessous), départage = milieu,
+  arrondi bas, de l'intervalle des prix d'ordre qui atteignent ce
+  maximum ; meilleurs prix puis plus anciens d'abord ; jamais un compte
+  contre lui-même ni une paire en refroidissement. Chaque paire devient un
+  deal (même rendez-vous). Entre deux enchères le carnet de l'objet
+  ne croise rien (un ordre qui croise attend) et ses ordres ne marchent
+  pas ; juste après une enchère, les ordres restés au carnet marchent
+  UNE fois (la marche de 10 %, un vendeur sans acheteur ou l'inverse).
+- B4 (`market_auction::recent_fills`, `anchor_for`) : la marche s'ancre
+  sur le prix moyen pondéré par le volume des échanges réglés des
+  `ANCHOR_WINDOW_TICKS` = 36 000 derniers ticks (au plus 50, les échanges
+  du compte exclus : table des deals, index `idx_deals_item_clock` créé à
+  l'ouverture sans changer la version du schéma), à la place du dernier
+  prix échangé ; le tirage à mi-chemin vers cette ancre reste. Un échange
+  isolé à 1 pièce parmi dix à 50 : ancre 46.
+- B5 (`concession::step_pct`) : pas = écart relatif à l'ancre arrondi au
+  pour cent supérieur, borné [`MIN_WALK_PCT` 1 ; `WALK_PCT` 10] (au moins
+  une pièce) ; sans ancre 10 %.
+Simulation sur la base du 2026-11-21 : 157 objets avec ordres au carnet,
+151 en enchère groupée, 6 en continu (13 jamais ou une seule fois
+échangés) ; 1 543 des 1 572 ordres au repos sont dans une enchère.
+
 Pénurie du marché, jamais une interdiction (2026-11-19) : un achat
 resté sans vendeur ou refusé par le marché n'interdit aucune compétence
 (`planner::market_shortfall`, `brain_succession::close_goal_history` ;

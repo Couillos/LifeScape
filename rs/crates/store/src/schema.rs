@@ -11,12 +11,17 @@ pub const SCHEMA_VERSION: u32 = 10;
 /// `work_gains`; plan équilibre lot 1).
 pub(crate) const REPORT_CLOCK_INDEX: &str = "idx_task_reports_clock";
 
+/// Index of the deals by object, status and update clock (B4, lot 3
+/// marché: the volume-weighted anchor reads an object's recent settled
+/// deals, parties included, `Store::settled_fills_since`).
+pub(crate) const DEAL_ITEM_INDEX: &str = "idx_deals_item_clock";
+
 /// Indexes every open ensures after the migrations: `IF NOT EXISTS`
 /// (idempotent, a no-op once built), no data rewritten and NO version
 /// bump, so a binary without them still opens the file (a reverted lot
 /// never meets a newer schema) and no other step's number is taken.
 fn ensured_indexes() -> String {
-    format!("CREATE INDEX IF NOT EXISTS {REPORT_CLOCK_INDEX} ON task_reports(created_clock);")
+    format!("CREATE INDEX IF NOT EXISTS {REPORT_CLOCK_INDEX} ON task_reports(created_clock); CREATE INDEX IF NOT EXISTS {DEAL_ITEM_INDEX} ON deals(item_id, status, updated_clock);")
 }
 
 pub(crate) const MIGRATION_V1: &str = "

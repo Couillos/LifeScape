@@ -328,7 +328,7 @@ fn reprice(engine: &mut Engine, traders: &[Trader], model: Model, tick: u64) {
                     elapsed_ticks: tick - live.curve_start,
                     window_ticks: live.window,
                     filled,
-                    public_price: reference.traded.then_some(reference.price),
+                    anchor_price: reference.traded.then_some(reference.price),
                     own_fill: live.own_fill,
                     best_opposite: opposite,
                     pressed: trader.urgency == Urgency::Pressed,

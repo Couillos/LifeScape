@@ -5,6 +5,7 @@
 //! `lifescape-orchestrator`. Everything here works on caller-supplied
 //! values, so tests run with fixed seeds and no live game.
 
+pub mod auction;
 pub mod book;
 pub mod concession;
 pub mod deals;

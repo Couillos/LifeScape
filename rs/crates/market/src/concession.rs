@@ -46,6 +46,9 @@ pub const ZIP_STEP_PCT: i64 = 5;
 /// Walk of an unfilled order per window, in percent (at least a coin):
 /// a seller down, a buyer up (user 2026-11-19, the market makers' rate).
 pub const WALK_PCT: i64 = 10;
+/// Smallest walk step, in percent, of an order resting on the mean price
+/// of the recent trades (B5, user plan lot 3 marché): see `step_pct`.
+pub const MIN_WALK_PCT: i64 = 1;
 /// Share of the gap to a public traded price a quote closes per window
 /// (ZIP learning rate on public fills).
 pub const PUBLIC_PULL: f64 = 0.5;
@@ -148,8 +151,10 @@ pub struct Window {
     pub window_ticks: u64,
     /// The order filled (even partly) since the last window.
     pub filled: bool,
-    /// Current traded price of the object (public prints), if traded.
-    pub public_price: Option<i64>,
+    /// Volume-weighted mean price of the object's recent trades
+    /// (`auction::anchor_price`, B4), if any: the pull's target and the
+    /// size of the step (`step_pct`).
+    pub anchor_price: Option<i64>,
     /// The order's own last fill price (its ZIP back-off already read
     /// it): a public price equal to it is its own print, never a pull.
     pub own_fill: Option<i64>,
@@ -206,13 +211,30 @@ pub fn zip_backoff(sell: bool, current: i64, limit: i64) -> i64 {
     }
 }
 
+/// Walk step in percent (B5): proportional to the relative gap between
+/// the order's price and the mean price of the recent trades, in
+/// `[MIN_WALK_PCT, WALK_PCT]` (a 1 % gap steps 1 %, a 4 % gap 4 %, 10 %
+/// or more steps 10 %); without a usable mean price, `WALK_PCT`.
+pub fn step_pct(current: i64, anchor: Option<i64>) -> i64 {
+    let Some(anchor) = anchor.filter(|price| *price >= 1) else {
+        return WALK_PCT;
+    };
+    let gap_pct = ((current.max(1) - anchor).abs() * 100 + anchor - 1) / anchor;
+    gap_pct.clamp(MIN_WALK_PCT, WALK_PCT)
+}
+
 /// The 10 % walk of an unfilled order from `current`: a seller `WALK_PCT`
 /// down (at least a coin, never under 1), a buyer `WALK_PCT` up (at
 /// least a coin; its ceiling is the caller's bound).
 pub fn walk(sell: bool, current: i64) -> i64 {
+    walk_by(sell, current, WALK_PCT)
+}
+
+/// `walk` with a step of `pct` percent (`step_pct`).
+pub fn walk_by(sell: bool, current: i64, pct: i64) -> i64 {
     let current = current.max(1);
     // Rounded up: 68 -> 61 like a maker's ask (`maker::quote`).
-    let moved = ((current * WALK_PCT + 99) / 100).max(1);
+    let moved = ((current * pct + 99) / 100).max(1);
     if sell {
         (current - moved).max(1)
     } else {
@@ -230,7 +252,8 @@ pub fn step(window: &Window) -> Step {
         let opening = zip_backoff(sell, current, limit);
         return if opening == current { Step::Hold } else { Step::Restart { opening } };
     }
-    let walked = if sell { walk(true, current) } else { walk(false, current).min(limit) };
+    let pct = step_pct(current, window.anchor_price);
+    let walked = if sell { walk_by(true, current, pct) } else { walk_by(false, current, pct).min(limit) };
     // M4: the opposite best inside the limit is taken when pressed, or
     // when the next walk reaches it anyway.
     if let Some(opposite) = window.best_opposite.filter(|price| *price >= 1 && within_limit(sell, *price, limit)) {
@@ -240,7 +263,7 @@ pub fn step(window: &Window) -> Step {
         }
     }
     let mut target = walked;
-    if let Some(public) = window.public_price.filter(|price| *price >= 1 && Some(*price) != window.own_fill) {
+    if let Some(public) = window.anchor_price.filter(|price| *price >= 1 && Some(*price) != window.own_fill) {
         // Others traded on the conceding side, inside the limit: pull
         // halfway toward that print (public data only, D22).
         let conceding = if sell { public < current } else { public > current };
