@@ -625,12 +625,16 @@ fn a_keeper_short_of_the_need_is_not_the_first_seller() {
     resolve_ready(&mut short, &ctx);
     assert_ne!(short.method.as_deref(), Some("shop:buy"), "2 units a window for a need of 70: {:?}", short.alternatives);
     // No ask at all (the fallback merchant, rule 3): still not the
-    // keeper, a resting bid.
+    // keeper, a bid. The Edgeville dungeon hill giants drop sapphires
+    // (a drop farm since user 2026-11-21): production with a standing
+    // bid beside it (D-B, rule 2) rather than a resting bid alone.
     let mut no_ask = ctx.clone();
     no_ask.best_ask = None;
     let mut bare = nodes[0].clone();
     resolve_ready(&mut bare, &no_ask);
-    assert_eq!(bare.method.as_deref(), Some("market:buy"), "no seller, a short keeper: bid {:?}", bare.alternatives);
+    assert_ne!(bare.method.as_deref(), Some("shop:buy"), "no seller, a short keeper: {:?}", bare.alternatives);
+    assert_eq!(bare.method.as_deref(), Some("farm:uncut_sapphire"), "the hill giants' drop farm: {:?}", bare.alternatives);
+    assert!(bare.alternatives.iter().any(|alt| alt.method == "market:bid"), "a standing bid beside it: {:?}", bare.alternatives);
     let mut covered = ctx.clone();
     covered.shop_window_units = Some(100);
     resolve_ready(&mut nodes[0], &covered);

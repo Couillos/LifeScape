@@ -35,11 +35,10 @@ pub const TRAINING_AMORTIZE_LOTS: f64 = 4.0;
 /// Units the bot alchs past what the market absorbs (one inventory).
 pub const ALCH_LOT: i64 = crate::market_fit::SALE_LOT_MIN;
 
-/// Ticks to walk from `from` to `to` (surface tiles, Manhattan).
+/// Ticks to walk from `from` to `to` (surface tiles, Manhattan; an
+/// underground end through its entrance, `method_rate_trip::site_walk_tiles`).
 pub fn walk_ticks(from: (i64, i64, i64), to: (i64, i64, i64)) -> f64 {
-    let (from_x, from_z, _) = lifescape_gamedata::access::surface_of(from.0, from.1, from.2);
-    let (to_x, to_z, _) = lifescape_gamedata::access::surface_of(to.0, to.1, to.2);
-    ((from_x - to_x).abs() + (from_z - to_z).abs()) as f64 * WALK_TICKS_PER_TILE
+    crate::method_rate_trip::site_walk_tiles(from, to) as f64 * WALK_TICKS_PER_TILE
 }
 
 /// Where one leg happens for this bot and the coins of the trip there

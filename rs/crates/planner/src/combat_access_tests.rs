@@ -283,3 +283,66 @@ fn a_method_full_everywhere_is_full() {
     let rich = Fare { wallet: 10_000, free_pass: true };
     assert_eq!(super::pick_site_crowded(method, 99, Some((3244, 3165, 0)), rich, &miner(99), &crowd), SitePick::Full);
 }
+
+const DRAYNOR: (i64, i64, i64) = (3092, 3245, 0);
+
+/// User 2026-11-21: the brain fights in the underground camps the
+/// navigation reaches. The lesser demons are in reach from their floor
+/// (80) and the volcano's six are sites behind the boat alone (offline
+/// `orchestrator route 3092 3245 0 2837 9565 0 --paid`: 6 segments, cost
+/// 408, the boat then the rope); never Elvarg's lair past the one-way
+/// secret door. The free Wilderness demons come first (a fare never
+/// beats a free site); once they are cooled, a fighter of combat 90
+/// with the fare sails, without it the round trip is the need.
+#[test]
+fn a_fighter_sails_to_the_volcano_demons() {
+    let method = "fight:melee/lesser_demons";
+    let floor = lifescape_gamedata::combat_spots::risk_floor("lesser_demons").expect("a risk camp") as u8;
+    let reach = min_combat_for_method(method);
+    assert!(reach >= floor && reach <= 90, "lesser demons in reach from {floor}: {reach}");
+    let volcano = |site: (i64, i64, i64)| site.2 == 0 && (2820..=2850).contains(&site.0) && (9548..=9570).contains(&site.1);
+    let table = super::method_site_table(method).expect("demon sites");
+    let volcano_rows: Vec<_> = table.iter().filter(|row| volcano(row.site)).collect();
+    assert_eq!(volcano_rows.len(), 6, "the volcano's six");
+    for row in &volcano_rows {
+        assert!(row.open_ever && row.required <= 90, "{:?} open at 90: {:?} needs {}", row.site, row.gates, row.required);
+        assert!(matches!(row.gates.as_slice(), [lifescape_gamedata::access::Gate::Boat { area: "karamja", .. }]), "{:?}: {:?}", row.site, row.gates);
+    }
+    assert!(table.iter().all(|row| row.site.1 < 9600 || row.site.1 > 9700), "never a lair spawn: {:?}", table.iter().map(|row| row.site).collect::<Vec<_>>());
+    let rich = Fare { wallet: 1_000, free_pass: false };
+    let free: Vec<(i64, i64, i64)> = table.iter().filter(|row| !volcano(row.site)).map(|row| row.site).collect();
+    match super::pick_site_avoiding(method, 90, Some(DRAYNOR), rich, &Pass::default(), &[], &free) {
+        SitePick::Boat { site, toll: false } => assert!(volcano(site), "a volcano demon: {site:?}"),
+        other => panic!("the volcano demons are open with the fare: {other:?}"),
+    }
+    assert_eq!(super::pick_site_avoiding(method, 90, Some(DRAYNOR), broke(), &Pass::default(), &[], &free), SitePick::Fare(60), "the boat both ways is the need");
+    assert!(matches!(pick_site_gated(method, 70, Some(DRAYNOR), rich, &Pass::default()), SitePick::Needs(level) if level >= floor), "below the floor: a combat need");
+}
+
+/// The Edgeville dungeon giants (trapdoor, no key needed) and the ice
+/// dungeon (Mudskipper Point ladder) are open fight sites; a drop farm
+/// hunts there too.
+#[test]
+fn routed_dungeon_camps_are_open_fight_sites() {
+    for (method, camp) in [("fight:melee/hill_giants", (3110, 9845, 0)), ("fight:melee/ice_dungeon", (3053, 9576, 0))] {
+        let table = super::method_site_table(method).expect("sites");
+        let row = table.iter().find(|row| row.site == camp).unwrap_or_else(|| panic!("{method}: {camp:?} is a site"));
+        assert!(row.open_ever && row.gates.is_empty(), "{method} {camp:?}: {:?}", row.gates);
+    }
+    match pick_site_gated("fight:melee/hill_giants", 60, Some((3094, 3491, 0)), broke(), &Pass::default()) {
+        SitePick::At(site) => assert!(site.1 >= 6400, "from Edgeville the dungeon giants are nearest: {site:?}"),
+        other => panic!("hill giants are open at 60: {other:?}"),
+    }
+}
+
+/// Gathers never go down: an underground rock outside the Mining Guild
+/// keeps its gate (the Dwarven Mine iron is no site).
+#[test]
+fn underground_mining_stays_refused() {
+    for ore in ["iron_ore", "coal", "mithril_ore", "copper_ore"] {
+        let table = super::method_site_table(&format!("gather:mining/{ore}")).expect("rocks");
+        let below: Vec<_> = table.iter().filter(|row| row.site.1 >= 6400 && !row.gates.iter().any(|gate| matches!(gate, lifescape_gamedata::access::Gate::Guild { .. }))).collect();
+        assert!(below.iter().all(|row| !row.open_ever), "{ore}: {:?}", below.iter().filter(|row| row.open_ever).map(|row| row.site).collect::<Vec<_>>());
+    }
+    assert!(super::method_site_table("gather:mining/iron_ore").expect("iron").iter().any(|row| row.site.1 >= 6400), "the Dwarven Mine iron exists, shut");
+}

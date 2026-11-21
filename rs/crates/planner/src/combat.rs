@@ -334,8 +334,10 @@ pub fn site_loads(method: &str, loads: i64) -> i64 {
 }
 
 /// Rows of one method, computed once from the data: each site's combat
-/// requirement (read at its surface tile for an underground guild) and
-/// its gates.
+/// requirement (read at its surface tile for an underground guild, at
+/// the spawn for an underground camp, whose bank `site_banks` prices
+/// through the ladders) and its gates (`access::fight_gates_at` for a
+/// fight or a drop farm).
 pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
     // A 100 % market lot works at its recipe's stations (`trade_craft`).
     let method = crate::trade_craft::inner(method);
@@ -353,19 +355,32 @@ pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
     // (foes 82) read "in reach" at combat 59 through one site whose own
     // danger said 15.
     let floor = if kind == "fight" { lifescape_gamedata::combat_spots::risk_floor(&resource) } else { None };
+    // That floor is the price of its foes (user 2026-11-21): their own
+    // aggression bound (twice their level, 165 for the volcano demons)
+    // never counts at their sites, like the ladder's `cluster_requirement`.
+    let risk_foes: Option<&'static [&'static str]> = floor.and_then(|_| lifescape_gamedata::combat_spots::by_key(&resource)).map(|spot| spot.npc_names);
     let floor = floor.map(|level| level.clamp(3, i64::from(lifescape_gamedata::danger::NEVER) - 1) as u8).unwrap_or(3);
+    // A fight or a drop farm goes underground where the navigation
+    // reaches the camp (user 2026-11-21, `access::fight_gates_at`: the
+    // volcano demons keep the boat, the Edgeville dungeon and the ice
+    // dungeon open); gathers, stations and curses keep every gate.
+    let hunts = is_fight_method(method);
     let table = method_site_list(method).map(|sites| {
         std::sync::Arc::new(
             sites
                 .into_iter()
                 .map(|(x, z, level)| {
                     let (surface_x, surface_z, surface_level) = lifescape_gamedata::access::surface_of(x, z, level);
-                    let gates = lifescape_gamedata::access::gates_at(x, z, level);
+                    let gates = if hunts { lifescape_gamedata::access::fight_gates_at(x, z, level) } else { lifescape_gamedata::access::gates_at(x, z, level) };
                     // Karamja is part of the map for every method (user
                     // 2026-11-16): the boat is a fare like the toll, the
                     // nav and the script walker pay it from the pack.
                     let open_ever = !gates.iter().any(lifescape_gamedata::access::impassable);
-                    let required = lifescape_gamedata::danger::kind_site_requirement(kind, surface_x, surface_z, surface_level).max(floor);
+                    let required = match risk_foes {
+                        Some(foes) => lifescape_gamedata::danger::camp_site_requirement(foes, surface_x, surface_z, surface_level),
+                        None => lifescape_gamedata::danger::kind_site_requirement(kind, surface_x, surface_z, surface_level),
+                    }
+                    .max(floor);
                     SiteRow { site: (x, z, level), required, gates, open_ever }
                 })
                 .collect::<Vec<_>>(),
@@ -574,13 +589,14 @@ pub fn pick_site_weighed(
         return SitePick::Cooled;
     }
     let distance = |site: &(i64, i64, i64)| {
-        // Underground sites (the Mining Guild, the Dwarven Mine) read
-        // from their surface entrance, like the bot's own position.
-        let (site_x, site_z, site_level) = lifescape_gamedata::access::surface_of(site.0, site.1, site.2);
+        // Underground sites (the Mining Guild, a dungeon camp) read from
+        // their surface entrance, like the bot's own position
+        // (`method_rate_trip::site_walk_tiles`).
+        let (_, _, site_level) = lifescape_gamedata::access::surface_of(site.0, site.1, site.2);
         let walk = match position {
             Some((x, z, level)) => {
-                let (from_x, from_z, from_level) = lifescape_gamedata::access::surface_of(x, z, level);
-                (site_x - from_x).abs() + (site_z - from_z).abs() + if site_level == from_level { 0 } else { 1000 }
+                let (_, _, from_level) = lifescape_gamedata::access::surface_of(x, z, level);
+                crate::method_rate_trip::site_walk_tiles((x, z, level), *site) + if site_level == from_level { 0 } else { 1000 }
             }
             None => 0,
         };

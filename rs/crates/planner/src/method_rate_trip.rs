@@ -64,6 +64,33 @@ pub fn bank_walk_tiles(site: (i64, i64, i64)) -> Option<i64> {
     links().iter().filter_map(|link| surface_bank_walk(link.above).map(|above| chebyshev(site, link.below) + above)).min()
 }
 
+/// Surface tile an underground `tile` climbs to (its nearest link's top)
+/// and the tiles walked to that link; a surface tile is its own.
+fn climb(tile: (i64, i64, i64)) -> ((i64, i64, i64), i64) {
+    if !is_underground(tile.1) {
+        return (tile, 0);
+    }
+    links().iter().map(|link| (link.above, chebyshev(tile, link.below))).min_by_key(|(_, tiles)| *tiles).unwrap_or((tile, 0))
+}
+
+/// Walk estimate in tiles (Manhattan) between two tiles for a site pick
+/// or a leg's walk: a guild interior reads at its door
+/// (`access::surface_of`); an underground end climbs through its nearest
+/// link (`underground::links`: the volcano rope, the Edgeville trapdoor),
+/// never across the 6400-tile gap in a straight line; two underground
+/// ends of one area walk straight. Levels are the caller's business.
+pub fn site_walk_tiles(from: (i64, i64, i64), to: (i64, i64, i64)) -> i64 {
+    let (from, to) = (lifescape_gamedata::access::surface_of(from.0, from.1, from.2), lifescape_gamedata::access::surface_of(to.0, to.1, to.2));
+    let manhattan = |left: (i64, i64, i64), right: (i64, i64, i64)| (left.0 - right.0).abs() + (left.1 - right.1).abs();
+    let ((from_top, from_climb), (to_top, to_climb)) = (climb(from), climb(to));
+    let via_surface = from_climb + manhattan(from_top, to_top) + to_climb;
+    if is_underground(from.1) && is_underground(to.1) {
+        via_surface.min(manhattan(from, to))
+    } else {
+        via_surface
+    }
+}
+
 /// Round-trip walk from `site` to the nearest F2P bank, in ticks.
 pub fn bank_round_trip(site: (i64, i64, i64)) -> Option<f64> {
     // Static banks and links: once per site (every prior of a banking
@@ -210,6 +237,20 @@ mod tests {
     fn underground_banks_through_its_ladder() {
         let guild = bank_round_trip((3044, 9753, 0)).expect("guild");
         assert!(guild > 40.0 && guild < 200.0, "{guild}");
+    }
+
+    /// User 2026-11-21: an underground camp is a site like another. The
+    /// volcano demons read from Karamja through the rope (2856,3168),
+    /// the Edgeville giants from Edgeville through the trapdoor, never
+    /// 6400 tiles away; two spawns of one dungeon walk straight.
+    #[test]
+    fn an_underground_site_walks_through_its_entrance() {
+        let volcano = super::site_walk_tiles((2856, 3170, 0), (2837, 9565, 0));
+        assert!(volcano < 60, "rope then 20 tiles: {volcano}");
+        let giants = super::site_walk_tiles((3094, 3491, 0), (3110, 9845, 0));
+        assert!(giants < 150, "Edgeville bank to the giants: {giants}");
+        assert_eq!(super::site_walk_tiles((3110, 9845, 0), (3113, 9831, 0)), 17, "one dungeon");
+        assert_eq!(super::site_walk_tiles((3222, 3218, 0), (3232, 3228, 0)), 20, "surface unchanged");
     }
 
     /// The essence trip is Aubury's teleport, not a walk from the mine.

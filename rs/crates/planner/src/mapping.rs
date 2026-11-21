@@ -422,8 +422,9 @@ pub(crate) fn is_fish(item: &str) -> bool {
 /// Combat spot whose NPCs drop `item` (`gamedata::combat_spots::drop_spots`):
 /// the weakest UNGATED one first; a spot behind the Al Kharid toll only
 /// when no ungated spot drops it (the site pick then budgets the fare
-/// and the launch carries `toll`). Never underground, behind a key or a
-/// boat (`kit::hunt::run_spot_with` refuses a bare key underground).
+/// and the launch carries `toll`). An underground camp counts through
+/// the spawns the navigation reaches (user 2026-11-21, after the surface
+/// ones); never behind a key or a boat.
 /// Live 2026-11-13: the first dropper by name sent "produce bones" to
 /// al_kharid_warriors across the fence and magic staffs to the moss
 /// giants. Only a spot the melee executor rates (`melee_ladder::RUNGS`):
@@ -497,7 +498,10 @@ mod tests {
     /// fence the brain never pays, and magic staffs sent a bare key to the
     /// moss giants underground (`run_spot_with` refuses both by design).
     /// A drop farm hunts the weakest ungated spot; a drop only gated spots
-    /// yield is no farm leg (market/shop answer instead).
+    /// yield is no farm leg (market/shop answer instead). User 2026-11-21:
+    /// an underground camp the navigation reaches is no gate (big bones
+    /// at the Edgeville dungeon hill giants); the moss giants' hall
+    /// behind the web stays out (no position, no rung).
     #[test]
     fn drop_farms_never_target_gated_spots() {
         let bones = Node::new("n9", NodeKind::ObtainItems { item: "bones".to_string(), count: 50 }, Vec::new(), 50);
@@ -505,8 +509,11 @@ mod tests {
         assert_eq!((script.as_str(), args.first().map(String::as_str)), ("melee", Some("chickens")), "got {args:?}");
         let staff = Node::new("n9", NodeKind::ObtainItems { item: "magic_staff".to_string(), count: 1 }, Vec::new(), 1);
         assert_eq!(map_method("farm:magic_staff", &staff, None), None, "only moss giants (underground) drop it");
+        let big = Node::new("n9", NodeKind::ObtainItems { item: "big_bones".to_string(), count: 10 }, Vec::new(), 10);
+        let (_, args) = map_method("farm:big_bones", &big, None).expect("hill giants drop big bones");
+        assert_eq!(args.first().map(String::as_str), Some("hill_giants"), "got {args:?}");
         for spot in lifescape_gamedata::combat_spots::all_spots() {
-            let gated = spot.access.is_some() || spot.entrance.is_some();
+            let gated = spot.access.is_some();
             for item in ["bones", "big_bones", "magic_staff", "bronze_axe", "feather", "cowhide", "raw_beef"] {
                 let node = Node::new("n9", NodeKind::ObtainItems { item: item.to_string(), count: 1 }, Vec::new(), 1);
                 if let Some((_, args)) = map_method(&format!("farm:{item}"), &node, None) {
