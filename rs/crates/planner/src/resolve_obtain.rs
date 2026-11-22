@@ -99,7 +99,10 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
             continue;
         }
         let Some(leg) = legs.iter().find(|leg| &leg.method == method) else { continue };
-        let est = cost_farm(count, ctx.yield_per_6000.max(1.0), ctx.trip_ticks);
+        let est = match ctx.leg_costs.iter().find(|known| &known.method == method) {
+            Some(own) => crate::cost::cost_leg(count, own, ctx.trip_ticks),
+            None => cost_farm(count, ctx.yield_per_6000.max(1.0), ctx.trip_ticks),
+        };
         let alt = Alternative { method: method.clone(), est_ticks: est, est_coins: 0 };
         priced.push(alt.clone());
         // A way behind an unfinished quest never launches: the quest is

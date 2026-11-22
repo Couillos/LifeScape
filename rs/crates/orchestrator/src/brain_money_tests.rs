@@ -320,3 +320,21 @@ fn a_trade_line_ranks_on_the_lot_the_bot_takes() {
     let poor = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 0.5, &|_| None, &guide_profit));
     assert!((poor[0].profit_6000 - 150.0 * 6000.0 / 750.0).abs() < 1e-6, "{}", poor[0].profit_6000);
 }
+
+/// Live 2026-11-22: ~10 bots picked the same waterrune spawn as a filler
+/// (517 runs a day) because the line read the whole spawn's rate. A ground
+/// line is worth the share one more bot gets (rate over bots there + 1).
+#[test]
+fn a_crowded_ground_spawn_line_is_shared() {
+    let rows = [row(Family::Farm, "ground:waterrune", 2400.0)];
+    let rows: Vec<&MoneyRow> = rows.iter().collect();
+    let sites: Vec<(i64, i64, i64)> = lifescape_planner::method_way::method_way("ground:waterrune").expect("way").1.sites;
+    let mut ctx = ReadyCtx::blind(0.5);
+    let none = |_: &str| 0.0;
+    let alone = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 0.5, &|_| None, &guide_profit));
+    assert_eq!(alone.first().map(|line| line.profit_6000), Some(2400.0), "empty spawn: whole rate");
+    ctx.seats = sites.iter().map(|site| (*site, "ground:waterrune".to_string(), 10)).collect();
+    let crowded = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 0.5, &|_| None, &guide_profit));
+    let profit = crowded.first().map(|line| line.profit_6000).expect("still a line");
+    assert!((profit - 2400.0 / 11.0).abs() < 1e-6, "10 bots on every tile: a eleventh, got {profit}");
+}

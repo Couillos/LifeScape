@@ -26,6 +26,11 @@ pub struct ReadyCtx {
     /// stocking 1 each, restocked every 25 000 ticks).
     pub shop_window_units: Option<i64>,
     pub yield_per_6000: f64,
+    /// Each production leg's own estimate for this bot (the brain's rates
+    /// read per method, inputs priced): a leg listed here is costed from
+    /// it, never from `yield_per_6000` (the node-wide figure of offline
+    /// contexts, which gave every leg of one item the same estimate).
+    pub leg_costs: Vec<crate::cost::LegCost>,
     pub xp_per_6000: f64,
     /// Carried + banked coins of the ordering bot. A market leg it
     /// cannot cover is dropped before the choice (same coverage rule
@@ -121,6 +126,7 @@ impl ReadyCtx {
             shop_price: 10,
             shop_window_units: None,
             yield_per_6000: 200.0,
+            leg_costs: Vec::new(),
             xp_per_6000: 4000.0,
             coins: 0,
             tools: Vec::new(),
@@ -752,3 +758,7 @@ mod fish_tests;
 #[cfg(test)]
 #[path = "expand_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "leg_cost_tests.rs"]
+mod leg_cost_tests;

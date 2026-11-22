@@ -28,6 +28,27 @@ pub fn cost_farm(qty: i64, yield_per_6000: f64, trip_ticks: u64) -> u64 {
     work.saturating_add(trip_ticks.saturating_mul(2))
 }
 
+/// One production leg's own estimate: the measured (or prior) units per
+/// 6000 ticks of its work, and the ticks its consumed inputs cost per
+/// unit made (their purchase grind at the bot's coin rate), so a smelt
+/// is compared with a ground pickup on the whole time it takes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LegCost {
+    pub method: String,
+    pub yield_per_6000: f64,
+    pub input_ticks_per_unit: f64,
+}
+
+/// Ticks of `qty` units by a leg: its own work at its own yield, the
+/// trips, and the inputs it consumes.
+pub fn cost_leg(qty: i64, leg: &LegCost, trip_ticks: u64) -> u64 {
+    let work = cost_farm(qty, leg.yield_per_6000, trip_ticks);
+    if work >= u64::MAX / 4 {
+        return work;
+    }
+    work.saturating_add((leg.input_ticks_per_unit.max(0.0) * qty.max(0) as f64).ceil() as u64)
+}
+
 /// `craft:R` cost: summed input costs plus the craft work itself.
 pub fn cost_craft(input_ticks: u64, qty: i64, yield_per_6000: f64, trip_ticks: u64) -> u64 {
     if yield_per_6000 <= 0.0 {
