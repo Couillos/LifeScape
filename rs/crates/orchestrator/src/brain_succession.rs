@@ -117,6 +117,12 @@ fn close_goal_history(life: &mut Life, stuck: bool, unmade_gear: bool) -> bool {
     if shortfall {
         skills.clear();
     }
+    // Missing inputs, an idle graph: a supply state, never the bot's
+    // failure at a skill (user 2026-11-22: "les competences interdites
+    // sont tres graves").
+    if cause.is_supply() {
+        skills.clear();
+    }
     if skills.is_empty() {
         crate::logln!("brain {}: goal {} stuck: {}", life.account, goal_label(&life.goal), cause.describe());
         push_history(life, "goal", &ban_entry("", 0, &cause));
@@ -149,6 +155,13 @@ pub(crate) fn note_expired_bans(life: &mut Life) -> bool {
     let done = crate::brain_rescue::quests_done(life);
     for skill in lifescape_planner::quest_lifted_bans(&life.history, &ticks_since, &done) {
         crate::logln!("brain {}: skill {skill} ban lifted: its quest is complete ({})", life.account, done.join(","));
+        push_history(life, "goal", &unban_entry(&skill));
+        changed = true;
+    }
+    // Bans recorded for a supply cause (missing inputs, idle graph) lift
+    // at once: they were never a failure of the skill (2026-11-22).
+    for skill in lifescape_planner::supply_lifted_bans(&life.history, &ticks_since) {
+        crate::logln!("brain {}: skill {skill} ban lifted: its cause was a supply state, not a skill failure", life.account);
         push_history(life, "goal", &unban_entry(&skill));
         changed = true;
     }
@@ -378,12 +391,28 @@ mod tests {
         assert!(!woodcutter.nodes.is_empty(), "the new goal brings nodes");
         let mut fisher = life_with(GoalKind::MaxSkills { skills: vec!["fishing".to_string()], level: 10 });
         for _ in 0..5 {
+            // A real failure of the skill's own run (3 failures): the ban cause.
+            let mut failed = Node::new("n1", NodeKind::ReachLevel { skill: "fishing".to_string(), level: 10 }, Vec::new(), 10);
+            failed.status = NodeStatus::Abandoned;
+            failed.failures = 3;
+            failed.last_error = "Failed: net never landed".to_string();
+            fisher.nodes = vec![failed];
+            fisher.history.push(HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
             let label = succeed_goal(&mut fisher, &live(&[]), true).unwrap_or_default();
             assert!(!label.starts_with("fishing"), "a banned skill is not redrawn while banned, got {label}");
             fisher.goal = GoalKind::MaxSkills { skills: vec!["fishing".to_string()], level: 10 };
         }
         let ban = fisher.history.iter().find(|entry| entry.outcome.starts_with("stuck:fishing@6000:")).expect("typed ban entry");
-        assert!(ban.outcome.contains("graph stuck"), "the cause rides in the entry, got {}", ban.outcome);
+        assert!(ban.outcome.contains("3 failures"), "the cause rides in the entry, got {}", ban.outcome);
+    }
+
+    /// A stuck graph with no failed node (idle, waiting on supply) bans no
+    /// skill (user 2026-11-22).
+    #[test]
+    fn an_idle_stuck_graph_bans_no_skill() {
+        let mut fisher = life_with(GoalKind::MaxSkills { skills: vec!["fishing".to_string()], level: 10 });
+        super::close_goal(&mut fisher, &live(&[]), true);
+        assert!(!fisher.history.iter().any(|entry| entry.outcome.starts_with("stuck:fishing@6000")), "no ban: {:?}", fisher.history);
     }
 
     /// The new goal climbs from the live level (attack 45 -> one tranche).

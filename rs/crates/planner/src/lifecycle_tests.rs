@@ -1,6 +1,6 @@
 //! Tests of `lifecycle.rs` (invariants, counters, liveness).
 
-use super::{graph_state, mark_launched, normalize, record_block, record_contract_error, record_failure, FailureFold, GraphState, MAX_FAILURES};
+use super::{graph_state, mark_launched, normalize, record_block, record_contract_error, record_wait_block, record_failure, FailureFold, GraphState, MAX_FAILURES};
 use crate::model::{Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
 
 fn reach(id: &str, deps: &[&str], status: NodeStatus) -> Node {
@@ -165,6 +165,23 @@ fn blocks_reuse_open_obtain_and_are_bounded() {
         record_block(&mut life, 0, &["small_fishing_net".to_string()]);
     }
     assert_eq!(status_of(&life, "n1"), NodeStatus::Abandoned, "fourth block abandons");
+}
+
+/// Live 2026-11-22 (lily_brook n5116, ~20 smithing bans an hour): a
+/// brain-side block (resolve, input gate, food gate: no worker ran) waits
+/// on its obtain and never counts toward `MAX_BLOCKS`.
+#[test]
+fn a_wait_block_files_the_obtain_without_counting() {
+    let mut life = life_of(vec![reach("n1", &[], NodeStatus::Active)], Some("n1"));
+    for _ in 0..10 {
+        record_wait_block(&mut life, 0, &["iron_ore".to_string()], &|_| 1, &crate::plan_read::PlanRead::prior());
+        normalize(&mut life);
+    }
+    assert_ne!(status_of(&life, "n1"), NodeStatus::Abandoned, "waiting is never abandonment");
+    assert_eq!(life.nodes[0].blocks, 0, "no counted block");
+    assert_eq!(life.nodes[0].last_error, "Blocked: missing iron_ore");
+    let obtains = life.nodes.iter().filter(|node| matches!(&node.kind, NodeKind::ObtainItems { .. })).count();
+    assert_eq!(obtains, 1, "one obtain reused");
 }
 
 /// Liveness on random graphs: after `normalize`, an unfinished graph has

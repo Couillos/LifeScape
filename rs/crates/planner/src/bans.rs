@@ -40,6 +40,13 @@ impl StuckCause {
     pub fn describe(&self) -> String {
         format!("{} (node {}, {})", self.class, self.node, self.last_error)
     }
+
+    /// True when the cause is a supply state, not a failure of the skill
+    /// itself: missing inputs, an unfilled or refused market order, a
+    /// graph that merely ran out of work. These never ban a skill.
+    pub fn is_supply(&self) -> bool {
+        cause_is_supply(&self.describe())
+    }
 }
 
 /// State of one skill read back from the history (latest entry wins).
@@ -152,6 +159,28 @@ pub fn quest_lifted_bans(history: &[HistoryEntry], ticks_since: &dyn Fn(i64) -> 
                 .iter()
                 .any(|quest| cause_names_quest(&cause, quest))
                 .then_some(skill),
+            BanState::Expired { .. } => None,
+        })
+        .collect()
+}
+
+/// `StuckCause::is_supply` on the described cause kept in a ban entry.
+fn cause_is_supply(described: &str) -> bool {
+    let (class, rest) = described.split_once(" (node ").unwrap_or((described, ""));
+    let last_error = rest.split_once(", ").map_or("", |(_, error)| error);
+    crate::bans_scope::market_shortfall(last_error)
+        || (class.ends_with(" blocks") && last_error.starts_with("Blocked: missing"))
+        || class == "graph stuck"
+}
+
+/// Active bans recorded for a supply cause (`cause_is_supply`): wrongful,
+/// lifted at once (rule applies to existing state). Sorted by skill; the
+/// brain writes `unban:<skill>` for each.
+pub fn supply_lifted_bans(history: &[HistoryEntry], ticks_since: &dyn Fn(i64) -> u64) -> Vec<String> {
+    ban_states(history, ticks_since)
+        .into_iter()
+        .filter_map(|(skill, state)| match state {
+            BanState::Active { cause, .. } => cause_is_supply(&cause).then_some(skill),
             BanState::Expired { .. } => None,
         })
         .collect()

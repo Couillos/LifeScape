@@ -141,3 +141,28 @@ fn a_finished_quest_lifts_its_bans() {
     assert!(super::quest_lifted_bans(&history, &since(200), &["cook".to_string()]).is_empty(), "another quest lifts nothing");
     assert!(super::quest_lifted_bans(&history, &since(100 + SKILL_BAN_TICKS as i64), &["runemysteries".to_string()]).is_empty(), "expired bans are the expiry's");
 }
+
+/// Live 2026-11-22: missing inputs, an unfilled order and an idle graph
+/// are supply states: they never ban a skill. A real failure does.
+#[test]
+fn only_real_failures_are_skill_causes() {
+    let blocks = |error: &str| StuckCause { node: "n1".to_string(), class: "4 blocks".to_string(), last_error: error.to_string() };
+    assert!(blocks("Blocked: missing iron_ore").is_supply());
+    assert!(blocks("market order for 111 deathrune unfilled after 6000 ticks (held 0, 0 cancelled)").is_supply());
+    let idle = StuckCause { node: "?".to_string(), class: "graph stuck".to_string(), last_error: "no abandoned node found".to_string() };
+    assert!(idle.is_supply());
+    assert!(!cause().is_supply(), "3 failures");
+    let failed = StuckCause { node: "n1".to_string(), class: "3 failures".to_string(), last_error: "Failed: superheat_item never landed".to_string() };
+    assert!(!failed.is_supply());
+}
+
+/// Existing bans recorded for a supply cause lift at once.
+#[test]
+fn supply_bans_are_lifted_and_failure_bans_kept() {
+    let supply = StuckCause { node: "n5116".to_string(), class: "4 blocks".to_string(), last_error: "Blocked: missing iron_ore".to_string() };
+    let history = vec![
+        entry("goal", &ban_entry("smithing", SKILL_BAN_TICKS, &supply), 100),
+        entry("goal", &ban_entry("firemaking", SKILL_BAN_TICKS, &cause()), 100),
+    ];
+    assert_eq!(super::supply_lifted_bans(&history, &since(200)), vec!["smithing".to_string()]);
+}

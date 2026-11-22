@@ -718,6 +718,21 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
 /// on the measured yields, the climbs and quests it files planned with
 /// them and the training guide.
 pub fn record_block_with(life: &mut Life, index: usize, missing: &[String], level_of: &dyn Fn(&str) -> u8, read: &crate::plan_read::PlanRead) -> FailureFold {
+    file_block(life, index, missing, level_of, read, true)
+}
+
+/// A brain-side wait (resolve block, input gate, food gate: no worker ran):
+/// the same obtain sub-tasks as `record_block_with`, but the block is not
+/// counted. Missing inputs are a supply state, not a failure of the node:
+/// it waits on its dependency and relaunches once it is held, never
+/// abandoned for waiting (live 2026-11-22: smithing banned ~20 times an
+/// hour on `missing iron_ore`). Only a script run that blocks without
+/// producing counts (`record_block_with`).
+pub fn record_wait_block(life: &mut Life, index: usize, missing: &[String], level_of: &dyn Fn(&str) -> u8, read: &crate::plan_read::PlanRead) -> FailureFold {
+    file_block(life, index, missing, level_of, read, false)
+}
+
+fn file_block(life: &mut Life, index: usize, missing: &[String], level_of: &dyn Fn(&str) -> u8, read: &crate::plan_read::PlanRead, counted: bool) -> FailureFold {
     release_active(life, index);
     // A need a node waiting on this one already works toward (the same
     // object, coins, a level, a quest): a cycle, directly or through the
@@ -730,7 +745,7 @@ pub fn record_block_with(life: &mut Life, index: usize, missing: &[String], leve
     }) {
         return crate::lifecycle_cycle::break_cycle(life, index, &need, &twins);
     }
-    let blocks = life.nodes[index].blocks.saturating_add(1);
+    let blocks = if counted { life.nodes[index].blocks.saturating_add(1) } else { life.nodes[index].blocks };
     life.nodes[index].blocks = blocks;
     life.nodes[index].last_error = format!("Blocked: missing {}", missing.join(", "));
     // The method whose run raised the block: a later cycle through this

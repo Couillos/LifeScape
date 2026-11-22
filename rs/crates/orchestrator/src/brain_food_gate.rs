@@ -33,7 +33,7 @@ pub(crate) fn block_if_foodless(job: &Job, life: &mut Life, launch: usize, metho
     let id = life.nodes[launch].id.clone();
     let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
     let view = crate::brain_plan_read::BotView::of(life);
-    let fold = crate::brain_plan_read::with_plan_read(&view, live, |read| lifescape_planner::record_block_with(life, launch, &missing, &level_of, read));
+    let fold = crate::brain_plan_read::with_plan_read(&view, live, |read| lifescape_planner::record_wait_block(life, launch, &missing, &level_of, read));
     crate::brain::push_history(life, &id, crate::brain_launch::block_outcome(&fold));
     if let lifescape_planner::FailureFold::CycleBroken(line) = &fold {
         crate::logln!("brain {}: {line}", job.account);
