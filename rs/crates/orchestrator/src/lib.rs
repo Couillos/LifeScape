@@ -229,6 +229,7 @@ pub mod web_rates_view;
 pub mod heartbeat_flows;
 pub mod session_log;
 pub mod log_rotate;
+pub mod brain_food_gate;
 pub mod brain_input_gate;
 pub mod brain_tools;
 pub mod brain_tool_shop;

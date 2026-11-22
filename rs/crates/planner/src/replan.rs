@@ -134,6 +134,15 @@ pub fn need_count_with(node: &Node, need: &str, live: Option<u8>, rate: crate::w
             }
         }
     }
+    // Food a fight blocked on, whatever the node: a drop farm is an
+    // `obtain_items` of its drop (live 2026-11-22 wolfe_carl: `farm:
+    // uncut_sapphire` blocked on swordfish asked 1, sized on the sapphires,
+    // and 34 sibling nodes launched and blocked on the same fish in a row).
+    if let Some(method) = node.method.as_deref() {
+        if crate::combat::is_fight_method(method) && lifescape_gamedata::food::heal(need) > 0 {
+            return FOOD_BATCH;
+        }
+    }
     // A 100 % market lot (R5) buys what its lot burns (`node.batch`
     // products, the recipe's failures counted), never one load.
     if let Some(units) = node.method.as_deref().and_then(|method| crate::trade_craft::input_count(method, need, node.batch)) {
@@ -462,6 +471,16 @@ mod tests {
         let mut cook = reach("cook/raw_shrimp");
         let fresh = replan_node(&mut cook, &ReplanCause::Blocked, &["raw_shrimp".to_string()], &mut 7);
         assert!(matches!(&fresh[0].kind, NodeKind::ObtainItems { item, count } if item == "raw_shrimp" && *count == shrimps), "{:?}", fresh[0].kind);
+    }
+
+    /// Live 2026-11-22 wolfe_carl: a drop farm (an obtain of its drop)
+    /// blocked on food asks a full load, never one fish sized on the drop.
+    #[test]
+    fn a_drop_farm_obtain_blocked_on_food_asks_a_full_load() {
+        let mut farm = Node::new("n9", NodeKind::ObtainItems { item: "uncut_sapphire".to_string(), count: 100 }, Vec::new(), 100);
+        farm.method = Some("farm:uncut_sapphire".to_string());
+        assert_eq!(super::need_count(&farm, "swordfish"), super::FOOD_BATCH);
+        assert_eq!(super::need_count(&farm, "bronze_sword"), 1, "gear still comes alone");
     }
 
     /// A baked meal blocks on its base components (`cook_meals` assembles

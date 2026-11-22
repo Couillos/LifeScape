@@ -172,3 +172,27 @@ fn a_level_block_never_reuses_the_blocked_node() {
     assert!(normalize(&mut life).iter().all(|change| !change.contains("cycle")), "no cycle");
     assert_ne!(life.nodes[0].status, NodeStatus::Abandoned);
 }
+
+/// Live 2026-11-22 wolfe_carl: sibling drop-farm nodes blocked on the same
+/// food file ONE obtain of a full load between them (the first creates it,
+/// the others reuse it as their dependency and wait on it).
+#[test]
+fn sibling_fights_blocked_on_food_share_one_full_load_obtain() {
+    let farm = |number: u32| {
+        let mut node = Node::new(&format!("n{number}"), NodeKind::ObtainItems { item: "uncut_sapphire".to_string(), count: 100 }, Vec::new(), 100);
+        node.status = NodeStatus::Ready;
+        node.method = Some("farm:uncut_sapphire".to_string());
+        node
+    };
+    let mut life = life_of(vec![farm(1), farm(2), farm(3)]);
+    for index in 0..3 {
+        record_block_from(&mut life, index, &["swordfish".to_string()], &|_| 1);
+    }
+    let foods: Vec<&Node> = life.nodes.iter().filter(|node| matches!(&node.kind, NodeKind::ObtainItems { item, .. } if item == "swordfish")).collect();
+    assert_eq!(foods.len(), 1, "one food sub-task for the three siblings");
+    assert!(matches!(&foods[0].kind, NodeKind::ObtainItems { count, .. } if *count == crate::replan::FOOD_BATCH));
+    for node in life.nodes.iter().filter(|node| node.id != foods[0].id) {
+        assert_eq!(node.deps, vec![foods[0].id.clone()], "{} waits on the food", node.id);
+        assert_eq!(node.status, NodeStatus::Pending);
+    }
+}

@@ -719,6 +719,12 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             }
         }
     }
+    // A fight the bot cannot feed files its food obtain now (one load
+    // shared by every sibling node), no worker, no 11-tick blocked run.
+    if crate::brain_food_gate::block_if_foodless(job, &mut life, launch, &method, &ctx, &live) {
+        save_or_log(&life);
+        return;
+    }
     // Engagement: money draws [6000, 18000] at the activity start;
     // reach boxes at one window and retries; farm obtains work one
     // window then recheck holdings; cleanup works one window per pass.
