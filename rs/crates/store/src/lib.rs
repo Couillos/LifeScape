@@ -100,6 +100,14 @@ impl From<std::io::Error> for Error {
     }
 }
 
+fn is_busy(source: &rusqlite::Error) -> bool {
+    matches!(
+        source,
+        rusqlite::Error::SqliteFailure(failure, _)
+            if matches!(failure.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
 /// SQLite backing store. Open once per process (the daemon).
 pub struct Store {
     connection: rusqlite::Connection,
@@ -124,11 +132,28 @@ impl Store {
         // A concurrent opener (migration, write batch) is waited for,
         // never a raw SQLITE_BUSY (2026-11-16 migration race).
         connection.busy_timeout(schema::BUSY_WAIT)?;
-        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        Self::enable_wal(&connection)?;
+        connection.execute_batch("PRAGMA foreign_keys=ON;")?;
         // Also ensures the reports-by-time index (`schema::REPORT_CLOCK_INDEX`:
         // measured gains, the brain's likely shop stock) without a version change.
         schema::apply_migrations(&connection)?;
         Ok(Self { connection })
+    }
+
+    /// Switches to WAL. On a fresh file the switch returns SQLITE_BUSY at
+    /// once when another opener holds the lock (the busy handler is not
+    /// consulted), so retry until `schema::BUSY_WAIT` elapses, then fail typed.
+    fn enable_wal(connection: &rusqlite::Connection) -> Result<(), Error> {
+        let started = std::time::Instant::now();
+        loop {
+            match connection.execute_batch("PRAGMA journal_mode=WAL;") {
+                Ok(()) => return Ok(()),
+                Err(source) if is_busy(&source) && started.elapsed() < schema::BUSY_WAIT => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(source) => return Err(Error::Sql(format!("wal switch: {source}"))),
+            }
+        }
     }
 
     /// Opens one write batch (a single transaction for a pass of many
