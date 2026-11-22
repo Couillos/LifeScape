@@ -551,6 +551,7 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
     // The failure marker logs after the lock drops: stamping takes it.
     let failed_line: Option<String> = {
         let mut inner = shared.inner.lock().unwrap();
+        let tick = inner.last_heartbeat_tick;
         inner.script_alive = false;
         inner.phase = "idle".to_string();
         inner.script = None;
@@ -560,18 +561,20 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
             "finished" => {
                 inner.status = "finished".to_string();
                 inner.last_code = outcome.1;
+                // A run that ends without error: the old one is stale.
+                inner.last_error = None;
                 None
             }
             "failed" => {
                 inner.status = "failed".to_string();
                 inner.last_code = outcome.1;
-                inner.last_error = outcome.2.clone();
+                inner.last_error = outcome.2.clone().map(|error| crate::error_stamp::stamp(error, crate::jobs::now_secs(), tick));
                 outcome.2.map(|error| format!("=== session failed {} {} ===", shared.account, json::stringify(&error)))
             }
             _ => {
                 inner.status = "idle".to_string();
-                if outcome.2.is_some() {
-                    inner.last_error = outcome.2;
+                if let Some(error) = outcome.2 {
+                    inner.last_error = Some(crate::error_stamp::stamp(error, crate::jobs::now_secs(), tick));
                 }
                 None
             }

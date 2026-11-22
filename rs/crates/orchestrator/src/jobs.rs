@@ -49,6 +49,8 @@ pub struct JobInner {
     /// Transient, never persisted: a daemon restart releases every hold.
     pub held: bool,
     pub last_error: Option<Value>,
+    /// Error of an earlier run, kept with its time once a later run worked.
+    pub previous_error: Option<Value>,
     pub last_event: Option<Value>,
     pub last_report: Option<Value>,
     pub requirements: Option<Value>,
@@ -82,6 +84,7 @@ impl Job {
                 started: now_secs(),
                 held: false,
                 last_error: None,
+                previous_error: None,
                 last_event: None,
                 last_report: None,
                 requirements: None,
@@ -119,7 +122,12 @@ impl Job {
             inner.status = status.to_string();
         }
         if !session.get("last_error").is_null() {
-            inner.last_error = Some(session.get("last_error").clone());
+            let stamped = crate::error_stamp::adopt(inner.last_error.as_ref(), session.get("last_error"), now_secs(), 0);
+            inner.last_error = Some(stamped);
+        } else if session.as_obj().is_some_and(|fields| fields.contains_key("last_error")) {
+            // The worker cleared it (a later run started or worked).
+            let JobInner { last_error, previous_error, .. } = &mut *inner;
+            crate::error_stamp::retire(last_error, previous_error);
         }
         if !session.get("last_event").is_null() {
             inner.last_event = Some(session.get("last_event").clone());
@@ -150,6 +158,7 @@ impl Job {
                     guard.session_pid,
                     guard.started,
                     guard.last_error.clone(),
+                    guard.previous_error.clone(),
                     guard.last_event.clone(),
                     guard.last_code.clone(),
                     guard.requirements.clone(),
@@ -173,6 +182,7 @@ impl Job {
             session_pid,
             started,
             last_error,
+            previous_error,
             last_event,
             last_code,
             requirements,
@@ -246,7 +256,9 @@ impl Job {
                 "requirements",
                 requirements.unwrap_or(Value::Null),
             ),
+            ("last_error_ago", crate::error_stamp::age_field(last_error.as_ref(), now_secs())),
             ("last_error", last_error.unwrap_or(Value::Null)),
+            ("previous_error", previous_error.unwrap_or(Value::Null)),
             ("last_code", last_code.unwrap_or(Value::Null)),
         ])
     }
@@ -536,6 +548,24 @@ mod tests {
         ] {
             assert!(state.as_obj().unwrap().contains_key(key), "missing {key}");
         }
+    }
+
+    /// A cleared worker error retires to `previous_error` with its time;
+    /// the current one is stamped and shows its age.
+    #[test]
+    fn cleared_worker_error_moves_to_previous() {
+        let job = Job::new("t02");
+        let blocked = object(vec![("type", str_value("Blocked")), ("message", str_value("blocked, missing: iron_bar"))]);
+        job.apply_session(&object(vec![("last_error", blocked)]));
+        let state = job.describe();
+        assert!(state.get("last_error").get("at_unix").as_f64().is_some(), "stamped with its time");
+        assert_eq!(state.get("last_error_ago").as_str(), Some("il y a 0 s"));
+        job.apply_session(&object(vec![("held", Value::Bool(false))]));
+        assert!(!job.describe().get("last_error").is_null(), "a partial session leaves it alone");
+        job.apply_session(&object(vec![("last_error", Value::Null)]));
+        let state = job.describe();
+        assert!(state.get("last_error").is_null(), "a later clean run clears it");
+        assert_eq!(state.get("previous_error").get("type").as_str(), Some("Blocked"));
     }
 
     fn fishing_report() -> Value {

@@ -190,6 +190,9 @@ pub fn run_shop_sale(bot: &mut Bot, order: &SaleOrder) -> Result<u32, ScriptErro
     let keeper = keeper_at(&order.shop, order.site).ok_or_else(|| ScriptError::Usage(format!("no F2P keeper of {} at {:?}", order.shop, order.site)))?;
     let (x, z, level) = order.site;
     bot.assigned_site = Some(order.site);
+    // The boat fare rides through a market pause (the banking after the
+    // trades gives it back, `toll::fare_back`).
+    bot.trip_fare_hold = sale_fare_coins(order.site);
     let mut pauses_at_withdraw: Option<u64> = None;
     let mut restarts = 0u32;
     let mut walked = false;

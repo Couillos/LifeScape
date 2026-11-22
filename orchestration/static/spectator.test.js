@@ -24,6 +24,13 @@ check('totals of no skills', SpectatorPanels.skillTotals([]), { skill: 'Total', 
 check('no skills', SpectatorPanels.skillRows(undefined), []);
 check('21 skill names', SpectatorPanels.SKILLS.length, 21);
 
+check('error age hours', SpectatorPanels.errorAge({ at_unix: 1000 }, 1000 + 2 * 3600 + 13 * 60 + 5), 'il y a 2 h 13 min');
+check('error age minutes', SpectatorPanels.errorAge({ at_unix: 1000 }, 1300), 'il y a 5 min');
+check('error age seconds', SpectatorPanels.errorAge({ at_unix: 1000 }, 1045), 'il y a 45 s');
+check('error age without time', SpectatorPanels.errorAge({ type: 'Blocked' }, 1045), '');
+check('error line carries its age', SpectatorPanels.errorLine('last error', { at_unix: 1000, type: 'X' }, 1300), 'last error: {"at_unix":1000,"type":"X"} (il y a 5 min)');
+check('no error, no line', SpectatorPanels.errorLine('last error', null, 5), null);
+
 if (failures) {
   console.log(failures + ' failure(s)');
   process.exit(1);

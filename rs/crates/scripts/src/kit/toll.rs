@@ -80,6 +80,7 @@ pub fn disarm(bot: &mut Bot) {
     bot.allow_paid = false;
     bot.fare_reserve = 0;
     bot.fare_bank = None;
+    bot.trip_fare_hold = 0;
 }
 
 /// Price the reserve of a paid run banking at `bank`: the fares of
@@ -176,9 +177,11 @@ fn carried_coins(bot: &Bot) -> u32 {
 
 /// Coins a paid run takes back out of the bank once a deposit-everything
 /// pass emptied its pack (the banking after the market trades): what the
-/// pack lacks of its route-priced reserve; 0 for any other run.
+/// pack lacks of its route-priced reserve, or of the fare an unpaid trip
+/// holds (`trip_fare_hold`: the shop sale behind the boat); 0 otherwise.
 pub fn fare_back(bot: &Bot) -> u32 {
-    reserve_short(bot, carried_coins(bot))
+    let carried = carried_coins(bot);
+    reserve_short(bot, carried).max(bot.trip_fare_hold.saturating_sub(carried))
 }
 
 /// Coins to fetch so the pack carries `reserve` (0 when it does).
@@ -229,8 +232,9 @@ fn fare_pack_keep(bot: &Bot) -> Vec<u16> {
 /// Fetch the coins a route's fare lacks (`Error::missing_coins`: the
 /// Karamja boat wants `coins:60` in the pack) from the nearest bank, the
 /// whole pack kept. `Ok(true)` once the pack carries `need`, so the walk
-/// may plan again; `Ok(false)` when it already did (another cause) or the
-/// bank had too few (the walk then fails with its own diagnosis).
+/// may plan again; `Ok(false)` when it already did (another cause). A bank
+/// too poor for the fare is a typed `Blocked` on `coins:N` (the brain
+/// files the coins), never a NoRoute loop.
 pub fn fetch_fare_coins(bot: &mut Bot, need: u32) -> Result<bool, ScriptError> {
     let carried = carried_coins(bot);
     if carried >= need {
@@ -240,11 +244,40 @@ pub fn fetch_fare_coins(bot: &mut Bot, need: u32) -> Result<bool, ScriptError> {
     let bank = crate::kit::bank::nearest_bank(bot)?;
     bot.log(&format!("fare: the route needs {need} coins in the pack, fetching {} at ({},{})", need - carried, bank.x, bank.z));
     crate::kit::bank::bank_trip(bot, &bank, &keep, need - carried)?;
-    Ok(carried_coins(bot) >= need)
+    if carried_coins(bot) < need {
+        // Bank too poor for the fare: a typed block the brain files as a
+        // `have_coins` need, never a NoRoute loop.
+        return Err(ScriptError::Blocked { missing: vec![fare_block_tag(need)] });
+    }
+    Ok(true)
+}
+
+/// The `missing` tag of a fare the pack and the bank cannot pay.
+pub fn fare_block_tag(need: u32) -> String {
+    format!("coins:{need}")
 }
 
 #[cfg(test)]
 mod tests {
+    /// A walk held back by a fare the bank cannot pay blocks typed on the
+    /// coins (the brain files them), and an unpaid trip's held fare comes
+    /// back after a market pause banked it (live 2026-11-22: `NoRoute
+    /// coins:60` right after each cleanup pause on the way to Karamja).
+    #[test]
+    fn a_held_trip_fare_comes_back_after_the_pause() {
+        let mut bot = live_bot();
+        assert_eq!(super::fare_back(&bot), 0, "no hold, no paid run: nothing");
+        bot.trip_fare_hold = 60;
+        assert_eq!(super::fare_back(&bot), 60, "the pause banked the fare");
+        carry(&mut bot, 25);
+        assert_eq!(super::fare_back(&bot), 35, "the pack's coins count");
+        carry(&mut bot, 500);
+        assert_eq!(super::fare_back(&bot), 0);
+        disarm(&mut bot);
+        assert_eq!(bot.trip_fare_hold, 0, "the next run decides its own fares");
+        assert_eq!(super::fare_block_tag(60), "coins:60");
+    }
+
     use super::{disarm, fare_shortfall, pack_reserve, reserve_at_bank, reserve_short, restock_reserve, TripFare};
 
     fn live_bot() -> lifescape_sdk::Bot {

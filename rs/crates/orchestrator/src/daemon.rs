@@ -543,6 +543,8 @@ impl Orchestrator {
                             ("type", str_value("script_error")),
                             ("message", str_value(frame.get("message").as_str().unwrap_or(""))),
                             ("at", frame.get("at").clone()),
+                            ("at_unix", Value::Float(now_secs())),
+                            ("tick", Value::Int(tick)),
                         ]));
                     }
                     let mut entry = std::collections::BTreeMap::new();

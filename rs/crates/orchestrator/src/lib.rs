@@ -134,6 +134,7 @@ mod market_taker_tests;
 #[cfg(test)]
 #[path = "market_impact_tests.rs"]
 mod market_impact_tests;
+pub mod error_stamp;
 pub mod jobs;
 pub mod holdings;
 pub(crate) mod holdings_indices;

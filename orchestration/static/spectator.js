@@ -14,7 +14,23 @@ var SpectatorPanels = (function () {
     const sum = (key) => rows.every(row => typeof row[key] === 'number') ? rows.reduce((acc, row) => acc + row[key], 0) : null;
     return { skill: 'Total', level: sum('base'), xp: sum('xp') };
   }
-  return { SKILLS: SKILLS, skillRows: skillRows, skillTotals: skillTotals };
+  // "il y a 2 h 13 min" from the error's unix time (at_unix); '' without one.
+  function errorAge(error, nowSeconds) {
+    if (!error || typeof error.at_unix !== 'number') return '';
+    const secs = Math.max(0, Math.floor(nowSeconds - error.at_unix));
+    const hours = Math.floor(secs / 3600);
+    const minutes = Math.floor((secs % 3600) / 60);
+    if (hours > 0) return 'il y a ' + hours + ' h ' + String(minutes).padStart(2, '0') + ' min';
+    if (minutes > 0) return 'il y a ' + minutes + ' min';
+    return 'il y a ' + secs + ' s';
+  }
+  // Panel line for last_error / previous_error (with their age).
+  function errorLine(label, error, nowSeconds) {
+    if (!error) return null;
+    const age = errorAge(error, nowSeconds);
+    return label + ': ' + JSON.stringify(error) + (age ? ' (' + age + ')' : '');
+  }
+  return { SKILLS: SKILLS, skillRows: skillRows, skillTotals: skillTotals, errorAge: errorAge, errorLine: errorLine };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = SpectatorPanels;
 
@@ -604,7 +620,11 @@ function updatePanels() {
   lines.push(`status: ${last.status || '?'}${last.paused ? ' (paused)' : ''}`);
   lines.push(`script: ${last.script || '-'}`);
   lines.push(`ticks: ${last.ticks ?? '?'}`);
-  if (last.last_error) lines.push(`last error: ${JSON.stringify(last.last_error)}`);
+  const nowSeconds = Date.now() / 1000;
+  const lastErrorLine = SpectatorPanels.errorLine('last error', last.last_error, nowSeconds);
+  if (lastErrorLine) lines.push(lastErrorLine);
+  const previousErrorLine = SpectatorPanels.errorLine('previous error', last.previous_error, nowSeconds);
+  if (previousErrorLine) lines.push(previousErrorLine);
   lines.push(modal ? `window open: ${modal}` : 'no window open');
   if (hint) lines.push(`hint arrow: ${hint}`);
   if (last.flash !== null && last.flash !== undefined && last.flash !== -1) lines.push(`flashing tab: ${last.flash}`);

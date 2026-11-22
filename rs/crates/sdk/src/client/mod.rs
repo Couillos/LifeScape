@@ -133,6 +133,10 @@ pub struct Bot {
     /// toll doors and fare edges of the trip, 0 for a free one (user
     /// 2026-11-17). 0 outside paid runs; bank trips refill to it.
     pub fare_reserve: u32,
+    /// Coins an UNPAID trip (a shop sale behind the Karamja boat) keeps in
+    /// the pack across a market pause: the banking after the trades gives
+    /// them back (`toll::fare_back`). 0 outside such a trip.
+    pub trip_fare_hold: u32,
     /// Bank tile `fare_reserve` was last priced from (bank → site →
     /// bank): a bank trip from another bank prices it again.
     pub fare_bank: Option<(i32, i32, i32)>,
@@ -267,6 +271,7 @@ impl Bot {
             approach_depth: 0,
             allow_paid: false,
             fare_reserve: 0,
+            trip_fare_hold: 0,
             fare_bank: None,
             allow_shop: true,
             combat_style: "melee".to_string(),
