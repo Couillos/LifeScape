@@ -132,6 +132,16 @@ pub(crate) fn gained_toward(report: &Value, kind: &NodeKind) -> i64 {
         .unwrap_or(0)
 }
 
+/// A coin node (`MakeMoney`, `HaveCoins`) working a 100 % market craft
+/// lot (`trade:craft/..`) is paid when the products SELL, not when they
+/// are made: a lot that made products is progress, never "goal check is
+/// short" (live 2026-11-22: 208 such failures, nodes abandoned, skills
+/// banned, e.g. 31 steel chainbodies smithed on lily_north). The next
+/// pass checks the wallet.
+pub(crate) fn coin_lot_progress(kind: &NodeKind, method: &str, made: i64) -> bool {
+    matches!(kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) && made > 0 && lifescape_planner::trade_craft::is_trade(method)
+}
+
 /// History outcome of a node folded done: a janitor pass that exits on
 /// its budget (`market cleanup` exits so only while the bank is still at
 /// or past the limit) is short, and holds the next insert back
@@ -349,7 +359,10 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         },
         _ => (true, false),
     };
-    let progressed = xp > 0 || (matches!(kind, NodeKind::ObtainItems { .. }) && life.nodes[index].progress_current > held_before) || gained_toward(report, &kind) > 0;
+    let progressed = xp > 0
+        || (matches!(kind, NodeKind::ObtainItems { .. }) && life.nodes[index].progress_current > held_before)
+        || gained_toward(report, &kind) > 0
+        || coin_lot_progress(&kind, &method, made);
     // Silent loops: the report-level detector (no output, bank churn),
     // then windows without progress toward a measurable node.
     let silent = crate::report_progress::assess(report).map(|finding| finding.message);
@@ -639,6 +652,19 @@ mod tests {
         let progressed = super::gained_toward(&strung, &obtain) > 0;
         assert_eq!(verdict("goal_reached", None, &[], false, false, progressed), Verdict::EngagementEnd);
         assert!(matches!(verdict("goal_reached", None, &[], false, false, false), Verdict::Failure(_)), "nothing brought stays short");
+    }
+
+    /// Live 2026-11-22 (lily_north n1771, 31 steel chainbodies smithed
+    /// for a coin node): a craft lot's products are progress of its coin
+    /// node, the sale pays later.
+    #[test]
+    fn a_coin_nodes_craft_lot_that_made_products_is_progress() {
+        use lifescape_planner::NodeKind;
+        let coins = NodeKind::HaveCoins { amount: 100_000 };
+        assert!(super::coin_lot_progress(&coins, "trade:craft/smith:steel_chainbody", 31));
+        assert!(!super::coin_lot_progress(&coins, "trade:craft/smith:steel_chainbody", 0), "nothing made");
+        assert!(!super::coin_lot_progress(&coins, "gather:mining/coal", 31), "no lot");
+        assert!(!super::coin_lot_progress(&NodeKind::ObtainItems { item: "logs".to_string(), count: 1 }, "trade:craft/smith:steel_chainbody", 31));
     }
 
     /// Tour 2 P2-11: an engagement end, a success or a stop never echoes

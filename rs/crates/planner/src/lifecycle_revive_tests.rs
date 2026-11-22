@@ -162,3 +162,24 @@ fn revive_leaves_cleanup_janitors_alone() {
     assert!(revive_stuck(&mut life, REVIVE_COOLDOWN_TICKS).is_empty());
     assert_eq!(by_id(&life, "n3").status, NodeStatus::Abandoned);
 }
+
+/// Live 2026-11-22 (shaw_sara 07:49, "graph stuck ... 0 nodes, roots: ?",
+/// then crafting banned): the current goal's gold_bar waits on an obtain
+/// of gold_ore an EARLIER goal left on the book (`earlier_wait`). The
+/// graph skipped that buy as "no work of this goal", so nothing was
+/// launchable and nothing abandoned. A buy an open node of the current
+/// goal waits on is its work: the graph is launchable.
+#[test]
+fn an_earlier_buy_the_current_goal_waits_on_is_its_work() {
+    let mut ore = node("n950", obtain_kind("gold_ore", 24), &[], NodeStatus::Ready, &["market:buy"]);
+    ore.method = Some("market:buy".to_string());
+    let bar = node("n962", obtain_kind("gold_bar", 24), &["n950"], NodeStatus::Pending, &["smelt:gold_bar"]);
+    let mut life = life_of(vec![ore, bar]);
+    life.memory.floor = Some(959);
+    life.history.push(crate::model::HistoryEntry { node: "n950".to_string(), started: 1, ended: 1, outcome: "awaiting_fill".to_string() });
+    normalize(&mut life);
+    assert_eq!(graph_state(&life), GraphState::Launchable);
+    // Nothing waits on it any more: it is the earlier goal's leftover again.
+    life.nodes.retain(|node| node.id == "n950");
+    assert_eq!(graph_state(&life), GraphState::Finished);
+}
