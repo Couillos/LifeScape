@@ -209,8 +209,9 @@ pub const RETURN_TICKS: u64 = 120;
 /// Cadence of the "cannot see" diagnostic while waiting on the tile.
 pub const SEE_LOG_TICKS: u64 = 200;
 
-/// Ticks without any sight of the partner before a later group whose
-/// partner already waits at its point is served first.
+/// Ticks this group's turn has waited (partner out of sight, or in view
+/// but not trading) before a later group whose partner already waits at
+/// its point is served first.
 pub const SERVE_FIRST_AFTER_TICKS: u64 = 100;
 
 /// How one group's turn ended (`market deliver`).
@@ -236,8 +237,12 @@ pub enum Meet {
 /// waited on its own tile for an absent bcm9kxn4 (deal 1687) while
 /// nina_rhodes stood still at the 1689 point six tiles away; she waited
 /// out the hard cap and reported the present, busy bd23dqpq `no_show`.
-/// A partner out of sight for `SERVE_FIRST_AFTER_TICKS` yields to the
-/// first later group whose partner is ready.
+/// A turn stalled for `SERVE_FIRST_AFTER_TICKS` yields to the first later
+/// group whose partner is ready. Stalled counts a partner seen but never
+/// trading too (live 2026-11-22, deals 115774/115789/115790: rae_tanner
+/// knocked isaac_hart, in view but serving another deal, for five
+/// minutes while bellarhodes, ready at the 115789 point, waited on her
+/// until all three timed out).
 pub fn serve_first(unseen_for: u64, ready: &[bool]) -> Option<usize> {
     if unseen_for < SERVE_FIRST_AFTER_TICKS {
         return None;
@@ -320,7 +325,7 @@ pub fn meet_partner(bot: &mut Bot, group: &DealGroup, deadline: u64, later: &[&D
     let mut last_log: Option<u64> = None;
     let mut still = PartnerStill::default();
     let mut later_still: Vec<PartnerStill> = later.iter().map(|_| PartnerStill::default()).collect();
-    let mut last_seen = bot.world.ticks;
+    let turn_started = bot.world.ticks;
     while bot.trade_modal().is_none() {
         if bot.world.ticks.saturating_sub(last_check) >= DEAL_WATCH_TICKS {
             last_check = bot.world.ticks;
@@ -333,9 +338,6 @@ pub fn meet_partner(bot: &mut Bot, group: &DealGroup, deadline: u64, later: &[&D
             return Ok(Meet::Watch(DealWatch::GaveUp));
         }
         let seen = partner_tile(bot, &group.partner);
-        if seen.is_some() {
-            last_seen = bot.world.ticks;
-        }
         let ready: Vec<bool> = later
             .iter()
             .zip(later_still.iter_mut())
@@ -345,9 +347,9 @@ pub fn meet_partner(bot: &mut Bot, group: &DealGroup, deadline: u64, later: &[&D
                 spot.is_some_and(|tile| chebyshev(tile, other.tile) <= MEET_RADIUS) && held >= PARTNER_STILL_TICKS
             })
             .collect();
-        if let Some(index) = serve_first(bot.world.ticks.saturating_sub(last_seen), &ready) {
+        if let Some(index) = serve_first(bot.world.ticks.saturating_sub(turn_started), &ready) {
             bot.log(&format!(
-                "deals {:?}: {} out of sight, serving {} first (deals {:?}, waiting at its point)",
+                "deals {:?}: {} not trading for {SERVE_FIRST_AFTER_TICKS} ticks, serving {} first (deals {:?}, waiting at its point)",
                 group.ids, group.partner, later[index].partner, later[index].ids
             ));
             return Ok(Meet::ServeFirst(index));
