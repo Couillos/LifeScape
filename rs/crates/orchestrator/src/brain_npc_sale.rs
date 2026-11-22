@@ -67,6 +67,13 @@ impl ShopSalePlan {
             .sum()
     }
 
+    /// The trip without the lots whose object the graph needs now (`keep`);
+    /// `None` when no lot is left.
+    pub fn without_kept(mut self, keep: &[String]) -> Option<ShopSalePlan> {
+        self.lines.retain(|line| !keep.contains(&line.item));
+        (!self.lines.is_empty()).then_some(self)
+    }
+
     /// `market cleanup` arguments of the trip.
     pub fn args(&self) -> Vec<String> {
         let mut args = vec!["--sale-shop".to_string(), self.shop.clone(), "--sale-site".to_string(), format!("{},{},{}", self.site.0, self.site.1, self.site.2)];
@@ -546,6 +553,20 @@ mod tests {
         assert_eq!(kept, vec!["generalshop1".to_string()], "coins all locked: Karamja drops");
         let kept: Vec<String> = payable_sale_sites(shops, 2 * lifescape_gamedata::services::BOAT_FARE_GP).into_iter().map(|shop| shop.shop).collect();
         assert_eq!(kept, vec!["generalshop7".to_string(), "generalshop1".to_string()], "the fare free: Karamja stays");
+    }
+
+    /// Live 2026-11-22 (pia_brown, owen_wood): the trip is planned at the
+    /// listing pass and launched minutes later; a lot the graph needs by
+    /// then (a market answer drawn in between) leaves the trip, and a
+    /// trip left without a lot is no trip.
+    #[test]
+    fn a_lot_the_graph_needs_at_launch_leaves_the_trip() {
+        let line = |item: &str, qty: i64| SaleLine { item: item.to_string(), qty, min_unit: 4, value: 9, whole: 0 };
+        let plan = ShopSalePlan { shop: "taxfree".to_string(), site: (3025, 3701, 0), lines: vec![line("iron_ore", 244), line("oak_logs", 663)] };
+        let kept = plan.clone().without_kept(&["iron_ore".to_string()]).expect("oak logs still go");
+        assert_eq!(kept.lines, vec![line("oak_logs", 663)]);
+        assert_eq!(plan.clone().without_kept(&[]).expect("nothing kept"), plan);
+        assert_eq!(plan.without_kept(&["iron_ore".to_string(), "oak_logs".to_string()]), None);
     }
 
     fn shops(item: &str) -> Vec<SaleShop> {

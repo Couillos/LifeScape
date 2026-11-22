@@ -843,8 +843,21 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         if life.profile.ironman {
             args.push("--iron".to_string());
         } else if let Some(plan) = crate::brain_npc_sale::take(&job.account, &node_snapshot.id) {
-            // Q3: the shop trip first (never a unit under the market).
-            args.extend(plan.args());
+            // Q3: the shop trip first (never a unit under the market). The
+            // lots were planned at the listing pass: what the graph needs
+            // at launch (a node drawn since) leaves the trip (live
+            // 2026-11-22, owen_wood: 7 680 iron ore offered, its smelt
+            // blocked `missing: iron_ore`).
+            let needed = crate::brain_sales::working_keep(&life, &[]);
+            match plan.clone().without_kept(&needed) {
+                Some(trimmed) => {
+                    if trimmed != plan {
+                        crate::logln!("brain {}: shop trip trimmed to {} lot(s): the graph needs the others", job.account, trimmed.lines.len());
+                    }
+                    args.extend(trimmed.args());
+                }
+                None => crate::logln!("brain {}: shop trip dropped: the graph needs every lot", job.account),
+            }
         }
     }
     if !crate::registry::script_known(&script) {

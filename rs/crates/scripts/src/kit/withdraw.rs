@@ -38,8 +38,17 @@ pub fn preflight_short(inputs: &[(String, i64)], held: &dyn Fn(&str) -> i64, ban
 /// `preflight_short` on the live bot: pack plus the last known bank.
 pub fn preflight_blocked(bot: &Bot, inputs: &[(String, i64)]) -> Option<ScriptError> {
     let bank_known = (bot.tables.com_id)("bank_main:inv").is_some_and(|com| bot.world.inv_known(com).is_some());
+    // The banknotes of an input in the pack count: the bank trip that
+    // follows deposits them (live 2026-11-22, a shop trip's unsold notes
+    // read as `missing: iron_ore`).
     let held = |name: &str| -> i64 {
-        crate::kit::pack::obj_id(bot, name).map(|obj| i64::from(pack_total(bot, obj)) + i64::from(banked_usable(bot, obj))).unwrap_or(0)
+        crate::kit::pack::obj_id(bot, name)
+            .map(|obj| {
+                let note = crate::market_client::trade_id(obj);
+                let noted = if note == obj { 0 } else { pack_total(bot, note) };
+                i64::from(pack_total(bot, obj)) + i64::from(noted) + i64::from(banked_usable(bot, obj))
+            })
+            .unwrap_or(0)
     };
     let missing = preflight_short(inputs, &held, bank_known);
     (!missing.is_empty()).then_some(ScriptError::Blocked { missing })
@@ -215,6 +224,22 @@ mod tests {
         assert!(super::preflight_short(&steel, &no_coal, false).is_empty(), "bank unseen: the trip finds out");
         let stocked = |name: &str| if name == "iron_ore" { 10 } else { 20 };
         assert!(super::preflight_short(&steel, &stocked, true).is_empty());
+    }
+
+    /// Live 2026-11-22: the pack holds 7 637 iron ore as banknotes (a
+    /// shop trip's unsold lot), the bank none: not missing, the bank
+    /// trip deposits them. Nothing anywhere stays missing.
+    #[test]
+    fn banknotes_in_the_pack_are_not_missing() {
+        let mut bot = bank_view_bot(3268, 3170, &[("coal", 40)]);
+        let pack = (bot.tables.com_id)("inventory:inv").expect("pack com");
+        let ore = obj_id(&bot, "iron_ore").expect("iron ore");
+        let note = crate::market_client::trade_id(ore);
+        assert_ne!(note, ore, "iron ore has a banknote");
+        let inputs = vec![("iron_ore".to_string(), 1i64), ("coal".to_string(), 2i64)];
+        assert!(super::preflight_blocked(&bot, &inputs).is_some(), "no ore anywhere: blocked");
+        bot.world.inv.insert(pack, [(0u8, (note, 7637u32))].into_iter().collect());
+        assert!(super::preflight_blocked(&bot, &inputs).is_none(), "the notes count");
     }
 
     use super::{bank_far, fetch_walk_needed};
