@@ -298,6 +298,13 @@ impl Store {
         Ok(())
     }
 
+    /// Gives a resting order the motive it lacks (an owner adopting an
+    /// unsaid row); a motive already said is never overwritten.
+    pub fn set_order_motive(&self, order_id: i64, motive: &str) -> Result<(), Error> {
+        self.connection.execute("UPDATE orders SET motive = ?1 WHERE order_id = ?2 AND motive = '' AND status IN ('open','matched')", rusqlite::params![motive, order_id])?;
+        Ok(())
+    }
+
     /// Rewrites the walk limit kept with a resting sell (the seller's own
     /// value moved), in the book's unit (coins per lot).
     pub fn set_order_ask_limit(&self, order_id: i64, ask_limit: i64) -> Result<(), Error> {

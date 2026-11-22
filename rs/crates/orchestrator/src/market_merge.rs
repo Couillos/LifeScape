@@ -67,6 +67,14 @@ pub(crate) fn merged_ask_limit(rows: &[lifescape_store::Order]) -> Option<i64> {
     rows.iter().filter_map(|row| row.ask_limit).max()
 }
 
+/// Motive and walk ceiling a merged row inherits: the oldest fragment's
+/// motive that says one (a merge used to drop it, 2026-11-22), the
+/// highest ceiling.
+pub(crate) fn merged_lineage(rows: &[lifescape_store::Order]) -> (String, Option<i64>) {
+    let motive = rows.iter().map(|row| row.motive.as_str()).find(|motive| !motive.is_empty()).unwrap_or("").to_string();
+    (motive, rows.iter().filter_map(|row| row.ceiling).max())
+}
+
 impl MarketService {
     /// Merges every account's resting orders that share object, side and
     /// price into one, directly in book and carnet: the fragments were
@@ -139,6 +147,10 @@ impl MarketService {
                 dormant: false,
                 clock: oldest_clock,
                 ask_limit: merged_ask_limit(rows),
+                // The oldest fragment's lineage and t0 go on.
+                replaces: rows.first().map(|row| row.order_id),
+                motive: merged_lineage(rows).0,
+                ceiling: merged_lineage(rows).1,
                 ..lifescape_store::NewOrder::default()
             })
             .map_err(|error| format!("merged row refused: {error}"))?;
@@ -231,6 +243,22 @@ mod tests {
         assert_eq!((seller.remaining, seller.seq), (15, 3), "summed, earliest priority");
         assert_eq!(merged[1].0.price, 2);
         assert_eq!(merged[2].0.seller, "harry_page");
+    }
+}
+
+#[cfg(test)]
+mod lineage_tests {
+    use super::merged_lineage;
+
+    fn fragment(motive: &str, ceiling: Option<i64>) -> lifescape_store::Order {
+        lifescape_store::Order { motive: motive.to_string(), ceiling, ..lifescape_store::Order::default() }
+    }
+
+    #[test]
+    fn a_merged_row_keeps_the_motive_and_the_highest_ceiling() {
+        let rows = [fragment("", Some(4)), fragment("need", Some(9)), fragment("stock", None)];
+        assert_eq!(merged_lineage(&rows), ("need".to_string(), Some(9)));
+        assert_eq!(merged_lineage(&[fragment("", None)]), (String::new(), None));
     }
 }
 

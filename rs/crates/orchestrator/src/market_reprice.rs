@@ -521,6 +521,12 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
     let open = rows.iter().find(|row| row.motive == motive).or_else(|| rows.first()).cloned();
     if let Some(row) = open {
         let (order, price) = amend_resting(service, account, &row, resting_target(row.price, open_at, open_cap, ceiling), None, ceiling)?;
+        // An unsaid row its owner adopts takes the owner's motive.
+        if row.motive.is_empty() && !motive.is_empty() {
+            if let Err(error) = service.lock_store().set_order_motive(order, motive) {
+                crate::logln!("market-reprice: motive of order {order} not kept: {error}");
+            }
+        }
         return Ok(answer(StandingBid::Kept { order, price }));
     }
     let reference = service.reference_lot(item);

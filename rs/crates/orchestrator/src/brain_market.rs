@@ -321,10 +321,54 @@ pub fn orphan_needs(rows: &[lifescape_store::Order], wanted: &[String], name_of:
         .collect()
 }
 
+/// Reason of a resting order without motive that no node owns.
+pub const STALE_UNOWNED_REASON: &str = "stale_unowned";
+
+/// Resting orders with NO motive nobody owns (pure): a merge round used to
+/// drop the motive of the fragments it folded (live 2026-11-22: 60 500
+/// planks at 2 coins resting for days). A buy whose object an open obtain
+/// node wants stays (its owner adopts it); every other unsaid order, sell
+/// or buy, is stale.
+pub fn stale_unowned(rows: &[lifescape_store::Order], wanted: &[String], name_of: &dyn Fn(i64) -> Option<String>) -> Vec<i64> {
+    rows.iter()
+        .filter(|row| matches!(row.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched) && row.remaining > 0 && row.motive.is_empty())
+        .filter(|row| row.side == lifescape_store::OrderSide::Sell || name_of(row.item_id).map_or(true, |name| !wanted.contains(&name)))
+        .map(|row| row.order_id)
+        .collect()
+}
+
+fn swept_unowned() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static TABLE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// One-time cleanup per account and daemon run: cancels the stale unsaid
+/// orders (`STALE_UNOWNED_REASON`), logged. Returns the count.
+pub fn release_stale_unowned(job: &Job, life: &lifescape_planner::Life) -> usize {
+    if !swept_unowned().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(job.account.clone()) {
+        return 0;
+    }
+    let Some(service) = crate::market_service::shared() else { return 0 };
+    let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
+    let wanted = crate::brain_wishlist::wanted_names(life);
+    let mut closed = 0;
+    for order in stale_unowned(&rows, &wanted, &crate::brain_gear::name_of) {
+        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(&job.account)), ("order", Value::Int(order)), ("reason", str_value(STALE_UNOWNED_REASON))]));
+        if reply.get("ok").as_bool() == Some(true) {
+            closed += 1;
+        }
+    }
+    if closed > 0 {
+        crate::logln!("brain {}: {closed} order(s) without motive cancelled ({STALE_UNOWNED_REASON}): no node owns them", job.account);
+    }
+    closed
+}
+
 /// One sweep (rate-limited per account): cancels the orphan need bids
 /// (reason `need_gone`). An expired fill wait no longer cancels its bid
 /// (M2): this sweep is where a need's bid ends when its node is gone.
 pub fn release_orphan_needs(job: &Job, life: &lifescape_planner::Life) -> usize {
+    release_stale_unowned(job, life);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs_f64()).unwrap_or(0.0);
     {
         let mut table = last_sweep().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -392,6 +436,25 @@ mod tests {
 
     /// Plan marché §3.5: a need bid whose node is gone goes; one an open
     /// node still wants, a gear bid and a legacy (motive-less) bid stay.
+    #[test]
+    fn unsaid_orders_without_an_owner_are_stale() {
+        use lifescape_store::OrderSide::{Buy, Sell};
+        let row = |order_id: i64, item_id: i64, side: lifescape_store::OrderSide, motive: &str| lifescape_store::Order {
+            order_id,
+            side,
+            item_id,
+            quantity: 60_500,
+            remaining: 60_500,
+            price: 2,
+            motive: motive.to_string(),
+            ..lifescape_store::Order::default()
+        };
+        let rows = vec![row(1, 1, Buy, ""), row(2, 2, Buy, ""), row(3, 3, Buy, "need"), row(4, 4, Sell, ""), row(5, 2, Sell, "surplus")];
+        let name = |id: i64| Some(format!("item{id}"));
+        let wanted = vec!["item2".to_string()];
+        assert_eq!(super::stale_unowned(&rows, &wanted, &name), vec![1, 4], "a wanted bid stays, a said motive stays");
+    }
+
     #[test]
     fn orphan_need_bids_are_the_ones_no_node_wants() {
         let row = |order_id: i64, item_id: i64, motive: &str| lifescape_store::Order {
