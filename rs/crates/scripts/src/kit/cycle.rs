@@ -666,7 +666,12 @@ pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut C
             }
             StepControl::GoalReached => return Ok(0),
         };
-        state.progress.observe(&crate::kit::progress::mark(bot), unit)?;
+        let marked = crate::kit::progress::mark(bot);
+        // A market pause delivered goods: the holdings fell for good.
+        if bot.pauses_done != pauses_at_step {
+            state.progress.rebase_after_delivery(&marked);
+        }
+        state.progress.observe(&marked, unit)?;
     }
 }
 

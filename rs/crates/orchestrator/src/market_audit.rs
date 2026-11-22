@@ -479,20 +479,44 @@ pub fn net_of_reserve(units: i64, reserved: i64) -> i64 {
     (units - reserved.max(0)).max(0)
 }
 
+/// Serializes "compute the account's locks, then send them": the market
+/// round and the brain's release push never interleave, so a stale
+/// snapshot never lands after the fresh one.
+static LOCK_PUSH_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// One `set_locks` request out of an account's locks.
+fn set_locks_request(coins: i64, items: &BTreeMap<i64, i64>) -> Value {
+    let rows: Vec<Value> = items.iter().map(|(id, qty)| Value::Arr(vec![Value::Int(*id), Value::Int(*qty)])).collect();
+    lifescape_json::object(vec![("cmd", lifescape_json::str_value("set_locks")), ("coins", Value::Int(coins)), ("items", Value::Arr(rows))])
+}
+
+/// Pushes the locks of each account through `send`. The locks of an
+/// account are read right before its own send, under the gate: the old
+/// all-accounts snapshot taken up front reached the last of 60 slow
+/// workers seconds later, after a release had pushed the fresh locks
+/// (live 2026-11-22, kate_ellis `locked:iron_ore` seven seconds after
+/// its listing was withdrawn, no order left in the store). A send that
+/// fails comes back typed (account, error), never ignored.
+pub(crate) fn push_locks_with(service: &MarketService, accounts: &[String], send: &mut dyn FnMut(&str, &Value) -> Result<(), String>) -> Vec<(String, String)> {
+    let mut failures = Vec::new();
+    for account in accounts {
+        let _gate = LOCK_PUSH_GATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some((coins, items)) = service.locks_for(std::slice::from_ref(account)).remove(account) else { continue };
+        if let Err(error) = send(account, &set_locks_request(coins, &items)) {
+            failures.push((account.clone(), error));
+        }
+    }
+    failures
+}
+
 /// Daemon side of the locks: one `set_locks` per live worker each round.
 impl crate::daemon::Orchestrator {
     pub(crate) fn push_locks(&self, service: &MarketService, accounts: &[String]) {
-        for (account, (coins, items)) in service.locks_for(accounts) {
-            let rows: Vec<Value> = items
-                .iter()
-                .map(|(id, qty)| Value::Arr(vec![Value::Int(*id), Value::Int(*qty)]))
-                .collect();
-            let request = lifescape_json::object(vec![
-                ("cmd", lifescape_json::str_value("set_locks")),
-                ("coins", Value::Int(coins)),
-                ("items", Value::Arr(rows)),
-            ]);
-            let _ = self.send_worker(&account, &request, std::time::Duration::from_secs(2));
+        let failures = push_locks_with(service, accounts, &mut |account, request| {
+            self.send_worker(account, request, std::time::Duration::from_secs(2)).map(|_| ())
+        });
+        for (account, error) in failures {
+            crate::logln!("market-locks: set_locks to {account} failed: {error}");
         }
     }
 }

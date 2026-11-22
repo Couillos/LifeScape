@@ -30,7 +30,7 @@ use lifescape_sdk::Bot;
 
 pub use crate::kit::curse_camp::{
     all_taken, choose_step, curse_refusal, CastBudget, CastSpent, CurseFoes, CurseRefusal, CurseStep, CAST_WAIT_TICKS, CURSE_LAND_TICKS,
-    FINISH_TICKS, FOE_RADIUS, LOWERED_BAN_TICKS, PICKS_PER_CAST, TAKEN_BAN_TICKS, UNDER_ATTACK_HOLD_TICKS,
+    walked_to_camp, FINISH_TICKS, FOE_RADIUS, LOWERED_BAN_TICKS, PICKS_PER_CAST, TAKEN_BAN_TICKS, UNDER_ATTACK_HOLD_TICKS,
 };
 use crate::kit::magic::{spell_com, wield_staff_for};
 use crate::kit::spell_load::{run_cast_steps, CastOutcome, SpellLoad};
@@ -116,9 +116,6 @@ fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: 
     let names: Vec<&str> = spot.npc_names.to_vec();
     let mut budget = CastBudget::new(bot.world.ticks);
     let mut pauses_seen = bot.pauses_done;
-    // Set by a pause: the next walk back to the camp restarts the bound
-    // (only that one, never a chase inside the camp).
-    let mut returning = false;
     let spent = loop {
         check_events(bot)?;
         let now = bot.world.ticks;
@@ -126,7 +123,6 @@ fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: 
         if crate::kit::site::paused_since(pauses_seen, bot.pauses_done) {
             pauses_seen = bot.pauses_done;
             budget.restart(now);
-            returning = true;
         }
         if load.pack_casts(bot) == 0 {
             return Ok(CastOutcome::Refill);
@@ -151,11 +147,12 @@ fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: 
                 let before = bot.world.ticks;
                 let from = (bot.world.x, bot.world.z);
                 reach_camp(bot, spot)?;
-                // The walk back after a pause restarts the bound at the
-                // camp.
-                if returning && (bot.world.x - from.0).abs().max((bot.world.z - from.1).abs()) > FOE_RADIUS {
+                // A walk to the camp (the first one from the bank, the one
+                // back after a pause) is no wait for its regeneration:
+                // the bound restarts at the camp, never on a chase
+                // inside it.
+                if walked_to_camp(from, (bot.world.x, bot.world.z)) {
                     budget.restart(bot.world.ticks);
-                    returning = false;
                 }
                 // The tick bound only ends a loop whose ticks move: an
                 // instant walk refusal still waits one tick.
@@ -199,7 +196,7 @@ fn curse_once(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot, spell: 
         match refusal {
             Some(CurseRefusal::Lowered) => foes.mark_lowered(slot, now),
             Some(CurseRefusal::Taken) | None => foes.ban(slot, now + TAKEN_BAN_TICKS),
-            Some(CurseRefusal::UnderAttack) => foes.under_attack(now),
+            Some(CurseRefusal::UnderAttack) => foes.under_attack_by(slot, now),
         }
     };
     // Every foe already weakened or under attack while other players work

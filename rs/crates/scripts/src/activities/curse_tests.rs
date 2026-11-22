@@ -203,3 +203,28 @@ fn a_cast_step_with_no_runes_in_the_pack_asks_a_refill() {
     let outcome = super::curse_once(&mut bot, &spot, "curse", &mut foes, &load).expect("no network touched");
     assert_eq!(outcome, crate::kit::spell_load::CastOutcome::Refill);
 }
+
+/// Live 2026-11-22 (frank_lane, 8 runs "no cows foe took curse in 270
+/// ticks" right after a 395-tick walk from the bank to the assigned site):
+/// the cast bound ran during the first walk to the camp. Any walk of more
+/// than the camp radius restarts it; a chase inside the camp does not.
+#[test]
+fn the_first_walk_to_the_camp_is_no_camp_wait() {
+    use crate::kit::curse_camp::{walked_to_camp, FOE_RADIUS};
+    assert!(walked_to_camp((3269, 3169), (3197, 3331)), "bank to camp");
+    assert!(!walked_to_camp((3190, 3330), (3190 + FOE_RADIUS, 3330)), "a chase inside the camp");
+}
+
+/// Live 2026-11-22 (frank_lane 20:00:41, leo_king, kevin_ellis, isaac_hart,
+/// 20 runs "12 refused casts ... already under attack"): the face of a camp
+/// NPC read as the aggressor was recast every tick. After the refusal that
+/// slot is out of the picks and the loop waits the combat window out.
+#[test]
+fn a_refused_aggressor_is_not_recast_every_tick() {
+    let mut foes = CurseFoes::default();
+    let camp = [(415u16, 3199, 3326), (472, 3200, 3327)];
+    assert_eq!(choose_step(Some(415), &camp, (3199, 3326), &foes, 100), CurseStep::Cast(415));
+    foes.under_attack_by(415, 100);
+    assert_eq!(choose_step(Some(415), &camp, (3199, 3326), &foes, 101), CurseStep::Wait, "no recast, no other cast");
+    assert_eq!(choose_step(Some(415), &camp, (3199, 3326), &foes, 100 + UNDER_ATTACK_HOLD_TICKS), CurseStep::Cast(472), "window over: another foe");
+}

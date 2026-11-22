@@ -112,6 +112,17 @@ impl ProgressGuard {
         now.xp_total > self.xp_high || now.held.iter().any(|(obj, count)| *count > self.held_high.get(obj).copied().unwrap_or(0))
     }
 
+    /// Une pause marché a livré des objets : le détenu a baissé pour de
+    /// bon (un échange, jamais un aller-retour de banque). Le plus haut vu
+    /// redescend à l'état courant, sinon les prises suivantes ne le
+    /// dépassent jamais (live 2026-11-22, ida_reed : 1 rune de l'esprit
+    /// ramassée par pas, 4 800 en stock puis 4 400 livrés, « no progress:
+    /// ground_pickup 26 steps in a row » sur des prises réelles). Les
+    /// compteurs de la période muette ne bougent pas.
+    pub fn rebase_after_delivery(&mut self, now: &Mark) {
+        self.held_high = now.held.clone();
+    }
+
     /// Note un pas fini (`unit` = charge `UnitDone`) ; `Err` typé quand la
     /// période muette dépasse un seuil.
     pub fn observe(&mut self, now: &Mark, unit: bool) -> Result<(), ScriptError> {
@@ -175,6 +186,20 @@ impl ProgressGuard {
 #[cfg(test)]
 mod tests {
     use super::{Mark, ProgressGuard, IDLE_TICKS};
+
+    /// Live 2026-11-22 (ida_reed, ground:mindrune): a market pause delivered
+    /// 400 of 4 800 runes; the one rune picked per step never beat the old
+    /// high. Rebased after the delivery, a pick is progress again.
+    #[test]
+    fn a_pick_after_a_delivery_is_progress() {
+        let site = (0, 3206, 3208);
+        let mut guard = ProgressGuard::start("ground_pickup", &at(0, &[(558, 4800)], 0, 100, site));
+        let after = at(0, &[(558, 4401)], 3, 900, site);
+        assert!(!guard.progressed(&after), "below the old high: no progress without a rebase");
+        guard.rebase_after_delivery(&after);
+        assert!(guard.progressed(&at(0, &[(558, 4402)], 3, 1000, site)), "one rune picked after the delivery");
+        assert!(!guard.progressed(&at(0, &[(558, 4401)], 3, 1000, site)), "a round trip still counts for nothing");
+    }
 
     fn at(xp_total: i64, held: &[(u16, u64)], bank_opens: u64, tick: u64, position: (i32, i32, i32)) -> Mark {
         Mark { xp_total, held: held.iter().copied().collect(), bank_opens, tick, position }

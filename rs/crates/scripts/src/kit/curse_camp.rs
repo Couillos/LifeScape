@@ -77,6 +77,12 @@ impl CastBudget {
 /// Tiles from the bot within which a camp NPC is a candidate.
 pub const FOE_RADIUS: i32 = 15;
 
+/// True when a search step carried the caster from `from` to `to`, farther
+/// than the camp's radius: a walk to the camp, not a chase inside it.
+pub fn walked_to_camp(from: (i32, i32), to: (i32, i32)) -> bool {
+    (to.0 - from.0).abs().max((to.1 - from.1).abs()) > FOE_RADIUS
+}
+
 /// Server answer to a curse click, by what the loop does about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CurseRefusal {
@@ -131,6 +137,17 @@ impl CurseFoes {
     /// other target is legal until the server's combat window lapses.
     pub fn under_attack(&mut self, now: u64) {
         self.hold_until = self.hold_until.max(now + UNDER_ATTACK_HOLD_TICKS);
+    }
+
+    /// The server refused a cast on `slot` with "I'm already under
+    /// attack!": that face is no aggressor of ours (the server lets us hit
+    /// the one that hits us), so it stays out of the picks for a while, and the combat
+    /// window holds every other cast. Live 2026-11-22
+    /// (frank_lane, kevin_ellis, isaac_hart): a camp NPC facing us was
+    /// recast every tick, twelve refusals in twelve ticks.
+    pub fn under_attack_by(&mut self, slot: u16, now: u64) {
+        self.under_attack(now);
+        self.ban(slot, now + TAKEN_BAN_TICKS);
     }
 
     /// True while the combat window of `under_attack` runs.

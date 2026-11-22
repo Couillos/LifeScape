@@ -144,7 +144,16 @@ enum Drain {
     BadInput,
     InputGone,
     Timeout,
-    PumpFailed,
+    PumpFailed(lifescape_sdk::Error),
+}
+
+/// A pump that failed mid-click keeps its typed cause: an interruption (the
+/// run's end, a market pause, an operator stop) or a lost connection is no
+/// "pump failed" of the station. Live 2026-11-22: 60+ `cooking pump failed`
+/// rows at the Varrock range, one of them after an 18-minute run that
+/// cooked until the order's stop reached the click loop.
+fn pump_failure(error: lifescape_sdk::Error) -> ScriptError {
+    ScriptError::Sdk(error)
 }
 
 /// Drain one produce click: wait for the input count to drop (the server
@@ -154,8 +163,8 @@ fn drain_click(bot: &mut Bot, input: u16, had: u32) -> Drain {
     let seen = bot.world.messages.len();
     let target = bot.world.ticks + ITEM_TICKS;
     while bot.world.ticks < target {
-        if bot.pump(2).is_err() {
-            return Drain::PumpFailed;
+        if let Err(error) = bot.pump(2) {
+            return Drain::PumpFailed(error);
         }
         if pack_total(bot, input) < had {
             return Drain::Consumed { units: had - pack_total(bot, input) };
@@ -461,9 +470,7 @@ fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u3
                     break;
                 }
             }
-            Drain::PumpFailed => {
-                return Err(ScriptError::Failed(format!("{} pump failed at {:?}", job.spec.verb, bot.position())));
-            }
+            Drain::PumpFailed(error) => return Err(pump_failure(error)),
         }
     }
     let made_now: u32 = job.products.iter().map(|id| pack_total(bot, *id)).sum();
@@ -625,6 +632,12 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_interrupted_pump_stays_an_interruption() {
+        let error = super::pump_failure(lifescape_sdk::Error::Interrupted("stop".to_string()));
+        assert!(error.ends_run(), "{error:?}");
+    }
+
     use super::{cook_recipe, count_answer, grid_button, match_option, stands_for};
 
     /// A chain cut by a level-up splash with inputs left re-clicks once

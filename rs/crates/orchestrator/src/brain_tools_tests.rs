@@ -194,6 +194,54 @@ fn a_released_listing_pushes_the_new_locks_at_once() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// Live 2026-11-22 (kate_ellis `locked:iron_ore` 7 s after its listing was
+/// withdrawn, no order left in the store): the round pushed a snapshot of
+/// every account taken up front, so a release pushed in the middle of the
+/// round was overwritten by the stale lock. Each account's locks are read
+/// right before its own send.
+#[test]
+fn a_round_push_never_sends_locks_older_than_a_release() {
+    use crate::market_seed::CatalogueItem;
+    use crate::market_service::MarketService;
+    use lifescape_json::{object, str_value, Value};
+    let ore = crate::brain_gear::obj_id("iron_ore").expect("iron_ore id");
+    let path = std::env::temp_dir().join(format!("lifescape-locks-round-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let catalogue = vec![
+        CatalogueItem { id: ore, name: "Iron ore".to_string(), shop_price: 150, alch_value: 0 },
+        CatalogueItem { id: 995, name: "Coins".to_string(), shop_price: 1, alch_value: 0 },
+    ];
+    let service = MarketService::open(&path, catalogue).expect("opens");
+    for account in ["first_bot", "kate_t"] {
+        service.sync_holdings(account, 0, &[(ore, 50)]);
+        let placed = service.handle(&object(vec![
+            ("op", str_value("place")),
+            ("account", str_value(account)),
+            ("side", str_value("sell")),
+            ("item", Value::Int(ore)),
+            ("qty", Value::Int(3)),
+            ("price", Value::Int(300)),
+        ]));
+        assert_eq!(placed.get("ok").as_bool(), Some(true), "listing placed: {placed:?}");
+    }
+    let mut sent: Vec<(String, usize)> = Vec::new();
+    let accounts = vec!["first_bot".to_string(), "kate_t".to_string()];
+    let failures = crate::market_audit::push_locks_with(&service, &accounts, &mut |account, request| {
+        sent.push((account.to_string(), request.get("items").as_arr().map_or(0, Vec::len)));
+        // While the first worker answers slowly, the brain releases kate_t.
+        if account == "first_bot" {
+            service.cancel_open_because("kate_t", ore, lifescape_store::OrderSide::Sell, "need_held");
+        }
+        Ok(())
+    });
+    assert!(failures.is_empty());
+    assert_eq!(sent, vec![("first_bot".to_string(), 1), ("kate_t".to_string(), 0)], "kate_t gets the lock read after its release");
+    let failures = crate::market_audit::push_locks_with(&service, &accounts, &mut |account, _| Err(format!("{account} wedged")));
+    assert_eq!(failures.len(), 2, "a failed send comes back typed: {failures:?}");
+    drop(service);
+    let _ = std::fs::remove_file(&path);
+}
+
 /// A2 review: a milestone set aside (blocked 3 times) needs no tool: the
 /// smith's hammer stays kept only while a drawable milestone needs it.
 #[test]
