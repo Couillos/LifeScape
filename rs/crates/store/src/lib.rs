@@ -32,6 +32,7 @@ mod provenance_v8;
 pub mod reports;
 pub mod schema;
 pub mod work_gains;
+pub mod xp_rates;
 
 pub use balance::{stock_days, MethodWork, UnsoldStock};
 pub use candle_chain::chain_candles;
@@ -47,6 +48,7 @@ pub use measures::{PurgeCounts, ReportMeasure, StoredMeasure};
 pub use orders::{NewOrder, Order, OrderSide, OrderStatus, AMENDED_REASON};
 pub use reports::{NewTaskReport, NewTaskYield, TaskReport, TaskYield, YieldAggregate};
 pub use work_gains::AccountWork;
+pub use xp_rates::{BucketWork, SkillBucket};
 
 use std::path::Path;
 

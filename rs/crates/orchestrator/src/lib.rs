@@ -140,6 +140,10 @@ pub(crate) mod holdings_indices;
 pub(crate) mod live_items;
 pub mod hiscores;
 pub mod hiscores_service;
+pub mod xp_rates;
+pub mod xp_service;
+#[cfg(test)]
+mod xp_rates_tests;
 pub mod registry;
 pub mod mapcache;
 pub mod mapbuild;

@@ -269,6 +269,19 @@ workers sont asynchrones (`push_conn`) : un daemon absent ne gèle plus
 leur pump. Build `dev` optimisé (`opt-level`), compilation sur 6 cœurs
 (`.cargo/config.toml`).
 
+XP / tick (2026-11-22) : page `/xp` (`orchestration/static/xp.html`, `xp.js`,
+`xp.test.js` : `node xp.test.js`), lien « XP / tick » dans la barre de chaque
+page. Instantané recalculé toutes les 30 min comme les hiscores
+(`src/xp_service.rs`, 240 s après le démarrage, persisté `run/xp.json`, servi
+depuis le cache par `/api/xp`). Modèle pur `src/xp_rates.rs` ; sommes SQL par
+heure/compte/méthode/compétence dans `store/src/xp_rates.rs`. Taux = somme des
+XP / somme des ticks de travail (jamais une moyenne de taux) : « contribution
+flotte » (XP de la compétence / ticks de toute la flotte) et « efficacité »
+(XP / ticks des rapports qui rapportent de l'XP dans la compétence).
+Graphique horaire sur 7 jours ; tableau 24 h, 7 jours, tout l'historique
+(évolution vs période précédente de même durée, sauf tout l'historique).
+Comptes exclus : `economy_guard::excluded_accounts()` (admin, admin2, bite).
+
 Hiscores (2026-11-14) : page `/hiscores` (`orchestration/static/hiscores.html`,
 `hiscores.js`, lien « Hiscores » dans la barre de chaque page), style des
 hiscores de 2004 en CSS original (cadre de pierre, titres dorés serif,

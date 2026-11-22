@@ -5,6 +5,7 @@
 //! /guides-money /guides-training /guides.js /api/guides/money|training?skill&level&family&quests (web_guides)
 //! /errors /errors.js /api/errors/summary|list|dossier/<file> (web_errors)
 //! /hiscores /hiscores.js /api/hiscores (cached snapshot, hiscores_service)
+//! /xp /xp.js /api/xp (cached snapshot, xp_service)
 //! /map/<dir>/<file>.png /map/<dir>/manifest.json /mapscene/<sprite>.png
 //! /api/map /api/status /api/state/<account> /api/items /api/items/history|flows
 //! /api/rates/table /api/rates/activities /api/rates/detail /api/rates/trading /api/lives /api/life/<account> /api/brain/<account> /api/economy
@@ -292,6 +293,24 @@ pub(crate) fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Respon
                 content_type: if html { "text/html; charset=utf-8" } else { "application/javascript" },
                 cache: "no-store",
                 body: asset(if html { "hiscores.html" } else { "hiscores.js" }).map_err(|error| error.to_string())?,
+            });
+        }
+        if parts == ["xp"] || parts == ["xp.js"] {
+            let html = parts[0] == "xp";
+            return Ok(Response {
+                status: 200,
+                content_type: if html { "text/html; charset=utf-8" } else { "application/javascript" },
+                cache: "no-store",
+                body: asset(if html { "xp.html" } else { "xp.js" }).map_err(|error| error.to_string())?,
+            });
+        }
+        if parts == ["api", "xp"] {
+            // Cached snapshot bytes only: no computation per request.
+            return Ok(Response {
+                status: 200,
+                content_type: "application/json",
+                cache: "no-store",
+                body: crate::xp_service::api_body(),
             });
         }
         if parts == ["api", "hiscores"] {
