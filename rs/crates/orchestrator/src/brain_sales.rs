@@ -361,8 +361,13 @@ fn adopt_listings(
         // M1): an adoption after a restart never restarts the age.
         // The walk runs in the book's unit (per lot).
         let bounds = crate::market_reprice::QuoteBounds::for_row(row, crate::market_units::to_lot(row.item_id, floor), crate::market_reprice::SELL_CAP);
+        let limit = bounds.floor;
         if crate::market_reprice::adopt(service, order, bounds) {
             walked += 1;
+            // The own-value limit is kept with the order (schema 11).
+            if let Err(error) = service.lock_store().set_order_ask_limit(order, limit) {
+                crate::logln!("brain {account}: ask limit of order {order} not kept: {error}");
+            }
         }
     }
     if walked + raised + lowered + withdrawn > 0 {

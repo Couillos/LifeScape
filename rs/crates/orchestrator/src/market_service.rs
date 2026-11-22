@@ -778,6 +778,7 @@ impl MarketService {
                 clock,
                 replaces: None,
                 motive, ceiling: crate::market_reprice::request_ceiling(request, side == Side::Sell, if per_lot { 1 } else { lot }),
+                ask_limit: crate::market_reprice::request_ask_limit(request, side == Side::Sell, if per_lot { 1 } else { lot }),
             }) {
                 Ok(id) => id,
                 Err(error) => return Self::err(error.to_string()),

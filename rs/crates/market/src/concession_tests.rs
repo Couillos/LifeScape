@@ -94,20 +94,65 @@ fn small_moves_wait_for_the_amend_threshold() {
 /// own cost, down to one coin; it never withdraws.
 #[test]
 fn an_unsold_ask_drops_ten_percent_per_window_down_to_one() {
-    let own_cost = curve(68, 34, 1.0);
-    assert_eq!(step(&window(true, 68, own_cost, 2000)), Step::Amend(61));
-    assert_eq!(step(&window(true, 34, own_cost, 36_000)), Step::Amend(30), "under its own cost");
-    assert_eq!(step(&window(true, 5, own_cost, 90_000)), Step::Amend(4), "at least a coin");
-    assert_eq!(step(&window(true, 1, own_cost, 90_000)), Step::Hold, "one coin rests, never withdrawn");
+    // A byproduct (own value ~0): the limit is one coin.
+    let byproduct = curve(68, 1, 1.0);
+    assert_eq!(step(&window(true, 68, byproduct, 2000)), Step::Amend(61));
+    assert_eq!(step(&window(true, 34, byproduct, 36_000)), Step::Amend(30), "under any cost: nothing was spent");
+    assert_eq!(step(&window(true, 5, byproduct, 90_000)), Step::Amend(4), "at least a coin");
+    assert_eq!(step(&window(true, 1, byproduct, 90_000)), Step::Hold, "one coin rests, never withdrawn");
     let mut current = 68;
     let mut windows = 0;
-    while let Step::Amend(next) = step(&window(true, current, own_cost, windows * 2000)) {
+    while let Step::Amend(next) = step(&window(true, current, byproduct, windows * 2000)) {
         assert!(next < current, "{current} -> {next}");
         current = next;
         windows += 1;
     }
     assert_eq!(current, 1);
     assert!(windows <= 40, "68 to 1 in {windows} windows");
+}
+
+/// User 2026-11-22, the mirror of B1: an ask stops at the seller's OWN
+/// value of the unit (what it costs this bot to replace by its work), a
+/// per-seller limit, never a market floor. Live: iron ore traded 112
+/// times at 1 coin while its miners' time was worth ~15 a unit.
+#[test]
+fn an_ask_stops_at_its_owners_value_and_waits_there() {
+    let own_value = curve(60, 15, 1.0);
+    assert_eq!(step(&window(true, 60, own_value, 2000)), Step::Amend(54));
+    assert_eq!(step(&window(true, 16, own_value, 36_000)), Step::Amend(15), "the last step lands on the value, not under it");
+    assert_eq!(step(&window(true, 15, own_value, 90_000)), Step::Hold, "it waits at its value: no walk, no withdrawal");
+    let mut current = 60;
+    let mut windows = 0;
+    while let Step::Amend(next) = step(&window(true, current, own_value, windows * 2000)) {
+        assert!(next >= 15, "{current} -> {next} went under the owner's value");
+        current = next;
+        windows += 1;
+    }
+    assert_eq!(current, 15);
+    // Near the mean price the 1 % step still stops there.
+    let mut near = window(true, 16, own_value, 500);
+    near.anchor_price = Some(16);
+    assert_eq!(step(&near), Step::Amend(15));
+    // A public print under the value never pulls it under.
+    let mut pulled = window(true, 30, own_value, 500);
+    pulled.anchor_price = Some(2);
+    assert_eq!(step(&pulled), Step::Amend(27), "a print under the value never pulls: only the 10 % walk");
+}
+
+/// An ask resting under its owner's value (placed before the rule) is
+/// brought up to it by its next window.
+#[test]
+fn an_ask_under_its_owners_value_rises_to_it_at_the_next_window() {
+    assert_eq!(step(&window(true, 1, curve(60, 15, 1.0), 2000)), Step::Amend(15));
+}
+
+/// A buyer is never capped by the seller's value and a seller that
+/// sold backs off from where it sold (never past its own value down).
+#[test]
+fn a_filled_ask_still_backs_off_up_and_a_value_never_pushes_a_bid() {
+    let mut sold = window(true, 20, curve(60, 15, 1.0), 6000);
+    sold.filled = true;
+    assert_eq!(step(&sold), Step::Restart { opening: 21 });
 }
 
 /// The same rule for bids: an unfilled bid climbs 10 % per window (at
@@ -155,7 +200,9 @@ fn pressed_orders_cross_and_any_order_takes_what_its_next_walk_reaches() {
     let mut seller = window(true, 100, curve(100, 50, 1.0), 500);
     seller.best_opposite = Some(45);
     seller.pressed = true;
-    assert_eq!(step(&seller), Step::Amend(45), "a full bank hits the bid, no floor");
+    assert_eq!(step(&seller), Step::Amend(90), "a bid under its own value is never taken: the walk goes on");
+    seller.best_opposite = Some(70);
+    assert_eq!(step(&seller), Step::Amend(70), "a full bank hits a bid at or over its value");
     let mut close = window(true, 60, curve(100, 50, 1.0), 500);
     close.best_opposite = Some(55);
     assert_eq!(step(&close), Step::Amend(55), "its next walk (54) passes the bid: it takes it");

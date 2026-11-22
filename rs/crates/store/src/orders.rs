@@ -85,6 +85,9 @@ pub struct NewOrder {
     pub replaces: Option<i64>,
     pub motive: String,
     pub ceiling: Option<i64>,
+    /// A sell's limit per lot (schema 11): the seller's own value of the
+    /// unit, where its ask stops walking down; `None` when unsaid.
+    pub ask_limit: Option<i64>,
 }
 
 /// Cancel reason of the row an amend closed (schema 6): the row is
@@ -117,6 +120,8 @@ pub struct Order {
     pub cancel_reason: String,
     /// A buy's limit per lot (schema 10), `None` when unsaid.
     pub ceiling: Option<i64>,
+    /// A sell's walk limit per lot (schema 11), `None` when unsaid.
+    pub ask_limit: Option<i64>,
 }
 
 impl Order {
@@ -153,12 +158,13 @@ fn map_order(row: &rusqlite::Row<'_>) -> Result<Order, Error> {
         motive: row.get(14)?,
         cancel_reason: row.get(15)?,
         ceiling: row.get(16)?,
+        ask_limit: row.get(17)?,
     })
 }
 
 const ORDER_COLUMNS: &str = "order_id, account, side, item_id, quantity, remaining, \
      price, status, dormant, created_clock, updated_clock, replaces, root_id, root_clock, \
-     motive, cancel_reason, ceiling";
+     motive, cancel_reason, ceiling, ask_limit";
 
 impl Store {
     /// Records a new open order, returns its id.
@@ -181,8 +187,8 @@ impl Store {
         };
         self.connection.execute(
             "INSERT INTO orders(account, side, item_id, quantity, remaining, price, \
-             status, dormant, created_clock, updated_clock, replaces, root_id, root_clock, motive, ceiling) \
-             VALUES (?1, ?2, ?3, ?4, ?4, ?5, 'open', ?6, ?7, ?7, ?8, ?9, ?10, ?11, ?12)",
+             status, dormant, created_clock, updated_clock, replaces, root_id, root_clock, motive, ceiling, ask_limit) \
+             VALUES (?1, ?2, ?3, ?4, ?4, ?5, 'open', ?6, ?7, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
                 new_order.account,
                 new_order.side.as_str(),
@@ -196,6 +202,7 @@ impl Store {
                 root_clock,
                 new_order.motive,
                 new_order.ceiling,
+                new_order.ask_limit,
             ],
         )?;
         let order_id = self.connection.last_insert_rowid();
@@ -275,6 +282,13 @@ impl Store {
     /// book's unit (coins per lot), like the column it writes.
     pub fn set_order_ceiling(&self, order_id: i64, ceiling: i64) -> Result<(), Error> {
         self.connection.execute("UPDATE orders SET ceiling = ?1 WHERE order_id = ?2 AND status IN ('open','matched')", rusqlite::params![ceiling.max(1), order_id])?;
+        Ok(())
+    }
+
+    /// Rewrites the walk limit kept with a resting sell (the seller's own
+    /// value moved), in the book's unit (coins per lot).
+    pub fn set_order_ask_limit(&self, order_id: i64, ask_limit: i64) -> Result<(), Error> {
+        self.connection.execute("UPDATE orders SET ask_limit = ?1 WHERE order_id = ?2 AND status IN ('open','matched')", rusqlite::params![ask_limit.max(1), order_id])?;
         Ok(())
     }
 
@@ -478,6 +492,18 @@ mod orders_tests {
 
     /// Schema 10 (user 2026-11-20, the 10 % walk after a restart): a buy
     /// keeps its ceiling, read back with the row; unsaid, none.
+    /// A sell keeps its own-value limit (schema 11), read back with the row.
+    #[test]
+    fn a_sell_keeps_its_ask_limit() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 314)?;
+        let said = store.place_order(&NewOrder { side: OrderSide::Sell, ask_limit: Some(15), ..sample_order("t06") })?;
+        assert_eq!(store.get_order(said)?.and_then(|row| row.ask_limit), Some(15));
+        store.set_order_ask_limit(said, 22)?;
+        assert_eq!(store.get_order(said)?.and_then(|row| row.ask_limit), Some(22));
+        Ok(())
+    }
+
     #[test]
     fn a_buy_keeps_its_ceiling() -> Result<(), Error> {
         let store = Store::open_in_memory()?;

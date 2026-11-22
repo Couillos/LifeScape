@@ -28,10 +28,13 @@
 //! logs listed at twice their own cost walked down to it, sat there,
 //! were withdrawn and relisted at twice again, 7 h without a trade):
 //! `step` no longer follows the curve. An unfilled ask drops `WALK_PCT`
-//! per window (at least a coin) down to one coin, under its own cost (no
-//! seller floor, no withdrawal); an unfilled bid climbs `WALK_PCT` per
-//! window up to its ceiling (what the buyer can pay). The curve's limit
-//! is the buyer's ceiling only.
+//! per window (at least a coin) down to the seller's OWN value of the unit
+//! (user 2026-11-22, the mirror of B1: what the unit costs this bot to
+//! replace by its work; one coin for a byproduct, loot or ground pickup),
+//! where it waits (no market floor, no withdrawal); an unfilled bid climbs
+//! `WALK_PCT` per window up to its ceiling (what the buyer can pay). The
+//! curve's limit is each owner's own: a buyer's ceiling, a seller's value.
+//! A resting ask under its owner's value rises to it at its next window.
 
 /// Smallest and largest shape: the bounds keep a curve from freezing
 /// (beta -> 0) or jumping to the limit at once (beta -> inf).
@@ -245,8 +248,10 @@ pub fn walk_by(sell: bool, current: i64, pct: i64) -> i64 {
 /// One window of the order (pure): the 10 % walk (module doc).
 pub fn step(window: &Window) -> Step {
     let sell = window.sell;
-    // No seller floor (user 2026-11-19): an ask walks down to one coin.
-    let limit = if sell { 1 } else { window.curve.limit.max(1) };
+    // The order's own limit (user 2026-11-22, the mirror of B1): a buyer's
+    // ceiling, a seller's own value of the unit (one coin for a
+    // byproduct). Never a market-wide floor.
+    let limit = window.curve.limit.max(1);
     let current = window.current.max(1);
     if window.filled {
         let opening = zip_backoff(sell, current, limit);

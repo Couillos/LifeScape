@@ -52,7 +52,7 @@ pub struct FoundMarks {
     pub margin: f64,
     /// Plan prix §1 (user 2026-11-18): horizons this seller's listings of
     /// the object ended unsold over the last day, net of its sales
-    /// (`discovery::unsold_horizons`): each drops its floor 10 %.
+    /// (`discovery::unsold_horizons`): kept for the report, no longer lowers the walk limit (2026-11-22).
     pub unsold: i64,
 }
 
@@ -75,10 +75,11 @@ pub fn plan_sale(free: i64, reserve: Option<Reserve>, reference: Reference, best
     if qty <= 0 {
         return SaleDecision::Hold("nothing free".to_string());
     }
-    // The keep value: the own cost lowered 10 % per unsold horizon (plan
-    // prix §1), down to 1 coin: no shop, alchemy or overstock floor (user
-    // 2026-11-18: "retire les floor de prix").
-    let keep = discovery::learned_floor(reserve.coins, marks.unsold);
+    // The walk limit: the seller's OWN value of the unit (its cost, 1 coin
+    // for found stock), never lowered by unsold horizons (user
+    // 2026-11-22, the mirror of B1); no shop, alchemy or overstock floor
+    // (user 2026-11-18: "retire les floor de prix").
+    let keep = reserve.coins.max(1);
     let (price, floor) = if reserve.source == CostSource::Found {
         let anchor = discovery::loot_anchor(reference, marks.anchor, keep, &marks.discovery, marks.margin);
         found_open(reference, best_bid, marks.others_ask, keep, anchor, last_sell, marks.pressed)

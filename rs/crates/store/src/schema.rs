@@ -5,7 +5,7 @@
 use crate::Error;
 
 /// Latest schema version this build understands.
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// Index of the task reports by creation clock (the time value's window,
 /// `work_gains`; plan équilibre lot 1).
@@ -333,6 +333,14 @@ fn pending_steps(connection: &rusqlite::Connection, found: u32) -> Result<(), Er
         connection
             .execute_batch("ALTER TABLE orders ADD COLUMN ceiling INTEGER; PRAGMA user_version = 10;")
             .map_err(|source| Error::Sql(format!("migration 10: {source}")))?;
+    }
+    if found < 11 {
+        // User 2026-11-22 (the mirror of B1): a sell keeps its own-value
+        // limit (per lot, where its ask stops walking down), NULL when
+        // unsaid; visible in the carnet next to a bid's ceiling.
+        connection
+            .execute_batch("ALTER TABLE orders ADD COLUMN ask_limit INTEGER; PRAGMA user_version = 11;")
+            .map_err(|source| Error::Sql(format!("migration 11: {source}")))?;
     }
     Ok(())
 }
