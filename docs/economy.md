@@ -67,15 +67,22 @@ l'annuler ; l'échéance de 6000 ticks termine la jambe marché du nœud,
 pas l'offre. `orchestrator economy [heures]` imprime les critères du
 plan (§ Section marché ci-dessous).
 
-Marche de 10 % (2026-11-19, décision utilisateur : « la règle des 10 %
+Marche de 10 %, passée à 5 % le 2026-11-22 (`WALK_PCT` 5, `MIN_WALK_PCT` 1, `maker::NO_DEMAND_STEP` 0,05 ; les chiffres « 10 % » de ce paragraphe valent désormais 5 %) (2026-11-19, décision utilisateur : « la règle des 10 %
 vaut pour tout le monde en bid et ask, sinon les prix ne sont pas
 réels ») : constat live, bûches d'if sans échange pendant 7 h, carl_miller
 mis en vente à 68 (2 × son coût de 34), descendu à 34, retiré à
 l'horizon, remis à 68, huit fois de suite ; tim_wolfe 5 h à 96, son coût.
 Désormais chaque fenêtre (`concession::step`, `WALK_PCT`) : un ask
 invendu baisse de 10 % (arrondi au-dessus, au moins une pièce) jusqu'à
-1 pièce, SOUS son coût propre (plus de plancher vendeur, plus de retrait
-à l'horizon : un ask à 1 reste au carnet) ; un bid non servi monte de
+la VALEUR PROPRE du vendeur (2026-11-22, miroir de B1 : ce que l'unité
+coûte à CE bot à refaire par son travail, `brain_reserve` = ticks
+mesurés × valeur de son temps + intrants ; sous-produit, butin ou
+ramassage sans travail dédié : 1 pièce ; jamais boutique/alchimie ni
+plancher de marché), où il attend (plus de retrait à l'horizon ; la
+décroissance du plancher par horizon invendu est supprimée ; la limite
+est gardée avec l'ordre, schéma 11, colonne `ask_limit`, reportée par
+chaque amend et chaque adoption ; une offre déjà sous sa valeur remonte
+à sa valeur à sa prochaine fenêtre) ; un bid non servi monte de
 10 % (au moins une pièce) jusqu'à son plafond (ce que l'acheteur peut
 payer). Toutes les offres d'achat montent (2026-11-20, décision
 utilisateur : « il faut les faire monter les offres d'achat pour inciter

@@ -1,12 +1,13 @@
 #![forbid(unsafe_code)]
-//! Order repricing (plan marché M3/M4, wave 2; the 10 % walk, user
+//! Order repricing (plan marché M3/M4, wave 2; the 10 % walk, 5 % since 2026-11-22, user
 //! 2026-11-19: « la règle des 10 % vaut pour tout le monde en bid et ask,
 //! sinon les prix ne sont pas réels »). Each window (its length from the
 //! motive's horizon, its phase from the account and object: no walk in a
 //! block) one `concession::step`:
-//! - an unfilled ask drops 10 % (at least a coin) down to one coin, under
-//!   its own cost (no seller floor, never withdrawn); an unfilled bid
-//!   climbs 10 % (at least a coin) up to its ceiling (what the buyer can
+//! - an unfilled ask drops 5 % (`WALK_PCT`, moved from 10 % by the user on
+//!   2026-11-22; at least a coin) down to its owner's own value of the unit
+//!   (one coin for a byproduct; no market floor, never withdrawn); an unfilled bid
+//!   climbs 5 % (at least a coin) up to its ceiling (what the buyer can
 //!   pay);
 //! - an own fill backs the price off one ZIP step (a seller up, a buyer
 //!   down);
@@ -424,7 +425,7 @@ pub fn bid_adoptions(rows: &[lifescape_store::Order], handled: &dyn Fn(i64) -> b
         .collect()
 }
 
-/// Adopts every bid nobody walks into the 10 % walk (`bid_adoptions`),
+/// Adopts every bid nobody walks into the 5 % walk (`bid_adoptions`),
 /// once the grace after the daemon start ran. Returns the count.
 pub fn adopt_bids(service: &MarketService, wall: f64) -> usize {
     if wall - daemon_start() < ADOPT_GRACE_SECS {
@@ -439,7 +440,7 @@ pub fn adopt_bids(service: &MarketService, wall: f64) -> usize {
         }
     }
     if adopted > 0 {
-        crate::logln!("market-reprice: {adopted} resting bid(s) adopted by the 10 % walk");
+        crate::logln!("market-reprice: {adopted} resting bid(s) adopted by the 5 % walk");
     }
     adopted
 }

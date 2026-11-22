@@ -16,7 +16,7 @@
 //!    trades the most units (`MarketService::auction_books`), the
 //!    deals executing like any other match;
 //! 3. what an auction left resting walks ONCE (`walk_items`, read by
-//!    `market_reprice::reprice_round`): the 10 % walk plays only after a
+//!    `market_reprice::reprice_round`): the 5 % walk plays only after a
 //!    missed auction (a seller without a buyer or the reverse, or prices
 //!    that did not meet).
 //!

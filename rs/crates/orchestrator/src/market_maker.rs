@@ -441,7 +441,7 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
             stock_cost: held.get(id).map(|position| position.cost).unwrap_or(0),
             capital: equity,
             // Unserved since the previous pass (no buy of it since): the
-            // bid climbs 10 % (`maker::quote`); bought, a fresh quote.
+            // bid climbs 5 % (`maker::quote`); bought, a fresh quote.
             own_bid: bids.first().map(|(_, price, _)| *price).filter(|_| !bought_since(account, *id, &deals, previous.unwrap_or(wall - ticks_as_secs(MAKER_PASS_TICKS)))),
             own_ask: asks.first().map(|(_, price, _)| *price),
         };

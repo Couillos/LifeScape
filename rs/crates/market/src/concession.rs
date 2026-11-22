@@ -23,7 +23,8 @@
 //! bank) crosses the spread when the opposite best is inside its limit
 //! (M4), and any order takes the opposite best its next step would reach.
 //!
-//! The 10 % walk (user 2026-11-19, « la règle des 10 % vaut pour tout le
+//! The walk (`WALK_PCT`, 10 % at first, 5 % since the user's decision of
+//! 2026-11-22; user 2026-11-19, « la règle des 10 % vaut pour tout le
 //! monde en bid et ask, sinon les prix ne sont pas réels »; live: yew
 //! logs listed at twice their own cost walked down to it, sat there,
 //! were withdrawn and relisted at twice again, 7 h without a trade):
@@ -47,8 +48,10 @@ pub const AMEND_MIN_PCT: i64 = 1;
 /// coin): the old `demand_step` size, now once per fill only.
 pub const ZIP_STEP_PCT: i64 = 5;
 /// Walk of an unfilled order per window, in percent (at least a coin):
-/// a seller down, a buyer up (user 2026-11-19, the market makers' rate).
-pub const WALK_PCT: i64 = 10;
+/// a seller down, a buyer up (user 2026-11-19, the market makers' rate;
+/// moved from 10 % to 5 % by the user on 2026-11-22, B5 still shrinks it
+/// to `MIN_WALK_PCT` near the mean price).
+pub const WALK_PCT: i64 = 5;
 /// Smallest walk step, in percent, of an order resting on the mean price
 /// of the recent trades (B5, user plan lot 3 marché): see `step_pct`.
 pub const MIN_WALK_PCT: i64 = 1;
@@ -216,8 +219,8 @@ pub fn zip_backoff(sell: bool, current: i64, limit: i64) -> i64 {
 
 /// Walk step in percent (B5): proportional to the relative gap between
 /// the order's price and the mean price of the recent trades, in
-/// `[MIN_WALK_PCT, WALK_PCT]` (a 1 % gap steps 1 %, a 4 % gap 4 %, 10 %
-/// or more steps 10 %); without a usable mean price, `WALK_PCT`.
+/// `[MIN_WALK_PCT, WALK_PCT]` (a 1 % gap steps 1 %, a 4 % gap 4 %, 5 %
+/// or more steps 5 %); without a usable mean price, `WALK_PCT`.
 pub fn step_pct(current: i64, anchor: Option<i64>) -> i64 {
     let Some(anchor) = anchor.filter(|price| *price >= 1) else {
         return WALK_PCT;
@@ -226,7 +229,7 @@ pub fn step_pct(current: i64, anchor: Option<i64>) -> i64 {
     gap_pct.clamp(MIN_WALK_PCT, WALK_PCT)
 }
 
-/// The 10 % walk of an unfilled order from `current`: a seller `WALK_PCT`
+/// The 5 % walk of an unfilled order from `current`: a seller `WALK_PCT`
 /// down (at least a coin, never under 1), a buyer `WALK_PCT` up (at
 /// least a coin; its ceiling is the caller's bound).
 pub fn walk(sell: bool, current: i64) -> i64 {
@@ -245,7 +248,7 @@ pub fn walk_by(sell: bool, current: i64, pct: i64) -> i64 {
     }
 }
 
-/// One window of the order (pure): the 10 % walk (module doc).
+/// One window of the order (pure): the 5 % walk (module doc).
 pub fn step(window: &Window) -> Step {
     let sell = window.sell;
     // The order's own limit (user 2026-11-22, the mirror of B1): a buyer's
