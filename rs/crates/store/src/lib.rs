@@ -14,6 +14,7 @@
 //! Candles are a cache: `executions` is the source of truth and any candle
 //! set can be rebuilt with [`Store::rebuild_candles`].
 
+pub mod amends;
 pub mod balance;
 pub mod candle_chain;
 pub mod candles;
@@ -34,6 +35,7 @@ pub mod schema;
 pub mod work_gains;
 pub mod xp_rates;
 
+pub use amends::OrderAmend;
 pub use balance::{stock_days, MethodWork, UnsoldStock};
 pub use candle_chain::chain_candles;
 pub use candles::{Candle, Execution, NewExecution, YieldCandleResolution};
@@ -45,7 +47,7 @@ pub use items::Item;
 pub use lineage::{LineageLink, LineageRow, AMEND_WINDOW_SECS};
 pub use market_criteria::MarketCriteria;
 pub use measures::{PurgeCounts, ReportMeasure, StoredMeasure};
-pub use orders::{NewOrder, Order, OrderSide, OrderStatus, AMENDED_REASON};
+pub use orders::{NewOrder, Order, OrderSide, OrderStatus, AMENDED_REASON, BOOKKEEPING_REASONS, MERGED_REASON, REGROUPED_REASON};
 pub use reports::{NewTaskReport, NewTaskYield, TaskReport, TaskYield, YieldAggregate};
 pub use work_gains::AccountWork;
 pub use xp_rates::{BucketWork, SkillBucket};

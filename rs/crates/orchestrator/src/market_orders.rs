@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use lifescape_json::{object, str_value, Value};
 use lifescape_market::{check_price, Order, Side};
-use lifescape_store::{NewOrder, OrderSide, OrderStatus};
+use lifescape_store::{OrderSide, OrderStatus};
 
 use crate::market_service::MarketService;
 
@@ -100,52 +100,22 @@ impl MarketService {
             return Self::err(format!("order {order_id} is not resting (filled or in flight)"));
         };
         let remaining = cap.map(|cap| cap.min(old.remaining)).unwrap_or(old.remaining);
-        // 2. Carnet: replacement row first, then the old row closes. Any
-        // refusal rolls the book back, so book and carnet never diverge.
-        // The replacement joins the old row's lineage (root, t0, motive:
-        // schema 6, decision Q1); the old row closes `amended`, never a
-        // cancellation in the measures.
-        let replacement = {
-            let store = self.lock_store();
-            let placed = store.place_order(&NewOrder {
-                account: account.clone(),
-                side: row.side,
-                item_id: item,
-                quantity: remaining,
-                price,
-                dormant: false,
-                clock,
-                replaces: Some(order_id),
-                motive: row.motive.clone(),
-                ceiling: walked_ceiling.or(row.ceiling),
-                ask_limit: walked_limit.or(row.ask_limit),
-            });
-            match placed {
-                Ok(id) => match store.cancel_order_because(order_id, clock, lifescape_store::AMENDED_REASON) {
-                    Ok(()) => Ok(id),
-                    Err(error) => {
-                        // The carnet had closed it: the book copy was stale.
-                        let _ = store.cancel_order(id, clock);
-                        Err((false, format!("order {order_id} is closed ({error})")))
-                    }
-                },
-                Err(error) => Err((true, error.to_string())),
-            }
-        };
-        let replacement = match replacement {
-            Ok(id) => id,
-            Err((restore, error)) => {
-                if restore {
-                    self.restore_to_book(old);
-                }
-                return Self::err(error);
-            }
-        };
+        // 2. Carnet: the SAME row changes in place (schema 12, user
+        // 2026-11-22: a reprice is not a cancellation): price, remaining,
+        // limits and update clock; the journal `order_amends` keeps the
+        // walk. Any refusal rolls the book back, so book and carnet never
+        // diverge.
+        let replacement = order_id;
         {
-            // Repricing bounds follow the order to its new id.
-            let mut engine = self.lock_engine();
-            if let Some(bounds) = engine.quote_bounds.remove(&order_id) {
-                engine.quote_bounds.insert(replacement, bounds);
+            let amended = self.lock_store().amend_order_in_place(&lifescape_store::OrderAmend { order_id, price, remaining: cap.map(|cap| cap.min(old.remaining)), ceiling: walked_ceiling, ask_limit: walked_limit, clock });
+            if let Err(error) = amended {
+                // Invalid: the book copy is intact, restore it. NotFound:
+                // the carnet had closed it, the stale book copy stays gone.
+                if matches!(error, lifescape_store::Error::NotFound(_)) {
+                    return Self::err(format!("order {order_id} is closed ({error})"));
+                }
+                self.restore_to_book(old);
+                return Self::err(error.to_string());
             }
         }
         // 3. Book: the replacement places like a fresh order and may
@@ -173,7 +143,7 @@ impl MarketService {
                 // Validated above: unreachable in practice. The lots are
                 // withdrawn from both book and carnet, never half-listed.
                 let _ = self.lock_store().cancel_order(replacement, clock);
-                crate::logln!("market amend: {account} order {order_id} withdrawn, replacement refused: {error}");
+                crate::logln!("market amend: {account} order {order_id} withdrawn, amended order refused: {error}");
                 return Self::err(error.to_string());
             }
         };
@@ -198,7 +168,6 @@ impl MarketService {
         object(vec![
             ("ok", Value::Bool(true)),
             ("order", Value::Int(replacement)),
-            ("cancelled", Value::Int(order_id)),
             ("deals", Value::Arr(deal_ids)),
         ])
     }

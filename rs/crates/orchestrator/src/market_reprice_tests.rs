@@ -203,12 +203,12 @@ fn a_need_bid_keeps_its_lineage_across_amends_and_obtains() {
     let StandingBid::Kept { order, price: 2 } = kept else { panic!("taken over at its walked price: {kept:?}") };
     let row = service.lock_store().get_order(order).ok().flatten().expect("walked row");
     assert_eq!((row.root_id, row.root_clock, row.motive.as_str()), (root, root_row.created_clock, "need"));
-    assert!(row.replaces.is_some(), "an amend links its predecessor");
+    assert_eq!(order, root, "an amend rewrites the same row (schema 12)");
+    assert!(row.replaces.is_none());
     assert_eq!(bounds_of(&service, order).map(|bounds| (bounds.root_id, bounds.root_clock, bounds.motive)), Some((root, root_row.created_clock, "need".to_string())));
     let rows = service.lock_store().account_orders("fiona_park").unwrap_or_default();
     assert_eq!(rows.len(), 1, "one resting bid, never a second lineage: {rows:?}");
-    let replaced = service.lock_store().get_order(root).ok().flatten().expect("root row");
-    assert_eq!(replaced.cancel_reason, lifescape_store::AMENDED_REASON, "the walk is no cancellation");
+    assert_eq!((row.status, row.cancel_reason.as_str()), (lifescape_store::OrderStatus::Open, ""), "the walk is no cancellation");
     cleanup(&path);
 }
 
@@ -223,7 +223,8 @@ fn adoption_after_a_restart_reads_t0_from_the_carnet() {
     let StandingBid::Placed { order: root, .. } = first else { panic!("{first:?}") };
     reprice_round(&service, 4_000_001_200.0, 600.0);
     let walked = service.lock_store().account_orders("ryan_mason").unwrap_or_default().into_iter().next().expect("walked");
-    assert_ne!(walked.order_id, root, "amended once");
+    assert_eq!(walked.order_id, root, "amended in place: the same row");
+    assert_ne!(walked.price, 1, "the walk moved its price");
     drop(service);
     let catalogue = vec![
         CatalogueItem { id: FEATHER, name: "Feather".to_string(), shop_price: 2, alch_value: 1 },

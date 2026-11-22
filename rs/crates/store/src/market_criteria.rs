@@ -95,6 +95,8 @@ struct BuyRow {
     root_id: i64,
     root_clock: i64,
     cancel_reason: String,
+    /// Price the row opened at (schema 12: before its first in-place amend).
+    open_price: i64,
 }
 
 /// One buy lineage: opening price, t0, how and when it ended.
@@ -128,7 +130,7 @@ fn lineages_of(rows: Vec<BuyRow>) -> Vec<BuyLineage> {
     for (root_id, mut group) in by_root {
         group.sort_by_key(|row| row.order_id);
         let Some(first) = group.first() else { continue };
-        let open_price = group.iter().find(|row| row.order_id == root_id).unwrap_or(first).price;
+        let open_price = group.iter().find(|row| row.order_id == root_id).unwrap_or(first).open_price;
         let Some(terminal) = group.iter().rev().find(|row| !replaced.contains(&row.order_id)) else { continue };
         out.push(BuyLineage {
             account: terminal.account.clone(),
@@ -213,7 +215,8 @@ impl Store {
     fn lineage_criteria(&self, since: i64, until: i64, excluded: &[String], criteria: &mut MarketCriteria) -> Result<(), Error> {
         let until = if until <= 0 { i64::MAX } else { until };
         let mut statement = self.connection.prepare(
-            "SELECT order_id, account, item_id, price, status, updated_clock, replaces, root_id, root_clock, cancel_reason FROM orders \
+            "SELECT order_id, account, item_id, price, status, updated_clock, replaces, root_id, root_clock, cancel_reason, \
+             COALESCE((SELECT old_price FROM order_amends WHERE order_amends.order_id = orders.order_id ORDER BY amend_id LIMIT 1), price) FROM orders \
              WHERE side = 'buy' AND root_id IN (SELECT DISTINCT root_id FROM orders WHERE side = 'buy' AND (updated_clock >= ?1 OR root_clock >= ?1))",
         )?;
         let mapped = statement.query_map(params![since], |row| {
@@ -228,6 +231,7 @@ impl Store {
                 root_id: row.get(7)?,
                 root_clock: row.get(8)?,
                 cancel_reason: row.get(9)?,
+                open_price: row.get(10)?,
             })
         })?;
         let rows: Vec<BuyRow> = mapped.collect::<Result<Vec<BuyRow>, rusqlite::Error>>()?.into_iter().filter(|row| !excluded_account(excluded, &row.account)).collect();
@@ -247,6 +251,7 @@ impl Store {
             }
             match lineage.status.as_str() {
                 "settled" => criteria.buy_settled += 1,
+                "cancelled" if crate::orders::BOOKKEEPING_REASONS.contains(&lineage.cancel_reason.as_str()) => {}
                 "cancelled" => {
                     criteria.buy_true_cancels += 1;
                     if lineage.cancel_reason == GEAR_PLAN_REASON {
@@ -267,7 +272,8 @@ impl Store {
         }
         criteria.median_unserved_life_secs = median_f64(&mut lives).map(|secs| secs as i64);
         criteria.amends = self.connection.query_row(
-            "SELECT COUNT(*) FROM orders WHERE replaces IS NOT NULL AND created_clock >= ?1 AND created_clock < ?2",
+            "SELECT (SELECT COUNT(*) FROM orders WHERE replaces IS NOT NULL AND created_clock >= ?1 AND created_clock < ?2) \
+                  + (SELECT COUNT(*) FROM order_amends WHERE clock >= ?1 AND clock < ?2)",
             params![since, until],
             |row| row.get::<_, i64>(0),
         )? as usize;
@@ -375,6 +381,25 @@ mod tests {
         assert_eq!(criteria.amends, 2);
         assert!((criteria.two_sided_share() - 0.25).abs() < 1e-9);
         assert_eq!(criteria.reopened_lower_share(), Some(1.0));
+        Ok(())
+    }
+
+    /// Schema 12: in-place amends keep one row; the opening price comes
+    /// from the journal and the amends are counted from it.
+    #[test]
+    fn in_place_amends_count_and_keep_the_opening_price() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        store.upsert_item(&crate::Item { item_id: VAMBRACES, name: "Leather vambraces".to_string(), shop_price: 2, alch_value: 1 })?;
+        let since = 10_000;
+        let walked = store.place_order(&NewOrder { motive: "gear".to_string(), ..order("ryan_mason", OrderSide::Buy, VAMBRACES, 1, 10, 1000) })?;
+        for (price, clock) in [(11, since + 100), (12, since + 300)] {
+            store.amend_order_in_place(&crate::OrderAmend { order_id: walked, price, remaining: None, ceiling: None, ask_limit: None, clock })?;
+        }
+        store.cancel_order_because(walked, since + 600, super::GEAR_PLAN_REASON)?;
+        store.place_order(&order("ryan_mason", OrderSide::Buy, VAMBRACES, 1, 10, since + 603))?;
+        let criteria = store.market_criteria(since, 0, &[])?;
+        assert_eq!((criteria.buy_true_cancels, criteria.gear_plan_cancels, criteria.amends), (1, 1, 2));
+        assert_eq!(criteria.reopened, (1, 0, 0), "reopened at 10 under its last 12");
         Ok(())
     }
 }

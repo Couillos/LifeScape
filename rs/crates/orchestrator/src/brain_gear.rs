@@ -269,20 +269,25 @@ fn cancel_order(service: &crate::market_service::MarketService, account: &str, o
     reply.get("ok").as_bool() == Some(true)
 }
 
-/// Cancels the account's resting buys on wearables the gear plan does
-/// not want (`wanted`): an upgraded slot, a tier the budget dropped, an
-/// old ladder step or wish. Spared: what the graph's own obtains want,
-/// and tools (the wishlist keeps those).
+/// Cancels the account's own gear bids (motive `gear`) on wearables the
+/// gear plan has not wanted for `STALE_GRACE_SECS`: an upgraded slot, a
+/// tier the budget dropped, an old ladder step or wish. Spared: bids of
+/// other motives (arbitrage, stock, need: 1 818 of 2 501 live
+/// "not wanted by the gear plan" cancels were arbitrage bids the plan
+/// never owned), what the graph's own obtains want, and tools.
 fn cancel_stale_bids(job: &Job, life: &Life, wanted: &[String]) {
     let Some(service) = crate::market_service::shared() else { return };
     let spared = crate::brain_wishlist::wanted_names(life);
     let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
-    for row in rows.iter().filter(|row| cancellable(row) && row.motive != crate::market_lineage::NEED) {
-        let Some(name) = name_of(row.item_id) else { continue };
-        if gear_wearable(&name) && !wanted.contains(&name) && !spared.contains(&name) {
-            let closed = cancel_order(&service, &job.account, row.order_id);
-            crate::logln!("brain {}: gear bid {} on {name} cancelled ({closed}): not wanted by the gear plan", job.account, row.order_id);
-        }
+    let candidates: Vec<crate::brain_gear_stale::Candidate> = rows
+        .iter()
+        .filter(|row| cancellable(row) && row.motive == crate::market_lineage::GEAR)
+        .filter_map(|row| name_of(row.item_id).map(|name| (row.order_id, name)))
+        .filter(|(_, name)| gear_wearable(name) && !wanted.contains(name) && !spared.contains(name))
+        .collect();
+    for (order, name) in crate::brain_gear_stale::due_for_account(&job.account, &candidates, wall_now()) {
+        let closed = cancel_order(&service, &job.account, order);
+        crate::logln!("brain {}: gear bid {order} on {name} cancelled ({closed}): not wanted by the gear plan for {} s", job.account, crate::brain_gear_stale::STALE_GRACE_SECS);
     }
 }
 
@@ -460,7 +465,10 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
     }
     let service = crate::market_service::shared();
     let budget = gear_ladder::wallet_ceiling(gear_free_coins(job), gear_ladder::GEAR_SHARE_PCT);
-    let owned_wearables: Vec<String> = owned.iter().filter(|name| gear_wearable(name)).cloned().collect();
+    // Only the pieces the plan keeps (best wearable per slot and style,
+    // or better) move the signature: stock held for a sale (arbitrage,
+    // loot) comes and goes without replanning the whole gear.
+    let owned_wearables: Vec<String> = gear_plan::kept_gear(&levels, &quests, &owned).into_iter().filter(|name| gear_wearable(name)).collect();
     let signature = crate::brain_gear_hold::gear_signature(style_name(style), &levels, &owned_wearables);
     let now_tick = crate::brain_stuck::seconds_to_ticks(now as i64);
     let allowed = |item: &str| obtainable_now(service.as_ref(), item, &quests, now);

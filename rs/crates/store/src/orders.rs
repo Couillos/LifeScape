@@ -94,6 +94,19 @@ pub struct NewOrder {
 /// `cancelled` (status unchanged, Q1) but its lineage goes on.
 pub const AMENDED_REASON: &str = "amended";
 
+/// Cancel reason of the fragments a merge round folded into one order
+/// (bookkeeping: the quantity goes on resting, nothing was withdrawn).
+pub const MERGED_REASON: &str = "merged";
+
+/// Cancel reason of a listing withdrawn so the stack relists as one lot
+/// (bookkeeping: the same units are listed again at once).
+pub const REGROUPED_REASON: &str = "regrouped";
+
+/// Reasons that are bookkeeping, never a withdrawn trade: the measures
+/// of cancellations leave them out. `amended` only exists on rows older
+/// than schema 12 (a reprice now rewrites its row, `order_amends`).
+pub const BOOKKEEPING_REASONS: [&str; 3] = [AMENDED_REASON, MERGED_REASON, REGROUPED_REASON];
+
 /// Stored order row.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Order {

@@ -145,12 +145,13 @@ fn amend_of_a_partly_filled_order_rests_once() {
         ("price", Value::Int(6)),
     ]));
     assert_eq!(amended.get("ok").as_bool(), Some(true), "{amended:?}");
-    let replacement = amended.get("order").as_i64().expect("replacement");
-    assert_eq!(status_of(&service, order), OrderStatus::Cancelled);
+    let replacement = amended.get("order").as_i64().expect("order");
+    assert_eq!(replacement, order, "amended in place: same row (schema 12)");
+    assert_eq!(status_of(&service, order), OrderStatus::Open, "an amend is no cancellation");
     let row = service.lock_store().get_order(replacement).expect("reads").expect("row");
     assert_eq!((row.status, row.remaining, row.price), (OrderStatus::Open, 6, 6));
     assert_eq!(book_sells(&service, FEATHER), vec![(6, 6)]);
-    // An order gone from the book cannot be amended, and no replacement
+    // An order gone from the book cannot be amended, and no extra
     // row is left behind.
     service.lock_engine().books.get_mut(&FEATHER).expect("book").cancel(replacement as u64).expect("rests");
     let refused = service.handle(&object(vec![
@@ -161,7 +162,7 @@ fn amend_of_a_partly_filled_order_rests_once() {
     ]));
     assert_eq!(refused.get("ok").as_bool(), Some(false));
     let live: Vec<i64> = service.lock_store().account_orders("seller").expect("reads").iter().map(|row| row.order_id).collect();
-    assert_eq!(live, vec![replacement], "no phantom replacement");
+    assert_eq!(live, vec![replacement], "no phantom row");
     cleanup(&path);
 }
 

@@ -2120,3 +2120,22 @@ maximal) ; (6) le mode d'un objet jamais mesuré est fixé au premier ordre ;
 base est journalisée ; (8) `market_service.rs` découpé
 (`market_reference.rs` : prix courants, `quote`, `book`) ; (9) le plafond
 persisté est dans l'unité du carnet (par lot), comme la colonne.
+
+## 2026-11-22 : annulations d'ordres à zéro (schéma 12)
+
+Constat sur 6 h : 35 737 lignes `cancelled` pour 3 546 `settled`, dont
+31 945 `amended` (un reprice = annuler + insérer). Décisions :
+(1) un reprice réécrit la même ligne (`Store::amend_order_in_place` :
+prix, reste, plafond, limite de vente, `updated_clock`), l'identifiant ne
+change plus ; l'historique du pas est dans `order_amends` (schéma 12, lu
+par `market_criteria` : prix d'ouverture, nombre d'amends) ; `amended`
+n'existe plus que sur les lignes d'avant le schéma 12 ; (2) la fusion de
+fragments (`merged`) et le regroupement d'une pile en un lot
+(`regrouped`) ont une raison propre ; `BOOKKEEPING_REASONS` (amended,
+merged, regrouped) = comptabilité, jamais un échange retiré ; (3) le plan
+d'équipement ne retire que ses propres offres (motif `gear`), et
+seulement après 30 min sans que la pièce soit voulue
+(`brain_gear_stale`) : 1 818 des 2 501 retraits « gear_plan » de 6 h
+étaient des offres d'arbitrage (vie moyenne 6 s) ; la signature du plan
+ne compte plus que les pièces gardées (`kept_gear`), plus le stock
+d'arbitrage en sac.

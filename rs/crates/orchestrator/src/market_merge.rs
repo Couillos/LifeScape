@@ -167,7 +167,7 @@ impl MarketService {
             return Err("book and carnet disagree (a fill or cancel raced the round), retried next round".to_string());
         }
         for order in &taken {
-            if let Err(error) = store.cancel_order(order.id as i64, clock) {
+            if let Err(error) = store.cancel_order_because(order.id as i64, clock, lifescape_store::MERGED_REASON) {
                 crate::logln!("market-merge: fragment {} already closed in the carnet ({error})", order.id);
             }
         }

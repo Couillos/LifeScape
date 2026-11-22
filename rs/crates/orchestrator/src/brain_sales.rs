@@ -417,7 +417,7 @@ fn regroup_slivers(
         if !crate::market_seller::undersized(row.quantity, row.remaining, spare, lot) {
             continue;
         }
-        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(row.order_id))]));
+        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(row.order_id)), ("reason", str_value(lifescape_store::REGROUPED_REASON))]));
         if reply.get("ok").as_bool() == Some(true) {
             crate::logln!("brain {account}: listing {} of {} {name} withdrawn ({spare} more free, lot {lot}): the stack lists as one lot", row.order_id, row.remaining);
             withdrawn.push(row.order_id);
