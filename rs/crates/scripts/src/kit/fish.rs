@@ -363,12 +363,27 @@ pub fn fish_load(
     let mut ops = FishOps { bank, coins, bait_ban: 0, short_bait: None, level, target: target.cloned() };
     let ok = crate::kit::load::run_load(
         bot,
-        &crate::kit::load::LoadCfg::gather().until(until),
+        &fish_cfg(until),
         &mut crate::kit::load::LoopState::fresh(bot),
         &mut ops,
     )?;
     Ok((ok, learn_level(bot, FISH_STAT, ops.level)))
 }
+
+/// The fishing load config: spots hop to a random coordinate of their
+/// area every 280-529 ticks (`fishing_movement.rs2`), so an empty view is
+/// a hop in progress, never a verdict. The repick window outlasts the
+/// longest hop period (the shared 16 x 15 ticks gave up first: 17 runs
+/// `fish failed at (3239..3240, 3243..3254)` in 6 h at Lumbridge, six
+/// bots, each fed to the brain's 3-strike ban of fishing).
+pub(crate) fn fish_cfg(until: Option<crate::kit::cycle::WantGoal>) -> crate::kit::load::LoadCfg {
+    let mut cfg = crate::kit::load::LoadCfg::gather().until(until);
+    cfg.repick_tries = u32::try_from(FISH_SPOT_HOP_MAX_TICKS.div_ceil(cfg.repick_wait) + 1).unwrap_or(u32::MAX);
+    cfg
+}
+
+/// Longest period of a fishing spot's hop (`280 + random(250)`).
+const FISH_SPOT_HOP_MAX_TICKS: u64 = 530;
 
 #[cfg(test)]
 mod dry_tests {
@@ -425,6 +440,13 @@ mod dry_tests {
 
 #[cfg(test)]
 mod tests {
+    /// Live 2026-11-22: the repick window must outlast a spot's hop.
+    #[test]
+    fn the_repick_window_outlasts_a_spot_hop() {
+        let cfg = super::fish_cfg(None);
+        assert!(u64::from(cfg.repick_tries) * cfg.repick_wait > super::FISH_SPOT_HOP_MAX_TICKS, "{} tries x {} ticks", cfg.repick_tries, cfg.repick_wait);
+    }
+
     /// The clicked spot hops (`npc_tele`) or leaves the stream: the stand
     /// ends on the slot itself; standing still is still fishing.
     #[test]
