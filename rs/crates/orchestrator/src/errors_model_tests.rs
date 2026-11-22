@@ -208,3 +208,18 @@ fn silent_loops_are_no_progress_rows() {
     let line = from_brain_line("brain harry_page: n133 no progress: 3 budget windows in a row without progress toward the node", 5).expect("row");
     assert_eq!((line.kind.as_str(), line.node_id.as_str()), ("no_progress", "n133"));
 }
+
+#[test]
+fn a_contended_or_depleted_site_wait_is_no_error() {
+    // D4 and the depletion rule: the brain cools the site, counts no
+    // failure, no block, no ban: the state is normal and handled.
+    let contended = json::parse(r#"{"account":"t01","activity":"mining","error":null,"missing":["contended:3298,3316,0"],"node_id":"n15","stop":"blocked"}"#).unwrap();
+    assert!(from_report("t01", &contended, None, 5_000, &no_zone).is_none());
+    let depleted = json::parse(r#"{"account":"t01","activity":"mining","error":null,"missing":["depleted:3288,3370,0,120"],"node_id":"n15","stop":"blocked"}"#).unwrap();
+    assert!(from_report("t01", &depleted, None, 5_000, &no_zone).is_none());
+    // A real need beside the site wait stays an error.
+    let mixed = json::parse(r#"{"account":"t01","activity":"mining","error":null,"missing":["contended:3298,3316,0","iron_pickaxe"],"node_id":"n15","stop":"blocked"}"#).unwrap();
+    assert!(from_report("t01", &mixed, None, 5_000, &no_zone).is_some());
+    let plain = json::parse(r#"{"account":"t01","activity":"mining","error":null,"missing":["coal"],"node_id":"n15","stop":"blocked"}"#).unwrap();
+    assert!(from_report("t01", &plain, None, 5_000, &no_zone).is_some());
+}
