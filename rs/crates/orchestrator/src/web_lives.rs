@@ -224,9 +224,23 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
     let (closed, predicted, realized) = crate::trade_report::closed_totals(&trade_rows);
     let trades: Vec<Value> = trade_rows.iter().take(50).map(crate::trade_report::row_value).collect();
     let clock = SystemTime::now().duration_since(UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+    // Cancelled / failed transactions and their percentage (staff and
+    // personal accounts excluded, measure rule).
+    let excluded: Vec<String> = crate::economy_guard::excluded_accounts().into_iter().collect();
+    let bounds = crate::economy_outcomes::since_bounds(clock);
+    let outcomes = crate::economy_outcomes::cached_outcomes(&run_dir.join("lifescape.db"), clock, || {
+        let deal_rows = store.deal_outcomes(&bounds, &excluded)?;
+        let order_rows = store.order_outcomes(&bounds, &excluded)?;
+        Ok(crate::economy_outcomes::outcomes_value(&deal_rows, &order_rows))
+    });
+    let outcomes = match outcomes {
+        Ok(value) => value,
+        Err(error) => return err_json(format!("economy outcomes: {error}")),
+    };
     object(vec![
         ("ok", Value::Bool(true)),
         ("clock", Value::Int(clock)),
+        ("outcomes", outcomes),
         (
             "market",
             object(vec![
@@ -425,6 +439,8 @@ mod tests {
         assert_eq!(economy.get("ok").as_bool(), Some(true), "empty store still serves a shape");
         assert!(economy.get("holdings").is_null(), "money supply and top holdings left the page");
         assert_eq!(economy.get("deals").get("total").as_i64(), Some(0));
+        assert_eq!(economy.get("outcomes").get("deals").as_arr().map(|windows| windows.len()), Some(4), "four periods of exchanges");
+        assert_eq!(economy.get("outcomes").get("orders").as_arr().map(|windows| windows.len()), Some(4), "four periods of offers");
         assert_eq!(economy.get("market").get("items").as_i64(), Some(3));
         assert!(economy.get("activities").as_arr().is_some());
         assert!(economy.get("activities_pending").as_bool().is_some(), "top activities say when the guides set is not built yet");
