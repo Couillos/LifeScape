@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use lifescape_json::Value;
 use lifescape_store::{BucketWork, SkillBucket};
 
-use crate::xp_rates::{build, change_percent, period_start, since_clock, History, F2P_SKILLS, SLOT_COUNT};
+use crate::xp_rates::{build, change_percent, history_bucket_seconds, period_start, since_clock, ChartHistory, History, F2P_SKILLS, SLOT_COUNT};
 
 const NOW: i64 = 1_800_000_000 + 1800;
 const HOUR: i64 = 3600;
@@ -23,7 +23,8 @@ fn excluded() -> BTreeSet<String> {
 
 fn snapshot_of(rows: &[SkillBucket], buckets: &[BucketWork]) -> Value {
     let history = History { rows, buckets, oldest_clock: NOW - 3 * DAY };
-    build(rows, buckets, &history, NOW, NOW + 1800, &excluded())
+    let chart_history = ChartHistory { rows, buckets, bucket_seconds: HOUR };
+    build(rows, buckets, &history, &chart_history, NOW, NOW + 1800, &excluded())
 }
 
 fn skill_row<'a>(snapshot: &'a Value, skill: &str) -> &'a Value {
@@ -48,8 +49,8 @@ fn rates_are_ratios_of_sums_and_staff_never_counts() {
         let period = skill_row(&snapshot, "woodcutting").get("periods").get(key);
         assert_eq!(period.get("xp").as_i64(), Some(3100), "{key}");
         assert_eq!(period.get("work_ticks").as_i64(), Some(2000), "{key}");
-        assert_eq!(period.get("efficiency").as_f64(), Some(1.55), "{key}");
-        assert_eq!(period.get("fleet_per_tick").as_f64(), Some(1.55), "{key}");
+        assert_eq!(period.get("efficiency").as_f64(), Some(9300.0), "{key}");
+        assert_eq!(period.get("fleet_rate").as_f64(), Some(9300.0), "{key}");
         assert_eq!(period.get("share").as_f64(), Some(1.0), "{key}");
         assert_eq!(period.get("bots").as_i64(), Some(2), "{key}");
     }
@@ -68,11 +69,11 @@ fn chart_is_hourly_over_seven_days_with_null_gaps() {
     assert_eq!(SLOT_COUNT, 168);
     assert_eq!(snapshot.get("slots").as_arr().unwrap().len(), SLOT_COUNT);
     let mining = snapshot.get("series").get("mining");
-    let per_fleet = mining.get("fleet_per_tick").as_arr().unwrap();
-    assert_eq!(per_fleet[SLOT_COUNT - 1].as_f64(), Some(0.5));
-    assert_eq!(per_fleet[SLOT_COUNT - 2].as_f64(), Some(0.025));
+    let per_fleet = mining.get("fleet_rate").as_arr().unwrap();
+    assert_eq!(per_fleet[SLOT_COUNT - 1].as_f64(), Some(3000.0));
+    assert_eq!(per_fleet[SLOT_COUNT - 2].as_f64(), Some(150.0));
     assert!(per_fleet[0].is_null());
-    assert_eq!(mining.get("efficiency").as_arr().unwrap()[SLOT_COUNT - 2].as_f64(), Some(0.05));
+    assert_eq!(mining.get("efficiency").as_arr().unwrap()[SLOT_COUNT - 2].as_f64(), Some(300.0));
     assert_eq!(snapshot.get("skills").as_arr().unwrap().len(), F2P_SKILLS.len());
 }
 
@@ -104,14 +105,93 @@ fn all_time_reads_its_own_history_and_idle_skills_are_flagged() {
     let buckets = vec![work(NOW - HOUR, "ann", 1000)];
     let all_buckets = vec![work(0, "ann", 41_000)];
     let history = History { rows: &all_rows, buckets: &all_buckets, oldest_clock: old };
-    let snapshot = build(&rows, &buckets, &history, NOW, NOW + 1800, &excluded());
+    let chart_history = ChartHistory { rows: &rows, buckets: &buckets, bucket_seconds: HOUR };
+    let snapshot = build(&rows, &buckets, &history, &chart_history, NOW, NOW + 1800, &excluded());
     let all = skill_row(&snapshot, "mining").get("periods").get("all");
     assert_eq!(all.get("xp").as_i64(), Some(4100));
-    assert_eq!(all.get("efficiency").as_f64(), Some(0.1));
+    assert_eq!(all.get("efficiency").as_f64(), Some(600.0));
     assert_eq!(skill_row(&snapshot, "mining").get("periods").get("7d").get("xp").as_i64(), Some(100));
     let prayer = skill_row(&snapshot, "prayer").get("periods").get("7d");
     assert_eq!(prayer.get("idle").as_bool(), Some(true));
     assert!(prayer.get("efficiency").is_null());
     assert!(since_clock(NOW) <= period_start(NOW, 7 * DAY) - 7 * DAY);
     assert!(since_clock(NOW) <= NOW - 167 * HOUR);
+}
+
+#[test]
+fn rates_are_per_6000_ticks_in_cards_tables_and_top_methods() {
+    let recent = (NOW / HOUR) * HOUR - HOUR;
+    // 150 xp over 600 ticks = 0.25 per tick = 1500 per 6000 ticks.
+    let rows = vec![row("ann", "chop:oak", recent, 1000, "woodcutting", 250), row("ann", "chop:oak", recent, 1000, "woodcutting", 50)];
+    let snapshot = snapshot_of(&rows, &[work(recent, "ann", 2000)]);
+    assert_eq!(snapshot.get("rate_ticks").as_i64(), Some(6000));
+    let day = skill_row(&snapshot, "woodcutting").get("periods").get("24h");
+    assert_eq!(day.get("efficiency").as_f64(), Some(900.0));
+    assert_eq!(day.get("fleet_rate").as_f64(), Some(900.0));
+    assert_eq!(snapshot.get("fleet").get("24h").get("xp_rate").as_f64(), Some(900.0));
+    assert_eq!(snapshot.get("top_methods").as_arr().unwrap()[0].get("xp_rate").as_f64(), Some(900.0));
+    assert_eq!(day.get("best_method").get("xp_rate").as_f64(), Some(900.0));
+}
+
+#[test]
+fn history_bucket_width_grows_with_the_span() {
+    assert_eq!(history_bucket_seconds(3 * DAY), HOUR);
+    assert_eq!(history_bucket_seconds(7 * DAY), HOUR);
+    assert_eq!(history_bucket_seconds(7 * DAY + 1), 6 * HOUR);
+    assert_eq!(history_bucket_seconds(45 * DAY), 6 * HOUR);
+    assert_eq!(history_bucket_seconds(45 * DAY + 1), DAY);
+}
+
+#[test]
+fn all_history_chart_sums_per_bucket_from_the_oldest_report() {
+    let width = 6 * HOUR;
+    let oldest = NOW - 20 * DAY;
+    let first = (oldest / width) * width;
+    let last = (NOW / width) * width;
+    // Two buckets of 6 h: xp 300 / ticks 100 and xp 100 / ticks 100 are
+    // summed (400 / 200 * 6000 = 12000), not averaged per bucket.
+    let all_rows = vec![row("ann", "m", first, 100, "mining", 300), row("ann", "m", last, 100, "mining", 100), row("admin", "m", first, 100, "mining", 9999)];
+    let all_buckets = vec![work(first, "ann", 100), work(last, "ann", 100), work(first, "admin", 100)];
+    let week_rows = vec![row("ann", "m", NOW - HOUR, 100, "mining", 100)];
+    let history = History { rows: &all_rows, buckets: &all_buckets, oldest_clock: oldest };
+    let chart_history = ChartHistory { rows: &all_rows, buckets: &all_buckets, bucket_seconds: width };
+    let snapshot = build(&week_rows, &[work(NOW - HOUR, "ann", 100)], &history, &chart_history, NOW, NOW + 1800, &excluded());
+    let chart = snapshot.get("history_chart");
+    assert_eq!(chart.get("bucket_seconds").as_i64(), Some(width));
+    let slots = chart.get("slots").as_arr().unwrap();
+    assert_eq!(slots[0].as_i64(), Some(first));
+    assert_eq!(slots[slots.len() - 1].as_i64(), Some(last));
+    assert_eq!(slots.len() as i64, (last - first) / width + 1);
+    let mining = chart.get("series").get("mining");
+    let efficiency = mining.get("efficiency").as_arr().unwrap();
+    assert_eq!(efficiency[0].as_f64(), Some(18000.0));
+    assert_eq!(efficiency[efficiency.len() - 1].as_f64(), Some(6000.0));
+    assert!(efficiency[1].is_null());
+    assert_eq!(chart.get("fleet_ticks").as_arr().unwrap()[0].as_i64(), Some(100));
+    // The hourly 7 day chart is untouched.
+    assert_eq!(snapshot.get("slots").as_arr().unwrap().len(), SLOT_COUNT);
+}
+
+#[test]
+fn fleet_chart_series_hold_raw_xp_and_xp_per_6000_ticks() {
+    let slot_start = (NOW / HOUR) * HOUR;
+    // 250 + 50 xp in two skills over 600 fleet ticks (staff left out):
+    // 300 / 600 * 6000 = 3000.
+    let rows = vec![
+        row("ann", "m", slot_start, 400, "mining", 250),
+        row("ann", "m", slot_start, 200, "attack", 50),
+        row("admin", "m", slot_start, 200, "attack", 9999),
+    ];
+    let buckets = vec![work(slot_start, "ann", 600), work(slot_start, "admin", 5000)];
+    let snapshot = snapshot_of(&rows, &buckets);
+    let fleet_xp = snapshot.get("fleet_xp").as_arr().unwrap();
+    let fleet_rate = snapshot.get("fleet_rate").as_arr().unwrap();
+    assert_eq!(fleet_xp.len(), SLOT_COUNT);
+    assert_eq!(fleet_xp[SLOT_COUNT - 1].as_i64(), Some(300));
+    assert_eq!(fleet_rate[SLOT_COUNT - 1].as_f64(), Some(3000.0));
+    assert_eq!(fleet_xp[0].as_i64(), Some(0));
+    assert!(fleet_rate[0].is_null());
+    let history = snapshot.get("history_chart");
+    assert_eq!(history.get("fleet_xp").as_arr().unwrap().iter().filter_map(Value::as_i64).sum::<i64>(), 300);
+    assert!(history.get("fleet_rate").as_arr().unwrap().iter().any(|value| value.as_f64() == Some(3000.0)));
 }

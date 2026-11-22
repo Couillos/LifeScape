@@ -62,7 +62,8 @@
   #players td.left, #players th.left, #skills td.left, #skills th.left { text-align: left; }
   #players tr[data-account] { cursor: pointer; }
   #players tr[data-account]:hover { background: #1a1a1a; }
-  #players tr.cur { font-weight: bold; color: #ff0; }
+  #players tr.cur, #players tr.cur td, #players tr.cur td * { font-weight: bold; color: #ff0; }
+  #titletext.sel { color: #ff0; }
   #players .dot { margin-right: 2px; vertical-align: 0; }
   #players .clip { display: inline-block; max-width: 170px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
   @media (max-width: 768px) {
@@ -108,7 +109,7 @@
   <div style="display:flex;gap:12px;align-items:center">
     <button id="toggle" onclick="window.spectator.toggle()" aria-expanded="true" title="Show/hide sessions">☰ Sessions</button>
     <h1>Spectator <span class="muted">— LifeScape bots</span></h1>
-    <nav id="topnav" aria-label="Sections"><a class="navlink" href="/" aria-current="page">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/guides-money">Money guide</a><a class="navlink" href="/guides-training">Training guide</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores">Hiscores</a><a class="navlink" href="/xp">XP / tick</a><a class="navlink" href="/errors">Errors</a></nav>
+    <nav id="topnav" aria-label="Sections"><a class="navlink" href="/" aria-current="page">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/guides-money">Money guide</a><a class="navlink" href="/guides-training">Training guide</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores">Hiscores</a><a class="navlink" href="/xp">XP</a><a class="navlink" href="/errors">Errors</a></nav>
   </div>
 </div>
 <div id="controls">

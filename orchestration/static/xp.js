@@ -1,4 +1,4 @@
-// Page « XP / tick » (2026-11-22). Le daemon calcule un instantané toutes
+// Page « XP » (2026-11-22). Le daemon calcule un instantané toutes
 // les 30 min (comme les hiscores, `xp_service`); cette page lit seulement
 // `/api/xp` (octets en cache). Tous les taux sont des rapports de sommes
 // (somme des XP / somme des ticks de travail), jamais des moyennes de taux.
@@ -9,18 +9,15 @@ const XpPage = (() => {
 
   const MODES = [
     {
-      key: 'fleet_per_tick',
+      key: 'fleet_rate',
       label: 'Contribution à la flotte',
-      note: 'XP gagnés dans la compétence pendant l’heure ÷ ticks de travail de toute la flotte pendant cette heure : '
-        + 'la part de chaque compétence dans l’XP par tick de la flotte (les courbes s’additionnent).',
     },
     {
       key: 'efficiency',
       label: 'Efficacité de la compétence',
-      note: 'XP gagnés dans la compétence ÷ ticks de travail des activités qui rapportent de l’XP dans cette compétence : '
-        + 'ce que rapporte un tick passé à l’entraîner (heure sans activité = trou).',
     },
   ];
+  const RATE_LABEL = 'XP / 6000 ticks';
   const PERIOD_LABELS = { '24h': '24 h', '7d': '7 jours', all: 'Tout l’historique' };
   const COLORS = {
     attack: '#e6194b', strength: '#f58231', defence: '#9a6324', hitpoints: '#fabed4', ranged: '#3cb44b',
@@ -44,11 +41,11 @@ const XpPage = (() => {
     return (value < 0 ? '-' : '') + out;
   }
 
-  // 1.5512 -> "1,55" (French decimal comma); null -> "-".
+  // Rates are per 6000 ticks: 9312.4 -> "9 312", 42.37 -> "42,4"; null -> "-".
   function formatRate(value) {
     if (value === null || value === undefined || !isFinite(value)) return '-';
-    const digits = value >= 10 ? 1 : value >= 1 ? 2 : 3;
-    return value.toFixed(digits).replace('.', ',');
+    if (Math.abs(value) >= 100) return formatNumber(Math.round(value));
+    return value.toFixed(1).replace('.', ',');
   }
 
   function formatShare(value) {
@@ -90,12 +87,43 @@ const XpPage = (() => {
     return MODES.find((entry) => entry.key === key) || MODES[0];
   }
 
+  // Data of one chart timeframe: "24h" = last 24 hourly slots of the week
+  // series, "7d" = the 7 day hourly series, "all" = the whole-history series
+  // (bucket width chosen by the daemon). Same shape for the three.
+  function chartView(snapshot, periodKey) {
+    const week = {
+      bucket_seconds: snapshot.bucket_seconds, slots: snapshot.slots || [], fleet_ticks: snapshot.fleet_ticks || [],
+      fleet_xp: snapshot.fleet_xp || [], fleet_rate: snapshot.fleet_rate || [], series: snapshot.series || {},
+    };
+    if (periodKey === 'all') return snapshot.history_chart || { bucket_seconds: week.bucket_seconds, slots: [], fleet_ticks: [], fleet_xp: [], fleet_rate: [], series: {} };
+    if (periodKey !== '24h') return week;
+    const count = 24;
+    const tail = (list) => list.slice(Math.max(0, list.length - count));
+    const series = {};
+    for (const skill of Object.keys(week.series)) {
+      series[skill] = {};
+      for (const key of Object.keys(week.series[skill])) series[skill][key] = tail(week.series[skill][key]);
+    }
+    return {
+      bucket_seconds: week.bucket_seconds, slots: tail(week.slots), fleet_ticks: tail(week.fleet_ticks),
+      fleet_xp: tail(week.fleet_xp), fleet_rate: tail(week.fleet_rate), series,
+    };
+  }
+
+  // The two fleet lines: raw XP per bucket, XP per 6000 fleet ticks.
+  function fleetLines(view) {
+    return {
+      xp: [{ skill: 'XP flotte', color: '#ff0', values: view.fleet_xp || [] }],
+      rate: [{ skill: RATE_LABEL + ' flotte', color: '#04A800', values: view.fleet_rate || [] }],
+    };
+  }
+
   // Chart lines: per visible skill, the aligned values (null = gap).
-  function chartLines(snapshot, modeKey, hidden) {
+  function chartLines(snapshot, view, modeKey, hidden) {
     const lines = [];
     for (const skill of snapshot.skills || []) {
       if (hidden && hidden[skill]) continue;
-      const values = ((snapshot.series || {})[skill] || {})[modeKey] || [];
+      const values = ((view.series || {})[skill] || {})[modeKey] || [];
       lines.push({ skill, color: COLORS[skill] || '#ccc', values });
     }
     return lines;
@@ -137,11 +165,11 @@ const XpPage = (() => {
 
   function methodText(best) {
     if (!best) return '-';
-    return best.method + ' · ' + formatRate(best.xp_per_tick) + '/tick · ' + formatNumber(best.ticks) + ' ticks · ' + best.runs + ' runs';
+    return best.method + ' · ' + formatRate(best.xp_rate) + ' · ' + formatNumber(best.ticks) + ' ticks · ' + best.runs + ' runs';
   }
 
   return {
-    MODES, PERIOD_LABELS, COLORS, esc, formatNumber, formatRate, formatShare, formatChange, changeClass, span, freshness,
+    MODES, RATE_LABEL, PERIOD_LABELS, chartView, fleetLines, COLORS, esc, formatNumber, formatRate, formatShare, formatChange, changeClass, span, freshness,
     mode, chartLines, chartMax, slotAt, tooltipLines, skillRows, methodText,
   };
 })();
@@ -154,17 +182,20 @@ if (typeof document !== 'undefined') {
   let loadError = '';
   let modeKey = page.MODES[0].key;
   let periodKey = '24h';
+  let chartPeriodKey = '24h';
+  let fleetPeriodKey = '24h';
   const hidden = {};
   const byId = (id) => document.getElementById(id);
 
   const PAD = { left: 56, right: 16, top: 10, bottom: 24 };
 
-  function drawChart(hoverSlot) {
-    const canvas = byId('chart');
+  // One canvas: `lines` over the slots of `view`, hover tooltip when
+  // `hoverSlot >= 0`. Every chart (skills, fleet XP, fleet rate) uses it.
+  function drawPlot(canvas, view, lines, hoverSlot, shortHeight) {
     const context = canvas.getContext('2d');
     const ratio = window.devicePixelRatio || 1;
     const width = Math.max(320, canvas.clientWidth || 720);
-    const height = Math.round(Math.min(420, width * 0.42));
+    const height = Math.round(Math.min(shortHeight ? 220 : 420, width * (shortHeight ? 0.25 : 0.42)));
     canvas.width = Math.round(width * ratio);
     canvas.height = Math.round(height * ratio);
     canvas.style.height = height + 'px';
@@ -172,8 +203,7 @@ if (typeof document !== 'undefined') {
     context.fillStyle = '#111';
     context.fillRect(0, 0, width, height);
     context.font = '11px monospace';
-    const slots = (snapshot && snapshot.slots) || [];
-    const lines = snapshot ? page.chartLines(snapshot, modeKey, hidden) : [];
+    const slots = (view && view.slots) || [];
     const plotW = width - PAD.left - PAD.right, plotH = height - PAD.top - PAD.bottom;
     const ticks = LifeChart.niceTicks(0, page.chartMax(lines) || 1, LifeChart.tickCount(plotH, 40, 8));
     const top = ticks[ticks.length - 1] || 1;
@@ -190,7 +220,7 @@ if (typeof document !== 'undefined') {
     context.textAlign = 'center';
     const every = LifeChart.labelEvery(slots.length, plotW, 80);
     for (let index = 0; index < slots.length; index += every) {
-      context.fillText(LifeChart.axisLabel(slots[index], snapshot.bucket_seconds, slots.length), xOf(index), height - 8);
+      context.fillText(LifeChart.axisLabel(slots[index], view.bucket_seconds, slots.length), xOf(index), height - 8);
     }
     context.lineWidth = 1.5;
     for (const line of lines) {
@@ -207,8 +237,8 @@ if (typeof document !== 'undefined') {
       const x = xOf(hoverSlot);
       context.strokeStyle = '#666';
       context.beginPath(); context.moveTo(x, PAD.top); context.lineTo(x, PAD.top + plotH); context.stroke();
-      const label = LifeChart.periodLabel(slots[hoverSlot], snapshot.bucket_seconds);
-      const rows = page.tooltipLines(snapshot, lines, hoverSlot, label);
+      const label = LifeChart.periodLabel(slots[hoverSlot], view.bucket_seconds);
+      const rows = page.tooltipLines(view, lines, hoverSlot, label);
       const boxW = Math.max(...rows.map((row) => context.measureText(row.text).width)) + 16;
       const boxH = rows.length * 14 + 8;
       const boxX = x + 12 + boxW > width ? x - 12 - boxW : x + 12;
@@ -221,54 +251,56 @@ if (typeof document !== 'undefined') {
     }
   }
 
-  function renderCards() {
-    let html = '';
-    for (const period of snapshot.periods || []) {
-      const fleet = (snapshot.fleet || {})[period.key] || {};
-      html += '<div class="card"><span class="muted">Flotte · ' + page.esc(page.PERIOD_LABELS[period.key] || period.key) + '</span>'
-        + '<b>' + page.formatRate(fleet.xp_per_tick) + ' XP/tick</b>'
-        + page.formatNumber(fleet.xp) + ' XP · ' + page.formatNumber(fleet.work_ticks) + ' ticks · ' + (fleet.bots || 0) + ' bots</div>';
+  // The three charts, each with its own timeframe and the same hover slot.
+  const CHARTS = [
+    { id: 'fleetxp', periodVar: () => fleetPeriodKey, lines: (view) => page.fleetLines(view).xp, short: true },
+    { id: 'fleetrate', periodVar: () => fleetPeriodKey, lines: (view) => page.fleetLines(view).rate, short: true },
+    { id: 'chart', periodVar: () => chartPeriodKey, lines: (view) => page.chartLines(snapshot, view, modeKey, hidden), short: false },
+  ];
+
+  function drawCharts(hoverChart, hoverSlot) {
+    for (const chart of CHARTS) {
+      const view = snapshot ? page.chartView(snapshot, chart.periodVar()) : null;
+      drawPlot(byId(chart.id), view, view ? chart.lines(view) : [], chart === hoverChart ? hoverSlot : -1, chart.short);
     }
-    byId('cards').innerHTML = html;
   }
 
   function renderControls() {
     byId('modes').innerHTML = page.MODES.map((entry) =>
       '<button class="toggle" data-mode="' + entry.key + '" aria-pressed="' + (entry.key === modeKey) + '">' + page.esc(entry.label) + '</button>').join('');
-    byId('modenote').textContent = page.mode(modeKey).note;
     byId('legend').innerHTML = (snapshot.skills || []).map((skill) =>
       '<button class="legend' + (hidden[skill] ? ' off' : '') + '" data-skill="' + skill + '"><i style="background:' + (page.COLORS[skill] || '#ccc') + '"></i>' + page.esc(skill) + '</button>').join('');
-    byId('periods').innerHTML = (snapshot.periods || []).map((period) =>
-      '<button class="toggle" data-period="' + period.key + '" aria-pressed="' + (period.key === periodKey) + '">' + page.esc(page.PERIOD_LABELS[period.key] || period.key) + '</button>').join('');
+    const periodButtons = (attribute, current) => (snapshot.periods || []).map((period) =>
+      '<button class="toggle" data-' + attribute + '="' + period.key + '" aria-pressed="' + (period.key === current) + '">' + page.esc(page.PERIOD_LABELS[period.key] || period.key) + '</button>').join('');
+    byId('periods').innerHTML = periodButtons('period', periodKey);
+    byId('chartperiods').innerHTML = periodButtons('chartperiod', chartPeriodKey);
+    byId('fleetperiods').innerHTML = periodButtons('fleetperiod', fleetPeriodKey);
   }
 
   function renderSkills() {
     const compare = periodKey !== 'all';
-    let html = '<thead><tr><th class="left">Compétence</th><th>XP / tick (efficacité)</th><th>Contribution flotte / tick</th><th>XP / h</th>'
-      + '<th>Part du temps de travail</th><th>Bots</th><th class="left">Meilleure méthode (XP/tick, échantillon)</th>'
+    let html = '<thead><tr><th class="left">Compétence</th><th>XP (efficacité)</th><th>Contribution flotte / tick</th><th>XP / h</th>'
+      + '<th>Part du temps de travail</th><th>Bots</th><th class="left">Meilleure méthode (XP / 6000 ticks, échantillon)</th>'
       + (compare ? '<th>Évolution vs période précédente</th>' : '') + '</tr></thead><tbody>';
     for (const row of page.skillRows(snapshot, periodKey)) {
       html += '<tr' + (row.idle ? ' class="idle" title="Moins de ' + Math.round((snapshot.idle_share || 0.01) * 100) + ' % du temps de travail de la flotte"' : '') + '>'
         + '<td class="left">' + page.esc(row.skill) + '</td>'
-        + '<td>' + page.formatRate(row.efficiency) + '</td><td>' + page.formatRate(row.fleet_per_tick) + '</td>'
+        + '<td>' + page.formatRate(row.efficiency) + '</td><td>' + page.formatRate(row.fleet_rate) + '</td>'
         + '<td>' + page.formatNumber(row.xp_per_hour) + '</td><td>' + page.formatShare(row.share) + '</td><td>' + (row.bots || 0) + '</td>'
         + '<td class="left">' + page.esc(page.methodText(row.best_method)) + '</td>'
         + (compare ? '<td class="' + page.changeClass(row.change_percent) + '">' + page.formatChange(row.change_percent) + '</td>' : '') + '</tr>';
     }
     byId('skills').innerHTML = html + '</tbody>';
-    byId('skillnote').textContent = 'Efficacité = XP ÷ ticks de travail des activités qui rapportent de l’XP dans la compétence (un combat compte ses ticks dans chaque compétence de combat nourrie, '
-      + 'les parts se recoupent). XP / h = XP de toute la flotte par heure réelle. En rouge : moins de 1 % du temps de travail. '
-      + 'Méthode classée à partir de ' + page.formatNumber(snapshot.min_method_ticks) + ' ticks. Les comptes staff et personnels sont exclus.';
   }
 
   function renderMethods() {
-    let html = '<thead><tr><th class="left">Compétence</th><th class="left">Méthode</th><th>XP / tick</th><th>Ticks de travail</th><th>Exécutions</th><th>Bots</th></tr></thead><tbody>';
+    let html = '<thead><tr><th class="left">Compétence</th><th class="left">Méthode</th><th>XP</th><th>Ticks de travail</th><th>Exécutions</th><th>Bots</th></tr></thead><tbody>';
     for (const row of snapshot.top_methods || []) {
-      html += '<tr><td class="left">' + page.esc(row.skill) + '</td><td class="left">' + page.esc(row.method) + '</td><td>' + page.formatRate(row.xp_per_tick)
+      html += '<tr><td class="left">' + page.esc(row.skill) + '</td><td class="left">' + page.esc(row.method) + '</td><td>' + page.formatRate(row.xp_rate)
         + '</td><td>' + page.formatNumber(row.ticks) + '</td><td>' + page.formatNumber(row.runs) + '</td><td>' + row.bots + '</td></tr>';
     }
     byId('methods').innerHTML = html + '</tbody>';
-    byId('methodnote').textContent = 'Méthodes (méthode du planner) ayant au moins ' + page.formatNumber(snapshot.min_method_ticks) + ' ticks de travail sur 24 h, classées par XP par tick.';
+    byId('methodnote').textContent = 'Méthodes (méthode du planner) ayant au moins ' + page.formatNumber(snapshot.min_method_ticks) + ' ticks de travail sur 24 h, classées par XP / 6000 ticks.';
   }
 
   function renderStatus() {
@@ -279,12 +311,11 @@ if (typeof document !== 'undefined') {
 
   function render() {
     renderStatus();
-    if (!snapshot) { drawChart(-1); return; }
-    renderCards();
+    if (!snapshot) { drawCharts(null, -1); return; }
     renderControls();
     renderSkills();
     renderMethods();
-    drawChart(-1);
+    drawCharts(null, -1);
   }
 
   async function reload() {
@@ -308,22 +339,27 @@ if (typeof document !== 'undefined') {
     if (!target || !snapshot) return;
     if (target.dataset.mode) modeKey = target.dataset.mode;
     else if (target.dataset.period) periodKey = target.dataset.period;
+    else if (target.dataset.chartperiod) chartPeriodKey = target.dataset.chartperiod;
+    else if (target.dataset.fleetperiod) fleetPeriodKey = target.dataset.fleetperiod;
     else if (target.dataset.skill) hidden[target.dataset.skill] = !hidden[target.dataset.skill];
     else return;
     render();
   });
-  const canvas = byId('chart');
-  const hover = (event) => {
-    if (!snapshot) return;
-    const rect = canvas.getBoundingClientRect();
-    const point = event.touches ? event.touches[0] : event;
-    drawChart(page.slotAt(point.clientX - rect.left, PAD.left, rect.width - PAD.left - PAD.right, (snapshot.slots || []).length));
-  };
-  canvas.addEventListener('mousemove', hover);
-  canvas.addEventListener('touchstart', hover, { passive: true });
-  canvas.addEventListener('touchmove', hover, { passive: true });
-  canvas.addEventListener('mouseleave', () => drawChart(-1));
-  window.addEventListener('resize', () => drawChart(-1));
+  for (const chart of CHARTS) {
+    const canvas = byId(chart.id);
+    const hover = (event) => {
+      if (!snapshot) return;
+      const rect = canvas.getBoundingClientRect();
+      const point = event.touches ? event.touches[0] : event;
+      const view = page.chartView(snapshot, chart.periodVar());
+      drawCharts(chart, page.slotAt(point.clientX - rect.left, PAD.left, rect.width - PAD.left - PAD.right, (view.slots || []).length));
+    };
+    canvas.addEventListener('mousemove', hover);
+    canvas.addEventListener('touchstart', hover, { passive: true });
+    canvas.addEventListener('touchmove', hover, { passive: true });
+    canvas.addEventListener('mouseleave', () => drawCharts(null, -1));
+  }
+  window.addEventListener('resize', () => drawCharts(null, -1));
 
   render();
   reload();

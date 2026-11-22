@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
-//! XP / tick page (user 2026-11-22, `/xp`): pure model, report rows in,
+//! XP page (user 2026-11-22, `/xp`): pure model, report rows in,
 //! one JSON snapshot out. Gathering, the 30-minute schedule and the
 //! cache live in `xp_service`; the endpoint only serves the snapshot.
 //!
 //! Definitions (every rate is a ratio of sums, never a mean of rates):
-//! - `fleet_per_tick` of a skill in a bucket = the fleet's XP in that
+//! - `fleet_rate` of a skill in a bucket = the fleet's XP in that
 //!   skill / the fleet's work ticks in the bucket (all reports): the
 //!   skill's contribution per tick of fleet work; the skills add up;
 //! - `efficiency` of a skill = its XP / the work ticks of the reports
@@ -29,6 +29,9 @@ pub const START_DELAY_SECONDS: i64 = crate::hiscores::START_DELAY_SECONDS;
 pub const BUCKET_SECONDS: i64 = 3600;
 /// Chart slots: 7 days of hours.
 pub const SLOT_COUNT: usize = 168;
+/// Rates are shown per this many work ticks (like the Rates page and the
+/// guides): a ratio of sums, then scaled; never a mean of rates.
+pub const RATE_TICKS: f64 = 6000.0;
 /// A method needs this many work ticks in a period to be ranked.
 pub const MIN_METHOD_TICKS: i64 = 1000;
 /// Top methods listed across all skills.
@@ -75,6 +78,11 @@ fn ratio(numerator: i64, denominator: i64) -> Option<f64> {
     (denominator > 0).then(|| numerator as f64 / denominator as f64)
 }
 
+/// Ratio of sums scaled to `RATE_TICKS`, one decimal.
+fn rate_number(numerator: i64, denominator: i64) -> Value {
+    number(ratio(numerator, denominator).map(|per_tick| per_tick * RATE_TICKS), 1)
+}
+
 fn number(value: Option<f64>, decimals: i32) -> Value {
     let scale = 10f64.powi(decimals);
     value.filter(|found| found.is_finite()).map_or(Value::Null, |found| Value::Float((found * scale).round() / scale))
@@ -99,6 +107,10 @@ impl Sums {
 
     fn rate(&self) -> Option<f64> {
         ratio(self.xp, self.ticks)
+    }
+
+    fn scaled_rate(&self) -> Value {
+        rate_number(self.xp, self.ticks)
     }
 }
 
@@ -143,7 +155,7 @@ fn method_value(skill: &str, method: &str, sums: &Sums) -> Value {
     object(vec![
         ("skill", str_value(skill)),
         ("method", str_value(method)),
-        ("xp_per_tick", number(sums.rate(), 3)),
+        ("xp_rate", sums.scaled_rate()),
         ("ticks", Value::Int(sums.ticks)),
         ("runs", Value::Int(sums.runs)),
         ("bots", Value::Int(sums.bots.len() as i64)),
@@ -181,13 +193,13 @@ fn period_table(rows: &[SkillBucket], buckets: &[BucketWork], history: &History,
                 object(vec![
                     ("xp", Value::Int(sums.xp)),
                     ("work_ticks", Value::Int(sums.ticks)),
-                    ("efficiency", number(sums.rate(), 3)),
-                    ("fleet_per_tick", number(ratio(sums.xp, fleet_total), 3)),
+                    ("efficiency", sums.scaled_rate()),
+                    ("fleet_rate", rate_number(sums.xp, fleet_total)),
                     ("xp_per_hour", number(Some(sums.xp as f64 / hours), 0)),
                     ("share", number(share, 4)),
                     ("idle", Value::Bool(share.unwrap_or(0.0) < IDLE_SHARE)),
                     ("bots", Value::Int(sums.bots.len() as i64)),
-                    ("previous_efficiency", number(previous_rate, 3)),
+                    ("previous_efficiency", number(previous_rate.map(|per_tick| per_tick * RATE_TICKS), 1)),
                     ("change_percent", number(change_percent(sums.rate(), previous_rate), 1)),
                     ("best_method", best),
                 ]),
@@ -206,7 +218,7 @@ fn period_table(rows: &[SkillBucket], buckets: &[BucketWork], history: &History,
             object(vec![
                 ("work_ticks", Value::Int(fleet_total)),
                 ("xp", Value::Int(fleet_xp)),
-                ("xp_per_tick", number(ratio(fleet_xp, fleet_total), 3)),
+                ("xp_rate", rate_number(fleet_xp, fleet_total)),
                 ("bots", Value::Int(active_bots.len() as i64)),
             ]),
         ));
@@ -220,24 +232,73 @@ fn period_table(rows: &[SkillBucket], buckets: &[BucketWork], history: &History,
     (Value::Arr(skill_rows), object(fleet), Value::Arr(top))
 }
 
-/// Chart series over the `SLOT_COUNT` hourly slots ending on the one
-/// holding `now`: per skill the contribution per fleet tick and the
-/// efficiency, null where the denominator is empty.
-fn chart(rows: &[SkillBucket], buckets: &[BucketWork], now: i64, excluded: &BTreeSet<String>) -> (Vec<i64>, Vec<i64>, Value) {
-    let last = (now / BUCKET_SECONDS) * BUCKET_SECONDS;
-    let slots: Vec<i64> = (0..SLOT_COUNT as i64).map(|index| last - (SLOT_COUNT as i64 - 1 - index) * BUCKET_SECONDS).collect();
-    let first = slots[0];
+/// Bucket width of the all-history chart: hourly while the history is at
+/// most 7 days, then 6 h up to 45 days, then daily.
+pub fn history_bucket_seconds(span_seconds: i64) -> i64 {
+    if span_seconds <= 7 * 24 * 3600 {
+        BUCKET_SECONDS
+    } else if span_seconds <= 45 * 24 * 3600 {
+        6 * 3600
+    } else {
+        24 * 3600
+    }
+}
+
+/// Store rows of the all-history chart, already grouped by `bucket_seconds`
+/// (the width `history_bucket_seconds` chose, from the oldest report).
+pub struct ChartHistory<'a> {
+    pub rows: &'a [SkillBucket],
+    pub buckets: &'a [BucketWork],
+    pub bucket_seconds: i64,
+}
+
+/// One chart: `slots` bucket starts (oldest first), the fleet's work ticks
+/// per slot and per skill the two series per 6000 ticks (null where the
+/// denominator is empty).
+struct ChartData {
+    bucket_seconds: i64,
+    slots: Vec<i64>,
+    fleet: Vec<i64>,
+    /// XP of all free-to-play skills per slot.
+    fleet_xp: Vec<i64>,
+    series: Value,
+}
+
+impl ChartData {
+    fn into_value(self) -> Value {
+        let fleet_rate = self.fleet_rate_values();
+        object(vec![
+            ("bucket_seconds", Value::Int(self.bucket_seconds)),
+            ("slots", Value::Arr(self.slots.iter().copied().map(Value::Int).collect())),
+            ("fleet_ticks", Value::Arr(self.fleet.iter().copied().map(Value::Int).collect())),
+            ("series", self.series),
+            ("fleet_xp", Value::Arr(self.fleet_xp.iter().copied().map(Value::Int).collect())),
+            ("fleet_rate", fleet_rate),
+        ])
+    }
+
+    /// Fleet XP per 6000 fleet work ticks per slot: sum of XP / sum of ticks.
+    fn fleet_rate_values(&self) -> Value {
+        Value::Arr(self.fleet_xp.iter().zip(&self.fleet).map(|(xp, ticks)| rate_number(*xp, *ticks)).collect())
+    }
+}
+
+/// Chart over the slots `first`, `first + bucket_seconds`, ... up to the
+/// one holding `now`, Σxp / Σticks per slot (never a mean of rates).
+fn chart(rows: &[SkillBucket], buckets: &[BucketWork], first: i64, bucket_seconds: i64, now: i64, excluded: &BTreeSet<String>) -> ChartData {
+    let slot_count = ((now - first) / bucket_seconds + 1).max(1) as usize;
+    let slots: Vec<i64> = (0..slot_count as i64).map(|index| first + index * bucket_seconds).collect();
     let slot_of = |clock: i64| -> Option<usize> {
         let offset = clock - first;
-        (offset >= 0).then(|| (offset / BUCKET_SECONDS) as usize).filter(|slot| *slot < SLOT_COUNT)
+        (offset >= 0).then(|| (offset / bucket_seconds) as usize).filter(|slot| *slot < slot_count)
     };
-    let mut fleet = vec![0i64; SLOT_COUNT];
+    let mut fleet = vec![0i64; slot_count];
     for bucket in buckets.iter().filter(|bucket| counts(&bucket.account, excluded)) {
         if let Some(slot) = slot_of(bucket.bucket_start) {
             fleet[slot] += bucket.work_ticks;
         }
     }
-    let mut xp: BTreeMap<&str, Vec<i64>> = F2P_SKILLS.iter().map(|skill| (*skill, vec![0; SLOT_COUNT])).collect();
+    let mut xp: BTreeMap<&str, Vec<i64>> = F2P_SKILLS.iter().map(|skill| (*skill, vec![0; slot_count])).collect();
     let mut ticks = xp.clone();
     for row in rows.iter().filter(|row| counts(&row.account, excluded)) {
         let Some(slot) = slot_of(row.bucket_start) else { continue };
@@ -248,30 +309,46 @@ fn chart(rows: &[SkillBucket], buckets: &[BucketWork], now: i64, excluded: &BTre
             values[slot] += row.work_ticks;
         }
     }
+    let fleet_xp: Vec<i64> = (0..slot_count).map(|slot| F2P_SKILLS.iter().map(|skill| xp[skill][slot]).sum()).collect();
     let series = F2P_SKILLS
         .iter()
         .map(|skill| {
-            let per_fleet: Vec<Value> = (0..SLOT_COUNT).map(|slot| number(ratio(xp[skill][slot], fleet[slot]), 3)).collect();
-            let efficiency: Vec<Value> = (0..SLOT_COUNT).map(|slot| number(ratio(xp[skill][slot], ticks[skill][slot]), 3)).collect();
-            (*skill, object(vec![("fleet_per_tick", Value::Arr(per_fleet)), ("efficiency", Value::Arr(efficiency))]))
+            let per_fleet: Vec<Value> = (0..slot_count).map(|slot| rate_number(xp[skill][slot], fleet[slot])).collect();
+            let efficiency: Vec<Value> = (0..slot_count).map(|slot| rate_number(xp[skill][slot], ticks[skill][slot])).collect();
+            (*skill, object(vec![("fleet_rate", Value::Arr(per_fleet)), ("efficiency", Value::Arr(efficiency))]))
         })
         .collect();
-    (slots, fleet, object(series))
+    ChartData { bucket_seconds, slots, fleet, fleet_xp, series: object(series) }
+}
+
+/// Hourly chart of the last `SLOT_COUNT` slots (7 days; the page slices
+/// the last 24 for "24 h").
+fn week_chart(rows: &[SkillBucket], buckets: &[BucketWork], now: i64, excluded: &BTreeSet<String>) -> ChartData {
+    let last = (now / BUCKET_SECONDS) * BUCKET_SECONDS;
+    chart(rows, buckets, last - (SLOT_COUNT as i64 - 1) * BUCKET_SECONDS, BUCKET_SECONDS, now, excluded)
 }
 
 /// The page's snapshot.
-pub fn build(rows: &[SkillBucket], buckets: &[BucketWork], history: &History, now: i64, next_at: i64, excluded: &BTreeSet<String>) -> Value {
-    let (slots, fleet, series) = chart(rows, buckets, now, excluded);
+pub fn build(rows: &[SkillBucket], buckets: &[BucketWork], history: &History, chart_history: &ChartHistory, now: i64, next_at: i64, excluded: &BTreeSet<String>) -> Value {
+    let week = week_chart(rows, buckets, now, excluded);
+    let week_fleet_rate = week.fleet_rate_values();
+    let width = chart_history.bucket_seconds.max(1);
+    let first = (history.oldest_clock.min(now) / width) * width;
+    let all = chart(chart_history.rows, chart_history.buckets, first, width, now, excluded);
     let (table, fleet_periods, top_methods) = period_table(rows, buckets, history, now, excluded);
     object(vec![
         ("ok", Value::Bool(true)),
         ("generated_at", Value::Int(now)),
         ("next_at", Value::Int(next_at)),
         ("bucket_seconds", Value::Int(BUCKET_SECONDS)),
+        ("rate_ticks", Value::Int(RATE_TICKS as i64)),
         ("skills", Value::Arr(F2P_SKILLS.iter().map(|skill| str_value(skill)).collect())),
-        ("slots", Value::Arr(slots.into_iter().map(Value::Int).collect())),
-        ("fleet_ticks", Value::Arr(fleet.into_iter().map(Value::Int).collect())),
-        ("series", series),
+        ("slots", Value::Arr(week.slots.into_iter().map(Value::Int).collect())),
+        ("fleet_ticks", Value::Arr(week.fleet.into_iter().map(Value::Int).collect())),
+        ("series", week.series),
+        ("fleet_xp", Value::Arr(week.fleet_xp.into_iter().map(Value::Int).collect())),
+        ("fleet_rate", week_fleet_rate),
+        ("history_chart", all.into_value()),
         ("periods", Value::Arr(PERIODS.iter().map(|(key, length)| object(vec![("key", str_value(key)), ("seconds", Value::Int(*length))])).collect())),
         ("table", table),
         ("fleet", fleet_periods),

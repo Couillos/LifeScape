@@ -209,6 +209,7 @@ function renderList(jobs) {
 
 function setTitle(text, zone) {
   setText(document.getElementById("titletext"), text);
+  document.getElementById("titletext").classList.toggle("sel", Boolean(selected));
   setText(document.getElementById("zonename"), zone || "");
 }
 

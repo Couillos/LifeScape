@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Aggregates behind the XP / tick page: XP, work ticks and run counts of
+//! Aggregates behind the XP page: XP, work ticks and run counts of
 //! the task reports of a window, summed in SQL per time bucket, account,
 //! planner method and skill, plus the work ticks of every report per
 //! bucket and account. Raw sums only; the orchestrator divides and

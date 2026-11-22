@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! XP / tick snapshot service, same mechanism as `hiscores_service`: one
+//! XP snapshot service, same mechanism as `hiscores_service`: one
 //! background thread computes the `xp_rates` snapshot at most every 30
 //! minutes (first run 240 s after the daemon start, or later when the
 //! persisted snapshot is younger than 30 minutes), keeps it in memory as
@@ -59,14 +59,26 @@ pub fn compute(now: i64, next_at: i64) -> Result<Value, String> {
     let buckets = store.bucket_work_since(since, xp_rates::BUCKET_SECONDS).map_err(|error| format!("xp: work ticks query: {error}"))?;
     let oldest = store.oldest_work_clock().map_err(|error| format!("xp: oldest report query: {error}"))?.unwrap_or(now);
     let excluded = crate::economy_guard::excluded_accounts();
+    // All-history chart: bucket width from the history span, grouped in SQL
+    // here (every 30 minutes), never per request.
+    let width = xp_rates::history_bucket_seconds(now - oldest);
+    let (chart_rows, chart_buckets) = if width == xp_rates::BUCKET_SECONDS && oldest >= since {
+        (rows.clone(), buckets.clone())
+    } else {
+        (
+            store.skill_buckets_since(0, width).map_err(|error| format!("xp: history chart skill sums query: {error}"))?,
+            store.bucket_work_since(0, width).map_err(|error| format!("xp: history chart work ticks query: {error}"))?,
+        )
+    };
+    let chart_history = xp_rates::ChartHistory { rows: &chart_rows, buckets: &chart_buckets, bucket_seconds: width };
     if oldest >= since {
         let history = xp_rates::History { rows: &rows, buckets: &buckets, oldest_clock: oldest };
-        return Ok(xp_rates::build(&rows, &buckets, &history, now, next_at, &excluded));
+        return Ok(xp_rates::build(&rows, &buckets, &history, &chart_history, now, next_at, &excluded));
     }
     let all_rows = store.skill_buckets_since(0, i64::MAX).map_err(|error| format!("xp: all-time skill sums query: {error}"))?;
     let all_buckets = store.bucket_work_since(0, i64::MAX).map_err(|error| format!("xp: all-time work ticks query: {error}"))?;
     let history = xp_rates::History { rows: &all_rows, buckets: &all_buckets, oldest_clock: oldest };
-    Ok(xp_rates::build(&rows, &buckets, &history, now, next_at, &excluded))
+    Ok(xp_rates::build(&rows, &buckets, &history, &chart_history, now, next_at, &excluded))
 }
 
 /// Computes, publishes and persists one snapshot; a failure is logged and

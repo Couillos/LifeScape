@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>XP / tick — LifeScape bots</title>
+<title>XP — LifeScape bots</title>
 <style>
   body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
   a { color: #04A800; }
@@ -28,7 +28,7 @@
   button.legend.off { color: #555; text-decoration: line-through; }
   button.legend i { width: 14px; height: 4px; display: inline-block; }
   button.legend.off i { opacity: 0.25; }
-  canvas#chart { width: 100%; max-width: 1100px; display: block; background: #111; }
+  canvas#chart, canvas#fleetxp, canvas#fleetrate { width: 100%; max-width: 1100px; display: block; background: #111; }
   table.grid { border-collapse: collapse; font-size: 12px; }
   table.grid td, table.grid th { border: 1px solid #333; padding: 2px 8px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   table.grid th { color: #888; font-weight: normal; }
@@ -44,21 +44,24 @@
 <div id="bar">
   <div style="display:flex;gap:12px;align-items:center">
     <h1>Spectator <span class="muted">— LifeScape bots</span></h1>
-    <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/guides-money">Money guide</a><a class="navlink" href="/guides-training">Training guide</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores">Hiscores</a><a class="navlink" href="/xp" aria-current="page">XP / tick</a><a class="navlink" href="/errors">Errors</a></nav>
+    <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/guides-money">Money guide</a><a class="navlink" href="/guides-training">Training guide</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores">Hiscores</a><a class="navlink" href="/xp" aria-current="page">XP</a><a class="navlink" href="/errors">Errors</a></nav>
   </div>
 </div>
-<h1>XP / tick <span class="muted" id="status">chargement…</span></h1>
+<h1>XP <span class="muted" id="status">chargement…</span></h1>
 <div id="errors"></div>
-<div id="cards" class="cards"></div>
-<h2>Évolution par heure (7 derniers jours, compétences gratuites)</h2>
+<h2>Flotte : XP gagnés par tranche de temps</h2>
+<div class="controls" id="fleetperiods"></div>
+<canvas id="fleetxp" aria-label="XP de la flotte par tranche de temps"></canvas>
+<h2>Flotte : XP / 6000 ticks</h2>
+<canvas id="fleetrate" aria-label="XP de la flotte pour 6000 ticks de travail"></canvas>
+<h2>Évolution par compétence (XP / 6000 ticks, compétences gratuites)</h2>
+<div class="controls" id="chartperiods"></div>
 <div class="controls" id="modes"></div>
-<p class="note" id="modenote"></p>
-<canvas id="chart" aria-label="XP par tick par compétence"></canvas>
+<canvas id="chart" aria-label="XP pour 6000 ticks par compétence"></canvas>
 <div class="controls" id="legend"></div>
 <h2>Par compétence</h2>
 <div class="controls" id="periods"></div>
 <div class="wrap"><table class="grid" id="skills"></table></div>
-<p class="note" id="skillnote"></p>
 <h2>Meilleures méthodes (24 h, toutes compétences)</h2>
 <div class="wrap"><table class="grid" id="methods"></table></div>
 <p class="note" id="methodnote"></p>

@@ -132,7 +132,7 @@ fn daemon_main() -> i32 {
     // Hiscores: snapshot at most every 30 min, first one 240 s after
     // the start (after the restore spike); the page serves the cache.
     lifescape_orchestrator::hiscores_service::start(orch.clone());
-    // XP / tick page: same 30-minute snapshot mechanism, read from the store.
+    // XP page: same 30-minute snapshot mechanism, read from the store.
     lifescape_orchestrator::xp_service::start(orch.clone());
     // Guides: one set of every view built every 300 s by the `guides`
     // thread; the API and the brain read the last one, never build.
