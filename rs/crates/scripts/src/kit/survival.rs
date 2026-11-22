@@ -231,11 +231,12 @@ pub fn death_resume(bot: &mut Bot, wait_ticks: u64, last_hp: &mut u8, seen: &mut
 }
 
 /// Safe-point predicate for the market pause and the end of engagement:
-/// alive with no modal open (no dialogue, no trade screen). The combat
+/// alive with no modal open (no dialogue, no trade screen; an overlay
+/// layer is a HUD such as the Wilderness one, never a modal). The combat
 /// check (no target) lives with the fight loop, which owns its target;
 /// the pause gate ANDs this with "not fighting" at the call site (L2).
 pub fn at_safe_point(bot: &Bot) -> bool {
-    hitpoints(bot) > 0 && bot.world.modal.is_none()
+    hitpoints(bot) > 0 && bot.world.modal.as_ref().is_none_or(|modal| modal.layer == "overlay")
 }
 
 
@@ -431,6 +432,25 @@ mod tests {
         bot.world.stats.insert(3, (0, 0));
         assert!(!at_safe_point(&bot), "dead is never safe");
         assert_eq!(FOOD_TARGET, 10, "restock target");
+    }
+
+    /// Live 2026-11-22 (N0valyfe, ground pickup at the Graveyard of
+    /// Shadows): the Wilderness HUD (`wilderness_overlay`, 193) is an
+    /// overlay layer, not a dialogue; counted as a modal it kept the
+    /// market gate shut for hours (poses every 5 min, 18 `no_show`
+    /// deals). Dialogues and trade screens still close the gate.
+    #[test]
+    fn a_hud_overlay_is_no_modal_for_the_safe_point() {
+        use lifescape_sdk::world::Modal;
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.stats.insert(3, (10, 0));
+        bot.world.modal = Some(Modal { layer: "overlay".to_string(), interface_id: 193 });
+        assert!(at_safe_point(&bot), "the Wilderness overlay is a HUD");
+        for layer in ["chat", "main", "main_side", "side"] {
+            bot.world.modal = Some(Modal { layer: layer.to_string(), interface_id: 1 });
+            assert!(!at_safe_point(&bot), "{layer} modal is a screen the bot must close first");
+        }
     }
 
     /// A foodless pack forces a bank trip only when the bank can restock:

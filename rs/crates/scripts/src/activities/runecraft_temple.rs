@@ -151,6 +151,15 @@ pub(crate) fn exit_temple(bot: &mut Bot, prefix: &str, portal: &str) -> Result<(
     let _ = portal;
     let stands = stands_around(portal_x, portal_z, 1, 1, bot.world.x, bot.world.z);
     for (stand_x, stand_z) in &stands {
+        // A market pause took the bot out of the temple (the delivery
+        // left it at the Varrock square): the portal is behind us, a walk
+        // to its stands is a NoRoute dossier per stand (live 2026-11-22,
+        // erin_quill: 4 dossiers in 12 s from (3185,3436) to the earth
+        // altar). Outside the temple the exit already happened.
+        if !in_temple(prefix, bot.position()) {
+            bot.log(&format!("exit {prefix} temple: already outside at {:?}, nothing to exit", bot.position()));
+            return Ok(());
+        }
         if let Err(error) = bot.walk_to(*stand_x, *stand_z, bot.world.level, 1500) {
             if walk_failed_fatal(&error) {
                 return Err(error.into());
@@ -209,6 +218,17 @@ mod tests {
         assert_eq!(altar_step(26, 26, true), AltarStep::PauseCut, "pause, nothing bound");
         assert_eq!(altar_step(26, 0, false), AltarStep::Bound(26), "all bound");
         assert_eq!(altar_step(26, 26, false), AltarStep::NextStand, "no reach from this stand");
+    }
+
+    /// Live 2026-11-22 erin_quill 06:51: the pause left the bot at the
+    /// Varrock square before the exit portal was worked; the exit walked
+    /// to the portal stands inside the altar room (4 NoRoute dossiers).
+    /// Outside the temple there is nothing to exit: Ok, no walk.
+    #[test]
+    fn exit_from_outside_the_temple_is_a_no_op() {
+        let mut bot = offline_bot();
+        (bot.world.level, bot.world.x, bot.world.z) = (0, 3185, 3436);
+        super::exit_temple(&mut bot, "earth", "earthtemple_exit_portal").expect("already outside: nothing to do");
     }
 
     /// Live 2026-11-21 kai_ellis 05:57: the pause took the bot from the
