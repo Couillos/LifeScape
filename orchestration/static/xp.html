@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XP / tick — LifeScape bots</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
+  a { color: #04A800; }
+  .muted { color: #888; }
+  #bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 10px; }
+  #bar h1 { font-size: 18px; margin: 0; }
+  #topnav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .navlink { color: #04A800; text-decoration: none; border: 1px solid #444; border-radius: 3px; padding: 3px 9px; }
+  .navlink:hover { background: #262626; }
+  .navlink[aria-current="page"] { color: #ff0; border-color: #ff0; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 16px 0 4px; color: #ff0; }
+  #errors { display: none; color: #ff1744; margin: 0 0 6px; }
+  .note { color: #888; margin: 2px 0 6px; max-width: 980px; }
+  .cards { display: flex; gap: 10px; flex-wrap: wrap; }
+  .card { border: 1px solid #333; border-radius: 3px; padding: 6px 12px; min-width: 150px; background: #0a0a0a; }
+  .card b { display: block; font-size: 18px; color: #ff0; font-variant-numeric: tabular-nums; }
+  .controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0 6px; }
+  button.toggle { background: #1b1b1b; color: #eee; border: 1px solid #444; padding: 2px 10px; cursor: pointer; border-radius: 3px; }
+  button.toggle[aria-pressed="true"] { color: #ff0; border-color: #ff0; }
+  button.legend { background: #0a0a0a; color: #eee; border: 1px solid #333; padding: 1px 8px 1px 4px; cursor: pointer; border-radius: 3px; display: inline-flex; gap: 5px; align-items: center; }
+  button.legend.off { color: #555; text-decoration: line-through; }
+  button.legend i { width: 14px; height: 4px; display: inline-block; }
+  button.legend.off i { opacity: 0.25; }
+  canvas#chart { width: 100%; max-width: 1100px; display: block; background: #111; }
+  table.grid { border-collapse: collapse; font-size: 12px; }
+  table.grid td, table.grid th { border: 1px solid #333; padding: 2px 8px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  table.grid th { color: #888; font-weight: normal; }
+  table.grid .left { text-align: left; }
+  table.grid tbody tr:hover { background: #1a1a1a; }
+  tr.idle td { color: #ff1744; }
+  .up { color: #04A800; }
+  .down { color: #ff1744; }
+  .wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <div style="display:flex;gap:12px;align-items:center">
+    <h1>Spectator <span class="muted">— LifeScape bots</span></h1>
+    <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/guides-money">Money guide</a><a class="navlink" href="/guides-training">Training guide</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores">Hiscores</a><a class="navlink" href="/xp" aria-current="page">XP / tick</a><a class="navlink" href="/errors">Errors</a></nav>
+  </div>
+</div>
+<h1>XP / tick <span class="muted" id="status">chargement…</span></h1>
+<div id="errors"></div>
+<div id="cards" class="cards"></div>
+<h2>Évolution par heure (7 derniers jours, compétences gratuites)</h2>
+<div class="controls" id="modes"></div>
+<p class="note" id="modenote"></p>
+<canvas id="chart" aria-label="XP par tick par compétence"></canvas>
+<div class="controls" id="legend"></div>
+<h2>Par compétence</h2>
+<div class="controls" id="periods"></div>
+<div class="wrap"><table class="grid" id="skills"></table></div>
+<p class="note" id="skillnote"></p>
+<h2>Meilleures méthodes (24 h, toutes compétences)</h2>
+<div class="wrap"><table class="grid" id="methods"></table></div>
+<p class="note" id="methodnote"></p>
+<script src="/chart.js"></script>
+<script src="/xp.js"></script>
+</body>
+</html>
