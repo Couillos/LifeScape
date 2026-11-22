@@ -243,6 +243,9 @@ pub struct Bot {
     /// progress guard: a loop that opens the bank again and again without
     /// producing anything is a silent loop, never a normal rhythm.
     pub bank_opens: u64,
+    /// Part of `bank_opens` made while a market pause was in flight (the
+    /// delivery's own deposits and withdrawals, never the script's).
+    pub pause_bank_opens: u64,
 }
 
 impl Bot {
@@ -303,6 +306,7 @@ impl Bot {
             zone_label: "?".to_string(),
             run_latch: false,
             bank_opens: 0,
+            pause_bank_opens: 0,
         }
     }
 
@@ -449,6 +453,26 @@ impl Bot {
     pub fn pause_ticks_now(&self) -> u64 {
         let running = self.pause_since.map(|since| self.world.ticks.saturating_sub(since)).unwrap_or(0);
         self.pause_ticks.saturating_add(running)
+    }
+
+    /// Counts one bank open, apart when a market pause is in flight.
+    pub fn note_bank_open(&mut self) {
+        self.bank_opens = self.bank_opens.saturating_add(1);
+        if self.pause_since.is_some() {
+            self.pause_bank_opens = self.pause_bank_opens.saturating_add(1);
+        }
+    }
+
+    /// Bank opens made by the running script: the session total minus the
+    /// ones a market pause made (`kit::progress` counts only these).
+    pub fn script_bank_opens(&self) -> u64 {
+        self.bank_opens.saturating_sub(self.pause_bank_opens)
+    }
+
+    /// Server ticks minus market-pause ticks (the pause in flight
+    /// included): the clock a silent-loop guard reads.
+    pub fn work_ticks(&self) -> u64 {
+        self.world.ticks.saturating_sub(self.pause_ticks_now())
     }
 
     /// Record what the bot is doing right now (dashboard state).
@@ -776,6 +800,26 @@ mod tests {
         assert_eq!(bot.pause_since, None, "closed");
         bot.world.ticks = 1800;
         assert_eq!(bot.pause_ticks_now(), 740, "no double count once closed");
+    }
+
+    /// Live 2026-11-22: bank opens of the market delivery were billed to the
+    /// script as bank churn. Opens and ticks of a pause are not the script's.
+    #[test]
+    fn pause_bank_opens_and_ticks_are_not_the_scripts() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.ticks = 100;
+        bot.note_bank_open();
+        bot.note_bank_open();
+        bot.begin_pause();
+        bot.world.ticks = 700;
+        bot.note_bank_open();
+        bot.note_bank_open();
+        assert_eq!(bot.work_ticks(), 100, "a running pause is not work");
+        bot.note_pause(600);
+        bot.note_bank_open();
+        assert_eq!(bot.bank_opens, 5);
+        assert_eq!(bot.script_bank_opens(), 3, "2 before + 1 after, the 2 of the pause excluded");
+        assert_eq!(bot.work_ticks(), 100);
     }
 
     #[test]

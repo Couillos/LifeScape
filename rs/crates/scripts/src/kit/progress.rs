@@ -1,5 +1,9 @@
 //! Garde de progrès : aucune boucle de charge ne tourne en silence.
 //!
+//! Les ouvertures de banque et les ticks d'une pause marché (la
+//! livraison fait ses propres dépôts/retraits) ne comptent pas : la
+//! garde lit `Bot::script_bank_opens` et `Bot::work_ticks`.
+//!
 //! `cycle::run` marque l'état après chaque pas (XP totale, détenu par
 //! objet = sac + porté + dernière banque connue, ouvertures de banque,
 //! position, tick). Un pas progresse quand l'XP totale monte ou qu'un
@@ -71,8 +75,8 @@ pub fn mark(bot: &Bot) -> Mark {
     Mark {
         xp_total: bot.world.stats.values().map(|(_, xp)| i64::from(*xp)).sum(),
         held,
-        bank_opens: bot.bank_opens,
-        tick: bot.world.ticks,
+        bank_opens: bot.script_bank_opens(),
+        tick: bot.work_ticks(),
         position: bot.position(),
     }
 }
