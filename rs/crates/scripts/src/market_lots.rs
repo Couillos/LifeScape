@@ -245,6 +245,33 @@ pub fn tool_ids(bot: &Bot) -> Vec<u16> {
     keep
 }
 
+/// Pack ids a finished shop sale leaves behind: everything but the
+/// tools, the held objects of a paused script and the coins (the unsold
+/// remainder of the lots, in banknote or base form).
+pub fn unsold_in_pack(bot: &Bot) -> Vec<u16> {
+    let mut keep = pack_stays(bot);
+    keep.extend(crate::kit::pack::obj_id(bot, "coins").ok());
+    let mut left: Vec<u16> = crate::kit::pack::pack_slots(bot).into_iter().map(|(_, (held, _))| held).filter(|held| !keep.contains(held)).collect();
+    left.sort_unstable();
+    left.dedup();
+    left
+}
+
+/// With the bank open: banks what a shop sale left in the pack (live
+/// 2026-11-22, owen_wood: 7 637 iron ore notes in the pack, four `smelt`
+/// blocks `missing: iron_ore` in 20 s). Tools and coins stay.
+pub fn bank_leftovers(bot: &mut Bot) -> Result<(), ScriptError> {
+    if unsold_in_pack(bot).is_empty() {
+        return Ok(());
+    }
+    let Some(side_com) = (bot.tables.com_id)("bank_side:inv") else { return Ok(()) };
+    let mut keep = pack_stays(bot);
+    keep.extend(crate::kit::pack::obj_id(bot, "coins").ok());
+    let _ = bot.bank_deposit_all(side_com, &keep, 300)?;
+    bot.pump(2)?;
+    Ok(())
+}
+
 /// Banks everything but the tools at the nearest bank, then withdraws the
 /// lots of every group at Varrock west. `None` when a bank could not be
 /// reached or opened (a trip failure, never a short party); otherwise one
@@ -404,6 +431,23 @@ mod tests {
         assert!(!bank_needs_approach((0, 3185, 3436), (3186, 3436, 0)), "at the booth");
         assert!(bank_needs_approach((0, 3150, 3436), (3186, 3436, 0)), "36 tiles away");
         assert!(bank_needs_approach((1, 3186, 3436), (3186, 3436, 0)), "upstairs");
+    }
+
+    /// Live 2026-11-22 (owen_wood, pia_brown, 30 of 154 blocks in an
+    /// hour): a shop trip that stopped at the shop's price left the
+    /// unsold lot in the pack as banknotes; the next script's inputs read
+    /// as missing. The notes are what the sale leaves behind; the pick,
+    /// the coins stay.
+    #[test]
+    fn the_unsold_notes_are_what_a_sale_leaves_in_the_pack() {
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        crate::tables_live::attach_live_tables(&mut bot);
+        let pack = (bot.tables.com_id)("inventory:inv").expect("pack com");
+        let note = crate::market_client::trade_id(crate::kit::pack::obj_id(&bot, "iron_ore").expect("iron ore"));
+        let pick = crate::kit::pack::obj_id(&bot, "bronze_pickaxe").expect("pickaxe");
+        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins");
+        bot.world.inv.insert(pack, [(0u8, (note, 7637u32)), (1u8, (pick, 1u32)), (2u8, (coins, 80u32))].into_iter().collect());
+        assert_eq!(super::unsold_in_pack(&bot), vec![note]);
     }
 
     /// User 2026-11-19: once the trades are done, the load the paused

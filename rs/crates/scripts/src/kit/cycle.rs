@@ -611,7 +611,8 @@ pub fn blocked_access(area: &str) -> ScriptError {
 /// one unit, repeat. Goal and budget end the run with their exit codes;
 /// every other error propagates (blocked included, except a block once
 /// the `--use` stock is spent: the lot is done, `kit::stock_use`; and a
-/// failure across a market pause, retaken `PASS_PAUSE_RESTARTS` times).
+/// failure or block across a market pause, retaken `PASS_PAUSE_RESTARTS`
+/// times).
 pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut CycleState) -> Result<StepControl, ScriptError>) -> crate::ScriptResult {
     bot.assigned_site = spec.site;
     bot.alternative_site = spec.alt_site;
@@ -645,6 +646,15 @@ pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut C
             Err(ScriptError::Blocked { missing }) if state.stock_spent(bot, spec) => {
                 bot.log(&format!("stock used up after {} loads (blocked on {}): lot done", state.units, missing.join(", ")));
                 return Ok(0);
+            }
+            // A delivery closed during the restock banked what it had
+            // withdrawn: the inputs read as missing though the bank holds
+            // them. The step runs again, which withdraws again; a block
+            // that stands with no new pause is the real one.
+            Err(ScriptError::Blocked { missing }) if crate::kit::site::reload_after_pause(pauses_at_step, bot.pauses_done, pause_reloads) => {
+                pause_reloads += 1;
+                bot.log(&format!("blocked on {} across a market pause: preparing again", missing.join(", ")));
+                StepControl::Continue
             }
             Err(error) => return Err(error),
         };

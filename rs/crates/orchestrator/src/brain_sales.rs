@@ -66,7 +66,10 @@ pub fn planned_methods_except(life: &Life, skip: Option<&str>) -> Vec<String> {
         if matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned) || skip == Some(node.id.as_str()) {
             continue;
         }
-        if !matches!(node.kind, NodeKind::ReachLevel { .. } | NodeKind::MakeMoney) {
+        // An obtain node (a market answer, a sub-task) works its method
+        // too: live 2026-11-22 owen_wood's shop trip, planned while
+        // `smelt:steel_bar` was open, offered 7 680 iron ore.
+        if !matches!(node.kind, NodeKind::ReachLevel { .. } | NodeKind::MakeMoney | NodeKind::ObtainItems { .. }) {
             continue;
         }
         methods.extend(node.method.iter().cloned().chain(node.alternatives.iter().map(|alt| alt.method.clone())));
@@ -202,8 +205,15 @@ pub fn working_keep_except(life: &Life, wished: &[String], skip: Option<&str>) -
         }
     }
     // An open magic climb past 21 keeps its alchemy runes between
-    // launches (priced at resolve: the next batch casts them).
-    for node in life.nodes.iter().filter(|node| !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)) {
+    // launches (priced at resolve: the next batch casts them); an obtain
+    // node whose method is not drawn yet keeps the inputs of its item's
+    // production ways.
+    for node in life.nodes.iter().filter(|node| !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned) && skip != Some(node.id.as_str())) {
+        if let NodeKind::ObtainItems { item, .. } = &node.kind {
+            if node.method.is_none() && node.alternatives.is_empty() && node.blocked_by.is_none() {
+                stage_inputs(item, u8::from(sews_leather(item)), &mut keep);
+            }
+        }
         if let NodeKind::ReachLevel { skill, level } = &node.kind {
             keep.extend(lifescape_planner::training::kept_inputs(skill, *level));
         }
@@ -886,3 +896,7 @@ pub(crate) mod tests {
         assert_eq!(method_product("spin:ball_of_wool"), Some("ball_of_wool"));
     }
 }
+
+#[cfg(test)]
+#[path = "brain_sales_obtain_tests.rs"]
+mod obtain_tests;

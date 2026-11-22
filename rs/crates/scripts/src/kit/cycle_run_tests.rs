@@ -83,8 +83,8 @@ fn a_failure_without_a_pause_still_fails() {
 }
 
 /// Bounded like the SDK trips: a step that fails across a pause every
-/// time fails after `PASS_PAUSE_RESTARTS` reloads; usage errors and
-/// blocks are never retried (a pause never explains them).
+/// time fails after `PASS_PAUSE_RESTARTS` reloads; usage errors are never
+/// retried (a pause never explains them).
 #[test]
 fn pause_reloads_are_bounded_and_only_for_failures() {
     let mut bot = offline_bot();
@@ -105,6 +105,41 @@ fn pause_reloads_are_bounded_and_only_for_failures() {
     });
     assert!(matches!(usage, Err(ScriptError::Usage(_))), "got {usage:?}");
     assert_eq!(usage_calls, 1, "a contract error is never a pause's doing");
+}
+
+/// A delivery that closes while a restock walks to the bank banks what
+/// the restock had withdrawn: the step then reads its inputs as missing
+/// (`Blocked`) though the bank holds them (8 of 169 blocks of the
+/// 2026-11-22 08:45-09:50 hour followed a pause with no load done). The
+/// step is taken again, which re-prepares (re-withdraws); a block that
+/// stands with no new pause is a real one and ends the run as before.
+#[test]
+fn a_block_across_a_pause_re_prepares_once_and_a_real_block_stands() {
+    let mut bot = offline_bot();
+    let spec = parse_cli("smelt", &[]).expect("smelt parses");
+    let mut calls = 0u32;
+    let outcome = run(&mut bot, &spec, |step_bot, _| {
+        calls += 1;
+        if calls == 1 {
+            step_bot.pauses_done += 1;
+            return Err(ScriptError::Blocked { missing: vec!["iron_ore".to_string()] });
+        }
+        Ok(StepControl::GoalReached)
+    });
+    assert_eq!(outcome.expect("the step re-prepares after the pause"), 0);
+    assert_eq!(calls, 2);
+    let mut real_calls = 0u32;
+    let real = run(&mut bot, &spec, |step_bot, _| {
+        real_calls += 1;
+        if real_calls == 1 {
+            step_bot.pauses_done += 1;
+        }
+        Err(ScriptError::Blocked { missing: vec!["iron_ore".to_string()] })
+    });
+    assert!(matches!(real, Err(ScriptError::Blocked { .. })), "still missing after re-preparing: blocked, got {real:?}");
+    assert_eq!(real_calls, 2, "one re-preparation, then the block stands");
+    let unpaused = run(&mut bot, &spec, |_, _| Err(ScriptError::Blocked { missing: vec!["iron_ore".to_string()] }));
+    assert!(matches!(unpaused, Err(ScriptError::Blocked { .. })), "no pause: blocked at once, got {unpaused:?}");
 }
 
 #[test]

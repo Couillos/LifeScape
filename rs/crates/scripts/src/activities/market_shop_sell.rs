@@ -88,10 +88,11 @@ pub fn sale_then_room(bot: &mut Bot, order: Option<&SaleOrder>) -> Result<bool, 
     if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
         return Err(ScriptError::Blocked { missing: vec!["bank".to_string()] });
     }
+    // The unsold remainder of the lots rides home as banknotes: banked
+    // again (`bank_leftovers`), or the next script reads its input as missing.
+    crate::market_lots::bank_leftovers(bot)?;
     let room = crate::kit::janitor::known_bank_types(bot) < lifescape_planner::space::BANK_TYPE_LIMIT;
-    if room {
-        let _ = bot.close_modal();
-    }
+    if room { let _ = bot.close_modal(); }
     Ok(room)
 }
 
