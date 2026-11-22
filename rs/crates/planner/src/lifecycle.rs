@@ -257,13 +257,20 @@ fn abandon_unresolvable(life: &mut Life, changes: &mut Vec<String>) {
 /// posted it was set aside or given back (`abandon_goal_work` spares it,
 /// the fill lands in the bank), it is no work of the current goal.
 /// Review 2026-11-20: such a wait kept a finished answer open, the
-/// ambition never drawn back.
+/// ambition never drawn back. A buy an open node of the current goal
+/// waits on (a reused obtain) is that goal's work, no leftover (live
+/// 2026-11-22: "graph stuck, 0 nodes abandoned" and a wrong ban).
 pub fn earlier_wait(life: &Life, node: &crate::model::Node) -> bool {
     let floor = life.memory.floor.unwrap_or(0);
     node.status == NodeStatus::Ready
         && node.method.as_deref().is_some_and(|method| method.starts_with("market:"))
         && crate::lifecycle_retire::node_number(&node.id).is_some_and(|number| number < floor)
         && life.history.iter().rev().find(|entry| entry.node == node.id).is_some_and(|entry| entry.outcome == "awaiting_fill")
+        && !life.nodes.iter().any(|waiting| {
+            !is_terminal(&waiting.status)
+                && waiting.deps.contains(&node.id)
+                && crate::lifecycle_retire::node_number(&waiting.id).is_none_or(|number| number >= floor)
+        })
 }
 
 /// State of a normalized graph (call `normalize` first). A buy left on
