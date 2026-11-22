@@ -299,7 +299,7 @@ fn no_wallet_no_trade() {
 #[test]
 fn trade_inputs_size_on_the_recipe_and_its_failures() {
     assert_eq!(input_count(&method_of(BRONZE), "copper_ore", 22), Some(22));
-    assert_eq!(input_count(&method_of("smelt:iron_bar"), "iron_ore", 10), Some(20), "an iron smelt fails half the time");
+    assert_eq!(input_count(&method_of("smelt:iron_bar"), "iron_ore", 10), Some(22), "an iron smelt fails half the time, plus the 10 % margin");
     assert_eq!(input_count(&method_of(BRONZE), "copper_ore", 0), None);
     assert_eq!(input_count(BRONZE, "copper_ore", 22), None, "only a trade lot");
     assert!(super::buys_input(&method_of(BRONZE), "tin_ore"));

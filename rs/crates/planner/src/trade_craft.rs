@@ -335,8 +335,13 @@ pub struct LotPlan {
 }
 
 /// Units of `input` a lot of `lot` products still needs bought.
-fn to_buy(input: &TradeInput, lot: i64) -> i64 {
-    ((lot as f64 * input.per_unit - 1e-9).ceil() as i64 - input.held).max(0)
+/// Odds of the recipe an offer crafts (`input_margin`).
+fn offer_success(offer: &TradeOffer) -> f64 {
+    crate::input_margin::recipe_success(recipe_of(&offer.method).unwrap_or(&offer.method))
+}
+
+fn to_buy(input: &TradeInput, lot: i64, success: f64) -> i64 {
+    (crate::input_margin::sized_inputs(lot as f64 * input.per_unit, input.per_unit.ceil() as i64, success) - input.held).max(0)
 }
 
 /// Coins `units` cost along the asks (each unit at least the current
@@ -357,7 +362,7 @@ fn walk_cost(input: &TradeInput, units: i64) -> Option<f64> {
 
 /// Coins a lot's purchases cost, `None` past the depth of an input.
 fn lot_cost(offer: &TradeOffer, lot: i64) -> Option<f64> {
-    offer.inputs.iter().try_fold(0.0, |total, input| walk_cost(input, to_buy(input, lot)).map(|coins| total + coins))
+    offer.inputs.iter().try_fold(0.0, |total, input| walk_cost(input, to_buy(input, lot, offer_success(offer))).map(|coins| total + coins))
 }
 
 /// The lot a bot works: as many products as one window of the row (the
@@ -395,7 +400,7 @@ pub fn lot_size(offer: &TradeOffer, wallet: i64) -> LotPlan {
     }
     let bound = if low == upper { upper_bound } else { LotBound::Capital };
     let cost = lot_cost(offer, low).unwrap_or(0.0).ceil() as i64;
-    let buys = offer.inputs.iter().map(|input| (input.item.clone(), to_buy(input, low))).filter(|(_, units)| *units > 0).collect();
+    let buys = offer.inputs.iter().map(|input| (input.item.clone(), to_buy(input, low, offer_success(offer)))).filter(|(_, units)| *units > 0).collect();
     LotPlan { lot: low, cost, bound, buys }
 }
 
@@ -470,7 +475,7 @@ pub fn input_count(method: &str, need: &str, batch: i64) -> Option<i64> {
     let (_, way) = crate::method_way::method_way(recipe)?;
     let (_, per_action) = way.inputs.iter().find(|(input, _)| input == need)?;
     let out = if way.expected_out() > 0.0 { way.expected_out() } else { 1.0 };
-    Some(((batch as f64 * (*per_action).max(1) as f64 / out) - 1e-9).ceil().max(1.0) as i64)
+    Some(crate::input_margin::sized_inputs(batch as f64 * (*per_action).max(1) as f64 / out, *per_action, way.success))
 }
 
 /// True when `need` is an input the trade method `method` buys on the
@@ -537,7 +542,7 @@ pub fn open_lot(lots: &mut Vec<TradeLot>, node: &Node, ctx: &ReadyCtx, now: i64)
     let plan = lot_size(offer, ctx.trade_wallet);
     let lot = node.batch.max(1);
     // The purchases of THIS lot (a lot the held stock makes buys nothing).
-    let buys: Vec<(String, i64)> = offer.inputs.iter().map(|input| (input.item.clone(), to_buy(input, lot))).filter(|(_, units)| *units > 0).collect();
+    let buys: Vec<(String, i64)> = offer.inputs.iter().map(|input| (input.item.clone(), to_buy(input, lot, offer_success(offer)))).filter(|(_, units)| *units > 0).collect();
     let bound = if buys.is_empty() { "held" } else { plan.bound.as_str() };
     let record = TradeLot {
         node: node.id.clone(),

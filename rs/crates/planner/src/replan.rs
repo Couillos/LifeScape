@@ -116,7 +116,11 @@ pub fn need_count_with(node: &Node, need: &str, live: Option<u8>, rate: crate::w
                 let per_action = crate::sizing::per_action_need_with(rate, &method, from, need).unwrap_or(1);
                 return units.min(node.batch.saturating_mul(per_action.max(1))).max(1);
             }
-            return units.max(1);
+            // A random recipe (iron smelts) runs dry before the climb's
+            // end at the expected burn: the margin of `input_margin`.
+            let odds = crate::input_margin::recipe_success(&method);
+            let per_action = crate::sizing::per_action_need_with(rate, &method, from, need).unwrap_or(1);
+            return crate::input_margin::sized_inputs(units as f64, per_action, odds).max(units).max(1);
         }
         // A climb whose subject is made from intermediate stages (pie
         // dishes from soft clay): the tranche's actions times the base
@@ -184,7 +188,7 @@ pub fn need_count_with(node: &Node, need: &str, live: Option<u8>, rate: crate::w
             // Inputs per unit made: an iron smelt fails half the time
             // (`Way::expected_out` 0.5), so a bar costs two ores.
             Some(count) => match way.expected_out() {
-                out if out > 0.0 => (count as f64 * per_action as f64 / out).ceil() as i64,
+                out if out > 0.0 => crate::input_margin::sized_inputs(count as f64 * per_action as f64 / out, per_action, way.success),
                 _ => count.saturating_mul(per_action),
             },
             None => {
@@ -419,8 +423,8 @@ mod tests {
             .collect();
         assert_eq!(asked, vec![("copper_ore".to_string(), 14), ("tin_ore".to_string(), 14)], "both ores, one each per bar");
         assert_eq!(bronze.deps, vec!["n21".to_string(), "n22".to_string()], "the smelt waits on both");
-        assert_eq!(super::need_count(&obtain("iron_bar", 10), "iron_ore"), 20, "half the iron smelts fail");
-        assert_eq!(super::need_count(&obtain("iron_bar", 5), "iron_ore"), 10);
+        assert_eq!(super::need_count(&obtain("iron_bar", 10), "iron_ore"), 22, "half the iron smelts fail, plus the 10 % margin");
+        assert_eq!(super::need_count(&obtain("iron_bar", 5), "iron_ore"), 11);
         assert_eq!(super::need_count(&obtain("steel_bar", 10), "iron_ore"), 10, "steel never fails");
         assert_eq!(super::need_count(&obtain("steel_bar", 10), "coal"), 20, "two coal per steel bar");
         assert_eq!(super::need_count(&obtain("mithril_bar", 3), "coal"), 12);
