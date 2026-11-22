@@ -275,6 +275,7 @@ impl MarketService {
         self.lock_store()
             .set_deal_status(deal_id, lifescape_store::DealStatus::Matched, "", clock)
             .map_err(|error| error.to_string())?;
+        let seller_limit = self.lock_store().get_order(fill.sell_id as i64).ok().flatten().and_then(|row| row.ask_limit);
         let mut engine = self.lock_engine();
         if let Ok(deal) = Deal::fresh(
             deal_id as u64,
@@ -292,6 +293,9 @@ impl MarketService {
             engine.deals.insert(deal_id as u64, deal);
             engine.arrived.insert(deal_id as u64, (false, false));
             engine.relist_rows.insert(deal_id as u64, relist);
+            if let Some(limit) = seller_limit {
+                engine.relist_ask_limits.insert(deal_id as u64, limit);
+            }
         }
         Ok(deal_id)
     }
@@ -590,7 +594,10 @@ impl MarketService {
         // cooldown, free to match anybody else (`market_uncross`).
         let until = wall_now() + crate::market_uncross::cooldown_secs();
         self.hold_pair_apart(buyer, seller, until);
-        let rows = self.lock_engine().relist_rows.remove(&deal_id).unwrap_or_default();
+        let (rows, seller_limit) = {
+            let mut engine = self.lock_engine();
+            (engine.relist_rows.remove(&deal_id).unwrap_or_default(), engine.relist_ask_limits.remove(&deal_id))
+        };
         let clock = Self::now_clock();
         for row in rows {
             let wanted = (row.account == buyer && relist_buyer) || (row.account == seller && relist_seller);
@@ -599,8 +606,11 @@ impl MarketService {
             }
             let store_id = {
                 let store = self.lock_store();
+                // The relisted ask keeps its owner's walk limit (schema 11).
+                let ask_limit = seller_limit.filter(|_| row.side == Side::Sell);
                 store
                     .place_order(&lifescape_store::NewOrder {
+                        ask_limit,
                         account: row.account.clone(),
                         side: if row.side == Side::Buy {
                             lifescape_store::OrderSide::Buy

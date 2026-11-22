@@ -69,10 +69,11 @@ pub const FILL_MARGIN_PCT: usize = 80;
 /// looter's whole concession.
 pub const DEMAND_LOOKBACK_TICKS: u64 = 72_000;
 
-/// No demand: the resting bid walks down 10 % per pass (at least a coin)
-/// toward 1, the sellers' rate (user Q1 2026-11-18): from 100 coins to 1
-/// in ~44 passes. An unsold ask walks down at the same rate.
-pub const NO_DEMAND_STEP: f64 = 0.10;
+/// No demand: the resting bid walks down 5 % per pass (at least a coin)
+/// toward 1, the sellers' rate (user Q1 2026-11-18 at 10 %, moved to 5 %
+/// by the user on 2026-11-22): from 100 coins to 1 in ~90 passes. An
+/// unsold ask walks down at the same rate.
+pub const NO_DEMAND_STEP: f64 = 0.05;
 
 /// Objects one maker covers: (60 + 28 - 20) * 80 % = 54.
 pub fn slice_capacity() -> usize {

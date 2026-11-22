@@ -174,21 +174,25 @@ fn neither_the_shop_nor_the_alchemy_is_a_floor() {
     }
 }
 
-/// Plan prix §1-§2 (user 2026-11-18): a seller whose cost (858) sits over
-/// the market (700) listed AT its floor, 93 % of the listings, and came
-/// back at the same price after each unsold horizon. Two unsold horizons
-/// drop its floor 10 % each (694); twenty drop it to 104, no bound under
-/// it; the listing opens over that floor by its margin, never on it.
+/// User 2026-11-22 (the mirror of B1): the ask walk stops at the seller's
+/// OWN value of the unit (its cost: measured ticks x its coins per tick,
+/// plus inputs). Unsold horizons no longer lower that limit (the old
+/// plan prix §1 decay, 10 % per horizon, is gone): an iron ore that costs
+/// its miner 15 coins of time stops at 15, never at 1. The listing opens
+/// over the limit by its margin, never on it.
 #[test]
-fn an_unsold_seller_learns_its_floor_and_opens_over_it() {
+fn an_unsold_seller_keeps_its_own_value_as_the_walk_limit() {
     let traded = Reference { price: 700, traded: true };
-    let marks = FoundMarks { margin: 0.10, unsold: 2, ..FoundMarks::default() };
-    assert_eq!(plan_sale(564, reserve(858), traded, None, None, marks, &demand(1, Vec::new())), SaleDecision::List { qty: 28, price: 764, floor: 694 });
-    let long = FoundMarks { margin: 0.10, unsold: 20, ..FoundMarks::default() };
-    match plan_sale(564, reserve(858), traded, None, None, long, &demand(1, Vec::new())) {
-        SaleDecision::List { floor, .. } => assert_eq!(floor, 104, "no alchemy bound: it keeps falling"),
-        other => panic!("{other:?}"),
+    for unsold in [0, 2, 20] {
+        let marks = FoundMarks { margin: 0.10, unsold, ..FoundMarks::default() };
+        assert_eq!(plan_sale(564, reserve(858), traded, None, None, marks, &demand(1, Vec::new())), SaleDecision::List { qty: 28, price: 944, floor: 858 }, "{unsold} unsold horizons");
     }
+    let ore = plan_sale(564, reserve(15), Reference { price: 1, traded: true }, None, None, FoundMarks { unsold: 9, ..FoundMarks::default() }, &demand(1, Vec::new()));
+    assert!(matches!(ore, SaleDecision::List { floor: 15, .. }), "{ore:?}");
+    // A byproduct (found stock, own value ~0): the limit is one coin.
+    let found = Some(Reserve { coins: 1, source: CostSource::Found });
+    let feathers = plan_sale(500, found, Reference { price: 3, traded: true }, None, None, FoundMarks { unsold: 9, ..FoundMarks::default() }, &demand(100, Vec::new()));
+    assert!(matches!(feathers, SaleDecision::List { floor: 1, .. }), "{feathers:?}");
     let fresh = FoundMarks { margin: 0.10, ..FoundMarks::default() };
     assert_eq!(plan_sale(564, reserve(858), traded, None, None, fresh, &demand(1, Vec::new())), SaleDecision::List { qty: 28, price: 944, floor: 858 }, "no failure yet: its cost, opened over it");
     let rich = Reference { price: 1_200, traded: true };

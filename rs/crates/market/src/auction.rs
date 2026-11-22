@@ -7,14 +7,14 @@
 //! trades once in a long while was walked 10 % at a time against nobody:
 //! each window moved prices on no information. Two regimes now:
 //!
-//! - continuous (frequent trades): the 10 % walk of `concession`, its
+//! - continuous (frequent trades): the 5 % walk of `concession`, its
 //!   reference the volume-weighted mean price of the recent trades
 //!   (`anchor_price`, B4) and its step shrinking near it
 //!   (`concession::step_pct`, B5);
 //! - grouped auction (rare trades, B2): every `AUCTION_PERIOD_TICKS` the
 //!   orders of the object clear at ONE price (`clearing`), the one that
 //!   trades the most units; between two auctions the orders rest (the
-//!   book does not match: `Book::set_batch`) and the 10 % walk plays
+//!   book does not match: `Book::set_batch`) and the 5 % walk plays
 //!   only for what an auction left unserved.
 //!
 //! Mode (B3, `next_mode`): measured on the object's own history, the

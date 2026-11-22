@@ -286,7 +286,7 @@ fn place(engine: &mut Engine, traders: &[Trader], owner: usize, model: Model, ti
         id,
         price,
         seen_remaining: engine.book.remaining(id).unwrap_or(0),
-        curve: Concession { opening: price, limit: engine.limit_of(trader), horizon_ticks: trader.horizon_ticks, beta },
+        curve: Concession { opening: price, limit: if trader.sell && trader.loot { 1 } else { engine.limit_of(trader) }, horizon_ticks: trader.horizon_ticks, beta },
         curve_start: tick,
         phase,
         window,

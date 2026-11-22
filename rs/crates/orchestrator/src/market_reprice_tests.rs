@@ -61,10 +61,10 @@ fn ticks(count: f64) -> f64 {
 
 /// Plan marché M3: an ask that sold backs off one ZIP step (the rest asks
 /// higher). The 10 % walk (user 2026-11-19): idle, it drops 10 % per
-/// window (at least a coin), under its own floor, down to one coin, and
-/// is never withdrawn.
+/// window (at least a coin) down to its owner's own value (user
+/// 2026-11-22, the mirror of B1: here 4) and waits there, never withdrawn.
 #[test]
-fn filled_asks_back_off_idle_asks_walk_down_to_one() {
+fn filled_asks_back_off_idle_asks_walk_down_to_their_owners_value() {
     let (service, path) = service("asks");
     funded(&service, "maker");
     funded(&service, "taker");
@@ -82,7 +82,9 @@ fn filled_asks_back_off_idle_asks_walk_down_to_one() {
         reprice_round(&service, restart + 10.0 * f64::from(window), 600.0);
         seen.push(price_of(&service, "maker"));
     }
-    assert_eq!(seen, [Some(5), Some(4), Some(3), Some(2), Some(1), Some(1)], "a coin a window under 10, through its floor 4, resting at 1");
+    assert_eq!(seen, [Some(5), Some(4), Some(4), Some(4), Some(4), Some(4)], "a coin a window, stopping at its own value 4");
+    let limit = service.lock_store().account_orders("maker").unwrap_or_default().into_iter().find(|row| row.remaining > 0).and_then(|row| row.ask_limit);
+    assert_eq!(limit, Some(4), "the own value is kept with the order");
     // No withdrawal any more: the sale alone is in the carnet.
     assert_eq!(service.lock_store().seller_learning("maker", 0).expect("learning").get(&FEATHER), Some(&(0, 1)));
     cleanup(&path);

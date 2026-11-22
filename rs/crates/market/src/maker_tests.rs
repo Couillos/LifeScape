@@ -165,16 +165,16 @@ fn stock_moves_both_sides() {
 /// The 10 % rule for every bid (user 2026-11-20, « il faut les faire
 /// monter les offres d'achat pour inciter les gens à vendre »; live: 351
 /// maker bids at 1 coin frozen for a day): nobody sells to it, its bid
-/// climbs 10 % a pass (at least a coin), whatever the regime, the
+/// climbs 5 % a pass (at least a coin), whatever the regime, the
 /// quantity shrinking with the capital cap; past one lot the stock still
 /// goes to the shop (a real buyer). A fill restarts from a fresh quote
 /// (the caller passes no `own_bid`).
 #[test]
-fn an_unserved_bid_climbs_ten_percent_a_pass_and_dumps_to_the_shop() {
+fn an_unserved_bid_climbs_five_percent_a_pass_and_dumps_to_the_shop() {
     let idle = MakerInput { best_bid: None, recent_buys: 0, stock: 300, capital: 1_000_000, own_bid: Some(90), ..liquid(0) };
     let first = quote(&MAKER_CAPS, &idle);
     assert_eq!(first.regime, Regime::NoDemand);
-    assert_eq!(first.bid.map(|leg| leg.price), Some(99), "10 % up a pass");
+    assert_eq!(first.bid.map(|leg| leg.price), Some(95), "5 % up a pass");
     let mut own = Some(1);
     for _ in 0..30 {
         let next = quote(&MAKER_CAPS, &MakerInput { own_bid: own, stock: 0, ..idle }).bid.map(|leg| leg.price);
@@ -236,10 +236,10 @@ fn a_shop_outlet_enters_the_reference_value() {
     assert!(full.ask.expect("an ask").price > 15, "a fresh ask quotes over its fair value: {full:?}");
     assert_eq!(full.npc_dump, 400 - lot, "past one lot, the shop: {full:?}");
     // Review lot 5 (user: no floor of any kind, shop and alchemy
-    // included; the 10 % walk is everyone's): an ask still unsold drops
-    // 10 % a pass, under the outlet too.
-    let walked = quote(&MAKER_CAPS, &MakerInput { stock: 400, stock_cost: 400, own_ask: Some(16), ..yew });
-    assert_eq!(walked.ask.expect("ask").price, 14, "16 unsold: 10 % down, under the outlet's 15: {walked:?}");
+    // included; the walk is everyone's, 5 %): an ask still unsold drops
+    // 5 % a pass, under the outlet too.
+    let walked = quote(&MAKER_CAPS, &MakerInput { stock: 400, stock_cost: 400, own_ask: Some(15), ..yew });
+    assert_eq!(walked.ask.expect("ask").price, 14, "15 unsold: 5 % down, under the outlet's 15: {walked:?}");
     // The same object without the outlet: the 1-coin trade rules.
     let plain = quote(&MAKER_CAPS, &MakerInput { outlet: None, ..yew });
     assert_eq!((plain.fair, plain.regime), (1, Regime::NoDemand), "{plain:?}");
@@ -345,7 +345,7 @@ fn discovery_centres_on_the_published_cost_inside_the_public_bounds() {
 
 /// Every order works the same (user 2026-11-18: "tous les items doivent
 /// fonctionner pareil bid et ask"): a maker's ask still resting unsold at
-/// the next pass drops 10 % (the sellers' rate), whatever the last trade
+/// the next pass drops 5 % (the sellers' rate), whatever the last trade
 /// says (wooden shield: the maker held 55 over a last trade at 53 while
 /// nobody bought), down to one coin over its own bid; a fresh quote under
 /// it is taken at once.
@@ -355,7 +355,7 @@ fn an_unsold_maker_ask_walks_down_like_any_seller() {
     let fresh = quote(&MAKER_CAPS, &held).ask.expect("ask").price;
     let bid = quote(&MAKER_CAPS, &held).bid.expect("bid").price;
     let walked = quote(&MAKER_CAPS, &MakerInput { own_ask: Some(fresh), ..held });
-    assert_eq!(walked.ask.expect("ask").price, ((fresh as f64 * 0.9).floor() as i64).max(bid + 1), "10 % down a pass: {walked:?}");
+    assert_eq!(walked.ask.expect("ask").price, ((fresh as f64 * 0.95).floor() as i64).max(bid + 1), "5 % down a pass: {walked:?}");
     assert!(walked.ask.expect("ask").price < fresh);
     let mut own = Some(fresh);
     for _ in 0..200 {

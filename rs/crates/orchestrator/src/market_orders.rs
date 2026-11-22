@@ -74,6 +74,7 @@ impl MarketService {
         let pressed = row.motive == crate::market_lineage::NEED || crate::market_reprice::bounds_of(self, order_id).is_some_and(|bounds| bounds.pressed);
         let walked_ceiling = crate::market_reprice::bounds_of(self, order_id).filter(|bounds| !bounds.sell && bounds.ceiling < crate::market_reprice::UNSAID_CEILING).map(|bounds| bounds.ceiling);
         // Plan prix lot D: per unit unless the caller says `per_lot`.
+        let walked_limit = crate::market_reprice::bounds_of(self, order_id).filter(|bounds| bounds.sell).map(|bounds| bounds.floor);
         let price = if request.get("per_lot").as_bool() == Some(true) { price } else { crate::market_units::to_lot(item, price) };
         if let Err(error) = check_price(price) {
             return Self::err(error.to_string());
@@ -117,6 +118,7 @@ impl MarketService {
                 replaces: Some(order_id),
                 motive: row.motive.clone(),
                 ceiling: walked_ceiling.or(row.ceiling),
+                ask_limit: walked_limit.or(row.ask_limit),
             });
             match placed {
                 Ok(id) => match store.cancel_order_because(order_id, clock, lifescape_store::AMENDED_REASON) {
