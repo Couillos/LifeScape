@@ -12,8 +12,8 @@
 use lifescape_planner::method_way::method_way;
 
 /// Method families whose script consumes recipe inputs it never buys.
-const GATED_FAMILIES: [&str; 17] = [
-    "smelt", "smith", "cut", "string", "pottery", "spin", "jewelry", "curse", "teleport", "bananas", "enchant", "superheat", "telegrab", "fill", "runecraft", "craft", "fight",
+const GATED_FAMILIES: [&str; 18] = [
+    "smelt", "smith", "cut", "string", "pottery", "spin", "jewelry", "curse", "teleport", "bananas", "enchant", "superheat", "telegrab", "fill", "runecraft", "craft", "fight", "cook",
 ];
 
 /// Staves and the rune each pays (a held staff stands for its element).
@@ -136,6 +136,17 @@ mod tests {
     fn a_held_staff_covers_its_rune() {
         let held = |name: &str| if name == "staff_of_water" || name == "earthrune" || name == "bodyrune" { 9 } else { 0 };
         assert!(short_inputs("curse:curse/cows", true, &held).is_empty());
+    }
+
+    /// Live 2026-11-22 (unastorm `cook:swordfish`, arthur_75
+    /// `string:unstrung_emerald_amulet`): the product-named cook and the
+    /// stringing launched with the raw fish or amulet missing.
+    #[test]
+    fn product_named_cook_and_string_methods_gate() {
+        let nothing = |_: &str| 0;
+        assert!(short_inputs("cook:swordfish", true, &nothing).contains(&"raw_swordfish".to_string()));
+        assert!(short_inputs("cook:lobster", true, &nothing).contains(&"raw_lobster".to_string()));
+        assert!(short_inputs("string:unstrung_emerald_amulet", true, &nothing).contains(&"unstrung_emerald_amulet".to_string()));
     }
 
     #[test]
