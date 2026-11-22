@@ -259,6 +259,15 @@ fn goalless(spec: &TaskSpec) -> bool {
     targets.count.is_none() && targets.want_item.is_none() && targets.xp_skill.is_none() && targets.level_skill.is_none() && targets.uses.is_empty()
 }
 
+/// A goal run that cast and then found the runes spent ends as a spent
+/// window (the brain counts the XP as progress and, at the next launch,
+/// its input gate files the runes): a `Blocked` error row after real work
+/// was noise (live 2026-11-22: curse/magic `missing waterrune` after 28
+/// casts). No cast done: `None`, the plain `Blocked` stays.
+pub fn ran_dry_window(casts_done: u32) -> Option<StopReason> {
+    (casts_done > 0).then_some(StopReason::BudgetExhausted)
+}
+
 /// Casts the order still asks for (count left, `--want` left), `u32::MAX`
 /// for a level/XP climb or a goalless run.
 fn casts_left(bot: &Bot, spec: &TaskSpec, done: u32, want_base: Option<u32>) -> u32 {
@@ -324,6 +333,10 @@ pub fn run_cast_steps(
                 if state.stock_spent(bot, &spec) {
                     bot.log(&format!("{} used up its stock after {} casts: {}", load.spell, state.units(), missing.join(", ")));
                     return Ok((state.units(), Some(StopReason::GoalReached)));
+                }
+                if let Some(stop) = ran_dry_window(state.units()) {
+                    bot.log(&format!("{} ran dry after {} casts toward its goal (pack and bank): {}", load.spell, state.units(), missing.join(", ")));
+                    return Ok((state.units(), Some(stop)));
                 }
                 return Err(ScriptError::Blocked { missing });
             }
@@ -457,6 +470,12 @@ pub(crate) mod tests {
         let mut plain = load.clone();
         plain.noted_target = false;
         assert_eq!(plain.pack_casts(&bot), 0, "unnoted loads read the base form only");
+    }
+
+    #[test]
+    fn a_goal_run_that_cast_then_ran_dry_is_a_spent_window() {
+        assert_eq!(super::ran_dry_window(28), Some(super::StopReason::BudgetExhausted));
+        assert_eq!(super::ran_dry_window(0), None);
     }
 
     /// Lot 8 review: a market pause banks the runes mid-cast (curse: 12

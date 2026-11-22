@@ -129,12 +129,27 @@ pub fn run_telegrab_wine(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bot.log(&format!("telegrab: a market pause left us at {:?}, runes and stand again", bot.position()));
     }
     if !wine_on_floor(bot, wine) {
-        return Err(ScriptError::Failed(format!("wine gone at {WINE_SPAWN:?} from {:?}", bot.position())));
+        return Err(lost_wine());
     }
     bot.log(&format!("ok casting telegrab near {WINE_SPAWN:?} (magic={level})"));
     bot.intend("telegrabbing the wine of Zamorak");
+    let before = crate::kit::pack::pack_total(bot, wine);
     cast_telegrab(bot, wine)?;
+    // The single spawn is fought over by the fleet: a wine that left the
+    // floor without entering the pack went to someone else (live
+    // 2026-11-22: 21 runs "goal_reached" with no XP, skill banned).
+    bot.pump(3)?;
+    if crate::kit::pack::pack_total(bot, wine) <= before {
+        return Err(lost_wine());
+    }
     Ok(0)
+}
+
+/// The altar's wine went to another player: the site is contended, the
+/// brain cools it without a failure (`kit::site::CONTENDED_TAG`).
+pub fn lost_wine() -> ScriptError {
+    let (x, z, level) = WINE_SPAWN;
+    ScriptError::Blocked { missing: vec![format!("{}{x},{z},{level}", crate::kit::site::CONTENDED_TAG)] }
 }
 
 #[cfg(test)]
@@ -150,6 +165,15 @@ mod tests {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         bot
+    }
+
+    /// Live 2026-11-22: a lost wine is contention, never a bare success.
+    #[test]
+    fn a_lost_wine_is_a_contended_block() {
+        match super::lost_wine() {
+            crate::ScriptError::Blocked { missing } => assert_eq!(missing, vec!["contended:2930,3515,0".to_string()]),
+            other => panic!("{other:?}"),
+        }
     }
 
     /// Declaration matches the dump spell row: level 33, air + law, F2P,

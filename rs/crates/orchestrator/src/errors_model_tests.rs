@@ -103,8 +103,25 @@ fn a_productive_stock_out_is_no_error_row() {
     let nothing = json::parse(r#"{"account":"t01","activity":"smelt","flows":[{"cause":"input","name":"Coal","qty":-4}],"missing":["coal"],"node_id":"n9","stop":"blocked"}"#).unwrap();
     assert_eq!(produced_units(&nothing), 0);
     assert!(from_report("t01", &nothing, None, 5_000, &no_zone).is_some());
-    let tagged = json::parse(r#"{"account":"t01","activity":"smelt","flows":[{"cause":"product","name":"Steel bar","qty":5}],"missing":["locked:coal"],"node_id":"n9","stop":"blocked"}"#).unwrap();
-    assert!(from_report("t01", &tagged, None, 5_000, &no_zone).is_some());
+    // Live 2026-11-22: smelt `locked:coal` after 15 steel bars: own
+    // listing took the stock, a stock-out too.
+    let locked = json::parse(r#"{"account":"t01","activity":"smelt","flows":[{"cause":"product","name":"Steel bar","qty":5}],"missing":["locked:coal"],"node_id":"n9","stop":"blocked"}"#).unwrap();
+    assert!(from_report("t01", &locked, None, 5_000, &no_zone).is_none());
+    let locked_nothing = json::parse(r#"{"account":"t01","activity":"smelt","missing":["locked:coal"],"node_id":"n9","stop":"blocked"}"#).unwrap();
+    assert!(from_report("t01", &locked_nothing, None, 5_000, &no_zone).is_some(), "no work done: still an error");
+    let level = json::parse(r#"{"account":"t01","activity":"smelt","flows":[{"cause":"product","name":"Steel bar","qty":5}],"missing":["level:smithing:40"],"node_id":"n9","stop":"blocked"}"#).unwrap();
+    assert!(from_report("t01", &level, None, 5_000, &no_zone).is_some());
+}
+
+/// Live 2026-11-22: curse/magic runs that cast 28 times then ran out of
+/// runes were `task/Blocked` rows (no product flow, so no stock-out).
+#[test]
+fn a_cast_run_that_ran_out_of_runes_is_a_stock_out() {
+    let cast = json::parse(r#"{"account":"t01","activity":"curse","units":{"cast":{"curse":28}},"missing":["bodyrune"],"node_id":"n9","stop":"blocked"}"#).unwrap();
+    assert_eq!(worked_units(&cast), 28);
+    assert!(from_report("t01", &cast, None, 5_000, &no_zone).is_none());
+    let none = json::parse(r#"{"account":"t01","activity":"curse","units":{"cast":{}},"missing":["bodyrune"],"node_id":"n9","stop":"blocked"}"#).unwrap();
+    assert!(from_report("t01", &none, None, 5_000, &no_zone).is_some());
 }
 
 #[test]

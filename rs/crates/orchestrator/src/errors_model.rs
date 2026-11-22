@@ -190,7 +190,21 @@ pub fn produced_units(report: &Value) -> i64 {
 /// out, the normal end of a production load. The brain still files the
 /// obtain for the missing input; no error row, no counted block.
 pub fn is_stock_out(report: &Value, missing: &[String]) -> bool {
-    report.get("stop").as_str() == Some("blocked") && !missing.is_empty() && missing.iter().all(|need| !need.contains(':')) && produced_units(report) > 0
+    // A lock is the bot's own listing taking the stock the run was using
+    // (live 2026-11-22: smelt `locked:coal` after 15 steel bars): the
+    // same end, the brain releases the listing at the next launch.
+    let plain = |need: &String| match need.strip_prefix(crate::brain_tools::LOCKED_TAG) {
+        Some(item) => !item.is_empty() && !item.contains(':'),
+        None => !need.contains(':'),
+    };
+    report.get("stop").as_str() == Some("blocked") && !missing.is_empty() && missing.iter().all(plain) && worked_units(report) > 0
+}
+
+/// Units a run made or cast: products and spell casts (curse, magic and
+/// enchant runs make no product flow yet burn their runes).
+pub fn worked_units(report: &Value) -> i64 {
+    let cast: i64 = report.get("units").get("cast").as_obj().map(|rows| rows.iter().filter_map(|(_, qty)| qty.as_i64()).filter(|qty| *qty > 0).sum()).unwrap_or(0);
+    produced_units(report) + cast
 }
 
 /// For a failed or blocked task report: the outcome to fold onto the

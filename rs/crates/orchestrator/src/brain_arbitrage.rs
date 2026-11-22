@@ -148,20 +148,54 @@ pub fn best_arbitrage(books: &PublicAsks, sales: &crate::brain_npc_sale::ShopSal
     best
 }
 
+/// Pure: `sells` `(object, account, unit price, units)` net of the
+/// resting bids of other accounts `(object, account, unit price, units)`
+/// that already cover them: each bid, highest first, claims the
+/// cheapest asks at or under its price. Live 2026-11-22: 52 bots bid
+/// within 40 s on the same 107 plateskirts (the match runs later), 50
+/// of those bids never filled and were withdrawn `arbitrage_resized`.
+pub fn unclaimed_sells(sells: &[(String, String, i64, i64)], bids: &[(String, String, i64, i64)], account: &str) -> Vec<(String, String, i64, i64)> {
+    let mut left: Vec<(String, String, i64, i64)> = sells.to_vec();
+    let mut claims: Vec<&(String, String, i64, i64)> = bids.iter().filter(|(_, owner, _, units)| *units > 0 && !owner.eq_ignore_ascii_case(account)).collect();
+    claims.sort_by_key(|(_, _, price, _)| std::cmp::Reverse(*price));
+    for (item, _, price, units) in claims {
+        let mut open = *units;
+        let mut order: Vec<usize> = (0..left.len()).filter(|index| left[*index].0 == *item && left[*index].2 <= *price && left[*index].3 > 0).collect();
+        order.sort_by_key(|index| left[*index].2);
+        for index in order {
+            let taken = open.min(left[index].3);
+            left[index].3 -= taken;
+            open -= taken;
+            if open == 0 {
+                break;
+            }
+        }
+    }
+    left.retain(|(_, _, _, units)| *units > 0);
+    left
+}
+
 /// Others' resting sells on the live book as `(object, account, unit
-/// price, units)` (banknote books read as their object).
-fn live_sells() -> Vec<(String, String, i64, i64)> {
+/// price, units)` (banknote books read as their object), net of the
+/// bids of other accounts already resting on them (`unclaimed_sells`).
+fn live_sells(account: &str) -> Vec<(String, String, i64, i64)> {
     let Some(service) = crate::market_service::shared() else { return Vec::new() };
     let engine = service.lock_engine();
-    let mut out = Vec::new();
+    let mut sells = Vec::new();
+    let mut bids = Vec::new();
     for (item_id, book) in engine.books.iter() {
         let Some(name) = usize::try_from(*item_id).ok().and_then(lifescape_gamedata::obj_by_id).and_then(|obj| obj.name) else { continue };
         let name = lifescape_gamedata::base_obj_name(name).to_string();
-        for order in book.orders().into_iter().filter(|order| order.side == lifescape_market::Side::Sell && order.remaining > 0) {
-            out.push((name.clone(), order.account.clone(), crate::market_units::to_unit(*item_id, order.price), order.remaining));
+        for order in book.orders().into_iter().filter(|order| order.remaining > 0) {
+            let row = (name.clone(), order.account.clone(), crate::market_units::to_unit(*item_id, order.price), order.remaining);
+            if order.side == lifescape_market::Side::Sell {
+                sells.push(row);
+            } else {
+                bids.push(row);
+            }
         }
     }
-    out
+    unclaimed_sells(&sells, &bids, account)
 }
 
 fn base_id(item: &str) -> Option<i64> {
@@ -232,7 +266,7 @@ pub(crate) fn arbitrage_pass(job: &Job, life: &Life, live: &Value) -> usize {
     }
     // One bid per object: another motive's bid owns its object.
     let foreign: BTreeSet<i64> = rows.iter().filter(|row| crate::brain_gear::cancellable(row) && row.motive != crate::market_lineage::ARBITRAGE).map(|row| crate::market_audit::book_item(row.item_id)).collect();
-    let books: PublicAsks = asks_by_object(&live_sells(), account)
+    let books: PublicAsks = asks_by_object(&live_sells(account), account)
         .into_iter()
         .filter(|(item, _)| base_id(item).is_some_and(|id| !foreign.contains(&id)))
         .filter(|(item, _)| !lifescape_gamedata::shop_sale::npc_sale_shops(item).is_empty())
@@ -343,6 +377,21 @@ mod tests {
         // this pass's.
         let cast = |item: &str| (item == "yew_logs").then_some(40.0);
         assert_eq!(best_arbitrage(&books, &sales, &none, &cast, 0.28, 10_000), None);
+    }
+
+    /// Live 2026-11-22: a resting bid of another bot already covers the
+    /// asks; the next bot sees none left.
+    #[test]
+    fn asks_covered_by_other_bids_are_not_offered_again() {
+        let sells = vec![("steel_plateskirt".to_string(), "amber".to_string(), 145, 107)];
+        let bid = |who: &str, price: i64, units: i64| ("steel_plateskirt".to_string(), who.to_string(), price, units);
+        let bids = vec![bid("wolfe", 145, 51), bid("alice", 145, 51), bid("me", 145, 51)];
+        let left = unclaimed_sells(&sells, &bids, "me");
+        assert_eq!(left, vec![("steel_plateskirt".to_string(), "amber".to_string(), 145, 5)]);
+        let mut more = bids.clone();
+        more.push(bid("tim", 145, 5));
+        assert!(unclaimed_sells(&sells, &more, "me").is_empty());
+        assert_eq!(unclaimed_sells(&sells, &[bid("wolfe", 100, 51)], "me"), sells, "a bid under the ask claims nothing");
     }
 
     /// Review lot 5: when the best lot of one object goes to alchemy (the
