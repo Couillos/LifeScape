@@ -177,6 +177,15 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if !quoting && crate::brain_milestone_value::set_aside_unpaying(&mut life, &live) {
         dirty = true;
     }
+    // Open work of earlier goals nothing of the current goal waits on
+    // leaves, persisted lives included (2026-11-22: 34 stale nodes).
+    if !quoting {
+        let stale = lifescape_planner::abandon_stale_goal_work(&mut life, "work of an earlier goal, no current node waits on it");
+        if !stale.is_empty() {
+            crate::logln!("brain {}: {} open nodes of earlier goals abandoned: {}", job.account, stale.len(), stale.join(","));
+            dirty = true;
+        }
+    }
     // After a daemon restart, an open bid answer holds its seats again.
     if !quoting {
         crate::brain_bid_release::reengage_after_restart(&life, &live);

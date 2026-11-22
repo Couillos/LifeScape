@@ -54,6 +54,8 @@ pub mod goals;
 pub mod lifecycle;
 pub mod lifecycle_cycle;
 pub mod lifecycle_retire;
+pub mod lifecycle_stale;
+pub use lifecycle_stale::abandon_stale_goal_work;
 pub mod life_memory;
 pub mod market_fit;
 pub mod market_maker;
