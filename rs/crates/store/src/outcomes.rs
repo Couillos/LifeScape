@@ -58,7 +58,7 @@ impl Store {
                 reason_column: "cancel_reason",
                 clock_expression: "(CASE WHEN root_clock > 0 THEN root_clock ELSE created_clock END)",
                 account_columns: &["account"],
-                extra_filter: "cancel_reason != 'amended'",
+                extra_filter: "cancel_reason NOT IN ('amended','merged','regrouped')",
             },
             since,
             excluded,
