@@ -148,6 +148,31 @@ pub fn tranche_need_with(rate: &dyn Fn(&str, u8) -> Option<WorkRate>, method: &s
     tranche_consumption_with(rate, method, from, to).into_iter().find(|(item, _)| item == need).map(|(_, units)| units)
 }
 
+/// Units of `need` ONE work session of `method` burns at `level`: the
+/// consumption of one 6000-tick window (`WINDOW_TICKS`, the normal work
+/// budget) read from `rate`, a random recipe sized with its margin
+/// (`input_margin`). A climb buys this much at a time, never its whole
+/// tranche (live 2026-11-22: 12 447 iron bars bid against a market that
+/// makes 450 an hour). `None`: the method does not consume `need`.
+pub fn session_need_with(rate: &dyn Fn(&str, u8) -> Option<WorkRate>, method: &str, level: u8, need: &str) -> Option<i64> {
+    let skill = trained_skill(method)?;
+    let read = rate(method, level.max(1))?;
+    let earned = read.xp_of(&skill);
+    let per_xp = read.burned_per_xp(&skill).into_iter().find(|(item, _)| item == need).map(|(_, per_xp)| per_xp)?;
+    let units = per_xp * earned;
+    if units <= 0.0 {
+        return None;
+    }
+    let per_action = per_action_need_with(rate, method, level, need).unwrap_or(1);
+    Some(crate::input_margin::sized_inputs(units, per_action, crate::input_margin::recipe_success(method)).max(1))
+}
+
+/// Actions one work session of `method` makes at `level` (`None`: no rate).
+pub fn session_actions_with(rate: &dyn Fn(&str, u8) -> Option<WorkRate>, method: &str, level: u8) -> Option<i64> {
+    let read = rate(method, level.max(1))?;
+    (read.actions_6000 > 0.0).then(|| read.actions_6000.ceil().max(1.0) as i64)
+}
+
 #[cfg(test)]
 #[path = "sizing_tests.rs"]
 mod tests;

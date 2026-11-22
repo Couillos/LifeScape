@@ -421,6 +421,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             return;
         }
     }
+    dirty |= crate::brain_plan_read::resize_session_inputs(&mut life, &live);
     // The gear sub-goal first, then the goal's next node; the tutorial
     // only ever starts through its gate. Parked market waits are skipped:
     // with nothing else ready, a short money window fills the wait.

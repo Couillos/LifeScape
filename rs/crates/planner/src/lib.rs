@@ -85,6 +85,7 @@ pub mod shop_drain;
 pub mod shop_site;
 pub mod serve_value;
 pub mod side_goal;
+pub mod session_resize;
 pub mod skeleton_deps;
 pub mod sizing;
 pub mod stock_lot;
