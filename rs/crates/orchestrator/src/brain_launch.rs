@@ -690,6 +690,35 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let _ = save_life(&life);
         return;
     }
+    // A production method whose inputs the holdings do not cover files
+    // its obtain sub-tasks now: no worker, no 3-tick blocked run.
+    {
+        let account = job.account.clone();
+        let free = |name: &str| holdings_count(job, name);
+        let listed = |name: &str| crate::brain_tools::listed_units(&account, name);
+        let gate = crate::brain_input_gate::verdict(&method, ctx.bank_known, &free, &listed, &mut |items| crate::brain_tools::release_own_locks(orch, &account, items));
+        match gate {
+            crate::brain_input_gate::Gate::Clear => {}
+            crate::brain_input_gate::Gate::Released(items) => {
+                crate::logln!("brain {account}: {} inputs listed on the market ({}): listings withdrawn, launching", life.nodes[launch].id, items.join(", "));
+            }
+            crate::brain_input_gate::Gate::Short(missing) => {
+                let id = life.nodes[launch].id.clone();
+                let level_of = |skill: &str| crate::brain_succession::live_level(&live, skill);
+                let view = crate::brain_plan_read::BotView::of(&life);
+                let fold = crate::brain_plan_read::with_plan_read(&view, &live, |read| lifescape_planner::record_block_with(&mut life, launch, &missing, &level_of, read));
+                push_history(&mut life, &id, block_outcome(&fold));
+                if let lifescape_planner::FailureFold::CycleBroken(line) = &fold {
+                    crate::logln!("brain {account}: {line}");
+                }
+                let status = life.nodes.iter().find(|node| node.id == id).map_or_else(|| "dropped".to_string(), |node| node.status.as_str());
+                crate::logln!("brain {account}: {id} inputs short before launch ({}) -> {status}", missing.join(", "));
+                lifescape_planner::normalize(&mut life);
+                save_or_log(&life);
+                return;
+            }
+        }
+    }
     // Engagement: money draws [6000, 18000] at the activity start;
     // reach boxes at one window and retries; farm obtains work one
     // window then recheck holdings; cleanup works one window per pass.

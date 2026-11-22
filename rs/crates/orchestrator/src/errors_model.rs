@@ -168,6 +168,13 @@ pub fn from_event(account: &str, frame: &Value, clock: i64, zone_of: ZoneOf<'_>)
     Some(row)
 }
 
+/// True when every need of a block is a site wait (`contended:` or
+/// `depleted:` rocks, spawns, spots): handled by the brain's cooling.
+fn is_site_wait(missing: &[String]) -> bool {
+    !missing.is_empty()
+        && missing.iter().all(|need| need.starts_with(crate::brain_cool::CONTENDED_TAG) || need.starts_with(crate::brain_cool::DEPLETED_TAG))
+}
+
 /// For a failed or blocked task report: the outcome to fold onto the
 /// script error row of the same failure, and the row to record when
 /// none exists (exit codes and blocks push no event).
@@ -192,6 +199,11 @@ pub fn from_report(
         .as_arr()
         .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
         .unwrap_or_default();
+    // A site wait (contended or depleted rocks) is a normal state the
+    // brain handles (cool the site, no failure): never an error row.
+    if stop == "blocked" && is_site_wait(&missing) {
+        return None;
+    }
     let message = match error.get("message").as_str() {
         Some(found) if !found.is_empty() => found.to_string(),
         _ if !missing.is_empty() => format!("blocked, missing: {}", missing.join(", ")),
