@@ -64,6 +64,14 @@ pub fn fires(resource: Option<&str>, unfired: &str) -> bool {
 }
 const FIRE: Produce<'static> = Produce { verb: "firing", site: ProduceSite::Loc(&OVENS), ui: ProduceUi::Direct };
 
+/// The water vessels a run may carry: a fired bowl is itself a vessel
+/// (`kit::water::VESSELS`), so a run whose product is the bowl drops that
+/// vessel, or its own output would stay in the pack as a "kept vessel"
+/// and never reach the bank (live 2026-11-22).
+pub fn vessels_for_product(vessels: Vec<(u16, u16)>, product: u16) -> Vec<(u16, u16)> {
+    vessels.into_iter().filter(|(empty, _)| *empty != product).collect()
+}
+
 /// Extra row whose outputs contain `name` for this `kind`.
 fn extra_row(kind: &str, name: &str) -> Option<ExtraRecipe> {
     lifescape_gamedata::extra_recipes::by_kind(kind).into_iter().find(|entry| entry.outputs.iter().any(|(output, _)| output == name))
@@ -115,7 +123,7 @@ pub fn run_pottery(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     let (clay, soft, unfired, fired) = (obj_id(bot, CLAY)?, obj_id(bot, SOFT)?, obj_id(bot, unfired_name)?, obj_id(bot, product_name)?);
     let made_id = if firing { fired } else { unfired };
-    let vessels = water::vessel_ids(bot)?;
+    let vessels = vessels_for_product(water::vessel_ids(bot)?, made_id);
     let bank = match crate::kit::site::site_bank(bot) {
         Some(site_bank) => site_bank,
         None => nearest_bank(bot)?,
@@ -263,6 +271,23 @@ mod tests {
         assert!(!super::fires(Some("piedish_unfired"), "piedish_unfired"));
         assert!(super::fires(Some("piedish"), "piedish_unfired"));
         assert!(super::fires(None, "pot_unfired"), "bare pottery fires pots");
+    }
+
+    /// Live 2026-11-22 (596 of 618 `pottery:bowl_empty` runs ended
+    /// `blocked` after one load of 26 to 28 bowls, 11 000 unfired bowls
+    /// banked): the bowl is also a water vessel, so the keep-list held
+    /// every fired bowl in the pack, the next load found no room and no
+    /// clay. A run that makes bowls never keeps bowls as vessels.
+    #[test]
+    fn a_bowl_order_never_keeps_its_own_product_as_a_vessel() {
+        let bot = offline_bot();
+        let vessels = crate::kit::water::vessel_ids(&bot).expect("vessels");
+        let bowl = obj_id(&bot, "bowl_empty").expect("bowl");
+        let piedish = obj_id(&bot, "piedish").expect("pie dish");
+        let for_bowls = super::vessels_for_product(vessels.clone(), bowl);
+        assert_eq!(for_bowls.len(), vessels.len() - 1);
+        assert!(for_bowls.iter().all(|(empty, _)| *empty != bowl), "the fired bowl is the product, banked");
+        assert_eq!(super::vessels_for_product(vessels.clone(), piedish), vessels, "other products keep the three vessels");
     }
 
     /// Catalogue §5.6 pot chain from the dumps: mix (no XP), shape pot 63,
