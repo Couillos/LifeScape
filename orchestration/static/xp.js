@@ -48,6 +48,15 @@ const XpPage = (() => {
     return value.toFixed(1).replace('.', ',');
   }
 
+  // Axis labels stay narrow: 4000000 -> "4 M", 250000 -> "250 k".
+  function formatAxis(value) {
+    if (value === null || value === undefined || !isFinite(value)) return '-';
+    const size = Math.abs(value);
+    if (size >= 1e6) return (value / 1e6).toFixed(size % 1e6 === 0 ? 0 : 1).replace('.', ',') + ' M';
+    if (size >= 1e4) return formatNumber(Math.round(value / 1e3)) + ' k';
+    return formatRate(value);
+  }
+
   function formatShare(value) {
     if (value === null || value === undefined || !isFinite(value)) return '-';
     const percent = value * 100;
@@ -169,7 +178,7 @@ const XpPage = (() => {
   }
 
   return {
-    MODES, RATE_LABEL, PERIOD_LABELS, chartView, fleetLines, COLORS, esc, formatNumber, formatRate, formatShare, formatChange, changeClass, span, freshness,
+    MODES, RATE_LABEL, PERIOD_LABELS, chartView, fleetLines, COLORS, esc, formatNumber, formatRate, formatAxis, formatShare, formatChange, changeClass, span, freshness,
     mode, chartLines, chartMax, slotAt, tooltipLines, skillRows, methodText,
   };
 })();
@@ -215,7 +224,7 @@ if (typeof document !== 'undefined') {
     for (const tick of ticks) {
       const y = yOf(tick);
       context.beginPath(); context.moveTo(PAD.left, y); context.lineTo(PAD.left + plotW, y); context.stroke();
-      context.fillText(page.formatRate(tick), PAD.left - 6, y + 4);
+      context.fillText(page.formatAxis(tick), PAD.left - 6, y + 4);
     }
     context.textAlign = 'center';
     const every = LifeChart.labelEvery(slots.length, plotW, 80);
@@ -279,7 +288,7 @@ if (typeof document !== 'undefined') {
 
   function renderSkills() {
     const compare = periodKey !== 'all';
-    let html = '<thead><tr><th class="left">Compétence</th><th>XP (efficacité)</th><th>Contribution flotte / tick</th><th>XP / h</th>'
+    let html = '<thead><tr><th class="left">Compétence</th><th>XP (efficacité)</th><th>Contribution flotte (XP / 6000 ticks)</th><th>XP / h</th>'
       + '<th>Part du temps de travail</th><th>Bots</th><th class="left">Meilleure méthode (XP / 6000 ticks, échantillon)</th>'
       + (compare ? '<th>Évolution vs période précédente</th>' : '') + '</tr></thead><tbody>';
     for (const row of page.skillRows(snapshot, periodKey)) {
