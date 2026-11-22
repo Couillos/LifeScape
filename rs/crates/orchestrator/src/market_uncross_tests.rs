@@ -263,3 +263,34 @@ fn failed_pair_waits_out_its_cooldown_then_matches_once() {
     assert_eq!(depth(&service, Side::Buy), Vec::<(i64, i64)>::new());
     cleanup(&path);
 }
+
+/// A failed deal relists the seller's ask: the new row keeps its owner's
+/// walk limit (schema 11), or it would walk to 1 coin again.
+#[test]
+fn a_relisted_ask_keeps_its_owners_walk_limit() {
+    let path = temp_db("relist-limit");
+    let service = MarketService::open(&path, catalogue()).expect("opens");
+    for account in ["lara_lane", "bmzvbp5u"] {
+        funded(&service, account);
+    }
+    place(&service, "lara_lane", "buy", 20);
+    let reply = service.handle(&object(vec![
+        ("op", str_value("place")),
+        ("account", str_value("bmzvbp5u")),
+        ("side", str_value("sell")),
+        ("item", Value::Int(BRONZE_AXE)),
+        ("qty", Value::Int(1)),
+        ("price", Value::Int(15)),
+        ("floor", Value::Int(8)),
+    ]));
+    let deal = first_deal(&reply);
+    let placed = reply.get("order").as_i64().expect("order");
+    let before = service.lock_store().get_order(placed).expect("reads").expect("row");
+    assert_eq!(before.ask_limit, Some(8), "placed with its limit");
+    fail_deal(&service, "lara_lane", deal, "timeout");
+    let rows = service.lock_store().account_orders("bmzvbp5u").expect("reads");
+    let resting: Vec<_> = rows.into_iter().filter(|row| row.remaining > 0 && matches!(row.status, lifescape_store::OrderStatus::Open)).collect();
+    assert_eq!(resting.len(), 1, "the ask is back in the book: {resting:?}");
+    assert_eq!(resting[0].ask_limit, Some(8), "{resting:?}");
+    cleanup(&path);
+}

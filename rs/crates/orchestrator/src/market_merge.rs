@@ -59,6 +59,14 @@ fn fold_rows(rows: Vec<Order>) -> Vec<Order> {
     folded
 }
 
+/// Walk limit of a merged ask: the HIGHEST of its fragments' limits. The
+/// merged lot sells as one, so it must not go under the own value of any
+/// unit it holds (same account and object: the limits differ only by when
+/// each fragment was priced).
+pub(crate) fn merged_ask_limit(rows: &[lifescape_store::Order]) -> Option<i64> {
+    rows.iter().filter_map(|row| row.ask_limit).max()
+}
+
 impl MarketService {
     /// Merges every account's resting orders that share object, side and
     /// price into one, directly in book and carnet: the fragments were
@@ -130,6 +138,7 @@ impl MarketService {
                 price,
                 dormant: false,
                 clock: oldest_clock,
+                ask_limit: merged_ask_limit(rows),
                 ..lifescape_store::NewOrder::default()
             })
             .map_err(|error| format!("merged row refused: {error}"))?;
@@ -170,7 +179,10 @@ impl MarketService {
         for order in &taken {
             engine.quote_bounds.remove(&(order.id as i64));
         }
-        if let Some(bounds) = bounds {
+        if let Some(mut bounds) = bounds {
+            if let Some(limit) = merged_ask_limit(rows).filter(|_| bounds.sell) {
+                bounds.floor = limit;
+            }
             engine.quote_bounds.insert(merged_id, bounds);
         }
         Ok((taken.len(), planned))
@@ -219,5 +231,20 @@ mod tests {
         assert_eq!((seller.remaining, seller.seq), (15, 3), "summed, earliest priority");
         assert_eq!(merged[1].0.price, 2);
         assert_eq!(merged[2].0.seller, "harry_page");
+    }
+}
+
+#[cfg(test)]
+mod ask_limit_tests {
+    use super::merged_ask_limit;
+
+    fn fragment(ask_limit: Option<i64>) -> lifescape_store::Order {
+        lifescape_store::Order { ask_limit, ..lifescape_store::Order::default() }
+    }
+
+    #[test]
+    fn a_merged_ask_keeps_the_highest_limit_of_its_fragments() {
+        assert_eq!(merged_ask_limit(&[fragment(Some(12)), fragment(Some(15)), fragment(None)]), Some(15));
+        assert_eq!(merged_ask_limit(&[fragment(None), fragment(None)]), None, "bids and unsaid asks stay unsaid");
     }
 }

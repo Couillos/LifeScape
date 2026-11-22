@@ -130,6 +130,9 @@ pub(crate) struct Engine {
     /// Consumed book rows per deal for a priority-preserving relist when
     /// the handover fails (original `seq` kept).
     pub(crate) relist_rows: HashMap<u64, Vec<Order>>,
+    /// The seller's walk limit per deal (its order's `ask_limit`, schema
+    /// 11), carried by the relist of a failed handover.
+    pub(crate) relist_ask_limits: HashMap<u64, i64>,
     /// Accounts with a live convocation: one at a time, regrouped.
     pub(crate) convened_accounts: HashSet<String>,
     /// First convene-tick sighting per matched deal (daemon wall) for
@@ -196,6 +199,7 @@ impl Engine {
             deal_tiles: HashMap::new(),
             deal_sweep_wall: HashMap::new(),
             relist_rows: HashMap::new(),
+            relist_ask_limits: HashMap::new(),
             convened_accounts: HashSet::new(),
             pending_since_wall: HashMap::new(),
             next_seq: 1,
