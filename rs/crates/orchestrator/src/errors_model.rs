@@ -175,6 +175,24 @@ fn is_site_wait(missing: &[String]) -> bool {
         && missing.iter().all(|need| need.starts_with(crate::brain_cool::CONTENDED_TAG) || need.starts_with(crate::brain_cool::DEPLETED_TAG))
 }
 
+/// Units a run made: the `product` flow rows of its report (any made
+/// unit is real work; the attribution is the inventory's own).
+pub fn produced_units(report: &Value) -> i64 {
+    report
+        .get("flows")
+        .as_arr()
+        .map(|rows| rows.iter().filter(|row| row.get("cause").as_str() == Some("product")).filter_map(|row| row.get("qty").as_i64()).filter(|qty| *qty > 0).sum())
+        .unwrap_or(0)
+}
+
+/// A blocked run that made units and now lacks plain items (no `tag:`
+/// need: a lock, a level, coins, a site wait stay blocks): its inputs ran
+/// out, the normal end of a production load. The brain still files the
+/// obtain for the missing input; no error row, no counted block.
+pub fn is_stock_out(report: &Value, missing: &[String]) -> bool {
+    report.get("stop").as_str() == Some("blocked") && !missing.is_empty() && missing.iter().all(|need| !need.contains(':')) && produced_units(report) > 0
+}
+
 /// For a failed or blocked task report: the outcome to fold onto the
 /// script error row of the same failure, and the row to record when
 /// none exists (exit codes and blocks push no event).
@@ -202,6 +220,10 @@ pub fn from_report(
     // A site wait (contended or depleted rocks) is a normal state the
     // brain handles (cool the site, no failure): never an error row.
     if stop == "blocked" && is_site_wait(&missing) {
+        return None;
+    }
+    // A load that ran dry after making units is a stock-out, not an error.
+    if is_stock_out(report, &missing) {
         return None;
     }
     let message = match error.get("message").as_str() {

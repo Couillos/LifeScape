@@ -92,6 +92,21 @@ fn report_rows_only_for_failed_or_blocked() {
     assert!(from_report("t01", &done, None, 5_000, &no_zone).is_none());
 }
 
+/// Live 2026-11-22: 96 of 125 production blocks were runs that made
+/// units and ended when the inputs ran out: a normal stock-out, no row.
+/// A run that made nothing stays an error.
+#[test]
+fn a_productive_stock_out_is_no_error_row() {
+    let made = json::parse(r#"{"account":"t01","activity":"smelt","flows":[{"cause":"input","name":"Coal","qty":-40},{"cause":"product","name":"Steel bar","qty":20}],"missing":["coal"],"node_id":"n9","stop":"blocked"}"#).unwrap();
+    assert_eq!(produced_units(&made), 20);
+    assert!(from_report("t01", &made, None, 5_000, &no_zone).is_none());
+    let nothing = json::parse(r#"{"account":"t01","activity":"smelt","flows":[{"cause":"input","name":"Coal","qty":-4}],"missing":["coal"],"node_id":"n9","stop":"blocked"}"#).unwrap();
+    assert_eq!(produced_units(&nothing), 0);
+    assert!(from_report("t01", &nothing, None, 5_000, &no_zone).is_some());
+    let tagged = json::parse(r#"{"account":"t01","activity":"smelt","flows":[{"cause":"product","name":"Steel bar","qty":5}],"missing":["locked:coal"],"node_id":"n9","stop":"blocked"}"#).unwrap();
+    assert!(from_report("t01", &tagged, None, 5_000, &no_zone).is_some());
+}
+
 #[test]
 fn dossier_row_has_from_dest_and_ref() {
     let dossier = json::parse(

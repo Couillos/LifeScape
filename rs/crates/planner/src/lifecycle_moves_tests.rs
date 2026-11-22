@@ -155,6 +155,25 @@ fn xp_earned_clears_the_block_count() {
     assert_eq!(fold, super::FailureFold::Retry, "the next refill is never the abandon");
 }
 
+/// Live 2026-11-22 (owen_wood n2966, wolfe_carl): a production run that
+/// made units and then ended `blocked` on its inputs running out is a
+/// normal stock-out, not a block: units made clear the count like XP
+/// does, so a node that keeps producing is never abandoned or banned.
+#[test]
+fn units_made_clear_the_block_count() {
+    let mut life = running(NodeKind::ReachLevel { skill: "smithing".to_string(), level: 30 });
+    for _ in 0..super::MAX_BLOCKS {
+        record_block_from(&mut life, 0, &["coal".to_string()], &|_| 29);
+        life.nodes[0].status = NodeStatus::Ready;
+        mark_launched(&mut life, 0);
+    }
+    assert_eq!(life.nodes[0].blocks, super::MAX_BLOCKS);
+    super::record_made(&mut life, 0, 0);
+    assert_eq!(life.nodes[0].blocks, super::MAX_BLOCKS, "nothing made: still a block");
+    super::record_made(&mut life, 0, 37);
+    assert_eq!(life.nodes[0].blocks, 0, "37 units made: a stock-out");
+}
+
 /// t01 n8 (cook 10 -> 20 on trout) depended on itself: a level block of
 /// the node's own skill reused the blocked node as the open climb, a
 /// one-node cycle `normalize` abandoned. The blocked node is never its

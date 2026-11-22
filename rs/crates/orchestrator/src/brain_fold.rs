@@ -445,7 +445,14 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
                 let level_of = |skill: &str| reach_level(report, skill).unwrap_or(1);
                 let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(lifescape_json::Value::Null);
                 let view = crate::brain_plan_read::BotView::of(&life);
+                // A load that ran dry after making units is a stock-out:
+                // the obtain is filed as ever, the block never counts
+                // (cleared before, so the 4th never abandons; after, so
+                // the count stays zero).
+                let made = if locked.is_empty() && crate::errors_model::is_stock_out(report, &needs) { crate::errors_model::produced_units(report) } else { 0 };
+                lifescape_planner::record_made(&mut life, index, made);
                 let fold = crate::brain_plan_read::with_plan_read(&view, &live, |read| lifescape_planner::record_block_with(&mut life, index, &needs, &level_of, read));
+                lifescape_planner::record_made(&mut life, index, made);
                 push_history(&mut life, &id, crate::brain_launch::block_outcome(&fold));
                 if let FailureFold::CycleBroken(line) = &fold {
                     crate::logln!("brain {account}: {line}");

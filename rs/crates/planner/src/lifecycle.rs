@@ -689,6 +689,16 @@ pub fn record_xp(life: &mut Life, index: usize, gained: i64) {
     }
 }
 
+/// Units a run made before it blocked on its inputs running out: a
+/// stock-out, real progress that clears the block count (like
+/// `record_xp`), so a node that keeps producing is never abandoned nor
+/// its skill banned by the loads it consumes.
+pub fn record_made(life: &mut Life, index: usize, made: i64) {
+    if made > 0 {
+        life.nodes[index].blocks = 0;
+    }
+}
+
 /// `record_block_from` with every live level unknown (level 1): offline
 /// replays and tests. The brain passes the live levels.
 pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> FailureFold {
