@@ -120,13 +120,17 @@ pub fn need_count_with(node: &Node, need: &str, live: Option<u8>, rate: crate::w
             // end at the expected burn: the margin of `input_margin`.
             let odds = crate::input_margin::recipe_success(&method);
             let per_action = crate::sizing::per_action_need_with(rate, &method, from, need).unwrap_or(1);
-            return crate::input_margin::sized_inputs(units as f64, per_action, odds).max(units).max(1);
+            // One work session at a time: the market is asked what one
+            // 6000-tick window burns, the next block buys the next.
+            let sized = crate::input_margin::sized_inputs(units as f64, per_action, odds).max(units).max(1);
+            return crate::sizing::session_need_with(rate, &method, from, need).map_or(sized, |session| sized.min(session)).max(1);
         }
         // A climb whose subject is made from intermediate stages (pie
         // dishes from soft clay): the tranche's actions times the base
         // components per unit (clay, water vessels capped).
         if let (Some(actions), Some(subject)) = (crate::sizing::tranche_actions_with(rate, &method, from, *level), method_subject(&method)) {
             if let Some(per_unit) = nested_per_unit(subject, need, NESTED_STAGES) {
+                let actions = crate::sizing::session_actions_with(rate, &method, from).map_or(actions, |session| actions.min(session));
                 if let Some(cap) = refilled_vessels(node, need) {
                     return actions.min(cap).max(1);
                 }

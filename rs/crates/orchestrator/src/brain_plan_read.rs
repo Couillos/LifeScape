@@ -92,6 +92,19 @@ pub(crate) fn with_plan_read<T>(bot: &BotView, live: &Value, body: impl FnOnce(&
     body(&PlanRead { rate: &rate, guide_trains: &trains })
 }
 
+/// One work session at a time: the open input obtains of the bot's climbs
+/// come down to what one session burns (`planner::session_resize`, the
+/// rule applied to the persisted state). Returns true when a node changed.
+pub(crate) fn resize_session_inputs(life: &mut Life, live: &Value) -> bool {
+    let view = BotView::of(life);
+    let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
+    let lines = with_plan_read(&view, live, |read| lifescape_planner::session_resize::resize_climb_inputs(life, &level_of, read.rate));
+    for line in &lines {
+        crate::logln!("brain {}: {line}", life.account);
+    }
+    !lines.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::measured_rate;

@@ -107,6 +107,8 @@ pub fn reach_chain_with(skill: &str, from: u8, to: u8, counter: &mut usize, afte
             if units <= 0 {
                 continue;
             }
+            // One work session's worth, never the whole tranche.
+            let units = crate::sizing::session_need_with(read.rate, &method, start, &item).map_or(units, |session| units.min(session)).max(1);
             let node = obtain(&item, units, wait.clone(), counter);
             extra.push(node.id.clone());
             out.push(node);

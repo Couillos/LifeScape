@@ -381,8 +381,12 @@ fn a_market_profile_climbs_smithing_on_bought_bars() {
     let (market, fresh) = climb(&life_with(0.8, 0.5));
     assert_eq!(market.supply, Supply::Market);
     assert!(market.pick.buys_inputs);
+    // One work session at a time: the tranche's bars, capped by what one
+    // 6000-tick session burns (user decision 2026-11-22).
     let tranche = lifescape_planner::sizing::tranche_need("smith:steel_med_helm", 56, 60, "steel_bar").expect("bars");
-    assert!(matches!(&fresh[0].kind, NodeKind::ObtainItems { item, count } if item == "steel_bar" && *count == tranche), "{:?}", fresh[0].kind);
+    let session = lifescape_planner::sizing::session_need_with(&lifescape_planner::work_rate::prior_rate, "smith:steel_med_helm", 56, "steel_bar").expect("session");
+    let bought = tranche.min(session);
+    assert!(matches!(&fresh[0].kind, NodeKind::ObtainItems { item, count } if item == "steel_bar" && *count == bought), "{:?}", fresh[0].kind);
     assert_eq!(fresh[0].alternatives.iter().map(|alt| alt.method.as_str()).collect::<Vec<_>>(), vec!["market:buy"], "bars bought, never smelted");
     let (autarkic, fresh) = climb(&life_with(0.1, 0.5));
     assert_eq!(autarkic.supply, Supply::Autonomous);
