@@ -112,9 +112,43 @@ pub(crate) fn ready_ctx(life: &Life, node: &Node, live: &Value) -> ReadyCtx {
             ctx.shop_price = shop_floor(&item_debug);
             ctx.shop_window_units = shop_window_units(&item_debug);
             ctx.yield_per_6000 = obtain_yield(&snapshot, node, &item_debug, &display, live);
+            ctx.leg_costs = leg_costs(&snapshot, &store, node, &item_debug, &display, live, ctx.coins_per_tick);
         }
     }
     ctx
+}
+
+/// Each production leg of an obtain node with its OWN estimate: the
+/// units per 6000 ticks of that method for this bot (`farm_yield`: the
+/// measured rate blended with the game prior) and the ticks its consumed
+/// inputs cost per unit (their market price at the bot's coin rate), so
+/// a smelt and a ground pickup of the same bar never share one figure
+/// (live 2026-11-22: `ground:iron_bar` 555 ticks per bar won the tie
+/// over smelting). A leg the rates cannot estimate carries yield 0 (the
+/// planner reads it as unusable), the error logged.
+fn leg_costs(snapshot: &crate::rates_service::Snapshot, store: &lifescape_store::Store, node: &Node, item_debug: &str, display: &str, live: &Value, coins_per_tick: f64) -> Vec<lifescape_planner::cost::LegCost> {
+    let trade = ["market:", "shop:", "dialogue:"];
+    let candidates: Vec<String> = node.alternatives.iter().map(|alt| alt.method.clone()).filter(|method| !trade.iter().any(|prefix| method.starts_with(prefix))).collect();
+    let mut out = Vec::new();
+    for leg in lifescape_planner::obtain_legs::production_legs(item_debug) {
+        if !candidates.is_empty() && !candidates.contains(&leg.method) {
+            continue;
+        }
+        let yield_per_6000 = match farm_yield(snapshot, &leg.method, display, live) {
+            Ok(rate) => rate.max(0.0),
+            Err(error) => {
+                crate::rates_read::log_rate_error(&error);
+                0.0
+            }
+        };
+        let input_coins: f64 = leg
+            .inputs
+            .iter()
+            .map(|(input, quantity)| crate::rates_service::price_estimate(store, &display_of(input)).0 * *quantity as f64)
+            .sum();
+        out.push(lifescape_planner::cost::LegCost { method: leg.method, yield_per_6000, input_ticks_per_unit: input_coins / coins_per_tick.max(0.01) });
+    }
+    out
 }
 
 /// Yield of an obtain node: its first production leg the rates estimate

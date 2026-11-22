@@ -103,7 +103,7 @@ fn returned_by(stages: &[String], component: &str) -> bool {
 /// A spawn tile a bot may sweep: free, behind no gate but the Karamja
 /// boat (a fare, user 2026-11-16), with a bank in reach some combat level
 /// makes safe (the Wilderness included).
-fn spawn_workable(site: &(i64, i64, i64)) -> bool {
+pub(crate) fn spawn_workable(site: &(i64, i64, i64)) -> bool {
     let (x, z, level) = *site;
     lifescape_gamedata::free_zones::is_free(x, z)
         && lifescape_gamedata::access::gates_at(x, z, level).iter().all(lifescape_gamedata::access::fare_only)

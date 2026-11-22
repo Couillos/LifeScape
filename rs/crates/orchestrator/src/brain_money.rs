@@ -175,7 +175,9 @@ pub fn lines_for(rows: &[&MoneyRow], ctx: &ReadyCtx, bot: &BotState, stock: &[(S
                 lot if lot >= 1 => offer.lot_rate(lot),
                 _ => offer.profit_6000,
             },
-            None => shared(row),
+            // A ground spawn's output is shared with the bots already on
+            // it (`spawn_share`, live 2026-11-22: ~10 fillers on one tile).
+            None => shared(row) * lifescape_planner::spawn_share::crowd_factor(&method, &ctx.seats),
         };
         if profit <= 0.0 {
             continue;

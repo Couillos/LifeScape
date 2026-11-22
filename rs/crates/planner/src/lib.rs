@@ -61,6 +61,7 @@ pub mod merchant_arbitrage;
 pub mod derived_demand;
 pub mod mapping;
 pub mod method_way;
+pub mod spawn_share;
 pub mod method_rate;
 pub mod method_rate_fight;
 pub mod method_rate_trip;
