@@ -705,7 +705,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let account = job.account.clone();
         let free = |name: &str| holdings_count(job, name);
         let listed = |name: &str| crate::brain_tools::listed_units(&account, name);
-        let gate = crate::brain_input_gate::verdict(&method, ctx.bank_known, &free, &listed, &mut |items| crate::brain_tools::release_own_locks(orch, &account, items));
+        let total = |name: &str| crate::brain_plan::raw_holdings_count(job, name);
+        let gate = crate::brain_input_gate::verdict(&method, ctx.bank_known, &free, &total, &listed, &mut |items| crate::brain_tools::release_own_locks(orch, &account, items));
         match gate {
             crate::brain_input_gate::Gate::Clear => {}
             crate::brain_input_gate::Gate::Released(items) => {

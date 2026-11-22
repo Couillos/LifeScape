@@ -23,7 +23,9 @@ pub fn short_inputs(method: &str, bank_known: bool, free: &dyn Fn(&str) -> i64) 
         return Vec::new();
     }
     let Some((_, way)) = method_way(method) else { return Vec::new() };
-    way.inputs.iter().filter(|(name, each)| free(name) < (*each).max(1)).map(|(name, _)| name.clone()).collect()
+    // The script's own definition of "enough to start" (`smelt` runs it
+    // as its preflight): one shared rule, never a second copy.
+    lifescape_scripts::kit::withdraw::preflight_short(&way.inputs, free, bank_known)
 }
 
 /// What the launch pass does with a production method.
@@ -39,21 +41,39 @@ pub enum Gate {
 }
 
 /// The gate on live holdings: `free` counts what the bot holds free of
-/// its own listings, `listed` what its resting sells hold, `release`
-/// withdraws listings and returns how many closed.
-pub fn verdict(method: &str, bank_known: bool, free: &dyn Fn(&str) -> i64, listed: &dyn Fn(&str) -> i64, release: &mut dyn FnMut(&[String]) -> usize) -> Gate {
+/// its own market locks (read fresh at each call), `total` every unit
+/// physically held (a listing or a deal can lock units the bot no longer
+/// has), `listed` what its resting sells hold, `release` withdraws
+/// listings and returns how many closed. A released input launches only
+/// when, once the listings are gone, it reads free: a lock a deal in
+/// flight keeps (or units sold away) files the plain need instead of a
+/// run its script blocks `locked:` in seconds (live 2026-11-22:
+/// kate_ellis `locked:uncut_emerald`, jim_ellis `locked:steel_bar`).
+pub fn verdict(
+    method: &str,
+    bank_known: bool,
+    free: &dyn Fn(&str) -> i64,
+    total: &dyn Fn(&str) -> i64,
+    listed: &dyn Fn(&str) -> i64,
+    release: &mut dyn FnMut(&[String]) -> usize,
+) -> Gate {
     let short = short_inputs(method, bank_known, free);
     if short.is_empty() {
         return Gate::Clear;
     }
     let inputs = method_way(method).map(|(_, way)| way.inputs).unwrap_or_default();
     let each_of = |name: &str| inputs.iter().find(|(input, _)| input == name).map_or(1, |(_, each)| (*each).max(1));
-    let (listed_short, plain): (Vec<String>, Vec<String>) = short.into_iter().partition(|name| listed(name) > 0 && free(name) + listed(name) >= each_of(name));
+    let (listed_short, plain): (Vec<String>, Vec<String>) = short.into_iter().partition(|name| listed(name) > 0 && total(name) >= each_of(name));
     if !plain.is_empty() {
         return Gate::Short(plain);
     }
     if release(&listed_short) > 0 {
-        Gate::Released(listed_short)
+        let still_short = short_inputs(method, bank_known, free);
+        if still_short.is_empty() {
+            Gate::Released(listed_short)
+        } else {
+            Gate::Short(still_short)
+        }
     } else {
         // A listing in a deal in flight stays locked: the plain need.
         Gate::Short(listed_short)
@@ -81,20 +101,43 @@ mod tests {
 
     #[test]
     fn a_listed_input_releases_instead_of_blocking() {
-        let free = |_: &str| 0;
+        let free_after = std::cell::Cell::new(false);
+        let free = |name: &str| if free_after.get() && name == "iron_ore" { 30 } else { 0 };
+        let total = |name: &str| if name == "iron_ore" { 30 } else { 0 };
         let listed = |name: &str| if name == "iron_ore" { 30 } else { 0 };
         let mut released: Vec<String> = Vec::new();
-        let gate = verdict("smelt:iron_bar", true, &free, &listed, &mut |items| {
+        let gate = verdict("smelt:iron_bar", true, &free, &total, &listed, &mut |items| {
             released.extend(items.iter().cloned());
+            free_after.set(true);
             1
         });
         assert_eq!(gate, Gate::Released(vec!["iron_ore".to_string()]));
         assert_eq!(released, vec!["iron_ore".to_string()]);
         // Nothing listed: a plain shortfall, nothing withdrawn.
-        let gate = verdict("smelt:iron_bar", true, &free, &|_| 0, &mut |_| panic!("no listing to release"));
+        let gate = verdict("smelt:iron_bar", true, &|_| 0, &|_| 0, &|_| 0, &mut |_| panic!("no listing to release"));
         assert_eq!(gate, Gate::Short(vec!["iron_ore".to_string()]));
         // A listing a deal holds frees nothing: the plain need.
-        let gate = verdict("smelt:iron_bar", true, &free, &listed, &mut |_| 0);
+        let gate = verdict("smelt:iron_bar", true, &|_| 0, &total, &listed, &mut |_| 0);
+        assert_eq!(gate, Gate::Short(vec!["iron_ore".to_string()]));
+    }
+
+    /// Live 2026-11-22 (kate_ellis `locked:uncut_emerald`): the listing
+    /// closed but a deal in flight still locks the units, which read
+    /// held after the release: no launch.
+    #[test]
+    fn a_release_that_leaves_the_lock_files_the_need() {
+        let total = |name: &str| if name == "iron_ore" { 2 } else { 0 };
+        let listed = |name: &str| if name == "iron_ore" { 2 } else { 0 };
+        let gate = verdict("smelt:iron_bar", true, &|_| 0, &total, &listed, &mut |_| 1);
+        assert_eq!(gate, Gate::Short(vec!["iron_ore".to_string()]));
+    }
+
+    /// Live 2026-11-22 (kate_ellis `missing uncut_sapphire`): units a
+    /// listing promises but the bot no longer holds are not releasable.
+    #[test]
+    fn a_listing_without_the_units_behind_it_is_a_plain_need() {
+        let listed = |name: &str| if name == "iron_ore" { 5 } else { 0 };
+        let gate = verdict("smelt:iron_bar", true, &|_| 0, &|_| 0, &listed, &mut |_| panic!("nothing physical to release"));
         assert_eq!(gate, Gate::Short(vec!["iron_ore".to_string()]));
     }
 }

@@ -1,0 +1,101 @@
+#![forbid(unsafe_code)]
+//! Input gate of the production methods (smelt, smith, cut, string,
+//! pottery, spin, jewelry), asked by the launch pass before a worker
+//! starts. The script already stops `blocked` on the inputs one action
+//! lacks (pack + known bank, `withdraw::preflight_blocked`), but only
+//! after a worker was spawned and an error row written: the brain knows
+//! the same holdings (pack, bank, worn, free of the bot's own listings),
+//! so the shortfall files its obtain sub-tasks at once, no launch.
+//! Live 2026-11-22: 585 smelt, 108 smith, 72 cut_gems, 35 stringing,
+//! 24 pottery blocks in four hours, most of them 3 ticks long.
+
+use lifescape_planner::method_way::method_way;
+
+/// Method families whose script consumes recipe inputs it never buys.
+const GATED_FAMILIES: [&str; 7] = ["smelt", "smith", "cut", "string", "pottery", "spin", "jewelry"];
+
+/// The inputs of one action of `method` that `free` does not cover.
+/// Empty for an ungated method, or while the bank was never seen
+/// (`bank_known` false: a banked input must not read as missing).
+pub fn short_inputs(method: &str, bank_known: bool, free: &dyn Fn(&str) -> i64) -> Vec<String> {
+    let family = method.split([':', '/']).next().unwrap_or("");
+    if !bank_known || !GATED_FAMILIES.contains(&family) {
+        return Vec::new();
+    }
+    let Some((_, way)) = method_way(method) else { return Vec::new() };
+    // The script's own definition of "enough to start" (`smelt` runs it
+    // as its preflight): one shared rule, never a second copy.
+    lifescape_scripts::kit::withdraw::preflight_short(&way.inputs, free, bank_known)
+}
+
+/// What the launch pass does with a production method.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Gate {
+    /// Every input is held: launch.
+    Clear,
+    /// Inputs held but listed on the market by the bot itself: the
+    /// listings were withdrawn, launch.
+    Released(Vec<String>),
+    /// Inputs the bot does not hold anywhere: file them as a block.
+    Short(Vec<String>),
+}
+
+/// The gate on live holdings: `free` counts what the bot holds free of
+/// its own market locks (read fresh at each call), `total` every unit
+/// physically held (a listing or a deal can lock units the bot no longer
+/// has), `listed` what its resting sells hold, `release` withdraws
+/// listings and returns how many closed. A released input launches only
+/// when, once the listings are gone, it reads free: a lock a deal in
+/// flight keeps (or units sold away) files the plain need instead of a
+/// run its script blocks `locked:` in seconds (live 2026-11-22:
+/// kate_ellis `locked:uncut_emerald`, jim_ellis `locked:steel_bar`).
+pub fn verdict(
+    method: &str,
+    bank_known: bool,
+    free: &dyn Fn(&str) -> i64,
+    total: &dyn Fn(&str) -> i64,
+    listed: &dyn Fn(&str) -> i64,
+    release: &mut dyn FnMut(&[String]) -> usize,
+) -> Gate {
+    let short = short_inputs(method, bank_known, free);
+    if short.is_empty() {
+        return Gate::Clear;
+    }
+    let inputs = method_way(method).map(|(_, way)| way.inputs).unwrap_or_default();
+    let each_of = |name: &str| inputs.iter().find(|(input, _)| input == name).map_or(1, |(_, each)| (*each).max(1));
+    let (listed_short, plain): (Vec<String>, Vec<String>) = short.into_iter().partition(|name| listed(name) > 0 && total(name) >= each_of(name));
+    if !plain.is_empty() {
+        return Gate::Short(plain);
+    }
+    if release(&listed_short) > 0 {
+        let still_short = short_inputs(method, bank_known, free);
+        if still_short.is_empty() {
+            Gate::Released(listed_short)
+        } else {
+            Gate::Short(still_short)
+        }
+    } else {
+        // A listing in a deal in flight stays locked: the plain need.
+        Gate::Short(listed_short)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_ungated_or_unseen_bank_never_gates() {
+        assert!(short_inputs("gather:mining/coal", true, &|_| 0).is_empty());
+        assert!(short_inputs("smelt:iron_bar", false, &|_| 0).is_empty());
+    }
+
+    #[test]
+    fn a_smelt_without_ore_names_the_short_input_only() {
+        let held = |name: &str| if name == "coal" { 5 } else { 0 };
+        assert_eq!(short_inputs("smelt:iron_bar", true, &held), vec!["iron_ore".to_string()]);
+        let steel = |name: &str| if name == "iron_ore" { 1 } else { 0 };
+        assert_eq!(short_inputs("smelt:steel_bar", true, &steel), vec!["coal".to_string()]);
+        assert!(short_inputs("smelt:steel_bar", true, &|_| 99).is_empty());
+    }
+
