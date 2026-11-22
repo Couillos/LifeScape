@@ -47,6 +47,7 @@ mod live_check_tests;
 #[cfg(test)]
 mod loot_check_tests;
 pub mod economy_guard;
+pub mod economy_outcomes;
 pub mod brain_fold;
 pub mod brain_food;
 pub mod brain_gear;

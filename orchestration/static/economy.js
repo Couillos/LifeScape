@@ -6,6 +6,50 @@ function number(value) {
   return Math.round(value * 10) / 10;
 }
 
+
+// Cancelled / failed transactions and their percentage (server counts
+// in `payload.outcomes`: exchanges between two bots, then real offers
+// with price changes not counted as cancellations).
+const REASON_LABELS = {
+  '': 'sans motif (anciens ordres)', timeout: 'délai dépassé', no_show: 'absent au rendez-vous',
+  mismatch: 'objets non conformes', short: 'quantité insuffisante', 'daemon restart': 'redémarrage du daemon',
+  gear_plan: 'équipement revu', need_gone: 'besoin disparu', need_met: 'besoin satisfait',
+  need_held: 'besoin déjà couvert', arbitrage_resized: 'arbitrage redimensionné',
+  timeout_streak: 'trop de délais ratés', stranded: 'bloqué', horizon: 'horizon dépassé',
+};
+
+function reasonLabel(reason) {
+  return Object.prototype.hasOwnProperty.call(REASON_LABELS, reason) ? REASON_LABELS[reason] : reason;
+}
+
+function percentLabel(value) {
+  return value === null || value === undefined ? '-' : value.toFixed(1) + ' %';
+}
+
+function reasonsText(windowRow) {
+  const reasons = windowRow.reasons || [];
+  if (!reasons.length) return '<span class="muted">-</span>';
+  return reasons.map(entry => reasonLabel(entry.reason) + ' ' + entry.count +
+    ' <span class="muted">(' + (windowRow.lost ? (entry.count * 100 / windowRow.lost).toFixed(0) : 0) + ' %)</span>').join(', ');
+}
+
+function outcomesTable(title, lostLabel, windows) {
+  return '<h2>' + title + '</h2><table><tr><th class="left">période</th><th>réglés</th><th>' + lostLabel +
+    '</th><th>en cours</th><th>% ' + lostLabel + '</th><th class="left">motifs</th></tr>' +
+    (windows || []).map(row => '<tr><td class="left">' + row.label + '</td><td>' + row.settled + '</td><td>' +
+      row.lost + '</td><td>' + row.open + '</td><td>' + percentLabel(row.lost_percent) +
+      '</td><td class="left">' + reasonsText(row) + '</td></tr>').join('') + '</table>';
+}
+
+function outcomesHtml(outcomes) {
+  if (!outcomes) return '';
+  return outcomesTable('Échanges entre bots', 'ratés', outcomes.deals) +
+    '<div class="muted">% ratés = ratés / (réglés + ratés) ; les échanges en cours ne comptent pas.</div>' +
+    outcomesTable('Ordres posés au marché', 'annulés', outcomes.orders) +
+    '<div class="muted">Un ordre compte une fois, même si son prix a changé plusieurs fois (le changement de prix n\'est pas une annulation). ' +
+    '% annulés = annulés / (réglés + annulés) ; les ordres ouverts ne comptent pas. Comptes staff et personnel exclus.</div>';
+}
+
 async function load() {
   let payload = null;
   try {
@@ -25,6 +69,7 @@ async function load() {
     '<tr><th class="left">deals</th><th>settled</th><th>failed</th><th>fail rate</th></tr>' +
     '<tr><td class="left">' + (deals.total || 0) + '</td><td>' + (deals.settled || 0) +
     '</td><td>' + (deals.failed || 0) + '</td><td>' + failPct + '</td></tr>';
+  document.getElementById('outcomes').innerHTML = outcomesHtml(payload.outcomes);
 
   // Top activities: the money guide's catalogue (precomputed set, the
   // guides page's figures): priced lines, none impossible for every bot.
@@ -70,5 +115,8 @@ async function load() {
       '</td></tr>').join('');
 }
 
-load();
-setInterval(load, 30000);
+if (typeof document !== 'undefined') {
+  load();
+  setInterval(load, 30000);
+}
+if (typeof module !== 'undefined' && module.exports) module.exports = { outcomesHtml, percentLabel, reasonLabel };
