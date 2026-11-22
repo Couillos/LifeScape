@@ -174,7 +174,9 @@ impl Bot {
     pub fn walk_to(&mut self, x: i32, z: i32, level: i32, timeout: u64) -> Result<()> {
         self.act(format!("walk_to ({x},{z},{level}) timeout={timeout}"));
         let dest = Tile { x, z, level };
+        let pause_mark = self.pause_ticks;
         let (options, plan, timings) = self.plan_travel(dest)?;
+        let timeout = super::travel_pause::budget_after_plan_pause(timeout, pause_mark, self.pause_ticks, plan.cost);
         self.run_with_replan(dest, options, plan, timings, timeout)
     }
 

@@ -73,6 +73,21 @@ pub(crate) fn replan_deadline(pushed: u64, now: u64, cost: u32) -> u64 {
     pushed.max(now.saturating_add(budget))
 }
 
+/// Caller budget of a walk planned after a market pause ran INSIDE the
+/// planning (`wait_until_still` pumps, the gate delivers at the Varrock
+/// square and the plan is then drawn from there). The caller sized its
+/// budget for where it stood before (a 1-tile bank stand: 70 ticks, a
+/// mining stand: 100), the plan now starts hundreds of tiles away: live
+/// 2026-11-22, 43 `walk timed out` at the Varrock west bank (101 ticks
+/// into 200-300 tile walks, no `nav pause` line since no leg was cut).
+/// Without a pause closed during planning the caller's budget stands.
+pub(crate) fn budget_after_plan_pause(timeout: u64, pause_mark: u64, pause_now: u64, cost: u32) -> u64 {
+    if pause_now == pause_mark {
+        return timeout;
+    }
+    timeout.max(u64::from(cost) * super::travel::COST_PER_TICK + super::travel::COST_BASE)
+}
+
 /// True for the marker a walk leg returns after a pause.
 pub(crate) fn is_paused_mark(error: &Error) -> bool {
     matches!(error, Error::StepRefused(detail) if detail.starts_with(PAUSED_MARK))
@@ -148,7 +163,18 @@ impl Bot {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_paused_mark, pause_caused, replan_deadline, PAUSED_MARK};
+    use super::{budget_after_plan_pause, is_paused_mark, pause_caused, replan_deadline, PAUSED_MARK};
+
+    /// Live 2026-11-22 (alicefield-789816: `open_bank` stand walk of 70
+    /// ticks, a delivery pause inside the plan wait, a 273-tile plan from
+    /// Varrock, timeout at 71 ticks). A pause closed while planning widens
+    /// the budget to the new plan's travel budget; none keeps the caller's.
+    #[test]
+    fn a_pause_inside_planning_widens_the_caller_budget() {
+        assert_eq!(budget_after_plan_pause(70, 500, 1_042, 273), 273 * 4 + 347, "pause during planning: the trek is budgeted");
+        assert_eq!(budget_after_plan_pause(70, 500, 500, 273), 70, "no pause: the caller's budget stands");
+        assert_eq!(budget_after_plan_pause(6_000, 500, 1_042, 273), 6_000, "a roomier caller budget stands");
+    }
 
     /// Live 2026-11-20 (nina_rhodes-78785 and ~400 `walk timed out` a
     /// day, mostly mining trips): a 1-tile `walk_to` (timeout 100) at
