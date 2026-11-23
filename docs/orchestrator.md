@@ -592,3 +592,10 @@ Tests entre crates : la fonctionnalité cargo `test-support` (de `orch-market` e
 ## Isolation des tests (2026-11-23)
 
 Règle pour toute nouvelle crate `orch-*` : si elle dépend (même indirectement) de `lifescape-orch-core`, `lifescape-sdk` ou `lifescape-store`, elle déclare dans ses `[dev-dependencies]` ces dépendances avec `features = ["test-isolation"]` (le résolveur 2 garde la feature hors du binaire `--release`) et ajoute `tests/test_isolation.rs` (copie de celui d'`orch-brain`). N'utiliser jamais `cfg!(test)` pour isoler un chemin d'une autre crate : seul `cfg!(any(test, feature = "test-isolation"))` est fiable. Les chemins d'état passent par `paths::run_dir()` (jamais `root().join("run")`); `root()` reste réservé aux ressources du dépôt en lecture seule (gamedata, static, scenarios). Le garde-fou `paths::assert_not_live` / `Store::open` panique sur tout chemin sous le vrai `run/`; un test qui lit une copie fixe `LIFESCAPE_ROOT` ou `LIFESCAPE_LIVES_DIR`.
+
+## Mesure de référence et profil des fils (plan d'architecture, lot 0.1, 2026-11-24)
+
+Deux outils hors démon, en lecture seule, dans `tools/` :
+
+- `tools/baseline.py [--hours 1] [--end UNIX] [--json]` : ouvre `run/lifescape.db` en `?mode=ro` et lit, par horloge Unix (fenêtre `[fin - heures, fin)`, par défaut la dernière heure pleine), les rapports par heure et la part de chaque `stop` (`goal_reached`, `blocked`, `failed`, `budget_exhausted`…), les ticks de travail et de pause par heure, l'XP par heure (`task_yields.xp`), les `error_events` par heure et par type, et le délai rapport → prise en compte (seule donnée tirée du journal du démon, lu sur sa fin : ligne `task_report … (push)` puis `folded report` du même bot). À lancer pour l'heure d'avant un déploiement et pour l'heure d'après, puis à comparer.
+- `tools/cpu_sample.py <fenêtres> <secondes>` : CPU par groupe de fils du démon (nom du fil sans son numéro final), des ouvriers, du serveur de jeu et du relais, lu dans `/proc`. Deux relevés à une heure d'écart donnent des chiffres voisins.
