@@ -11,7 +11,8 @@
 
 use lifescape_sdk::Bot;
 
-use crate::kit::pack::obj_id;
+pub use crate::kit::sale_lots::{fare_to_withdraw, sale_fare_coins};
+use crate::kit::sale_lots::withdraw_lots;
 use crate::ScriptError;
 
 /// One lot of a shop sale.
@@ -82,14 +83,24 @@ pub fn split_sale_args(args: &[String]) -> Result<(Vec<String>, Option<SaleOrder
 /// has room again (the janitor pass is not needed).
 pub fn sale_then_room(bot: &mut Bot, order: Option<&SaleOrder>) -> Result<bool, ScriptError> {
     let Some(order) = order else { return Ok(false) };
-    let sold = run_shop_sale(bot, order)?;
+    let sold = match run_shop_sale(bot, order) {
+        Ok(sold) => sold,
+        Err(error) => {
+            // The sale failed typed, but what it already paid (and the
+            // lots it still carries) must not ride into the next task.
+            crate::kit::shop_reopen::bank_after_failed_sale(bot, &error);
+            return Err(error);
+        }
+    };
     bot.log(&format!("cleanup: {sold} units sold to {}", order.shop));
     let bank = crate::kit::bank::nearest_bank(bot)?;
     if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
         return Err(ScriptError::Blocked { missing: vec!["bank".to_string()] });
     }
-    // The unsold remainder of the lots rides home as banknotes: banked
-    // again (`bank_leftovers`), or the next script reads its input as missing.
+    // The unsold remainder of the lots rides home as banknotes, and the
+    // shop paid coins: both banked again (`bank_leftovers`), or the next
+    // script reads its input as missing and works with the proceeds in
+    // its pack.
     crate::market_lots::bank_leftovers(bot)?;
     let room = crate::kit::janitor::known_bank_types(bot) < lifescape_planner::space::BANK_TYPE_LIMIT;
     if room { let _ = bot.close_modal(); }
@@ -108,76 +119,6 @@ fn keeper_spawn(site: (i32, i32, i32)) -> (i32, i32, i32) {
 fn keeper_at(shop: &str, site: (i32, i32, i32)) -> Option<String> {
     let access = lifescape_gamedata::f2p::f2p_shop_access(shop)?;
     access.npcs.iter().filter_map(|npc| lifescape_gamedata::npc_by_id(*npc)).find(|npc| npc.spawns.iter().any(|spawn| (spawn.x, spawn.z, spawn.level) == (i64::from(site.0), i64::from(site.1), i64::from(site.2)))).and_then(|npc| npc.name).map(str::to_string)
-}
-
-/// Pure: coins the trip to a keeper at `site` pays in fares: the Karamja
-/// boat out and back (the nav's `coins:60` on `boat_port_sarim_to_karamja`,
-/// the brain's `payable_sale_sites` check), nothing on the mainland (the
-/// cleanup run never opens the toll gates).
-pub fn sale_fare_coins(site: (i32, i32, i32)) -> u32 {
-    let (x, z, level) = site;
-    if lifescape_gamedata::access::behind_boat(i64::from(x), i64::from(z), i64::from(level)) {
-        (2 * lifescape_gamedata::services::BOAT_FARE_GP) as u32
-    } else {
-        0
-    }
-}
-
-/// Pure: coins to withdraw with the lots so the pack (`carried` coins)
-/// pays the trip's fares (`sale_fare_coins`).
-pub fn fare_to_withdraw(site: (i32, i32, i32), carried: u32) -> u32 {
-    sale_fare_coins(site).saturating_sub(carried)
-}
-
-/// Takes every lot into the pack (banknotes for non-stackables: one slot
-/// each), only the units not carried yet, plus the coins the trip to
-/// `site` pays in fares (`fare_to_withdraw`: before the first walk, never
-/// after a `NeedsRequirement coins:60`); returns the lots carried with
-/// their form (empty: nothing left to sell).
-fn withdraw_lots(bot: &mut Bot, lots: &[SaleLot], site: (i32, i32, i32)) -> Result<Vec<(SaleLot, u16)>, ScriptError> {
-    let mut wanted: Vec<(&SaleLot, u16, u16, u32)> = Vec::new();
-    for lot in lots {
-        let base = obj_id(bot, &lot.item)?;
-        let note = crate::market_client::trade_id(base);
-        let carried = crate::kit::pack::pack_total(bot, base) + if note != base { crate::kit::pack::pack_total(bot, note) } else { 0 };
-        wanted.push((lot, base, note, lot.qty.saturating_sub(carried)));
-    }
-    let coins = obj_id(bot, "coins")?;
-    let fare = fare_to_withdraw(site, crate::kit::pack::pack_total(bot, coins));
-    if fare > 0 || wanted.iter().any(|(_, _, _, missing)| *missing > 0) {
-        let bank = crate::kit::bank::nearest_bank(bot)?;
-        if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
-            return Err(ScriptError::Blocked { missing: vec!["bank".to_string()] });
-        }
-        bot.pump(2)?;
-        if fare > 0 {
-            bot.log(&format!("shopsell: the trip to ({},{}) pays the boat, taking {fare} coins with the lots", site.0, site.1));
-            if let Err(error) = bot.bank_withdraw(coins, fare, 300) {
-                bot.log(&format!("shopsell: fare withdraw failed ({error})"));
-            }
-        }
-        for (lot, base, note, missing) in &wanted {
-            let banked = bot.bank_items().get(base).copied().unwrap_or(0);
-            let take = (*missing).min(banked);
-            if take > 0 {
-                let outcome = if note != base { bot.bank_withdraw_noted(*base, *note, take, 300) } else { bot.bank_withdraw(*base, take, 300) };
-                if let Err(error) = outcome {
-                    bot.log(&format!("shopsell {}: withdraw failed ({error})", lot.item));
-                }
-            }
-        }
-        let _ = bot.close_modal();
-        bot.pump(3)?;
-    }
-    let mut forms: Vec<(SaleLot, u16)> = Vec::new();
-    for (lot, base, note, _) in wanted {
-        let form = if crate::kit::pack::pack_total(bot, note) > 0 { note } else { base };
-        let carried = crate::kit::pack::pack_total(bot, form).min(lot.qty);
-        if carried > 0 {
-            forms.push((SaleLot { qty: carried, ..lot.clone() }, form));
-        }
-    }
-    Ok(forms)
 }
 
 /// Runs the trip; returns the units sold. Nothing carried or banked of a
@@ -239,8 +180,10 @@ pub fn run_shop_sale(bot: &mut Bot, order: &SaleOrder) -> Result<u32, ScriptErro
                 if !opened {
                     return Err(ScriptError::Failed(format!("shopsell: trade with {keeper} failed at {:?}", bot.position())));
                 }
+                let mut reopens = 0u32;
                 for (lot, form) in &forms {
-                    let (sold, coins) = crate::kit::shop::sell_units(bot, *form, &lot.item, &order.shop, lot.qty, lot.min_unit)?;
+                    let mark = pauses_at_withdraw;
+                    let (sold, coins) = crate::kit::shop_reopen::sell_lot_reopening(bot, &keeper, keeper_spawn(order.site), *form, lot, &order.shop, &mut reopens, &|bot| mark.is_some_and(|mark| paused_since(mark, bot.pauses_done)))?;
                     bot.log(&format!("shopsell {}: sold {sold}/{} to {} for {coins} coins (at least {} each)", lot.item, lot.qty, order.shop, lot.min_unit));
                     total += sold;
                     if let Some(left) = remaining.iter_mut().find(|left| left.item == lot.item) {

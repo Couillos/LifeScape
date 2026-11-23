@@ -552,59 +552,7 @@ pub fn units_paying(shop: &str, obj_name: &str, shop_holds: i64, count: u32, min
 /// lower the price meanwhile). Returns (units sold, coins received). A
 /// click the server refuses ends the sale, logged.
 pub fn sell_units(bot: &mut Bot, form: u16, obj_name: &str, shop: &str, count: u32, min_unit: i64) -> Result<(u32, i64), ScriptError> {
-    let side_com = (bot.tables.com_id)("shop_template_side:inv")
-        .ok_or_else(|| ScriptError::Usage("shop_template_side:inv missing from component table".to_string()))?;
-    let main_com = (bot.tables.com_id)("shop_template:inv")
-        .ok_or_else(|| ScriptError::Usage("shop_template:inv missing from component table".to_string()))?;
-    let coins = obj_id(bot, "coins")?;
-    let base = obj_id(bot, obj_name)?;
-    let (mut sold, mut earned) = (0u32, 0i64);
-    while sold < count {
-        let shop_holds: i64 = bot.world.inv.get(&main_com).map(|slots| slots.values().filter(|(held, _)| *held == base).map(|(_, qty)| i64::from(*qty)).sum()).unwrap_or(0);
-        let Some(paying) = units_paying(shop, obj_name, shop_holds, count - sold, min_unit) else {
-            return Err(ScriptError::Usage(format!("shop {shop} buys no {obj_name}")));
-        };
-        if paying == 0 {
-            bot.log(&format!("shopsell {obj_name}: the next unit pays under {min_unit} (the market): stop after {sold}"));
-            break;
-        }
-        let units_before = pack_total(bot, form);
-        // Both stops are logged: 3 294 lots of the day ended "sold 0"
-        // with no line saying why (lot 8, cause still open).
-        let Some((button, size)) = sell_batch_for(paying.min(units_before)) else {
-            bot.log(&format!("shopsell {obj_name}: no unit of form {form} in the pack view after {sold} (paying {paying}) at {:?}", bot.position()));
-            break;
-        };
-        let Some(slot) = bot.world.inv.get(&side_com).and_then(|slots| slots.iter().find(|(_, (held, _))| *held == form).map(|(slot, _)| *slot)) else {
-            let side = bot.world.inv.get(&side_com).map(|slots| slots.len());
-            bot.log(&format!("shopsell {obj_name}: form {form} not in the shop's side inventory ({side:?} slots) after {sold} at {:?}", bot.position()));
-            break;
-        };
-        let coins_before = pack_total(bot, coins);
-        let pauses_before = bot.pauses_done;
-        bot.inv_button(button, form, slot, side_com)?;
-        let deadline = bot.world.ticks + SELL_UNIT_TICKS;
-        while bot.world.ticks < deadline && pack_total(bot, form) >= units_before && bot.pauses_done == pauses_before {
-            bot.pump(1)?;
-        }
-        let Some(gone) = batch_sold(units_before, pack_total(bot, form), pauses_before, bot.pauses_done) else {
-            bot.log(&format!("shopsell {obj_name}: a market pause cut the sale after {sold} at {:?}", bot.position()));
-            break;
-        };
-        if gone == 0 {
-            bot.log(&format!("shopsell {obj_name}: the shop took nothing of a {size} batch at {:?}", bot.position()));
-            break;
-        }
-        bot.pump(1)?;
-        sold += gone;
-        if bot.pauses_done != pauses_before {
-            // Sold before the pause, its coins banked by it: no coin read.
-            bot.log(&format!("shopsell {obj_name}: a market pause followed the batch after {sold} at {:?}", bot.position()));
-            break;
-        }
-        earned += i64::from(pack_total(bot, coins)) - i64::from(coins_before);
-    }
-    Ok((sold, earned))
+    crate::kit::shop_reopen::sell_units_stop(bot, form, obj_name, shop, count, min_unit).map(|(sold, earned, _)| (sold, earned))
 }
 
 /// Pure: units one sale batch sold, read from the pack (`units_before`,

@@ -245,12 +245,13 @@ pub fn tool_ids(bot: &Bot) -> Vec<u16> {
     keep
 }
 
-/// Pack ids a finished shop sale leaves behind: everything but the
-/// tools, the held objects of a paused script and the coins (the unsold
-/// remainder of the lots, in banknote or base form).
+/// Pack ids a finished shop sale banks: everything but the tools and the
+/// held objects of a paused script, so the unsold remainder of the lots
+/// (banknote or base form) and the coins the shop paid (user 2026-11-23:
+/// a sale's proceeds go to the bank, not back to work in the pack). The
+/// next script fetches its own fare reserve.
 pub fn unsold_in_pack(bot: &Bot) -> Vec<u16> {
-    let mut keep = pack_stays(bot);
-    keep.extend(crate::kit::pack::obj_id(bot, "coins").ok());
+    let keep = pack_stays(bot);
     let mut left: Vec<u16> = crate::kit::pack::pack_slots(bot).into_iter().map(|(_, (held, _))| held).filter(|held| !keep.contains(held)).collect();
     left.sort_unstable();
     left.dedup();
@@ -259,14 +260,14 @@ pub fn unsold_in_pack(bot: &Bot) -> Vec<u16> {
 
 /// With the bank open: banks what a shop sale left in the pack (live
 /// 2026-11-22, owen_wood: 7 637 iron ore notes in the pack, four `smelt`
-/// blocks `missing: iron_ore` in 20 s). Tools and coins stay.
+/// blocks `missing: iron_ore` in 20 s), and the sale's coins. Only the
+/// tools stay.
 pub fn bank_leftovers(bot: &mut Bot) -> Result<(), ScriptError> {
     if unsold_in_pack(bot).is_empty() {
         return Ok(());
     }
     let Some(side_com) = (bot.tables.com_id)("bank_side:inv") else { return Ok(()) };
-    let mut keep = pack_stays(bot);
-    keep.extend(crate::kit::pack::obj_id(bot, "coins").ok());
+    let keep = pack_stays(bot);
     let _ = bot.bank_deposit_all(side_com, &keep, 300)?;
     bot.pump(2)?;
     Ok(())
@@ -436,8 +437,9 @@ mod tests {
     /// Live 2026-11-22 (owen_wood, pia_brown, 30 of 154 blocks in an
     /// hour): a shop trip that stopped at the shop's price left the
     /// unsold lot in the pack as banknotes; the next script's inputs read
-    /// as missing. The notes are what the sale leaves behind; the pick,
-    /// the coins stay.
+    /// as missing. The notes are what the sale leaves behind, and (user
+    /// 2026-11-23, Bandit Camp trips: 3.5 M coins carried back to work)
+    /// the coins it paid; only the pick stays.
     #[test]
     fn the_unsold_notes_are_what_a_sale_leaves_in_the_pack() {
         let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
@@ -447,7 +449,11 @@ mod tests {
         let pick = crate::kit::pack::obj_id(&bot, "bronze_pickaxe").expect("pickaxe");
         let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins");
         bot.world.inv.insert(pack, [(0u8, (note, 7637u32)), (1u8, (pick, 1u32)), (2u8, (coins, 80u32))].into_iter().collect());
-        assert_eq!(super::unsold_in_pack(&bot), vec![note]);
+        let mut left = super::unsold_in_pack(&bot);
+        left.sort_unstable();
+        let mut expected = vec![note, coins];
+        expected.sort_unstable();
+        assert_eq!(left, expected, "the notes and the coins go to the bank, the pick stays");
     }
 
     /// User 2026-11-19: once the trades are done, the load the paused
