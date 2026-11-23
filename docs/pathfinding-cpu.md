@@ -18,7 +18,7 @@ recherche est bornée par `MAX_VISITS = 500_000` (`plan.rs:57`) et appelle
 | Visites max par `plan()` | 4 × 500 k = 2 M | `plan.rs:57,255-364` |
 | Coût par visite | ~2 µs | rapport parent (mesures `route --release`) |
 | NoRoute exhaustif (pire cas) | ~3,5 s | rapport parent ; corroboré : `chateau_scell` = 3669 ms release (`docs/decisions.md:13`) |
-| Plans réussis (budget golden) | < 300 ms, max observé 140 ms | `rs/crates/nav/tests/golden.rs:173-175`, `docs/decisions.md:13` |
+| Plans réussis (budget golden) | < 400 ms (300 ms jusqu'au 2026-11-23), max observé 140 ms | `rs/crates/nav/tests/golden.rs:173-175`, `docs/decisions.md:13` |
 | `prepare_edges()` | ~90 ms à froid, **rejoué à chaque Dijkstra** (jusqu'à 4×/plan) | `plan.rs:518-549` ; itère 367 transitions (`gamedata/data/transitions.json`) avec test `reach` par stand |
 | Sans yield, 238 k visites → Disconnected (1 cas de test) | prouve l'épuisement avant `MAX_VISITS` | `rs/crates/sdk/src/client/travel.rs:879-888` |
 | Monde | N ≈ 1,3 M tuiles marchables après fix ciel | rapport parent ; pack = 1932 carrés (`maps-server.zip`) |

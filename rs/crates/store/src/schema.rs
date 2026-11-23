@@ -5,7 +5,7 @@
 use crate::Error;
 
 /// Latest schema version this build understands.
-pub const SCHEMA_VERSION: u32 = 12;
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// Index of the task reports by creation clock (the time value's window,
 /// `work_gains`; plan équilibre lot 1).
@@ -298,6 +298,12 @@ pub(crate) fn migrate_from(connection: &rusqlite::Connection, seen: u32) -> Resu
 /// Steps newer than `found` (read under the write lock), each with its
 /// version bump, inside the caller's transaction.
 fn pending_steps(connection: &rusqlite::Connection, found: u32) -> Result<(), Error> {
+    pending_steps_upto(connection, found, SCHEMA_VERSION)
+}
+
+/// `pending_steps` stopping at version `upto` (tests build an older file
+/// to migrate it).
+pub(crate) fn pending_steps_upto(connection: &rusqlite::Connection, found: u32, upto: u32) -> Result<(), Error> {
     if found > SCHEMA_VERSION {
         return Err(Error::SchemaMismatch { found, expected: SCHEMA_VERSION });
     }
@@ -346,6 +352,13 @@ fn pending_steps(connection: &rusqlite::Connection, found: u32) -> Result<(), Er
         // User 2026-11-22: a reprice amends the row in place; the walk's
         // history goes to `order_amends`, never to cancelled rows.
         connection.execute_batch(crate::amends::MIGRATION_V12).map_err(|source| Error::Sql(format!("migration 12: {source}")))?;
+    }
+    if found < 13 && upto >= 13 {
+        // 2026-11-23 compaction: partial indexes for the live order book,
+        // the unused indexes dropped, `task_levels` stored as a lossless
+        // delta, `task_levels` and `task_units` WITHOUT ROWID.
+        crate::levels::apply_v13(connection)?;
+        connection.execute_batch("PRAGMA user_version = 13;").map_err(|source| Error::Sql(format!("migration 13 version: {source}")))?;
     }
     Ok(())
 }

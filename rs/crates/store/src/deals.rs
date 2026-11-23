@@ -117,7 +117,7 @@ impl Store {
                 new_deal.quantity, new_deal.price
             )));
         }
-        self.connection.execute(
+        self.run(
             "INSERT INTO deals(buyer, seller, item_id, quantity, price, meeting_x, \
              meeting_y, meeting_level, status, fail_reason, deadline_tick, \
              created_clock, updated_clock, taker_side) \
@@ -150,7 +150,7 @@ impl Store {
         if status == DealStatus::Failed && fail_reason.is_empty() {
             return Err(Error::Invalid("failed deal needs a reason".to_string()));
         }
-        let touched = self.connection.execute(
+        let touched = self.run(
             "UPDATE deals SET status = ?1, fail_reason = ?2, updated_clock = ?3 \
              WHERE deal_id = ?4",
             rusqlite::params![status.as_str(), fail_reason, clock, deal_id],
@@ -164,7 +164,7 @@ impl Store {
     /// One deal by id.
     pub fn get_deal(&self, deal_id: i64) -> Result<Option<Deal>, Error> {
         let query = format!("SELECT {DEAL_COLUMNS} FROM deals WHERE deal_id = ?1");
-        let mut statement = self.connection.prepare(&query)?;
+        let mut statement = self.connection.prepare_cached(&query)?;
         let mut found_rows = statement.query(rusqlite::params![deal_id])?;
         match found_rows.next()? {
             None => Ok(None),
@@ -179,7 +179,7 @@ impl Store {
              WHERE (buyer = ?1 OR seller = ?1) AND status NOT IN ('settled','failed') \
              ORDER BY created_clock"
         );
-        let mut statement = self.connection.prepare(&query)?;
+        let mut statement = self.connection.prepare_cached(&query)?;
         let mut found_rows = statement.query(rusqlite::params![account])?;
         let mut open_deals = Vec::new();
         while let Some(row) = found_rows.next()? {
@@ -198,7 +198,7 @@ impl Store {
             "SELECT price, created_clock FROM deals WHERE {column} = ?1 AND item_id = ?2 \
              AND status != 'failed' ORDER BY created_clock DESC, deal_id DESC LIMIT 1"
         );
-        let mut statement = self.connection.prepare(&query)?;
+        let mut statement = self.connection.prepare_cached(&query)?;
         let mut found_rows = statement.query(rusqlite::params![account, item_id])?;
         match found_rows.next()? {
             Some(row) => Ok(Some((row.get(0)?, row.get(1)?))),
@@ -212,7 +212,7 @@ impl Store {
     /// learned floor reads, from the carnet (a daemon restart keeps it).
     pub fn seller_learning(&self, account: &str, since: i64) -> Result<std::collections::HashMap<i64, (i64, i64)>, Error> {
         let mut out: std::collections::HashMap<i64, (i64, i64)> = std::collections::HashMap::new();
-        let mut withdrawn = self.connection.prepare(
+        let mut withdrawn = self.connection.prepare_cached(
             "SELECT item_id, COUNT(*) FROM orders WHERE account = ?1 AND status = 'cancelled' AND side = 'sell' \
              AND cancel_reason = 'horizon' AND updated_clock >= ?2 GROUP BY item_id",
         )?;
@@ -220,7 +220,7 @@ impl Store {
         while let Some(row) = rows.next()? {
             out.entry(row.get(0)?).or_default().0 = row.get(1)?;
         }
-        let mut sold = self.connection.prepare(
+        let mut sold = self.connection.prepare_cached(
             "SELECT item_id, COUNT(*) FROM deals WHERE seller = ?1 AND status = 'settled' AND updated_clock >= ?2 GROUP BY item_id",
         )?;
         let mut rows = sold.query(rusqlite::params![account, since])?;
@@ -233,7 +233,7 @@ impl Store {
     /// Item ids the account bought (non-failed buyer deals, distinct,
     /// by id).
     pub fn items_bought_by(&self, account: &str) -> Result<Vec<i64>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT DISTINCT item_id FROM deals WHERE buyer = ?1 AND status != 'failed' ORDER BY item_id",
         )?;
         let mut found_rows = statement.query(rusqlite::params![account])?;
@@ -253,7 +253,7 @@ impl Store {
              WHERE (buyer = ?1 OR seller = ?1) AND status != 'failed' AND created_clock >= ?2 \
              ORDER BY created_clock, deal_id"
         );
-        let mut statement = self.connection.prepare(&query)?;
+        let mut statement = self.connection.prepare_cached(&query)?;
         let mut found_rows = statement.query(rusqlite::params![account, since_clock])?;
         let mut deals = Vec::new();
         while let Some(row) = found_rows.next()? {
@@ -266,7 +266,7 @@ impl Store {
     /// `excluded` (non-failed deals, public prints): the demand a market
     /// maker reads, its own purchases left out (plan marché Q6).
     pub fn units_bought_since(&self, since_clock: i64, excluded: &str) -> Result<Vec<(i64, i64)>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT item_id, SUM(quantity) FROM deals WHERE buyer != ?1 AND status != 'failed' AND created_clock >= ?2 \
              GROUP BY item_id ORDER BY item_id",
         )?;
@@ -287,7 +287,7 @@ impl Store {
             "SELECT {DEAL_COLUMNS} FROM deals \
              ORDER BY created_clock DESC, deal_id DESC LIMIT ?1"
         );
-        let mut statement = self.connection.prepare(&query)?;
+        let mut statement = self.connection.prepare_cached(&query)?;
         let mut found_rows = statement.query(rusqlite::params![capped])?;
         let mut latest = Vec::new();
         while let Some(row) = found_rows.next()? {
@@ -304,7 +304,7 @@ impl Store {
             "SELECT {DEAL_COLUMNS} FROM deals WHERE status = 'settled' AND (?1 < 0 OR item_id = ?1) \
              ORDER BY updated_clock DESC, deal_id DESC LIMIT ?2"
         );
-        let mut statement = self.connection.prepare(&query)?;
+        let mut statement = self.connection.prepare_cached(&query)?;
         let mut found_rows = statement.query(rusqlite::params![item.unwrap_or(-1), limit.clamp(1, 1000)])?;
         let mut out = Vec::new();
         while let Some(row) = found_rows.next()? {
@@ -321,7 +321,7 @@ impl Store {
         if reason.is_empty() {
             return Err(Error::Invalid("failed deal needs a reason".to_string()));
         }
-        let touched = self.connection.execute(
+        let touched = self.run(
             "UPDATE deals SET status = 'failed', fail_reason = ?1, updated_clock = ?2 \
              WHERE status NOT IN ('settled','failed')",
             rusqlite::params![reason, clock],
@@ -362,14 +362,14 @@ impl Store {
         );
         let mut stale = Vec::new();
         {
-            let mut statement = self.connection.prepare(&query)?;
+            let mut statement = self.connection.prepare_cached(&query)?;
             let mut found_rows = statement.query(rusqlite::params![])?;
             while let Some(row) = found_rows.next()? {
                 stale.push(map_deal(row)?);
             }
         }
         for deal in &stale {
-            self.connection.execute(
+            self.run(
                 "UPDATE deals SET status = 'failed', fail_reason = ?1, updated_clock = ?2 \
                  WHERE deal_id = ?3",
                 rusqlite::params![reason, clock, deal.deal_id],
@@ -387,7 +387,7 @@ impl Store {
                 })?;
                 // Rank of the deal's clock, but re-entered now: a crossed
                 // reload makes the latest (re)entry the taker.
-                self.connection.execute(
+                self.run(
                     "UPDATE orders SET updated_clock = ?1 WHERE order_id = ?2",
                     rusqlite::params![clock, relisted],
                 )?;

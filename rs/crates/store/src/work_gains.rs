@@ -52,13 +52,13 @@ impl Store {
     /// flow reads an empty `flows`.
     pub fn work_flows_since(&self, since: i64, unvalued_causes: &[&str]) -> Result<Vec<AccountWork>, Error> {
         let mut works: BTreeMap<String, (i64, BTreeMap<String, i64>)> = BTreeMap::new();
-        let mut statement = self.connection.prepare(WORK_TICKS_SQL)?;
+        let mut statement = self.connection.prepare_cached(WORK_TICKS_SQL)?;
         let rows = statement.query_map(params![MEASURE_VERSION, since], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
         for row in rows {
             let (account, work_ticks) = row?;
             works.entry(account).or_default().0 += work_ticks;
         }
-        let mut statement = self.connection.prepare(WORK_FLOWS_SQL)?;
+        let mut statement = self.connection.prepare_cached(WORK_FLOWS_SQL)?;
         let rows = statement.query_map(params![MEASURE_VERSION, since], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?))
         })?;
@@ -132,7 +132,7 @@ mod tests {
     fn the_window_reads_through_the_clock_index() -> Result<(), Error> {
         let store = Store::open_in_memory()?;
         for sql in [super::WORK_TICKS_SQL, super::WORK_FLOWS_SQL] {
-            let mut statement = store.connection.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let mut statement = store.connection.prepare_cached(&format!("EXPLAIN QUERY PLAN {sql}"))?;
             let steps = statement.query_map(rusqlite::params![2, 0], |row| row.get::<_, String>(3))?.collect::<Result<Vec<String>, _>>()?;
             let reports = steps.iter().find(|step| step.contains(" r ") || step.contains("task_reports")).cloned().unwrap_or_default();
             assert!(reports.contains(crate::schema::REPORT_CLOCK_INDEX), "{sql}: {steps:?}");

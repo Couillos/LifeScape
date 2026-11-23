@@ -90,7 +90,7 @@ fn live_check() {
         .and_then(|text| crate::rates_service::snapshot_from_json(&text))
         .unwrap_or_default();
     // The money guide of the copy (one cycle): its best lines, shown.
-    let guides = crate::guides_store::build_set(&store, &snapshot, &crate::web_guides::StoreWaits::default());
+    let guides = crate::guides_store::build_set(&store, &snapshot, &crate::guides_model::StoreWaits::default());
     // Each bot's coin rate: what its work really earned on the copy (D1),
     // the window ending at the copy's newest report (an old copy is never
     // read empty, every bot at the floor).

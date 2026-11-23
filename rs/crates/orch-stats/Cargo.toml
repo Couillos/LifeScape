@@ -1,0 +1,36 @@
+[package]
+name = "lifescape-orch-stats"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "lifescape_orch_stats"
+path = "src/lib.rs"
+
+[dependencies]
+lifescape-json = { path = "../json" }
+lifescape-gamedata = { path = "../gamedata" }
+lifescape-nav = { path = "../nav" }
+lifescape-sdk = { path = "../sdk" }
+lifescape-scripts = { path = "../scripts" }
+lifescape-market = { path = "../market" }
+lifescape-planner = { path = "../planner" }
+lifescape-store = { path = "../store" }
+lifescape-orch-core = { path = "../orch-core" }
+lifescape-orch-world = { path = "../orch-world" }
+lifescape-orch-fleet = { path = "../orch-fleet" }
+lifescape-orch-market = { path = "../orch-market" }
+
+[features]
+# Test helpers shared with the crates above (`rates_service::snapshot_from_json`).
+test-support = []
+
+[dev-dependencies]
+# Test isolation (see orch-core `test-isolation`): run/ state resolves to a temp root.
+lifescape-orch-core = { path = "../orch-core", features = ["test-isolation"] }
+lifescape-sdk = { path = "../sdk", features = ["test-isolation"] }
+lifescape-store = { path = "../store", features = ["test-isolation"] }
+lifescape-orch-market = { path = "../orch-market", features = ["test-support"] }
+
+[lints]
+workspace = true

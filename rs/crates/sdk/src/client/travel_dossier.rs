@@ -290,6 +290,37 @@ pub(crate) fn dossier_json(
 /// the working dir or the executable holding `orchestration` (same rule
 /// as the orchestrator paths, without depending on it).
 fn failures_dir() -> std::path::PathBuf {
+    let dir = failures_dir_unchecked();
+    if cfg!(any(test, feature = "test-isolation")) {
+        guard_live(&dir);
+    }
+    dir
+}
+
+/// Test builds: a dossier never lands in the real `<repo>/run/` (the tests
+/// of crates above the sdk used to write `run/failures/*-rescue-*.json`).
+fn guard_live(dir: &std::path::Path) {
+    let mut repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
+    while !repo.join("orchestration").is_dir() {
+        if !repo.pop() {
+            return;
+        }
+    }
+    let live = repo.join("run");
+    let real = |path: &std::path::Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut probe = dir.to_path_buf();
+    while !probe.exists() && probe.pop() {}
+    if real(&probe).starts_with(real(&live)) || dir.starts_with(&live) {
+        panic!("test isolation: dossier dir {} is inside the LIVE data directory {}", dir.display(), live.display());
+    }
+}
+
+fn failures_dir_unchecked() -> std::path::PathBuf {
+    if cfg!(any(test, feature = "test-isolation")) && std::env::var("LIFESCAPE_ROOT").map(|root| root.is_empty()).unwrap_or(true) {
+        let dir = std::env::temp_dir().join(format!("lifescape-test-run-{}", std::process::id())).join("run").join("failures");
+        let _ignored = std::fs::create_dir_all(&dir);
+        return dir;
+    }
     if let Ok(root) = std::env::var("LIFESCAPE_ROOT") {
         if !root.is_empty() {
             return std::path::PathBuf::from(root).join("run").join("failures");

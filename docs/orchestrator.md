@@ -202,7 +202,11 @@ chemin de dépendance) que si elle change. Tests :
 `web_brain_tests.rs`, `web_brain_view_tests.rs`, `node orchestration/static/brain.test.js`.
 Serveur de jeu via `LIFESCAPE_SERVER_HOST` / `LIFESCAPE_SERVER_PORT`
 (défaut `127.0.0.1:43594`), données engine via `LIFESCAPE_ENGINE_DIR`
-(défaut `../lostcity/engine`).
+(défaut `../lostcity/engine`). Flotte (2026-11-23) : démarrer le daemon
+avec `LIFESCAPE_SERVER_HOST=<IP du conteneur lostcity>` (aujourd'hui
+`172.19.0.2`, `docker inspect lostcity`) ; les workers en héritent. Par
+`127.0.0.1`, chaque paquet passe par `docker-proxy` (relais en espace
+utilisateur, 8 à 17 % d'un cœur pour 74 bots à 60 ms/tick).
 
 Ne jamais lancer un bot en direct hors orchestrateur (ni rescue manuel) :
 sessions orphelines et états faux. Diagnostics aussi via l'orchestrateur
@@ -528,3 +532,61 @@ Lecteurs : `brain_plan::raw_holdings_count`, `live_owned`,
 `brain_ambition::live_count`. Une ligne de rapport (nom affiché) ne compte
 pour la cible d'un nœud que si la méthode du run la nomme ainsi
 (`brain_fold::gained_toward`, `rates_names::debug_in`).
+
+## Découpage en couches (phase A, 2026-11-23)
+
+La crate `lifescape-orchestrator` est découpée en couches, d'abord à l'intérieur de la crate (phase A, sans changement de comportement), puis en crates séparées (phase B). Ordre, du bas vers le haut :
+
+| couche | contenu |
+|---|---|
+| `core` | `logln!` + `log_sink`, `paths`, `clock`, `client`, `log_markers`, `cpu_profile`, `res_stats`, `store_pool`, `store_queue`, `names`, `api_shapes`, `economy_guard`, journaux |
+| `world` | cartes (`png`, `mapcache`, `minimap`, `zones`...), `plan_service` |
+| `fleet` | `jobs` (tables de jobs, registre de supervision, `live_of`, `merge_light`), trait `Fleet`, `registry`, `site_crowd`, `worker_owner`, `daemon_pool` |
+| `market` | moteur du marché (`market_service`, `_orders`, `_reprice`, `_convene`, `_daemon`...), `funding_gifts`, `market_host` (trait `MarketHost`), `market_facts` (trait `AccountFacts`) |
+| `stats` | `rates_*`, `report_*`, `flow_causes`, `holdings`, `hiscores`, `guides_store`, `guides_model`, `rates_ingest`, `errors_model` |
+| `session`, `brain` (même niveau) | worker `session*`; `brain*`, agents de marché (`market_maker`, `market_seller`, `market_demand`, `market_discovery`), `bid_why`, `method_health` |
+| `web` | `web*` |
+| `daemon` | `daemon*`, `supervise`, `push_hub`, `errors_ingest`, `rares_cmd`, `funding_*`; porte `Orchestrator` |
+| `bin` | `main`, `cli`, commandes hors ligne, `dump_*`, `verify_*` |
+
+Règle : un module ne référence que sa couche ou une couche plus basse. Ce qui doit remonter passe par un trait enregistré au démarrage : `Fleet` (le démon vu du cerveau, du marché et des statistiques), `MarketHost`, `AccountFacts` (le cerveau vu du marché), `log_sink` (le démon vu de `logln!`). Ces enregistrements se font en tête de `main`, avant tout thread; `log_sink::assert_registered` échoue bruyamment s'ils manquent. Le contrôle (`layering_check.py`, à brancher dans le dépôt) compte les références de code de production qui vont vers une couche égale ou supérieure : 63 avant la phase A, 0 après.
+
+### Phase B : crates séparées (état au 2026-11-23, étapes B1 à B10, terminée)
+
+Les neuf couches sont des crates de `rs/crates/`, une par couche, chacune ne dépendant que de celles du dessous. `lifescape-orchestrator` les ré-exporte dans son `lib.rs` (`pub use lifescape_orch_core::{paths, ...};`), si bien que `crate::paths::x`, `crate::jobs::Job`, `crate::logln!` s'écrivent partout comme avant; chaque crate ré-exporte de la même façon celles du dessous (y compris `logln`).
+
+| crate (paquet) | contenu | dépend de |
+|---|---|---|
+| `orch-core` (`lifescape-orch-core`) | `logln!`, `daemon_clock`, `log_sink`, `paths`, `clock`, `client`, `log_markers`, `cpu_profile`, `error_stamp`, `log_rotate`, `disk_guard`, `res_stats`, `store_pool`, `store_queue`, `names`, `api_shapes`, `nav_profile`, `economy_guard` | json, store, nav |
+| `orch-world` | `png`, `mapcache`, `mapbuild`, `minimap`, `staticmap`, `zones`, `plan_service` | core |
+| `orch-fleet` | `jobs`, `fleet` (trait `Fleet`), `registry`, `site_crowd`, `worker_owner`, `daemon_pool` | core |
+| `orch-market` | moteur du marché, `funding_gifts`, `market_host`, `market_facts`, `market_own` (mémoire du vendeur sur le moteur), `market_test_support` | core, world, fleet |
+| `orch-stats` | `rates_*` (dont `web_rates`, sous-module de `rates_service`), `report_*`, `flow_causes`, `time_value`, `xp_*`, `hiscores*`, `holdings*`, `live_items`, `guides_store`, `guides_model`, `rates_ingest`, `errors_model`, `errors_aggregate`, `trade_report`, `economy_outcomes` | core, world, fleet, market |
+
+| `orch-session` | worker `session*`, `push_conn`, `heartbeat_flows` (pompe du battement) | core, world, fleet, market, stats |
+| `orch-brain` | `brain*`, agents de marché (`market_maker` avec `register_account_facts`, `market_seller`, `market_demand`, `market_discovery`, `market_maker_report`), `bid_why`, `method_health`, bancs `par_harness`; `tests/fixtures/lives` | core, world, fleet, market, stats |
+| `orch-web` | `web*`, `web_rates_view`, `hiscores_web_tests` | + brain, session (`heartbeat_flows`) |
+| `orch-daemon` | `daemon*`, `supervise`, `push_hub`, `errors_ingest`, `rares_cmd`, `funding_cmd`, `funding_plan`; porte `Orchestrator` et `impl Fleet` | + session, brain, web |
+| `orchestrator` | binaire unique `orchestrator` (`main`, `cli`, commandes hors ligne, `dump_*`, `verify_*`, `migrate_cmd`, `purge_cmd`...) et `lib.rs` qui ré-exporte tout (`crate::x::y` inchangé) | toutes |
+
+DAG des dépendances (une flèche = « dépend de ») :
+
+```
+core <- world, fleet
+market -> core, world, fleet          stats -> + market
+session -> core, world, fleet, market, stats
+brain   -> core, world, fleet, market, stats          (session et brain sont frères)
+web     -> brain, session, stats ...  daemon -> web, brain, session ...  orchestrator -> toutes
+```
+
+Le binaire reste unique : les workers lancent `current_exe() session`, le déploiement lance `rs/target/release/orchestrator`. Le démarrage de `main` est inchangé : `register_log_sink`, `assert_registered`, `register_account_facts` d'abord, avant tout thread.
+
+Lancer les tests d'une crate (profil incrémental, jamais le profil debug, il remplit le disque) : `RUST_TEST_THREADS=6 nice -n 19 cargo test --profile release-test --manifest-path rs/Cargo.toml -p lifescape-orch-<crate>` (`brain`, `web`, `daemon`, `session`...; `-p lifescape-orchestrator` pour ce qui reste). Suite complète : même commande avec `--no-fail-fast` sans `-p`. Les fixtures de vies sont dans `rs/crates/orch-brain/tests/fixtures/lives` (`migrate_cmd_tests` les lit par `../orch-brain/...`); le test `brain_d17_tests` balaie `orchestrator` et toutes les `orch-*`.
+
+Reste à faire (facultatif, étape C) : un trait `Autopilot` (`on_supervise`, `note_operator_stop`, `request`, `explain_for`, `wishes_reply`) enregistré par le cerveau, pour que démon, web et cerveau deviennent des crates sœurs (aujourd'hui web et démon dépendent du cerveau, le démon du web). Une modification d'un fichier du cerveau recompile donc brain, web, daemon puis le binaire.
+
+Tests entre crates : la fonctionnalité cargo `test-support` (de `orch-market` et `orch-stats`), activée par les `dev-dependencies` des crates au-dessus, ouvre les aides de test (`market_test_support`, `market_facts::test_support`, bascules `cfg!(test)` du marché : première commande au carnet continu, patience 0,5, cotation à l'unité). Sans elle, le code de production est celui du démon. Les faits de compte de test (`market_facts::test_support::register`) remplacent l'ancien repli sur ceux du cerveau : les tests qui cotent un objet jamais échangé l'appellent. Le contrôle `layering_check.py` lit maintenant toutes les crates `orch-*` et refuse un fichier rangé dans une autre crate que celle qui lui est assignée.
+
+## Isolation des tests (2026-11-23)
+
+Règle pour toute nouvelle crate `orch-*` : si elle dépend (même indirectement) de `lifescape-orch-core`, `lifescape-sdk` ou `lifescape-store`, elle déclare dans ses `[dev-dependencies]` ces dépendances avec `features = ["test-isolation"]` (le résolveur 2 garde la feature hors du binaire `--release`) et ajoute `tests/test_isolation.rs` (copie de celui d'`orch-brain`). N'utiliser jamais `cfg!(test)` pour isoler un chemin d'une autre crate : seul `cfg!(any(test, feature = "test-isolation"))` est fiable. Les chemins d'état passent par `paths::run_dir()` (jamais `root().join("run")`); `root()` reste réservé aux ressources du dépôt en lecture seule (gamedata, static, scenarios). Le garde-fou `paths::assert_not_live` / `Store::open` panique sur tout chemin sous le vrai `run/`; un test qui lit une copie fixe `LIFESCAPE_ROOT` ou `LIFESCAPE_LIVES_DIR`.

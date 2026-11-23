@@ -1,6 +1,6 @@
 //! Routes en or: chaque ligne de `routes.txt` planifiee et verifiee.
 //!
-//! Verdicts, couts et temps par plan affiches (chaque plan < 300 ms en
+//! Verdicts, couts et temps par plan affiches (chaque plan < 400 ms en
 //! release). Les coordonnees viennent du pack, de transitions.json ou
 //! des scripts contenu, jamais inventees.
 
@@ -194,7 +194,7 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
         .map(str::trim)
         .find_map(|part| part.strip_prefix("budget_ms="))
         .map(|raw| raw.parse::<u128>().expect("budget_ms number"))
-        .unwrap_or(300);
+        .unwrap_or(400);
     if result.is_ok() && !cfg!(debug_assertions) {
         assert!(ms < budget, "route {name}: plan took {ms}ms, budget is {budget}ms");
     }

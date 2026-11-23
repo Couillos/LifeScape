@@ -28,7 +28,7 @@ impl Store {
     /// Coin lines of the task reports created in `[since, until)` (until
     /// 0 = now), summed by provenance, staff accounts left out.
     pub fn coin_flows_between(&self, since: i64, until: i64, excluded: &[String]) -> Result<Vec<CoinFlowTotal>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT r.account, y.provenance, SUM(y.quantity), COUNT(*) FROM task_yields y JOIN task_reports r ON r.report_id = y.report_id \
              WHERE LOWER(y.item_name) = 'coins' AND r.created_clock >= ?1 AND (?2 <= 0 OR r.created_clock < ?2) \
              GROUP BY r.account, y.provenance",
@@ -57,7 +57,7 @@ impl Store {
     /// (staff accounts left out; `item` filters one display name,
     /// case-insensitive).
     pub fn item_flows_since(&self, since: i64, excluded: &[String], item: Option<&str>) -> Result<Vec<(String, String, i64, i64)>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT r.account, y.item_name, y.provenance, SUM(y.quantity), COUNT(*) FROM task_yields y JOIN task_reports r ON r.report_id = y.report_id \
              WHERE r.created_clock >= ?1 AND y.item_name != '' AND (?2 = '' OR LOWER(y.item_name) = LOWER(?2)) GROUP BY r.account, y.item_name, y.provenance, y.quantity > 0",
         )?;
@@ -86,7 +86,7 @@ impl Store {
 
     /// Fills per item in `[since, until)`: quantity and mean price.
     pub fn fills_between(&self, since: i64, until: i64) -> Result<Vec<ItemFills>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             // Coins per unit: a price is per the item's lot (plan prix lot D).
             "SELECT e.item_id, SUM(e.quantity), SUM(e.quantity * e.price / COALESCE(i.lot, 1)) FROM executions e LEFT JOIN items i ON i.item_id = e.item_id \
              WHERE e.clock >= ?1 AND (?2 <= 0 OR e.clock < ?2) GROUP BY e.item_id HAVING SUM(e.quantity) > 0 ORDER BY e.item_id",

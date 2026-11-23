@@ -58,7 +58,7 @@ impl Store {
         if account.account.is_empty() {
             return Err(Error::Invalid("account name is empty".to_string()));
         }
-        self.connection.execute(
+        self.run(
             "INSERT INTO accounts_econ(account, iron, deals_settled, deals_failed, \
              market_affinity, price_patience, archetype) \
              VALUES (?1, ?2, 0, 0, ?3, ?4, ?5) \
@@ -78,7 +78,7 @@ impl Store {
 
     /// One account row, `None` when the account never traded.
     pub fn get_account(&self, account: &str) -> Result<Option<AccountEcon>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT account, iron, deals_settled, deals_failed, market_affinity, \
              price_patience, archetype FROM accounts_econ WHERE account = ?1",
         )?;
@@ -110,7 +110,7 @@ impl Store {
         if trend.period.is_empty() {
             return Err(Error::Invalid("trend period is empty".to_string()));
         }
-        self.connection.execute(
+        self.run(
             "INSERT INTO trends(item_id, period, shortage, momentum, score, computed_clock) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
              ON CONFLICT(item_id, period) DO UPDATE SET shortage=excluded.shortage, \
@@ -130,7 +130,7 @@ impl Store {
 
     /// Every trend period scored for one item.
     pub fn trends_for_item(&self, item_id: i64) -> Result<Vec<Trend>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT item_id, period, shortage, momentum, score, computed_clock \
              FROM trends WHERE item_id = ?1 ORDER BY period",
         )?;

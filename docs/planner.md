@@ -1999,3 +1999,327 @@ d'une récolte planifiée (plumes, appât de pêche :
   Une réponse tirée pendant que l'ambition attend un achat
   (`brain_wait_answer`, historique `bid_trade::WAIT_ANSWER_TAG`) pèse
   tout le marché et n'est jamais rendue comme hors métier.
+
+## Passe de lancement : entrées typées et liste d'étapes (refonte neutre, 2026-11-23)
+
+`brain_launch::maybe_launch` n'est plus une fonction de 840 lignes : c'est
+une liste ordonnée d'étapes nommées sur un `LaunchPass` (handles, vie,
+instantané live, entrées, `dirty`, `quoting`, attentes). Même décisions,
+même ordre, mêmes lignes de journal, mêmes libellés `cpu_profile` qu'avant.
+
+**Entrées (`planner::launch_inputs::LaunchInputs`).** Données simples, sans
+type de l'orchestrateur : position, niveau de combat, `inv_streamed` /
+`bank_streamed`, nombre de types en banque, piles (sac, banque, porté),
+verrous du marché, quantités déjà mises en vente, pièces engagées par les
+achats posés, foule et places des sites, marque de lancement récent, rapport
+en vol ou en attente. Les aides de comptage (`raw_units`, `held`,
+`listed_units`, `free_of_listings`, `family_held`, `free_now`,
+`carried_tools`, `committed`) reprennent mot pour mot les formules des
+anciennes fonctions (`live_units`, `holdings_count`, `listed_units`,
+`free_tool_names`, `committed_coins`) ; les tests de `launch_inputs_tests.rs`
+le prouvent. `brain_launch_inputs::gather` remplit la partie vivante une fois
+au début de la passe ; `gather_market` relit ce que les actions de la passe
+changent.
+
+**Relectures conservées (`// lot 3:`).** Une action de la passe (inscription
+en vente, enchère, retrait d'annonces) change les verrous, les annonces et
+les pièces engagées : ils sont relus à la construction du contexte, avant le
+test « déjà détenu », et après `release_own_locks`. Les drapeaux d'autres
+fils (marque de lancement, rapport en vol) sont relus là où le détecteur
+d'inactivité les lit. `take_operator_stop` et `first_idle_since_start`
+consomment leur marque : ils restent appelés à leur place, jamais en avance.
+La porte des intrants (`brain_input_gate`) garde ses lectures directes, car
+elle retire des annonces entre deux comptages.
+
+**Étapes (`brain_launch_pass.rs`).** Chaque étape rend `Flow::Continue` ou
+`Flow::Stop(Save)` ; `Save` dit comment la vie est écrite : `None` (rien),
+`IfDirty` (si la passe l'a changée), `Always` (`save_or_log`), `Silent`
+(`save_life` sans journal d'erreur).
+
+1. garde-fous : worker libre, vie, instantané live, bot échoué (`steps::open`)
+2. entretien de la vie : opérateur, makers, ambition, libérations d'enchères,
+   buts périmés, ré-engagement après redémarrage
+3. espace en banque, vente PNJ, `normalize`
+4. nœud en cours : attente de remplissage, rapport en vol, grâce après
+   redémarrage, rapport perdu
+5. porte du tutoriel
+6. garde « sac streamé », passes de marché (`COMMERCE_STEPS`, lot 5 ci-dessous :
+   réserve de quêtes, surplus, cotes du maker ou souhaits, alchimie, arbitrage,
+   stock, outils, équipement), puis les attentes : besoins orphelins, achats
+   parqués, quêtes, méthodes refroidies
+7. état du graphe : en cours / bloqué / fini (succession)
+8. nœud suivant (`brain_launch_node.rs`) : choix, déjà atteint, quête
+   faite, construction du contexte de résolution
+9. décision, effets, fin (lot 3, ci-dessous) : `brain_launch_drive::drive`
+
+## La décision de lancement dans le planner (lot 3, refonte neutre, 2026-11-23)
+
+Les étapes 8 et 9 mélangeaient décider et agir (appels au marché,
+`release_own_locks`, `run_job`, journaux, sauvegardes). La décision est
+maintenant dans le planner, pure ; l'orchestrateur ne garde que les entrées,
+les effets et la sauvegarde.
+
+**`planner::launch_decide::decide`** : une fonction pure (pas d'E/S, pas de
+global, rien n'est modifié : la résolution tourne sur une copie du nœud et du
+contexte) qui rend un `Decided` : le nœud, la prélude de résolution
+(`Boundary` : nœud résolu et mémoire après le choix et le lot noté), le plan
+d'expédition (engagement, progression, budget, instantané), les `Emit` (lignes
+de journal et effets, dans l'ordre) et une `LaunchDecision` :
+`AlreadyHeld`, `GearStepWithdrawn`, `CoinTargetMet`, `CoinCycle`,
+`WaitUncounted`, `CooledWait`, `Abandon`, `Blocked{stage, missing}` (résolution,
+intrants, nourriture), `RefuseIron`, `PlaceMarketBuy`, `NoScript`, `RunScript`
+et les demandes `Need(Recount | Gate | Food | Loot | Cleanup)`,
+`WithdrawOwnListings`, `WithdrawInputListings`.
+
+**Demandes.** Ce que seul l'orchestrateur sait lire (annonces à retirer,
+nourriture abordable, valeurs du butin, sources du « garder » du nettoyage,
+comptes frais du marché) est demandé : l'appelant répond dans `Known` et
+rappelle `decide`. La décision est déterministe ; `Known::resumed` reporte la
+résolution d'un appel à l'autre (jamais refaite) et chaque `Decided::emits`
+est un préfixe du suivant (l'appelant n'imprime que ce qu'il n'a pas encore
+imprimé). Retirer ses annonces n'est donc plus un « retirer puis recompter »
+caché dans une étape : c'est la décision `WithdrawOwnListings`, effectuée puis
+re-décidée DANS LA MÊME PASSE (pas de passe chaînée en plus : `brain_chain`
+n'enchaîne que si la vie a été sauvée, ce qu'une simple demande ne fait pas ;
+re-décider dans la passe garde le même résultat final et aucun délai de lancement).
+
+**`planner::launch_apply`** : `apply_to_life(&mut Life, &Decided, &ApplyEnv)`
+écrit les changements de vie (`complete_node`, `record_wait_block`,
+`park_for_fill` / `settle_market_buy`, `mark_launched`, `retry_uncounted`,
+historique) et rend les lignes et effets qui suivent. Testable sans démon.
+`apply_pre` (prélude + engagement + progression) est idempotent : l'orchestrateur
+l'applique avant un effet qui lit la vie (enchère permanente, sources du nettoyage).
+
+**Feuilles partagées** (une seule copie, dans le planner) : `launch_leaf`
+(verdict de détention, besoins de pièces, butin laissé, liste « garder »),
+`launch_note` (choix du guide et lot marché), `launch_inputs` (règle de
+comptage : `entry_is`, `live_units`, `locked_in`, `free_count`,
+`free_tool_names`, `node_counts`). `live_items`, `brain_locks`, `brain_plan::merge_keep`
+y délèguent ; il ne reste plus de copie des formules de comptage côté
+orchestrateur (sauf `market_audit::base_of`, hors périmètre : fichier `market_*`).
+
+**Orchestrateur.** `brain_launch_node` (choix, contexte), `brain_launch_drive`
+(boucle décider -> effets -> fin, générique sur `Fx`), `brain_launch_fx` (trait
+`Fx` et `LiveFx` : marché, retrait d'annonces, `run_job`, créances, journaux,
+sauvegarde). Libellés `cpu_profile` inchangés (`resolve` passe par le crochet
+`Timed` de `decide`).
+
+**Preuve d'équivalence** (`brain_launch_reference` + `brain_launch_equiv_tests`,
+tests uniquement) : l'ancien chemin (étapes nœud et expédition) est recopié sur
+un faux enregistreur des effets ; le nouveau chemin (`drive` sur le même faux)
+est comparé à lui sur des vies croisées avec des entrées générées (détentions,
+annonces qui verrouillent, porte-monnaie, pièces engagées, bans, Iron, banque
+vue ou non, sites encombrés, jambes de combat, nettoyage, achat). On compare
+la sauvegarde demandée, la vie obtenue, chaque effet et chaque ligne de journal
+dans l'ordre, et le contexte vu par les effets. Neuf vies committées
+(`tests/fixtures/lives`) tournent en CI ; les 84 vies réelles tournent avec
+`LIFESCAPE_LIVES_DIR=run/lives cargo test --release --include-ignored the_decision_equals -- --nocapture`
+(copiées en répertoire temporaire, jamais écrites).
+
+## L'entretien de la vie et l'état du graphe dans le planner (lot 4, refonte neutre, 2026-11-23)
+
+Les étapes 2 (entretien de la vie) et 7 (état du graphe) de la passe de
+lancement mêlaient décider et agir. Chaque règle DÉCIDE maintenant dans le
+planner, par une fonction pure sur la vie et des faits typés, et rend un
+changement typé ; l'orchestrateur ne garde que la collecte des faits, les
+effets (annuler des cotes, libérer un tableau, tirer un but, écrire une ligne)
+et la sauvegarde. Même ordre des règles, mêmes lignes de journal, mêmes
+libellés `cpu_profile` (`ambition.ensure`, `ambition.coverage`,
+`stuck.effective_state`,
+`rescue.market`, `stuck.on_stuck`, `succession.redraw`).
+
+**Planner (quatre fichiers, aucun accès au démon, au magasin ni au SDK).**
+
+- `upkeep.rs` : `Clock { now, tick_ms }` (l'horloge qu'une règle lit, mêmes
+  ticks que `brain_stuck::seconds_to_ticks`) et la famille des rendus de buts,
+  type `GiveBack` (cause d'abandon, tête du journal, entrée d'historique,
+  oubli de l'origine, lignes du tirage qui suit) : `blocked_bid_give`
+  (2026-11-20, réponse d'enchère dont tous les sites refusent), `off_trade_give`
+  (2026-11-20, hors métier), `beyond_reach_give` (2026-11-20, au-delà de la
+  montée), `unpaying_give` après `serve_query` (2026-11-21, but de demande qui
+  ne paie plus le temps du bot), `milestone_query` puis `milestone_aside`
+  (2026-11-21 et 2026-11-23, jalon de demande mis de côté et refroidi),
+  `stale_goal_give` (D3, 2026-11-19, but tiré par une ambition antérieure) et
+  `stale_work_line` (2026-11-22, travail ouvert de buts antérieurs). Deux
+  temps : `apply_give_back` écrit le changement (abandons, normalisation,
+  historique) et rend la ligne ; l'orchestrateur tire le but suivant ;
+  `finish_give_back` normalise et rend la ligne du tirage.
+- `upkeep_role.rs` : makers (`switch_cancels`, `apply_switch`, `retire_due`,
+  `retire_cancels`, `apply_retire`, sur des `OrderFact`) et bascule de
+  l'opérateur (`lift_role_bans`, `operator_step` -> `Done` / `Assign` sur un
+  brouillon / `Alcher`, `operator_assigned`, `operator_drawn`,
+  `operator_alcher`, `alcher_drawn`). Le brouillon ne remplace la vie que si le
+  pas d'attribution a réussi (comme avant).
+- `upkeep_ambition.rs` : `lacks_ambition`, `review_mark` (marque D3 unique),
+  `sync_catalog` / `catalog_drawn` (échelle révisée, règle d'approvisionnement
+  2026-11-20), la ligne du rééquilibrage A4 (`RebalanceRow`, `row_verdict`,
+  `row_applied`) et `reengage_candidate` / `reengage_lot`.
+- `upkeep_graph.rs` : `Spell` / `spell`, `goal_met`, `effective_state`,
+  `stuck_summary`, `open_spell` / `spell_drawn`, `retry_drawn`, `revive`,
+  `finished_closing` / `finished_drawn`, et le sauvetage par le marché
+  (`market_rescue`, décision 2026-11-13) qui lit le marché à travers
+  `RescueReader` (portefeuille, cote, détenu, pièces engagées : lus un nœud à
+  la fois, comme avant) et écrit ses lignes par un puits `FnMut(String)`
+  (elle lit entre deux lignes : l'ordre exact est conservé).
+
+**Faits typés rassemblés par l'orchestrateur.** Pas un `UpkeepInputs`
+monolithique : chaque règle a ses faits, lus au moment où elle les lisait
+(les lectures coûteuses restent paresseuses : la marge et la valeur du temps
+ne sont lues qu'après une requête non vide, les cotes du marché qu'un nœud à
+la fois). Niveaux vivants (`level_of`), `BotNow` (niveaux, pièces, détenu),
+`Clock`, `Stamp`, `ServeFacts` (marge, rendement par tick, valeur du tick du
+bot), verdicts des jalons, `OrderFact` (carnet du maker), `RouteFacts`,
+surplus de la flotte, ligne du plan A4. Le trait `UpkeepFx`
+(`brain_upkeep_fx.rs`) les donne, `LiveUpkeepFx` les lit comme avant (les
+chemins de prix ne prennent jamais le verrou du magasin ; aucun appel de prix
+n'est fait sous `lock_store()`).
+
+**Orchestrateur.** `brain_upkeep_drive.rs` : `operator_and_maker`,
+`ambition_upkeep` et `graph_state`, génériques sur `UpkeepFx`, dans l'ordre
+exact des anciennes étapes (les commentaires datés des règles suivent leur
+logique). `brain_launch_steps` ne fait plus que les appeler. Les anciens
+points d'entrée des modules (`release_*`, `apply_pending`, `review_at`,
+`apply_row`, `goal_met`, `effective_state`) restent, en test seulement, comme
+minces enveloppes de la même voie.
+
+**Ce qui reste côté orchestrateur, et pourquoi.** Les tirages
+(`brain_succession::{succeed_goal, close_goal, draw_next, redraw}`,
+`brain_ambition::{assign_kind, assign_natural, redraw_neediest}`) lisent toute la flotte, le marché, les verrous et les
+réclamations : un tirage n'est pas une décision de vie seule (lot ultérieur).
+`brain_ambition::ensure` (attribue toute la flotte ; sa décision par vie,
+`lacks_ambition`, est dans le planner), `coverage_pass` (table de
+limitation par compte, ne change jamais la vie) et
+`reengage_after_restart` (table mémoire des places ; la candidature par vie est
+dans le planner). Les migrations uniques (marque D3, A4) ont quitté la boucle
+au lot 5 (section « Migrations uniques », ci-dessous) : le plan A4 et son
+marqueur (`brain_rebalance::pending_row`) ne sont plus lus à chaque passe.
+
+**Preuve d'équivalence** (`brain_upkeep_reference` + `brain_upkeep_equiv_tests`,
+tests uniquement) : l'ancien code (opérateur, makers, ambition, rendus, état
+du graphe) est recopié sur un faux enregistreur du monde (`RecUpkeep`) ; la
+nouvelle voie (`brain_upkeep_drive`) tourne sur le même faux. On compare le
+drapeau « modifiée » et « maker en cotation », l'arrêt et la sauvegarde demandée
+(état du graphe), la vie obtenue (nœuds, statuts, historique, mémoire,
+ambition et jalons, engagement) et chaque lecture, effet, libellé de phase et
+ligne de journal dans l'ordre. Vies croisées avec des entrées générées :
+bascule d'opérateur en attente ou non, makers (rôles, capital, ordres),
+ambitions absentes, de l'ancienne règle, à but périmé, révision du catalogue,
+réponses d'enchère bloquées, hors métier ou hors de portée, buts et jalons de
+demande qui paient ou non, travail périmé, graphe en cours, bloqué ou fini,
+sauvetage possible ou non, interdictions et horloges d'expiration. (Lot 5 : la
+ligne A4 et la marque D3 ne sont plus dans la boucle ; voir « Migrations
+uniques ».) Neuf vies committées tournent en CI ; les
+vies réelles tournent avec
+`LIFESCAPE_LIVES_DIR=run/lives cargo test --release -p lifescape-orchestrator the_upkeep_equals_the_reference_on_the_real_lives -- --ignored --nocapture`
+(copiées en répertoire temporaire, jamais écrites).
+
+## Les passes de marché en liste explicite (lot 5, refonte neutre, 2026-11-23)
+
+`brain_launch_steps::market_passes` enchaînait neuf appels au marché dans la
+passe de lancement. Ils forment maintenant la liste nommée `COMMERCE_STEPS`
+(`brain_commerce.rs`), appelée au MÊME point de la passe (après la garde « sac
+streamé », avant les attentes), dans le même ordre, sous les mêmes libellés
+`cpu_profile` et avec les mêmes lignes de journal. Rien ne change de
+calendrier : ni nouvelle passe, ni exécution pendant que le worker travaille.
+
+| # | étape (libellé `cpu_profile`) | garde |
+|---|---|---|
+| 1 | `quest_gate.publish` : objets des quêtes ouvertes réservés | toujours |
+| 2 | `sales.list_surplus` : surplus mis en vente | toujours |
+| 3 | `market_maker.quote_pass` : cotes de la tranche | maker en cotation |
+| 4 | `wishlist.bid_wishes` : souhaits d'amélioration | pas en cotation |
+| 5 | `alch.market_pass` : runes de nature, achats sous le plancher d'alchimie | pas en cotation |
+| 6 | `arbitrage.pass` : offres sous le prix d'un marchand | pas en cotation |
+| 7 | `stock.future_pass` : stock futur | pas en cotation |
+| 8 | `tool_shop_pass` : kit permanent (hache, pioche, marteau, briquet) | pas en cotation |
+| 9 | `gear_pass` : équipement | pas en cotation |
+
+La garde « sac streamé » (`pack_streamed`) reste une étape de passe distincte
+(`PASS_STEPS`) : liste de commerce et attentes ne la contournent pas. Les
+attentes (besoins orphelins, achats parqués, quêtes, méthodes refroidies)
+restent leur propre étape `waits`, juste après.
+
+**Règle de l'utilisateur, écrite en code et en test : le commerce ne
+préempte jamais le jalon actif de l'ambition** (jamais d'enchère
+lucrative avant l'XP). Aucune étape de la liste ne change `life.goal`,
+l'ambition et le statut de ses jalons, ni le statut, le genre ou la méthode
+d'un nœud existant. Deux familles : les passes en lecture seule prennent
+`&Life` (réserve, surplus, cotes, souhaits, alchimie, arbitrage, stock) : le
+compilateur interdit de toucher la vie, elles ne font que poser, déplacer ou
+retirer des ordres de marché (la comptabilité du marché, hors vie) ; les deux
+qui classent des pas (`tool_shop_pass`, `gear_pass`, `&mut Life`) n'ont le droit
+que d'AJOUTER des nœuds (kit permanent, équipement complet : règle de
+l'utilisateur « chaque bot garde un kit de combat complet et la hache, pioche,
+marteau et briquet du meilleur niveau ») et de retirer la chaîne d'un pas
+d'équipement qu'ils avaient eux-mêmes classé et que personne n'a commencé
+(`withdraw_gear_step`).
+
+**Preuve** (`brain_commerce_tests`, invariant sur toutes les vies réelles
+croisées avec des entrées générées) : `COMMERCE_STEPS` tourne pour de vrai sur
+un `Job` portant un instantané généré (niveaux, pièces, sac, banque, porté ;
+banque streamée ou non ; Iron ; makers en cotation ou non), trois tours de suite
+sur la même vie (le deuxième voit le pas classé par le premier). Vérifié après
+chaque tour : `life.goal`, `goal_origin`, l'ambition entière (jalons compris)
+inchangés ; aucune entrée d'historique du but ; chaque nœud existant a le même
+genre, statut et méthode (sauf la chaîne d'un pas d'équipement, retirable) ; tout
+nœud ajouté est un pas d'équipement ou l'obtention d'un objet. Limite : un test
+unitaire n'a pas de service de marché : les branches qui lisent le carnet (ask
+couvert, enchère permanente) répondent « marché vide ». Les 9 vies committées
+tournent en CI ; les vies réelles avec
+`LIFESCAPE_ROOT=$(mktemp -d) LIFESCAPE_LIVES_DIR=run/lives cargo test --release -p lifescape-orchestrator commerce_never_preempts_the_ambition_on_the_real_lives -- --ignored --nocapture`
+(copiées en répertoire temporaire, jamais écrites ; `LIFESCAPE_ROOT` détourné
+pour que rien n'aille dans `run/`). Résultat réel : 74 vies, 2 960 scénarios, 8 880 tours des 9 étapes (847 en maker en
+cotation), 4 979 nœuds classés, 0 violation (`LIFESCAPE_COMMERCE_VARIANTS`, 40
+par défaut ; les comptes de test n'entrent pas dans la table de niveaux de la
+flotte, `brain_gear_fleet`, pour ne pas fausser les autres tests).
+Les harnais de vies réelles (lots 3, 4, 5) répartissent les vies sur 6 fils
+(`par_harness.rs`, `LIFESCAPE_HARNESS_THREADS`), tallies fusionnés.
+
+## Migrations uniques sorties de la boucle (lot 5, 2026-11-23)
+
+Deux règles uniques tournaient à chaque passe de chaque bot :
+
+- **Marque D3** (`upkeep_ambition::review_mark`, A2 2026-11-21 : « une
+  ambition de l'ancienne règle est seulement marquée `need`, jamais
+  retirée ») : ne lit que la vie. Appliquée hors ligne.
+- **Rééquilibrage A4** (`row_verdict` / `row_applied`, marqueur
+  `run/ambition_rebalance_a4c.json`) : la ligne de plan de chaque bot,
+  appliquée une fois. Donner un nouveau genre tire une ambition sur la
+  flotte, le marché et les niveaux vivants (`assign_rebalanced`) : impossible
+  hors ligne.
+
+**État réel (lecture seule, 74 vies, marqueur `a4c`).** Marque D3 : 0 vie la
+demande (71 `need` marquées, 3 `operator` sans marque et hors règle). A4 :
+71 lignes sur 71 appliquées, 0 en attente ; les trois comptes protégés ne sont
+pas au plan. Les deux règles sont donc sorties de la boucle : plus de lecture
+du marqueur (20 ko, relu et analysé à chaque passe de chaque bot), plus
+d'appel à `review_mark`. Disparus : le plan de la flotte
+(`brain_rebalance::{pending_row, plan_fleet}`), `brain_ambition::{fleet_bots,
+fleet_names}`, les libellés `ambition.review` et `ambition.rebalance`, les
+méthodes `rebalance_row` et `assign_rebalanced` du trait `UpkeepFx`
+(`assign_rebalanced` ne reste qu'en test). Restent, purs : `review_mark`,
+`row_verdict`, `row_applied`, `RebalanceRow`, le marqueur et ses décisions
+(`step`, `covers`, `rows_of`, `write_marker_at`), lus par le tableau de bord.
+
+**Commande** `orchestrator migrate-lives [--check]` (`migrate_cmd.rs`) : refuse
+de tourner pendant que le démon tourne (comme `store-compact`), applique la
+marque D3 hors ligne à toute vie qui en aurait besoin (une sauvegarde
+restaurée) et sauve chaque vie changée ; `--check` liste sans écrire. Pour A4
+elle RAPPORTE seulement les lignes encore en attente dans le marqueur (compte et
+effet : rien, gardée, ou « donne », ce dernier demandant la flotte vivante) ;
+un marqueur absent ou illisible est signalé : le plan n'est plus jamais refait.
+À lancer après une restauration de sauvegarde, démon arrêté.
+
+**Preuve d'équivalence** (harnais du lot 4, `brain_upkeep_equiv_tests`) : pour
+chaque vie, (migration hors ligne puis boucle sans les règles) == (ancienne
+boucle avec les règles), sur la première passe puis sur la suivante : mêmes
+vies, mêmes lectures, effets, libellés et lignes (hors les deux libellés et la
+lecture A4 retirés de la référence ; la ligne D3 de la référence est celle de la
+migration) ; « modifiée » égal une fois la sauvegarde de la migration comptée.
+Résultat réel : 74 vies, 99 900 scénarios d'entretien (deux passes chacun) et 44 400 d'état du graphe identiques. Le faux monde ne porte aucune ligne A4 (le marqueur réel n'en a plus). Deux
+cas où la boucle ne marque pas ce que la migration marque, vies égales à
+l'arrivée : l'ambition est remplacée dans la passe avant la marque (bascule de
+l'opérateur, retrait ou bascule d'un maker). Hypothèse du test : tout tirage
+marque l'ambition qu'il donne (`mark_rule`), et l'ambition d'un maker porte la
+marque `operator` ; une ambition de maker sans marque (jamais dans l'état réel)
+serait marquée par la migration alors que la boucle l'aurait laissée en cotation.

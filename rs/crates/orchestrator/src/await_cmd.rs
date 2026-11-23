@@ -143,7 +143,7 @@ pub struct DaemonSource {
 
 impl StateSource for DaemonSource {
     fn show(&mut self) -> Result<Value, AwaitError> {
-        let reply = crate::cli::send_command(
+        let reply = crate::client::send_command(
             &object(vec![("cmd", str_value("show")), ("account", str_value(&self.account))]),
             POLL_TIMEOUT,
         )
@@ -161,7 +161,7 @@ impl StateSource for DaemonSource {
     }
 
     fn logs(&mut self, lines: usize) -> Result<Vec<String>, AwaitError> {
-        let reply = crate::cli::send_command(
+        let reply = crate::client::send_command(
             &object(vec![
                 ("cmd", str_value("logs")),
                 ("account", str_value(&self.account)),
@@ -551,14 +551,14 @@ pub fn run_and_wait(
         Ok(state) => Baseline::capture(&state),
         Err(_) => Baseline::empty(),
     };
-    let reply = crate::cli::send_command(
+    let reply = crate::client::send_command(
         &object(vec![
             ("cmd", str_value("run")),
             ("account", str_value(account)),
             ("script", str_value(script)),
             ("args", Value::Arr(script_args.iter().map(|arg| str_value(arg)).collect())),
         ]),
-        Duration::from_secs(crate::daemon::WORKER_TIMEOUT),
+        Duration::from_secs(crate::client::WORKER_TIMEOUT),
     );
     let reply = match reply {
         Ok(reply) => reply,

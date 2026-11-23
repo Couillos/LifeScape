@@ -66,7 +66,7 @@ impl Store {
     /// and the units it traded in `[since, until)` (`until` 0 = now), by
     /// item id.
     pub fn unsold_stock(&self, since: i64, until: i64, excluded: &[String]) -> Result<Vec<UnsoldStock>, Error> {
-        let mut asks = self.connection.prepare(
+        let mut asks = self.connection.prepare_cached(
             "SELECT o.account, o.item_id, COALESCE(i.name, ''), SUM(o.remaining) FROM orders o LEFT JOIN items i ON i.item_id = o.item_id \
              WHERE o.side = 'sell' AND o.status IN ('open','matched') AND o.remaining > 0 AND o.dormant = 0 GROUP BY o.account, o.item_id",
         )?;
@@ -79,7 +79,7 @@ impl Store {
             }
             by_item.entry(item_id).or_insert_with(|| UnsoldStock { item_id, name, resting_units: 0, traded_units: 0 }).resting_units += units;
         }
-        let mut trades = self.connection.prepare("SELECT item_id, SUM(quantity) FROM executions WHERE clock >= ?1 AND (?2 <= 0 OR clock < ?2) GROUP BY item_id")?;
+        let mut trades = self.connection.prepare_cached("SELECT item_id, SUM(quantity) FROM executions WHERE clock >= ?1 AND (?2 <= 0 OR clock < ?2) GROUP BY item_id")?;
         let traded = trades.query_map(params![since, until], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
         for row in traded {
             let (item_id, units) = row?;
@@ -104,7 +104,7 @@ impl Store {
     /// 0 = now), summed by (planner method, combat style, node), staff
     /// left out; reports without a planner method keep an empty one.
     pub fn work_by_method(&self, since: i64, until: i64, excluded: &[String]) -> Result<Vec<MethodWork>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT account, planner_method, combat_style, node_id, SUM(work_ticks) FROM task_reports \
              WHERE created_clock >= ?1 AND (?2 <= 0 OR created_clock < ?2) GROUP BY account, planner_method, combat_style, node_id",
         )?;

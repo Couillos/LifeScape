@@ -1,0 +1,23 @@
+[package]
+name = "lifescape-orch-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "lifescape_orch_core"
+path = "src/lib.rs"
+
+[dependencies]
+lifescape-json = { path = "../json" }
+lifescape-store = { path = "../store" }
+lifescape-nav = { path = "../nav" }
+
+[features]
+# Test builds only: `run/` state resolves under a per-process temp root and
+# touching the real `<repo>/run/` panics. Every crate that reaches orch-core
+# enables it in its [dev-dependencies] (resolver 2 keeps it out of the
+# shipped binary); orch-core's own tests get it through cfg(test).
+test-isolation = ["lifescape-store/test-isolation"]
+
+[lints]
+workspace = true

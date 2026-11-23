@@ -87,7 +87,7 @@ impl Store {
         if new_report.ticks < 0 {
             return Err(Error::Invalid(format!("bad report ticks {}", new_report.ticks)));
         }
-        self.connection.execute(
+        self.run(
             "INSERT INTO task_reports(account, node_id, method, script, ticks, stop, \
              context_level, created_clock) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
@@ -109,7 +109,7 @@ impl Store {
         if new_yield.provenance.is_empty() {
             return Err(Error::Invalid("yield provenance is empty".to_string()));
         }
-        self.connection.execute(
+        self.run(
             "INSERT INTO task_yields(report_id, item_name, provenance, quantity, skill, xp) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
@@ -126,7 +126,7 @@ impl Store {
 
     /// Every yield line of one report.
     pub fn yields_for_report(&self, report_id: i64) -> Result<Vec<TaskYield>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT yield_id, report_id, item_name, provenance, quantity, skill, xp \
              FROM task_yields WHERE report_id = ?1 ORDER BY yield_id",
         )?;
@@ -142,7 +142,7 @@ impl Store {
     /// newest first: its measured ticks per unit and coins per tick
     /// (seller reserve, 2026-11-14). Never another account's rows.
     pub fn account_reports(&self, account: &str, limit: i64) -> Result<Vec<(TaskReport, Vec<TaskYield>)>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT report_id, account, node_id, method, script, ticks, stop, context_level, created_clock \
              FROM task_reports WHERE account = ?1 ORDER BY report_id DESC LIMIT ?2",
         )?;
@@ -175,7 +175,7 @@ impl Store {
     /// first: (method, ticks, context level, [(item, provenance, qty)]).
     /// The rates' per-run profit rebuilds from it at a cold start.
     pub fn report_flows_since(&self, since: i64) -> Result<Vec<(String, i64, i64, Vec<(String, String, i64)>)>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT r.report_id, r.method, r.ticks, r.context_level, y.item_name, y.provenance, y.quantity FROM task_reports r \
              JOIN task_yields y ON y.report_id = r.report_id WHERE r.created_clock >= ?1 AND y.item_name != '' ORDER BY r.report_id",
         )?;
@@ -204,7 +204,7 @@ impl Store {
     /// without any. Report order. Read by the brain's likely shop stock
     /// (lot 8), on `schema::REPORT_CLOCK_INDEX`.
     pub fn shop_sales_since(&self, since: i64) -> Result<Vec<(String, String, i64, String, i64)>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT r.account, r.node_id, r.created_clock, COALESCE(y.item_name, ''), COALESCE(-y.quantity, 0) FROM task_reports r \
              LEFT JOIN task_yields y ON y.report_id = r.report_id AND y.provenance = 'shop_sold' AND y.quantity < 0 AND y.item_name != '' \
              WHERE r.created_clock >= ?1 ORDER BY r.report_id, y.yield_id",
@@ -220,7 +220,7 @@ impl Store {
     /// Recomputes summed quantities per (method, item, provenance) join.
     /// Reports are counted distinct so multi-line reports count once.
     pub fn aggregate_yields(&self) -> Result<Vec<YieldAggregate>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT reports.method, yields.item_name, yields.provenance, \
              SUM(yields.quantity), SUM(yields.xp), COUNT(DISTINCT yields.report_id) \
              FROM task_yields AS yields \

@@ -51,6 +51,15 @@ pub mod guide_read;
 pub mod guide_share;
 pub mod guide_training;
 pub mod goals;
+pub mod launch_apply;
+pub mod launch_decide;
+pub mod launch_inputs;
+pub mod launch_leaf;
+pub mod launch_note;
+pub mod upkeep;
+pub mod upkeep_ambition;
+pub mod upkeep_graph;
+pub mod upkeep_role;
 pub mod lifecycle;
 pub mod lifecycle_cycle;
 pub mod lifecycle_retire;
@@ -136,6 +145,7 @@ pub use market_maker::{become_quoting, maker_post, maker_role, quoting, switch_d
 pub use ambition_review::{adopt_need_mark, redraw_gaps, OPERATOR_RULE, draw_rule_for, goal_from_earlier_ambition, is_milestone_origin, keeps_ladder_end, mark_rule, needs_review, review_slot_ticks, LEVEL_RULE, NEED_RULE, REVIEW_SPREAD_TICKS, STALE_GOAL_CAUSE};
 pub use ambition_fleet::{assign_fleet, coverage_gaps, draw_kind, level_led, neediest_kind, saturate, Assignment, FleetBot, LEVEL_LED_ACCOUNTS, PROTECTED_WHY};
 pub use ambition_value::{assign_by_value, kind_value, pick_by_value, protected, rebalance, KindValue, Pick, Reassignment, UnservedBid, ValueContext, ASKED_SHARE, PROTECTED_ACCOUNTS};
+pub use launch_inputs::{base_of, entry_is as live_entry_is, free_count, free_tool_names, live_units, locked_in, read_stacks, LaunchInputs, LiveStack};
 pub use mapping::map_method;
 pub use model::{
     Alternative, Archetype, Engagement, GoalKind, HistoryEntry, Life, Node, NodeKind, NodeStatus,

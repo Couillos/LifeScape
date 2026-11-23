@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/sdk", "crates/gamedata", "crates/orchestrator", "crates/scripts", "crates/json", "crates/nav", "crates/store", "crates/market", "crates/planner"]
+members = ["crates/sdk", "crates/gamedata", "crates/orchestrator", "crates/orch-daemon", "crates/orch-web", "crates/orch-brain", "crates/orch-session", "crates/orch-stats", "crates/orch-market", "crates/orch-fleet", "crates/orch-world", "crates/orch-core", "crates/scripts", "crates/json", "crates/nav", "crates/store", "crates/market", "crates/planner"]
 resolver = "2"
 
 [workspace.lints.rust]
@@ -22,3 +22,10 @@ opt-level = 2
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Release-optimised tests, incremental (user 2026-11-23): run them with
+# `cargo test --profile release-test`; a small change recompiles in
+# seconds. The shipped binary (`--release`, profile release) is unchanged.
+[profile.release-test]
+inherits = "release"
+incremental = true

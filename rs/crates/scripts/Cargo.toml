@@ -14,5 +14,9 @@ lifescape-sdk = { path = "../sdk" }
 lifescape-gamedata = { path = "../gamedata" }
 lifescape-planner = { path = "../planner" }
 
+[dev-dependencies]
+# Test isolation (see orch-core `test-isolation`): run/ state resolves to a temp root.
+lifescape-sdk = { path = "../sdk", features = ["test-isolation"] }
+
 [lints]
 workspace = true

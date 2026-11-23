@@ -165,7 +165,7 @@ impl Store {
 
     /// Resting book: two sides, spread, asks at 1, asks-only never traded.
     fn book_criteria(&self, excluded: &[String], criteria: &mut MarketCriteria) -> Result<(), Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT account, side, item_id, price, remaining FROM orders \
              WHERE status IN ('open','matched') AND remaining > 0 AND dormant = 0",
         )?;
@@ -193,7 +193,7 @@ impl Store {
         criteria.ask_one_items = ask_one.len();
         let mut spreads: Vec<f64> = Vec::new();
         let traded: BTreeSet<i64> = {
-            let mut traded_statement = self.connection.prepare("SELECT DISTINCT item_id FROM executions")?;
+            let mut traded_statement = self.connection.prepare_cached("SELECT DISTINCT item_id FROM executions")?;
             let ids = traded_statement.query_map([], |row| row.get::<_, i64>(0))?;
             ids.collect::<Result<BTreeSet<i64>, rusqlite::Error>>()?
         };
@@ -214,7 +214,7 @@ impl Store {
     /// Buy lineages touched in the window, their ends and their reopenings.
     fn lineage_criteria(&self, since: i64, until: i64, excluded: &[String], criteria: &mut MarketCriteria) -> Result<(), Error> {
         let until = if until <= 0 { i64::MAX } else { until };
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT order_id, account, item_id, price, status, updated_clock, replaces, root_id, root_clock, cancel_reason, \
              COALESCE((SELECT old_price FROM order_amends WHERE order_amends.order_id = orders.order_id ORDER BY amend_id LIMIT 1), price) FROM orders \
              WHERE side = 'buy' AND root_id IN (SELECT DISTINCT root_id FROM orders WHERE side = 'buy' AND (updated_clock >= ?1 OR root_clock >= ?1))",
@@ -290,7 +290,7 @@ impl Store {
         )?;
         criteria.volume_units = units;
         criteria.volume_coins = coins;
-        let mut at_one = self.connection.prepare(
+        let mut at_one = self.connection.prepare_cached(
             "SELECT DISTINCT i.name FROM executions e JOIN items i ON i.item_id = e.item_id \
              WHERE e.price <= i.lot AND e.clock >= ?1 AND (?2 <= 0 OR e.clock < ?2) ORDER BY i.name",
         )?;
@@ -309,7 +309,7 @@ impl Store {
              UNION SELECT DISTINCT LOWER(y.item_name) FROM task_yields y JOIN task_reports r ON r.report_id = y.report_id \
              WHERE y.provenance = 'consumed' AND r.created_clock >= ?1 AND (?2 <= 0 OR r.created_clock < ?2)"
         );
-        let mut statement = self.connection.prepare(&query)?;
+        let mut statement = self.connection.prepare_cached(&query)?;
         let names = statement.query_map(params![since, until], |row| row.get::<_, String>(0))?;
         Ok(names.collect::<Result<BTreeSet<String>, rusqlite::Error>>()?)
     }

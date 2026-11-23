@@ -95,6 +95,151 @@ dependencies = [
 ]
 
 [[package]]
+name = "lifescape-orch-brain"
+version = "0.1.0"
+dependencies = [
+ "lifescape-gamedata",
+ "lifescape-json",
+ "lifescape-market",
+ "lifescape-nav",
+ "lifescape-orch-core",
+ "lifescape-orch-fleet",
+ "lifescape-orch-market",
+ "lifescape-orch-stats",
+ "lifescape-orch-world",
+ "lifescape-planner",
+ "lifescape-scripts",
+ "lifescape-sdk",
+ "lifescape-store",
+]
+
+[[package]]
+name = "lifescape-orch-core"
+version = "0.1.0"
+dependencies = [
+ "lifescape-json",
+ "lifescape-nav",
+ "lifescape-store",
+]
+
+[[package]]
+name = "lifescape-orch-daemon"
+version = "0.1.0"
+dependencies = [
+ "lifescape-gamedata",
+ "lifescape-json",
+ "lifescape-market",
+ "lifescape-nav",
+ "lifescape-orch-brain",
+ "lifescape-orch-core",
+ "lifescape-orch-fleet",
+ "lifescape-orch-market",
+ "lifescape-orch-session",
+ "lifescape-orch-stats",
+ "lifescape-orch-web",
+ "lifescape-orch-world",
+ "lifescape-planner",
+ "lifescape-scripts",
+ "lifescape-sdk",
+ "lifescape-store",
+]
+
+[[package]]
+name = "lifescape-orch-fleet"
+version = "0.1.0"
+dependencies = [
+ "lifescape-json",
+ "lifescape-orch-core",
+ "lifescape-planner",
+ "lifescape-scripts",
+]
+
+[[package]]
+name = "lifescape-orch-market"
+version = "0.1.0"
+dependencies = [
+ "lifescape-gamedata",
+ "lifescape-json",
+ "lifescape-market",
+ "lifescape-nav",
+ "lifescape-orch-core",
+ "lifescape-orch-fleet",
+ "lifescape-orch-world",
+ "lifescape-planner",
+ "lifescape-scripts",
+ "lifescape-sdk",
+ "lifescape-store",
+]
+
+[[package]]
+name = "lifescape-orch-session"
+version = "0.1.0"
+dependencies = [
+ "lifescape-gamedata",
+ "lifescape-json",
+ "lifescape-market",
+ "lifescape-nav",
+ "lifescape-orch-core",
+ "lifescape-orch-fleet",
+ "lifescape-orch-market",
+ "lifescape-orch-stats",
+ "lifescape-orch-world",
+ "lifescape-planner",
+ "lifescape-scripts",
+ "lifescape-sdk",
+ "lifescape-store",
+]
+
+[[package]]
+name = "lifescape-orch-stats"
+version = "0.1.0"
+dependencies = [
+ "lifescape-gamedata",
+ "lifescape-json",
+ "lifescape-market",
+ "lifescape-nav",
+ "lifescape-orch-core",
+ "lifescape-orch-fleet",
+ "lifescape-orch-market",
+ "lifescape-orch-world",
+ "lifescape-planner",
+ "lifescape-scripts",
+ "lifescape-sdk",
+ "lifescape-store",
+]
+
+[[package]]
+name = "lifescape-orch-web"
+version = "0.1.0"
+dependencies = [
+ "lifescape-gamedata",
+ "lifescape-json",
+ "lifescape-market",
+ "lifescape-nav",
+ "lifescape-orch-brain",
+ "lifescape-orch-core",
+ "lifescape-orch-fleet",
+ "lifescape-orch-market",
+ "lifescape-orch-session",
+ "lifescape-orch-stats",
+ "lifescape-orch-world",
+ "lifescape-planner",
+ "lifescape-scripts",
+ "lifescape-sdk",
+ "lifescape-store",
+]
+
+[[package]]
+name = "lifescape-orch-world"
+version = "0.1.0"
+dependencies = [
+ "lifescape-json",
+ "lifescape-nav",
+ "lifescape-orch-core",
+ "lifescape-sdk",
+]
+
+[[package]]
 name = "lifescape-orchestrator"
 version = "0.1.0"
 dependencies = [
@@ -102,6 +247,15 @@ dependencies = [
  "lifescape-json",
  "lifescape-market",
  "lifescape-nav",
+ "lifescape-orch-brain",
+ "lifescape-orch-core",
+ "lifescape-orch-daemon",
+ "lifescape-orch-fleet",
+ "lifescape-orch-market",
+ "lifescape-orch-session",
+ "lifescape-orch-stats",
+ "lifescape-orch-web",
+ "lifescape-orch-world",
  "lifescape-planner",
  "lifescape-scripts",
  "lifescape-sdk",

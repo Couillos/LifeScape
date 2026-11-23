@@ -60,11 +60,11 @@ pub fn rates_rebuild_cli(args: &[String]) -> i32 {
     }
     if let Some(at) = args.iter().position(|arg| arg == "--guide") {
         let kind = match args.get(at + 1).map(String::as_str) {
-            Some("training") => crate::web_guides::GuideKind::Training,
-            _ => crate::web_guides::GuideKind::Money,
+            Some("training") => crate::guides_model::GuideKind::Training,
+            _ => crate::guides_model::GuideKind::Money,
         };
-        let filter = crate::web_guides::filter_of(&crate::web::parse_query(args.get(at + 2).map(String::as_str).unwrap_or("")));
-        match crate::web_guides::build_guide(&store, &snapshot, kind, &filter) {
+        let filter = crate::guides_model::filter_of(&crate::web::parse_query(args.get(at + 2).map(String::as_str).unwrap_or("")));
+        match crate::guides_model::build_guide(&store, &snapshot, kind, &filter) {
             Ok(guide) => println!("{}", lifescape_json::stringify(&guide)),
             Err(error) => {
                 eprintln!("rates-rebuild: guide: {error}");
@@ -127,9 +127,9 @@ fn guides_store_check(store: &lifescape_store::Store, snapshot: &crate::rates_se
     );
     // The set's size: every view as the API serializes it (its rows in
     // memory hold about as much).
-    let mut views: Vec<(crate::web_guides::GuideKind, lifescape_planner::guide_model::GuideFilter)> = vec![(crate::web_guides::GuideKind::Money, Default::default()), (crate::web_guides::GuideKind::Training, Default::default())];
+    let mut views: Vec<(crate::guides_model::GuideKind, lifescape_planner::guide_model::GuideFilter)> = vec![(crate::guides_model::GuideKind::Money, Default::default()), (crate::guides_model::GuideKind::Training, Default::default())];
     for level in crate::guides_store::band_levels() {
-        for kind in [crate::web_guides::GuideKind::Money, crate::web_guides::GuideKind::Training] {
+        for kind in [crate::guides_model::GuideKind::Money, crate::guides_model::GuideKind::Training] {
             views.push((kind, lifescape_planner::guide_model::GuideFilter { level: Some(level), ..Default::default() }));
         }
     }
@@ -143,9 +143,9 @@ fn guides_store_check(store: &lifescape_store::Store, snapshot: &crate::rates_se
     println!("guides store: incremental waits {} ms (no new report)", incremental.elapsed().as_millis());
     for (index, spec) in args.iter().skip(1).enumerate() {
         let (kind, query) = spec.split_once(':').unwrap_or((spec.as_str(), ""));
-        let kind = if kind == "training" { crate::web_guides::GuideKind::Training } else { crate::web_guides::GuideKind::Money };
+        let kind = if kind == "training" { crate::guides_model::GuideKind::Training } else { crate::guides_model::GuideKind::Money };
         let began = std::time::Instant::now();
-        let filter = crate::web_guides::filter_of(&crate::web::parse_query(query));
+        let filter = crate::guides_model::filter_of(&crate::web::parse_query(query));
         let value = crate::web_guides::read_guide(&set, kind, &filter);
         let text = lifescape_json::stringify(&value);
         let spent = began.elapsed().as_millis();

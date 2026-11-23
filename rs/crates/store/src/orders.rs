@@ -198,7 +198,7 @@ impl Store {
             Some(previous) => self.lineage_of(previous, new_order)?,
             None => (0, new_order.clock),
         };
-        self.connection.execute(
+        self.run(
             "INSERT INTO orders(account, side, item_id, quantity, remaining, price, \
              status, dormant, created_clock, updated_clock, replaces, root_id, root_clock, motive, ceiling, ask_limit) \
              VALUES (?1, ?2, ?3, ?4, ?4, ?5, 'open', ?6, ?7, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
@@ -221,7 +221,7 @@ impl Store {
         let order_id = self.connection.last_insert_rowid();
         if root_id == 0 {
             // A fresh order is the root of its own lineage.
-            self.connection.execute("UPDATE orders SET root_id = ?1 WHERE order_id = ?1", rusqlite::params![order_id])?;
+            self.run("UPDATE orders SET root_id = ?1 WHERE order_id = ?1", rusqlite::params![order_id])?;
         }
         Ok(order_id)
     }
@@ -257,7 +257,7 @@ impl Store {
         if new_price < 1 {
             return Err(Error::Invalid(format!("bad amended price {new_price}")));
         }
-        let touched = self.connection.execute(
+        let touched = self.run(
             "UPDATE orders SET price = ?1, updated_clock = ?2 \
              WHERE order_id = ?3 AND status = 'open'",
             rusqlite::params![new_price, clock, order_id],
@@ -276,7 +276,7 @@ impl Store {
     /// `cancel_order` recording why (`amended` for the row an amend
     /// replaced: the measure of true cancellations reads it, schema 6).
     pub fn cancel_order_because(&self, order_id: i64, clock: i64, reason: &str) -> Result<(), Error> {
-        let touched = self.connection.execute(
+        let touched = self.run(
             // A partly filled order (`matched`) still rests its remainder
             // on the book: it must stay cancellable, or the remainder can
             // never be withdrawn (audit, brain, operator).
@@ -294,21 +294,21 @@ impl Store {
     /// the owner's limit moved, a restart must adopt the new one). In the
     /// book's unit (coins per lot), like the column it writes.
     pub fn set_order_ceiling(&self, order_id: i64, ceiling: i64) -> Result<(), Error> {
-        self.connection.execute("UPDATE orders SET ceiling = ?1 WHERE order_id = ?2 AND status IN ('open','matched')", rusqlite::params![ceiling.max(1), order_id])?;
+        self.run("UPDATE orders SET ceiling = ?1 WHERE order_id = ?2 AND status IN ('open','matched')", rusqlite::params![ceiling.max(1), order_id])?;
         Ok(())
     }
 
     /// Gives a resting order the motive it lacks (an owner adopting an
     /// unsaid row); a motive already said is never overwritten.
     pub fn set_order_motive(&self, order_id: i64, motive: &str) -> Result<(), Error> {
-        self.connection.execute("UPDATE orders SET motive = ?1 WHERE order_id = ?2 AND motive = '' AND status IN ('open','matched')", rusqlite::params![motive, order_id])?;
+        self.run("UPDATE orders SET motive = ?1 WHERE order_id = ?2 AND motive = '' AND status IN ('open','matched')", rusqlite::params![motive, order_id])?;
         Ok(())
     }
 
     /// Rewrites the walk limit kept with a resting sell (the seller's own
     /// value moved), in the book's unit (coins per lot).
     pub fn set_order_ask_limit(&self, order_id: i64, ask_limit: i64) -> Result<(), Error> {
-        self.connection.execute("UPDATE orders SET ask_limit = ?1 WHERE order_id = ?2 AND status IN ('open','matched')", rusqlite::params![ask_limit.max(1), order_id])?;
+        self.run("UPDATE orders SET ask_limit = ?1 WHERE order_id = ?2 AND status IN ('open','matched')", rusqlite::params![ask_limit.max(1), order_id])?;
         Ok(())
     }
 
@@ -326,7 +326,7 @@ impl Store {
         if remaining < 0 {
             return Err(Error::Invalid(format!("bad remaining {remaining}")));
         }
-        let touched = self.connection.execute(
+        let touched = self.run(
             "UPDATE orders SET status = ?1, remaining = ?2, updated_clock = ?3 \
              WHERE order_id = ?4 AND status IN ('open','matched')",
             rusqlite::params![status.as_str(), remaining, clock, order_id],
@@ -342,7 +342,7 @@ impl Store {
     /// object, 2026-11-16). Final rows keep their history. Returns the
     /// rows moved.
     pub fn rebase_resting_orders(&self, from: i64, to: i64) -> Result<usize, Error> {
-        Ok(self.connection.execute(
+        Ok(self.run(
             "UPDATE orders SET item_id = ?2 WHERE item_id = ?1 AND status IN ('open','matched')",
             rusqlite::params![from, to],
         )?)
@@ -351,7 +351,7 @@ impl Store {
     /// One order by id.
     pub fn get_order(&self, order_id: i64) -> Result<Option<Order>, Error> {
         let query = format!("SELECT {ORDER_COLUMNS} FROM orders WHERE order_id = ?1");
-        let mut statement = self.connection.prepare(&query)?;
+        let mut statement = self.connection.prepare_cached(&query)?;
         let mut found_rows = statement.query(rusqlite::params![order_id])?;
         match found_rows.next()? {
             None => Ok(None),
@@ -370,7 +370,7 @@ impl Store {
              WHERE item_id = ?1 AND side = ?2 AND status = 'open' AND dormant = 0 \
              ORDER BY {ordering}"
         );
-        let mut statement = self.connection.prepare(&query)?;
+        let mut statement = self.connection.prepare_cached(&query)?;
         let mut found_rows = statement.query(rusqlite::params![item_id, side.as_str()])?;
         let mut book = Vec::new();
         while let Some(row) = found_rows.next()? {
@@ -385,7 +385,7 @@ impl Store {
             "SELECT {ORDER_COLUMNS} FROM orders \
              WHERE account = ?1 AND status IN ('open','matched') ORDER BY created_clock"
         );
-        let mut statement = self.connection.prepare(&query)?;
+        let mut statement = self.connection.prepare_cached(&query)?;
         let mut found_rows = statement.query(rusqlite::params![account])?;
         let mut account_book = Vec::new();
         while let Some(row) = found_rows.next()? {
@@ -404,7 +404,7 @@ impl Store {
             "SELECT {ORDER_COLUMNS} FROM orders \
              WHERE status IN ('open','matched') AND dormant = 0 ORDER BY created_clock"
         );
-        let mut statement = self.connection.prepare(&query)?;
+        let mut statement = self.connection.prepare_cached(&query)?;
         let mut found_rows = statement.query(rusqlite::params![])?;
         let mut resting = Vec::new();
         while let Some(row) = found_rows.next()? {

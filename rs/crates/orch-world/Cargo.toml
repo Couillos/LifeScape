@@ -1,0 +1,22 @@
+[package]
+name = "lifescape-orch-world"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "lifescape_orch_world"
+path = "src/lib.rs"
+
+[dependencies]
+lifescape-json = { path = "../json" }
+lifescape-sdk = { path = "../sdk" }
+lifescape-nav = { path = "../nav" }
+lifescape-orch-core = { path = "../orch-core" }
+
+[dev-dependencies]
+# Test isolation (see orch-core `test-isolation`): run/ state resolves to a temp root.
+lifescape-orch-core = { path = "../orch-core", features = ["test-isolation"] }
+lifescape-sdk = { path = "../sdk", features = ["test-isolation"] }
+
+[lints]
+workspace = true

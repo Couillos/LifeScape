@@ -64,7 +64,19 @@ horizon et ouverture (la courbe de concession de la vague 2 les lira).
 Un besoin garde UNE offre par (compte, objet) : `place_obtain_bid` et
 les souhaits reprennent l'offre au repos (sa marche continue) au lieu de
 l'annuler ; l'échéance de 6000 ticks termine la jambe marché du nœud,
-pas l'offre. `orchestrator economy [heures]` imprime les critères du
+pas l'offre. L'attente ne court pas pendant que le démon est arrêté
+(2026-11-23) : `run/downtime.json` garde le dernier instant vivant (réécrit
+au plus 1 fois/min par la boucle de supervision), le démarrage du démon et
+les 64 derniers intervalles d'arrêt ; au démarrage `[dernier vivant,
+démarrage)` s'y ajoute, et l'attente = temps écoulé depuis l'entrée
+`awaiting_fill` moins l'arrêt qui chevauche (`orch-core::downtime`,
+`awake_secs`) ; sans fichier (premier démarrage), le dernier vivant est le
+plus récent `ended` de toutes les vies (`brain_downtime::newest_life_stamp`).
+Même pause pour les minuteries qui PÉNALISENT : mise de côté d'un jalon
+qui attend un achat (`brain_wait_answer`) et offre rendue après un blocage
+(`upkeep::blocked_bid_give`) ; cooldowns, bans, relance filler, étranglement
+d'ambition et révision de graphe bloqué ne font que libérer : inchangés.
+`orchestrator economy [heures]` imprime les critères du
 plan (§ Section marché ci-dessous).
 
 Marche de 10 %, passée à 5 % le 2026-11-22 (`WALK_PCT` 5, `MIN_WALK_PCT` 1, `maker::NO_DEMAND_STEP` 0,05 ; les chiffres « 10 % » de ce paragraphe valent désormais 5 %) (2026-11-19, décision utilisateur : « la règle des 10 %
@@ -713,6 +725,13 @@ ticks de travail et de pause ; `task_levels`, `task_flows` (cause),
 exécutée seulement sur confirmation utilisateur, daemon arrêté :
 `orchestrator purge-measures-v1` (simulation) puis `--confirm` (lignes
 v1 de `task_reports`/`task_yields` et `run/rates-snapshot.json`).
+
+Store (schéma 13, 2026-11-23, voir `decisions.md`) : `task_levels` ne
+garde qu'une ligne par changement de niveau (clé compte + métier + rapport,
+`task_reports.levels_mode` 0/1 pour la relecture exacte) ; le carnet vivant
+a ses index partiels. Après la migration, le fichier ne rétrécit qu'avec
+`orchestrator store-compact` (daemon arrêté ; `VACUUM`, refuse de tourner
+si le daemon vit, jamais lancé automatiquement).
 
 Ingestion : la session pousse le rapport, le superviseur du daemon le
 verse dans le store (`jobs::ingest_report_into` : lignes v1 + mesure du
@@ -2858,3 +2877,6 @@ sorciers, 2/128) : bots bloqués sur `missing:water_talisman`.
   poignée de pêcheurs à la mouche consomme (≈ 300 plumes par 6000 ticks
   et par bot) : la demande existe désormais, l'équilibre demande aussi de
   moins ramasser.
+
+
+Prix du marché, source unique (2026-11-23) : `rates_price::price_estimate` lit la mémoire du `MarketService` quand le daemon tourne (plus de 5 lectures SQL par objet), la base seulement sans service ; voir `docs/decisions.md`.

@@ -53,7 +53,7 @@ impl Store {
             return Err(Error::Invalid(format!("bad amended remaining {remaining}")));
         }
         let quantity = current.quantity - (current.remaining - remaining);
-        let touched = self.connection.execute(
+        let touched = self.run(
             "UPDATE orders SET price = ?1, remaining = ?2, quantity = ?3, updated_clock = ?4, \
              ceiling = COALESCE(?5, ceiling), ask_limit = COALESCE(?6, ask_limit) \
              WHERE order_id = ?7 AND status IN ('open','matched')",
@@ -62,7 +62,7 @@ impl Store {
         if touched == 0 {
             return Err(Error::NotFound(format!("open order {}", amend.order_id)));
         }
-        self.connection.execute(
+        self.run(
             "INSERT INTO order_amends(order_id, clock, old_price, new_price, old_remaining, new_remaining) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![amend.order_id, amend.clock, current.price, amend.price, current.remaining, remaining],
         )?;

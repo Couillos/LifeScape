@@ -195,7 +195,7 @@ impl Store {
     /// account (same message, no report folded yet, recent). False when none
     /// matched: the caller then records its own row.
     pub fn attach_task_outcome(&self, outcome: &TaskOutcome) -> Result<bool, Error> {
-        let changed = self.connection.execute(
+        let changed = self.run(
             "UPDATE error_events SET node_id = ?1, method = ?2, stop = ?3, kind = ?4 \
              WHERE error_id = (SELECT error_id FROM error_events WHERE source = 'task' \
              AND account = ?5 AND message = ?6 AND stop = '' AND clock >= ?7 \
@@ -231,7 +231,7 @@ impl Store {
             values.push(rusqlite::types::Value::Integer(filter.limit));
             sql.push_str(&format!(" LIMIT ?{}", values.len()));
         }
-        let mut statement = self.connection.prepare(&sql)?;
+        let mut statement = self.connection.prepare_cached(&sql)?;
         let mapped = statement.query_map(rusqlite::params_from_iter(values.iter()), map_error)?;
         let mut rows = Vec::new();
         for mapped_row in mapped {
@@ -271,7 +271,7 @@ impl Store {
     /// Finished task reports per (script, stop) in a clock window: the
     /// run counts behind the per-script failure rate.
     pub fn task_stop_counts(&self, since: i64, until: i64) -> Result<Vec<(String, String, i64)>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT script, stop, COUNT(*) FROM task_reports WHERE created_clock >= ?1 \
              AND (?2 <= 0 OR created_clock < ?2) GROUP BY script, stop ORDER BY script, stop",
         )?;
@@ -297,7 +297,7 @@ impl Store {
     /// Failed deals moved at or after `since`, oldest first, with the
     /// item name (empty when the catalogue misses it).
     pub fn failed_deals_since(&self, since: i64) -> Result<Vec<FailedDeal>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT deals.deal_id, deals.buyer, deals.seller, deals.item_id, COALESCE(items.name, ''), \
              deals.quantity, deals.price, deals.meeting_x, deals.meeting_y, deals.meeting_level, \
              deals.fail_reason, deals.updated_clock FROM deals LEFT JOIN items ON items.item_id = deals.item_id \

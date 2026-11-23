@@ -20,7 +20,7 @@ use std::time::Duration;
 use lifescape_json::{self as json, Value, object, str_value};
 
 use crate::await_cmd::{AwaitError, Baseline, DaemonSource, StateSource, Verdict, WaitEnd, POLL_MS, terminal};
-use crate::daemon::WORKER_TIMEOUT;
+use crate::client::WORKER_TIMEOUT;
 use crate::verify_assert::{check_assert, position_of};
 use crate::verify_reject::{RejectWatch, max_msg_tick};
 use crate::verify_scenario::{Scenario, SetupOp, list_scenarios, load_scenario};
@@ -31,7 +31,7 @@ const LOG_TAIL: usize = 10;
 const MAX_PARALLEL: usize = 20;
 
 fn daemon_send(request: &Value, timeout: Duration) -> Result<Value, String> {
-    crate::cli::send_command(request, timeout)
+    crate::client::send_command(request, timeout)
         .map_err(|error| format!("session unreachable: {error}"))
 }
 

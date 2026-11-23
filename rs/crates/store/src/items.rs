@@ -30,7 +30,7 @@ impl Store {
         if item.name.is_empty() {
             return Err(Error::Invalid("item name is empty".to_string()));
         }
-        self.connection.execute(
+        self.run(
             "INSERT INTO items(item_id, name, shop_price, alch_value) VALUES (?1, ?2, ?3, ?4) \
              ON CONFLICT(item_id) DO UPDATE SET name=excluded.name, \
              shop_price=excluded.shop_price, alch_value=excluded.alch_value",
@@ -41,7 +41,7 @@ impl Store {
 
     /// Fetches one item by id, `None` when unknown.
     pub fn get_item(&self, item_id: i64) -> Result<Option<Item>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT item_id, name, shop_price, alch_value FROM items WHERE item_id = ?1",
         )?;
         let mut found_rows = statement.query_map(rusqlite::params![item_id], map_item)?;
@@ -78,7 +78,7 @@ impl Store {
 
     /// Every item's quotation lot over 1 (`item_id`, `lot`).
     pub fn item_lots(&self) -> Result<Vec<(i64, i64)>, Error> {
-        let mut statement = self.connection.prepare("SELECT item_id, lot FROM items WHERE lot > 1 ORDER BY item_id")?;
+        let mut statement = self.connection.prepare_cached("SELECT item_id, lot FROM items WHERE lot > 1 ORDER BY item_id")?;
         let mapped = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let mut out = Vec::new();
         for row in mapped {
@@ -128,7 +128,7 @@ impl Store {
 
     /// Whole catalogue ordered by id.
     pub fn list_items(&self) -> Result<Vec<Item>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT item_id, name, shop_price, alch_value FROM items ORDER BY item_id",
         )?;
         let mapped = statement.query_map([], map_item)?;

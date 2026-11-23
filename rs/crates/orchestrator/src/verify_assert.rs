@@ -43,13 +43,7 @@ fn skill_xp(state: &Value, skill: i64) -> Option<i64> {
     })
 }
 
-pub fn position_of(state: &Value) -> Option<(i64, i64, i64)> {
-    let pos = state.get("position").as_arr().cloned().unwrap_or_default();
-    match (pos.first().and_then(|v| v.as_i64()), pos.get(1).and_then(|v| v.as_i64()), pos.get(2).and_then(|v| v.as_i64())) {
-        (Some(level), Some(x), Some(z)) => Some((level, x, z)),
-        _ => None,
-    }
-}
+pub use crate::api_shapes::position_of;
 
 pub fn check_assert(assert: &Assert, before: &Value, after: &Value) -> Result<(), String> {
     match assert {

@@ -92,7 +92,7 @@ impl Store {
             reason = query.reason_column,
             table = query.table,
         );
-        let mut statement = self.connection.prepare(&sql)?;
+        let mut statement = self.connection.prepare_cached(&sql)?;
         let mut parameters: Vec<rusqlite::types::Value> = since.iter().map(|bound| (*bound).into()).collect();
         parameters.extend(excluded.iter().map(|name| name.clone().into()));
         let mut rows = statement.query(rusqlite::params_from_iter(parameters))?;

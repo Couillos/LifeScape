@@ -15,6 +15,7 @@
 //! set can be rebuilt with [`Store::rebuild_candles`].
 
 pub mod amends;
+pub mod live_guard;
 pub mod balance;
 pub mod candle_chain;
 pub mod candles;
@@ -24,6 +25,9 @@ pub mod economy_report;
 pub mod errors;
 pub mod holdings;
 pub mod items;
+mod levels;
+#[cfg(test)]
+mod levels_tests;
 pub mod lineage;
 pub mod market_criteria;
 pub mod measures;
@@ -117,9 +121,29 @@ impl Store {
     /// Opens (creating it) the database file, enables WAL and applies any
     /// pending migrations. One opener per file: the daemon.
     pub fn open(path: &Path) -> Result<Self, Error> {
+        live_guard::assert_not_live(path);
         let connection =
             rusqlite::Connection::open(path).map_err(|source| Error::Sql(source.to_string()))?;
         Self::initialize(connection)
+    }
+
+    /// Opens a file an earlier `Store::open` of this process already
+    /// migrated: the connection, the busy wait and the foreign keys, plus a
+    /// cheap check that the file is at this build's schema (otherwise
+    /// `SchemaMismatch`, the caller then falls back to `open`). No WAL
+    /// switch (persistent in the file), no migration, no index statement:
+    /// what long-lived daemon connections use (2026-11-23).
+    pub fn open_migrated(path: &Path) -> Result<Self, Error> {
+        live_guard::assert_not_live(path);
+        let connection = rusqlite::Connection::open(path).map_err(|source| Error::Sql(source.to_string()))?;
+        connection.busy_timeout(schema::BUSY_WAIT)?;
+        connection.set_prepared_statement_cache_capacity(128);
+        connection.execute_batch("PRAGMA foreign_keys=ON;")?;
+        let found = schema::current_version(&connection)?;
+        if found != schema::SCHEMA_VERSION {
+            return Err(Error::SchemaMismatch { found, expected: schema::SCHEMA_VERSION });
+        }
+        Ok(Self { connection })
     }
 
     /// In-memory database with the same schema. Tests and offline tools.
@@ -132,6 +156,7 @@ impl Store {
         // A concurrent opener (migration, write batch) is waited for,
         // never a raw SQLITE_BUSY (2026-11-16 migration race).
         connection.busy_timeout(schema::BUSY_WAIT)?;
+        connection.set_prepared_statement_cache_capacity(128);
         Self::enable_wal(&connection)?;
         connection.execute_batch("PRAGMA foreign_keys=ON;")?;
         // Also ensures the reports-by-time index (`schema::REPORT_CLOCK_INDEX`:
@@ -174,6 +199,49 @@ impl Store {
         }
         self.connection.execute_batch("COMMIT")?;
         Ok(())
+    }
+
+    /// `Connection::execute` through the statement cache (one parse per
+    /// distinct text and connection, not per call).
+    pub(crate) fn run(&self, sql: &str, params: impl rusqlite::Params) -> rusqlite::Result<usize> {
+        self.connection.prepare_cached(sql)?.execute(params)
+    }
+
+    /// Rewrites the file without its free pages (`VACUUM`) and empties the
+    /// WAL. Needs the file to itself and room for a full copy; never run
+    /// by the daemon (`orchestrator store-compact`, daemon stopped).
+    pub fn compact(&self) -> Result<(), Error> {
+        self.connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
+    /// Rolls back the batch `begin_batch` opened (a failed multi-row write
+    /// leaves nothing behind). No-op when no batch is open.
+    pub fn rollback_batch(&self) {
+        if !self.connection.is_autocommit() {
+            let _ignored = self.connection.execute_batch("ROLLBACK");
+        }
+    }
+
+    /// True when no transaction is open (a connection kept for reuse must
+    /// be idle).
+    pub fn is_idle(&self) -> bool {
+        self.connection.is_autocommit()
+    }
+
+    /// Runs `write` in one transaction (joins the caller's batch when one
+    /// is already open): all its statements commit together, one journal
+    /// sync instead of one per statement, and a failure leaves nothing.
+    pub fn in_batch<T, E: From<Error>>(&self, write: impl FnOnce(&Store) -> Result<T, E>) -> Result<T, E> {
+        let owned = self.begin_batch()?;
+        let written = write(self);
+        if owned {
+            match &written {
+                Ok(_) => self.commit_batch()?,
+                Err(_) => self.rollback_batch(),
+            }
+        }
+        written
     }
 
     /// Schema version of the open file (equals the latest migration).

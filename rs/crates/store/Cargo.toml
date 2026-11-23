@@ -10,5 +10,10 @@ path = "src/lib.rs"
 [dependencies]
 rusqlite = { version = "=0.41.1", features = ["bundled"] }
 
+[features]
+# Test builds only (dev-dependency of every crate that can reach the store):
+# opening a file inside the real `<repo>/run/` panics (see `live_guard`).
+test-isolation = []
+
 [lints]
 workspace = true

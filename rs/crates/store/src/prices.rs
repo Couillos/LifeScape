@@ -25,6 +25,38 @@ impl Store {
         Ok(statement.query_row(rusqlite::params![item_id], |row| row.get::<_, Option<i64>>(0))?)
     }
 
+    /// Newest `limit` fills of EVERY item in one pass (window over the
+    /// executions): (item, price, quantity), per item oldest first, the
+    /// same rows `last_fills` returns item by item. The market service
+    /// preloads its rings with it at open.
+    pub fn last_fills_all(&self, limit: i64) -> Result<Vec<(i64, i64, i64)>, Error> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT item_id, price, quantity FROM ( \
+               SELECT item_id, price, quantity, clock, exec_id, \
+                      ROW_NUMBER() OVER (PARTITION BY item_id ORDER BY clock DESC, exec_id DESC) AS rank \
+               FROM executions) \
+             WHERE rank <= ?1 ORDER BY item_id, clock ASC, exec_id ASC",
+        )?;
+        let mut rows = statement.query(rusqlite::params![limit.max(0)])?;
+        let mut fills = Vec::new();
+        while let Some(row) = rows.next()? {
+            fills.push((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?));
+        }
+        Ok(fills)
+    }
+
+    /// Store clock of the newest fill of every traded item (one grouped
+    /// read; `newest_fill_clock` for all items at once).
+    pub fn newest_fill_clocks(&self) -> Result<Vec<(i64, i64)>, Error> {
+        let mut statement = self.connection.prepare_cached("SELECT item_id, MAX(clock) FROM executions GROUP BY item_id")?;
+        let mapped = statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+        let mut clocks = Vec::new();
+        for entry in mapped {
+            clocks.push(entry?);
+        }
+        Ok(clocks)
+    }
+
     pub fn last_fills(&self, item_id: i64, limit: i64) -> Result<Vec<(i64, i64)>, Error> {
         let mut statement = self.connection.prepare_cached(
             "SELECT price, quantity FROM executions WHERE item_id = ?1 \

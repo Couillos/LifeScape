@@ -192,7 +192,7 @@ fn measure(state: &Value, plan: &MethodPlan) -> i64 {
 }
 
 fn send(request: Value, timeout: Duration) -> Result<Value, String> {
-    let reply = crate::cli::send_command(&request, timeout).map_err(|error| format!("daemon unreachable: {error}"))?;
+    let reply = crate::client::send_command(&request, timeout).map_err(|error| format!("daemon unreachable: {error}"))?;
     if reply.get("ok").as_bool() == Some(true) {
         Ok(reply)
     } else {
@@ -208,7 +208,7 @@ fn cheat(account: &str, command: &str) -> Result<(), String> {
             ("method", str_value("cheat")),
             ("args", Value::Arr(vec![str_value(command)])),
         ]),
-        Duration::from_secs(crate::daemon::WORKER_TIMEOUT),
+        Duration::from_secs(crate::client::WORKER_TIMEOUT),
     )
     .map(|_| ())
     .map_err(|error| format!("cheat {command:?}: {error}"))
@@ -233,7 +233,7 @@ const BANK_DISPOSE_AT: usize = 40;
 const STAFF_COMBAT: i64 = 70;
 
 fn send_simple(account: &str, cmd: &str) -> Result<Value, String> {
-    send(object(vec![("cmd", str_value(cmd)), ("account", str_value(account))]), Duration::from_secs(crate::daemon::WORKER_TIMEOUT))
+    send(object(vec![("cmd", str_value(cmd)), ("account", str_value(account))]), Duration::from_secs(crate::client::WORKER_TIMEOUT))
 }
 
 fn running(state: &Value) -> bool {
@@ -288,7 +288,7 @@ fn run_to_end(account: &str, script: &str, args: &[String]) -> Result<(), String
             ("script", str_value(script)),
             ("args", Value::Arr(args.iter().map(|arg| str_value(arg)).collect())),
         ]),
-        Duration::from_secs(crate::daemon::WORKER_TIMEOUT),
+        Duration::from_secs(crate::client::WORKER_TIMEOUT),
     )?;
     let mut source = DaemonSource { account: account.to_string() };
     let advance = || std::thread::sleep(Duration::from_millis(POLL_MS));
@@ -439,7 +439,7 @@ pub fn check(account: &str, plan: &MethodPlan, count: i64) -> Result<Checked, St
             ("script", str_value(&plan.script)),
             ("args", Value::Arr(plan.args.iter().map(|arg| str_value(arg)).collect())),
         ]),
-        Duration::from_secs(crate::daemon::WORKER_TIMEOUT),
+        Duration::from_secs(crate::client::WORKER_TIMEOUT),
     )?;
     let _ = reply;
     let mut source = DaemonSource { account: account.to_string() };
@@ -484,10 +484,7 @@ fn record(account: &str, plan: Option<&MethodPlan>, method: &str, outcome: &Resu
     object(fields)
 }
 
-/// Path of the check registry (one JSON line per check).
-pub fn registry_path() -> std::path::PathBuf {
-    crate::paths::run_dir().join("method_checks.jsonl")
-}
+pub use crate::method_health::registry_path;
 
 fn append(line: &Value) {
     use std::io::Write;
@@ -617,6 +614,17 @@ pub fn check_method_cli(args: &[String]) -> i32 {
 mod tests {
     use super::{held, plan};
     use lifescape_json::{object, Value};
+
+    /// `check-method <staff> trade:craft/<recipe>` checks the craft leg
+    /// live (staff never trade, rule 13: the inputs are staged): the
+    /// planner's view is the recipe's.
+    #[test]
+    fn check_method_sees_the_craft_leg_of_a_trade() {
+        let trade = plan("trade:craft/smelt:bronze_bar", 3).expect("trade plan");
+        let recipe = plan("smelt:bronze_bar", 3).expect("recipe plan");
+        assert_eq!((trade.script.as_str(), trade.product.as_str()), (recipe.script.as_str(), recipe.product.as_str()));
+        assert_eq!(trade.inputs, recipe.inputs);
+    }
 
     #[test]
     fn the_planner_names_script_inputs_and_tools() {

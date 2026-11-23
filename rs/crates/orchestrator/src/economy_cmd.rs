@@ -90,11 +90,11 @@ pub fn economy_cli(args: &[String]) -> i32 {
         Ok(criteria) => print_market(&criteria, hours),
         Err(error) => println!("market criteria: {error}"),
     }
-    crate::market_maker_report::print_rows(&crate::market_maker_report::maker_rows(&store, &crate::brain::lives_dir()));
+    crate::market_maker_report::print_rows(&crate::market_maker_report::maker_rows(&store, &crate::paths::lives_dir()));
     crate::funding_cmd::print_section();
-    let trade_rows = crate::trade_report::trade_rows(&store, &crate::brain::lives_dir());
+    let trade_rows = crate::trade_report::trade_rows(&store, &crate::paths::lives_dir());
     crate::trade_report::print_rows(&trade_rows);
-    crate::brain_picks::print_section(&crate::brain_picks::fleet_picks(&crate::brain::lives_dir()), since, hours);
+    crate::brain_picks::print_section(&crate::brain_picks::fleet_picks(&crate::paths::lives_dir()), since, hours);
     crate::economy_balance::print_section(&store, &trade_rows, since, hours, &excluded);
     0
 }

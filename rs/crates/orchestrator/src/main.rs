@@ -93,6 +93,8 @@ fn daemon_main() -> i32 {
         eprintln!("pid write failed");
         return 1;
     }
+    // Downtime clock before any brain pass: the stop is not a wait.
+    lifescape_orchestrator::brain_downtime::start();
     let dispatch: web::Dispatch = {
         let inner = orch.clone();
         Arc::new(move |request: Value| dispatch_open(&inner, &request))
@@ -155,7 +157,7 @@ fn daemon_main() -> i32 {
     };
     // Handover convocations: sweeps, staggered poses, one delivery per bot.
     // After the market registry exists (the loop exits when it does not).
-    orch.start_market_convene();
+    lifescape_orchestrator::market_convene::start_convene_loop(orch.clone());
     // E2 persistent pushes: one stream per worker, one reader thread
     // daemon-side (`push.sock`). The CLI socket below keeps its 1
     // req/1 reply shape on a bounded pool (no thread per message).
@@ -216,6 +218,12 @@ fn daemon_main() -> i32 {
 }
 
 fn main() -> std::process::ExitCode {
+    // First thing, before any thread starts: `logln!` reaches the errors
+    // collector and the idle reasons only through this registration.
+    lifescape_orchestrator::errors_ingest::register_log_sink();
+    lifescape_orchestrator::log_sink::assert_registered();
+    lifescape_orchestrator::market_maker::register_account_facts();
+    assert!(lifescape_orchestrator::market_facts::is_registered(), "market facts not registered");
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "daemon" {
         return std::process::ExitCode::from(daemon_main() as u8);

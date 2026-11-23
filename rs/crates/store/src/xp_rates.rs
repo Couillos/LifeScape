@@ -49,7 +49,7 @@ const BUCKET_WORK_SQL: &str = "SELECT (created_clock / ?2) * ?2, account, SUM(wo
 impl Store {
     /// XP sums of the reports created at or after `since`, per bucket.
     pub fn skill_buckets_since(&self, since: i64, bucket_seconds: i64) -> Result<Vec<SkillBucket>, Error> {
-        let mut statement = self.connection.prepare(SKILL_XP_SQL)?;
+        let mut statement = self.connection.prepare_cached(SKILL_XP_SQL)?;
         let rows = statement.query_map(params![since, bucket_seconds.max(1)], |row| {
             Ok(SkillBucket {
                 bucket_start: row.get(0)?,
@@ -66,7 +66,7 @@ impl Store {
 
     /// Work ticks per bucket and account since `since`.
     pub fn bucket_work_since(&self, since: i64, bucket_seconds: i64) -> Result<Vec<BucketWork>, Error> {
-        let mut statement = self.connection.prepare(BUCKET_WORK_SQL)?;
+        let mut statement = self.connection.prepare_cached(BUCKET_WORK_SQL)?;
         let rows = statement.query_map(params![since, bucket_seconds.max(1)], |row| {
             Ok(BucketWork { bucket_start: row.get(0)?, account: row.get(1)?, work_ticks: row.get(2)? })
         })?;

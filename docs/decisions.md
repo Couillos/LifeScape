@@ -2139,3 +2139,83 @@ seulement après 30 min sans que la pièce soit voulue
 étaient des offres d'arbitrage (vie moyenne 6 s) ; la signature du plan
 ne compte plus que les pièces gardées (`kept_gear`), plus le stock
 d'arbitrage en sac.
+
+## 2026-11-23 : compaction du store (schéma 13)
+
+Constat sur la copie de 643 Mo : `orders` 1,45 M de lignes dont 99,9 %
+terminales, `task_levels` 4,6 M de lignes dont 0,8 % changent d'un rapport
+au suivant, 6 index que aucune requête n'utilise, et `resting_orders`
+(212 ms par appel, sous le verrou unique du marché) qui lisait toute la
+table. Décisions :
+(1) migration 13 (une transaction, `levels.rs`) : suppression des index
+inutilisés (`idx_task_yields_item`, `idx_task_flows_item`,
+`idx_orders_replaces`, `idx_task_reports_planner|method|measure`) et de
+`idx_orders_item_status` / `idx_orders_account` ; index PARTIELS pour le
+carnet vivant : `idx_orders_open_book` (`status = 'open'`, pour les
+requêtes du carnet qui disent `status = 'open'`),
+`idx_orders_live_book|live_account|live_clock` (`status IN
+('open','matched')`), `idx_orders_horizon`, `idx_deals_live` ; SQLite
+n'utilise pas un index partiel `IN (...)` pour une requête `= 'open'`,
+d'où deux familles ;
+(2) `task_levels` en delta SANS perte : une ligne seulement quand le
+niveau diffère du dernier niveau stocké du même compte et du même métier
+(ou métier nouveau pour le compte), clé `(account, skill, report_id)`,
+`WITHOUT ROWID` ; `task_reports.levels_mode` dit comment relire : 0 = les
+lignes du rapport SONT ses niveaux (ancien format, rapport sans niveau,
+sous-ensemble de métiers), 1 = pour chaque métier, la ligne du compte au
+`report_id` le plus grand non supérieur. Un rapport dont les métiers ne
+couvrent pas ceux déjà connus du compte reste en mode 0 (jamais deviné) ;
+un rapport qui arrive après un plus récent du même compte fige d'abord les
+plus récents en mode 0. `report_measure(id).levels` rend exactement les
+mêmes valeurs que l'ancien format : preuve sur les 219 092 rapports de la
+copie réelle (0 écart, 4 600 764 lignes -> 37 673), test
+`levels_tests::real_data_levels_check` ;
+(3) `task_units` reconstruite `WITHOUT ROWID` (son autoindex doublait la
+table) ;
+(4) test `hot_queries_never_scan_a_whole_table` : EXPLAIN QUERY PLAN de
+chaque requête chaude, échec sur un `SCAN orders|deals|task_reports` nu ;
+(5) le `VACUUM` ne peut pas tourner dans la migration : commande
+opérateur `orchestrator store-compact` (daemon arrêté, place disque ≈ la
+taille de la base), jamais automatique. Sur la copie : 643 Mo -> 287 Mo ;
+(6) connexions longues : `orchestrator::store_pool::open` rend une
+connexion gardée par fil et par fichier (migrations une fois par
+processus, ensuite `Store::open_migrated` = vérification de version
+seulement) au lieu d'un `Store::open` par appel ; l'ingestion d'un rapport
+(`jobs::ingest_report_into`) écrit rapport + lignes + mesure dans UNE
+transaction (186 ms -> 21 ms par rapport : un sync disque par instruction
+auparavant) ; `prepare_cached` partout dans le store.
+`PRAGMA synchronous` n'est pas touché (durabilité) : `NORMAL` en WAL serait
+une option, au prix de perdre les dernières transactions sur coupure de
+courant (jamais la cohérence).
+
+- 2026-11-23 — Budget golden des plans réussis porté de 300 à 400 ms : `bateau_draynor_homard` dépassait (315 ms) sous charge machine depuis 7 jours, sans régression du planificateur. Le `budget_ms=` par route reste prioritaire.
+
+- 2026-11-23 — Une seule source de prix : la mémoire du marché. `rates_price::price_estimate` lisait 5 fois la base par objet (nom, cinq dernières exécutions, carnet côté achat, côté vente, dernière exécution), en boucle (N+1). Dans le daemon (`market_service::shared()` présent) il lit maintenant la mémoire du `MarketService` : table nom -> id chargée à l'ouverture (même règle que `Store::item_id_by_name` : nom exact sensible à la casse, plus petit id), anneau des dernières exécutions, carnets, horloge de la dernière exécution, puis la même `current_price_at` (`reference_lot_at`, prix exact par lot divisé par `lot_of`, jamais le `reference()` arrondi). Le chemin SQL reste pour les commandes séparées (`rates-rebuild`, tests sans service). `rates_price::price_of(objet)` est la variante sans magasin (passe de lancement : `brain_plan::ready_ctx` n'ouvre plus de connexion par passe). Preuve : `rates_price_tests` (mémoire == SQL : dernières exécutions, carnets, lots, jamais échangé avec/sans carnet, noms inconnus, « coins », ordres dormants) et test `#[ignore]` sur copie de la vraie base (`LS_REAL_DB`). Seul écart connu : un ordre en échange en cours (`matched`) reste dans le carnet de l'engine mais pas dans la lecture SQL (`status = 'open'`) ; la mémoire est la vérité du moteur. Piège : ne jamais appeler le chemin mémoire en tenant `lock_store()` (verrou non réentrant) : `time_value::measure_in` et le kit d'outils le respectent.
+
+- 2026-11-23 — Lot 5 de la refonte du cerveau, passes de marché : les neuf appels de `steps::market_passes` forment la liste nommée `COMMERCE_STEPS` (`brain_commerce.rs`), au même point de la passe, même ordre, mêmes libellés `cpu_profile` et mêmes lignes de journal, mêmes gardes (maker en cotation / non) ; aucun nouveau calendrier (neutre, la flotte n'est mesurée qu'après tous les lots). Règle de l'utilisateur écrite en code et en test : le commerce ne préempte jamais le jalon actif de l'ambition (invariant `brain_commerce_tests` sur les vies réelles croisées avec des instantanés générés : ni `life.goal`, ni ambition et jalons, ni statut/genre/méthode d'un nœud existant ne changent ; seuls ajouts permis : pas d'outils du kit permanent et d'équipement, et la comptabilité des ordres de marché).
+- 2026-11-23 — Marque D3 et rééquilibrage A4 sortis de la boucle de passe : état réel (74 vies, marqueur `a4c`) = 0 vie à marquer, 71 lignes A4 sur 71 appliquées, 0 en attente ; plus de relecture du marqueur à chaque passe de chaque bot. `orchestrator migrate-lives [--check]` (démon arrêté) applique la marque D3 hors ligne et rapporte les lignes A4 en attente (A4 lit la flotte et les niveaux vivants : non applicable hors ligne). Équivalence prouvée sur le harnais du lot 4 : (migration puis boucle sans règles) == (ancienne boucle), première passe et suivante.
+- 2026-11-23 — `market_audit::base_of` n'est plus une copie : il appelle `lifescape_planner::base_of` (même sémantique, prouvée par un test contre l'ancien corps sur tous les identifiants d'objets du dump, billets compris).
+- 2026-11-23 — Compilation incrémentale pour les tests en release (profil `release-test`, hérité de `release` avec `incremental = true`, lancé par `cargo test --profile release-test`) : une petite modification ne recompile plus les 77 000 lignes de l'orchestrateur. Le binaire livré (`--release`) est inchangé.
+- 2026-11-23 — Découpage de la crate `orchestrator`, phase A (dans la crate, sans changement de comportement) : les dépendances remontantes sont supprimées une à une pour que la phase B puisse déplacer des fichiers dans de nouvelles crates sans cycle. Couches (de bas en haut) : `core < world < fleet < market < stats < {session, brain} < web < daemon < bin`; un module ne dépend que de sa couche ou d'une couche plus basse. Contrôle : `layering_check.py` (63 références fautives au départ, 0 à l'arrivée).
+- 2026-11-23 — Helpers remontés au plus bas, avec `pub use` pour que les appelants ne changent pas : `clock::now_secs` (ex `jobs`), `client::{send_command, WORKER_TIMEOUT}` (ex `cli`/`daemon`), `paths::{lives_dir, life_path, engine_dir, push_socket_path}` (ex `brain`/`session`/`push_hub`), `log_markers` (balises lues par `errors_model`, ex modules `brain_*`), `api_shapes::position_of`, `method_health::registry_path`, `errors_model::RETENTION_SECS`; `session_report` appelle `lifescape_planner::base_of`.
+- 2026-11-23 — `res_stats::snapshot_json(plan)` reçoit les stats du service de plan en argument (le démon passe `plan_service::stats_json()`), le coeur ne connaît plus la couche `world`.
+- 2026-11-23 — `rates_ingest.rs` (écriture en base d'un rapport de tâche, ex `jobs.rs`) passe dans la couche stats, tests compris; le modèle du rapport (`TaskReport`, `FlowLine`, `Units`, `Alert`) passe de `session_report` à `report_contract` (`session_report` les ré-exporte).
+- 2026-11-23 — `guides_model.rs` (constructeurs purs des guides argent/entraînement et formes JSON de leurs lignes, ex `web_guides.rs`) : `guides_store` et le cerveau ne lisent plus la couche web; `web_guides` ne garde que `read_guide` et `guides_api`.
+- 2026-11-23 — Trait `Fleet` (`fleet.rs` : table des jobs, drapeau d'arrêt, `proc_alive`, `send_worker`, `run_job`, `open_job`) implémenté par `Orchestrator`; cerveau, agents de marché et services de stats prennent `&Arc<dyn Fleet>`. Le registre de supervision et `live_of` passent dans `jobs.rs`, `merge_light` aussi. Trait d'extension `MarketHost: Fleet` (`market_host.rs`) à la place des blocs `impl Orchestrator` de `market_audit`/`market_convene`; `orch.start_market_convene()` devient `market_convene::start_convene_loop(orch.clone())`.
+- 2026-11-23 — `logln!` n'appelle plus `errors_ingest` : il passe par `log_sink::emit`; `main` enregistre `errors_ingest::observe_log_line` (`register_log_sink`) avant tout thread et vérifie l'enregistrement (`assert_registered`), un test prouve que `logln!` alimente les raisons d'inactivité de `brain_idle`.
+- 2026-11-23 — Inversion de politique du marché : trait `AccountFacts` (`market_facts.rs` : `is_maker`, `price_patience`, `public_anchors`), enregistré par le cerveau (`market_maker::register_account_facts`) en tête de `main`, avant toute requête de marché; sans enregistrement les réponses sont celles d'aujourd'hui pour un compte sans vie (pas teneur, patience 0,5, pas d'ancre). `account_margin` passe dans `market_reprice`. Écart au plan : les ancres publiques passent par le même trait (et non en paramètre de `buyer_open`), car `keep_bid_from` a trop d'appelants.
+- 2026-11-23 — Classements de phase A8 : `rares_cmd`, `funding_cmd`, `funding_plan` côté démon; `market_maker*`, `market_seller`, `market_demand`, `market_discovery`, `bid_why`, `method_health`, `par_harness` côté cerveau; `migrate_life` déplacé dans `brain_ambition` (`migrate_cmd` le ré-exporte); les tests de `brain_trade` (`method_check::plan`) et de `market_reprice` (`bought_since`) rejoignent le module qu'ils testent; le test `brain_d17_tests` qui interdit d'anciens noms parcourt `orchestrator` et les crates `orch-*`.
+- 2026-11-23 — Phase B, étapes B1 à B5 : les couches `core`, `world`, `fleet`, `market`, `stats` deviennent les crates `lifescape-orch-core`, `-world`, `-fleet`, `-market`, `-stats` (`rs/crates/orch-*`), sans changement de comportement. L'orchestrateur les ré-exporte (`pub use`), les chemins `crate::...` et `crate::logln!` ne changent pas; `pub(crate)` devient `pub` seulement pour les symboles qui franchissent une crate. Les anciens fichiers sont réduits à un commentaire `// moved to <crate>` (à supprimer par l'utilisateur).
+- 2026-11-23 — Aides de test partagées entre crates par la fonctionnalité `test-support` (au lieu de `cfg(test)`, invisible d'une crate à l'autre) : `market_test_support`, `market_units::lots_on_for_this_test`, premier ordre continu et patience 0,5 du marché, `rates_service::snapshot_from_json`. Le nombre de tests reste 2 986 (aucun perdu).
+- 2026-11-23 — `market_facts` en test ne retombe plus sur les faits du cerveau (la crate marché ne peut pas le nommer) : un double `market_facts::test_support` (mêmes ancres publiques : gamedata + planificateur, runes à 1 pièce, pas de coût de fabrication) est enregistré par le test qui cote un objet jamais échangé.
+- 2026-11-23 — Rattrapage de la phase A (oublié par le contrôle de couches, qui ne compte que les chemins) : le bloc `impl MarketService` de `market_seller` (cerveau) ne peut plus vivre hors de la crate du type. La mémoire du vendeur sur le moteur (`public_view`, `remember_fill`, `own_sell_fill`, `own_buy_price(_lot)`, `seller_learning`, `unsold_horizons`, `overstocked`) passe dans `market_own` (crate marché); la politique reste au cerveau : trait `SellerPolicy::sale_decision` et fonction `market_seller::seller_quote`, branchée à l'opération `seller_quote` du service par `AccountFacts::seller_quote` (même enregistrement que les autres faits, en tête de `main`; sans enregistrement : réponse d'erreur explicite).
+- 2026-11-23 — `web_rates.rs` (sous-module de `rates_service` par `#[path]`) est rangé côté stats; le test `web_serves_the_cached_snapshot_and_the_page` (hiscores, passe par `web::handle_get`) devient `hiscores_web_tests.rs`, resté dans l'orchestrateur jusqu'à B8; `market_impact_tests` rejoint `orch-stats` (il teste `rates_price`).
+- 2026-11-23 — Phase B, étapes B6 à B10 : `session*`/`push_conn`/`heartbeat_flows` (`lifescape-orch-session`), le cerveau avec les agents de marché, `bid_why`, `method_health`, `par_harness` et `tests/fixtures/lives` (`-brain`), `web*` (`-web`), le démon avec `supervise`, `push_hub`, `errors_ingest`, `rares_cmd`, `funding_*` (`-daemon`, porte `Orchestrator` et `impl Fleet`) deviennent des crates; `orchestrator` garde `main`, `cli`, les commandes hors ligne et un `lib.rs` de ré-exports, avec le binaire unique `orchestrator`. Sans changement de comportement : mêmes journaux, mêmes libellés `cpu_profile`, même ordre de démarrage; seule visibilité élargie (`pub(crate)` vers `pub`) pour ce qui franchit une frontière. Contrôle de couches : 0.
+- 2026-11-23 — `web` dépend de `session` (`heartbeat_flows::light_value`/`merge_light` dans `web_ws`), arête permise par les couches (web au-dessus de session). `migrate_cmd_tests` lit les fixtures de vies dans `../orch-brain/tests/fixtures/lives`.
+- 2026-11-23 — Étape C (trait `Autopilot`) non faite : elle touche les appels du démon et du web vers le cerveau, plus d'une douzaine de sites, pas une étape petite et neutre; laissée en travail futur.
+
+- 2026-11-23 — Les tests ne touchent plus jamais `run/` : `cfg!(test)` n'est vrai que pour la crate testée, donc depuis le découpage `orch-core` rendait les chemins réels aux tests des autres crates (base migrée en v13, dossier `failures` écrit). Remède : feature `test-isolation` (`orch-core`, `sdk`, `store`), activée dans les `[dev-dependencies]` de chaque crate; `run_dir()`/`store_db()` pointent alors un répertoire temporaire par processus (sauf `LIFESCAPE_ROOT` explicite vers une copie), et toute ouverture ou écriture dans le vrai `<dépôt>/run/` panique (`Store::open`, `write_json`, file de staging, dossiers d'échec). Le binaire release n'a pas la feature (résolveur 2).
+- 2026-11-23 : `LaunchInputs` — `gather` renseigne maintenant `now`, `tick_ms`, `levels`, `market_up`, `filler_ticks` (oubliés au lot 3 : historique daté 0, attentes d’achat expirées d’emblée) ; l’horloge est relue avant chaque décision et dans `gather_market` ; test garde `brain_launch_inputs_tests`.
+
+- 2026-11-23 — L'attente d'un achat marché (6000 ticks) est suspendue pendant l'arrêt du démon : 38 achats avaient expiré d'un coup après 7 h d'arrêt (échec x3, nœud abandonné, but tiré à nouveau). `run/downtime.json` (dernier vivant, début, 64 derniers intervalles) ; attente = mur moins arrêt chevauchant ; sans fichier, repli sur le plus récent `ended` des vies (pas la base : ses lignes survivent aux vies restaurées). Même pause pour la mise de côté d'un jalon en attente et l'offre rendue après blocage ; cooldowns/bans/relances ne font que libérer, inchangés. Rejeté : allonger l'échéance, ignorer les attentes plus vieilles que X heures.
+- 2026-11-23 — Les bots se connectent au conteneur lostcity en direct (`LIFESCAPE_SERVER_HOST=172.19.0.2` au démarrage du daemon) au lieu de `127.0.0.1:43594` : le relais `docker-proxy` recopiait chaque paquet en espace utilisateur (8 à 17 % d'un cœur). Rejeté : `userland-proxy: false` (redémarre tous les conteneurs de la machine), `network_mode: host` (plus d'isolation).

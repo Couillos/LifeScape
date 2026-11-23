@@ -118,7 +118,7 @@ impl Store {
                 new_execution.price
             )));
         }
-        self.connection.execute(
+        self.run(
             "INSERT INTO executions(item_id, quantity, price, clock, server_tick, taker_side) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
@@ -136,7 +136,7 @@ impl Store {
     /// Price of the last fill of one item strictly before `clock` (the
     /// close a flat, trade-less candle carries forward), `None` if none.
     pub fn last_price_before(&self, item_id: i64, clock: i64) -> Result<Option<i64>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT price FROM executions WHERE item_id = ?1 AND clock < ?2 \
              ORDER BY clock DESC, exec_id DESC LIMIT 1",
         )?;
@@ -154,7 +154,7 @@ impl Store {
         from_clock: i64,
         to_clock: i64,
     ) -> Result<Vec<Execution>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT exec_id, item_id, quantity, price, clock, server_tick, taker_side \
              FROM executions WHERE item_id = ?1 AND clock >= ?2 AND clock < ?3 \
              ORDER BY clock, exec_id",
@@ -178,7 +178,7 @@ impl Store {
     /// The newest `limit` fills across every item, oldest first (reloads
     /// the daemon's live print ring after a restart).
     pub fn latest_executions(&self, limit: i64) -> Result<Vec<Execution>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT exec_id, item_id, quantity, price, clock, server_tick, taker_side FROM \
              (SELECT * FROM executions ORDER BY clock DESC, exec_id DESC LIMIT ?1) \
              ORDER BY clock, exec_id",
@@ -222,7 +222,7 @@ impl Store {
         from_window: i64,
         to_window: i64,
     ) -> Result<Vec<Candle>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT item_id, resolution, window_start, open_price, high_price, \
              low_price, close_price, volume, buy_volume, sell_volume FROM candles \
              WHERE item_id = ?1 AND resolution = ?2 \

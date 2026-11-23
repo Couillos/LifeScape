@@ -32,7 +32,7 @@ fn cpu_bench() {
     assert!(!root.contains("/home/josh/dev/LifeScape/run"), "bench on a copy only");
     std::env::set_var("LIFESCAPE_ROOT", &root);
     let service = crate::market_service::start().expect("market starts on the copy");
-    let accounts: Vec<String> = std::fs::read_dir(crate::brain::lives_dir())
+    let accounts: Vec<String> = std::fs::read_dir(crate::paths::lives_dir())
         .expect("lives")
         .filter_map(|entry| entry.ok()?.file_name().to_str()?.strip_suffix(".json").map(str::to_string))
         .filter(|name| crate::paths::user_paths(name).0.exists())
@@ -46,7 +46,7 @@ fn cpu_bench() {
         timed("Store::open", 20, || lifescape_store::Store::open(&crate::market_service::db_path()).is_ok());
         // The brain reads its coin figures in the money guide (`brain_d17`):
         // one cycle built on the copy and published, as the daemon does.
-        let set = timed("guides_store::build_set (one cycle)", 1, || crate::guides_store::build_set(&store, &snapshot, &crate::web_guides::StoreWaits::default()));
+        let set = timed("guides_store::build_set (one cycle)", 1, || crate::guides_store::build_set(&store, &snapshot, &crate::guides_model::StoreWaits::default()));
         crate::guides_store::publish(set);
     }
     {
@@ -110,10 +110,10 @@ fn filler_bench() {
     {
         let store = lifescape_store::Store::open(&crate::market_service::db_path()).expect("store copy");
         let snapshot = crate::rates_service::live_snapshot();
-        let set = timed("guides_store::build_set (one cycle)", 1, || crate::guides_store::build_set(&store, &snapshot, &crate::web_guides::StoreWaits::default()));
+        let set = timed("guides_store::build_set (one cycle)", 1, || crate::guides_store::build_set(&store, &snapshot, &crate::guides_model::StoreWaits::default()));
         crate::guides_store::publish(set);
     }
-    let mut accounts: Vec<String> = std::fs::read_dir(crate::brain::lives_dir())
+    let mut accounts: Vec<String> = std::fs::read_dir(crate::paths::lives_dir())
         .expect("lives")
         .filter_map(|entry| entry.ok()?.file_name().to_str()?.strip_suffix(".json").map(str::to_string))
         .filter(|name| !["admin", "admin2", "bite"].contains(&name.as_str()) && crate::paths::user_paths(name).0.exists())

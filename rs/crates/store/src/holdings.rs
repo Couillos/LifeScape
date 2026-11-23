@@ -46,12 +46,12 @@ impl Store {
             if *item_id <= 0 || *count <= 0 {
                 return Err(Error::Invalid(format!("bad holdings point ({item_id}, {count})")));
             }
-            self.connection.execute(
+            self.run(
                 "INSERT INTO holdings_hourly(item_id, taken_at, count) VALUES (?1, ?2, ?3) \
                  ON CONFLICT(item_id, taken_at) DO UPDATE SET count = excluded.count",
                 rusqlite::params![item_id, hour, count],
             )?;
-            self.connection.execute(
+            self.run(
                 "INSERT INTO holdings_daily(item_id, day_start, taken_at, count) VALUES (?1, ?2, ?3, ?4) \
                  ON CONFLICT(item_id, day_start) DO UPDATE SET taken_at = excluded.taken_at, count = excluded.count \
                  WHERE excluded.taken_at >= holdings_daily.taken_at",
@@ -64,11 +64,11 @@ impl Store {
     /// Deletes hourly points older than 8 days and daily rows older
     /// than 400 days, relative to `now` clock seconds.
     pub fn prune_holdings(&self, now: i64) -> Result<(), Error> {
-        self.connection.execute(
+        self.run(
             "DELETE FROM holdings_hourly WHERE taken_at < ?1",
             rusqlite::params![now - HOURLY_KEEP_SECONDS],
         )?;
-        self.connection.execute(
+        self.run(
             "DELETE FROM holdings_daily WHERE day_start < ?1",
             rusqlite::params![now - DAILY_KEEP_SECONDS],
         )?;
@@ -92,10 +92,10 @@ impl Store {
     /// `clock` (`(taken_at, [(item, count)])`), `None` when no point is
     /// that old: the 24 h baseline of the item holdings list.
     pub fn holdings_at_or_before(&self, clock: i64) -> Result<Option<(i64, Vec<(i64, i64)>)>, Error> {
-        let mut latest = self.connection.prepare("SELECT MAX(taken_at) FROM holdings_hourly WHERE taken_at <= ?1")?;
+        let mut latest = self.connection.prepare_cached("SELECT MAX(taken_at) FROM holdings_hourly WHERE taken_at <= ?1")?;
         let taken: Option<i64> = latest.query_map(rusqlite::params![clock], |row| row.get(0))?.next().transpose()?.flatten();
         let Some(taken_at) = taken else { return Ok(None) };
-        let mut rows = self.connection.prepare("SELECT item_id, count FROM holdings_hourly WHERE taken_at = ?1 ORDER BY item_id")?;
+        let mut rows = self.connection.prepare_cached("SELECT item_id, count FROM holdings_hourly WHERE taken_at = ?1 ORDER BY item_id")?;
         let mut counts = Vec::new();
         for mapped in rows.query_map(rusqlite::params![taken_at], |row| Ok((row.get(0)?, row.get(1)?)))? {
             counts.push(mapped?);
@@ -120,7 +120,7 @@ impl Store {
                 "SELECT {time_column}, SUM(count) FROM {table} GROUP BY {time_column} ORDER BY {time_column}"
             ),
         };
-        let mut statement = self.connection.prepare(&sql)?;
+        let mut statement = self.connection.prepare_cached(&sql)?;
         let mut points = Vec::new();
         match item_id {
             Some(item) => {
@@ -147,7 +147,7 @@ impl Store {
             "SELECT {time_column}, SUM(count) FROM {table} WHERE item_id IN ({}) GROUP BY {time_column} ORDER BY {time_column}",
             list.join(",")
         );
-        let mut statement = self.connection.prepare(&sql)?;
+        let mut statement = self.connection.prepare_cached(&sql)?;
         let mut points = Vec::new();
         for mapped_row in statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))? {
             points.push(mapped_row?);
@@ -163,7 +163,7 @@ impl Store {
             format!("WHERE item_id NOT IN ({}) ", excluded.iter().map(|item| item.to_string()).collect::<Vec<_>>().join(","))
         };
         let sql = format!("SELECT {time_column}, SUM(count) FROM {table} {filter}GROUP BY {time_column} ORDER BY {time_column}");
-        let mut statement = self.connection.prepare(&sql)?;
+        let mut statement = self.connection.prepare_cached(&sql)?;
         let mut points = Vec::new();
         for mapped_row in statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))? {
             points.push(mapped_row?);

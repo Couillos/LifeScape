@@ -671,7 +671,11 @@ pub fn record_contract_error(life: &mut Life, index: usize, error: &str) {
 /// once per inventory load by design (cook, smelt, burn), and only a
 /// block that never leads anywhere must count toward `MAX_BLOCKS`.
 pub fn record_progress(life: &mut Life, index: usize, current: i64) {
-    let node = &mut life.nodes[index];
+    note_progress(&mut life.nodes[index], current);
+}
+
+/// `record_progress` on the node itself (the launch decision works on a copy).
+pub fn note_progress(node: &mut Node, current: i64) {
     if current > node.progress_current {
         node.blocks = 0;
     }

@@ -69,9 +69,11 @@ impl Store {
     }
 
     fn write_measure(&self, report_id: i64, measure: &ReportMeasure) -> Result<(), Error> {
-        let updated = self.connection.execute(
+        let updated = self.connection.prepare_cached(
             "UPDATE task_reports SET measure_version = ?2, planner_method = ?3, method_source = ?4, site = ?5, target = ?6, \
              tool = ?7, combat_style = ?8, work_ticks = ?9, pause_ticks = ?10 WHERE report_id = ?1",
+        )?
+        .execute(
             rusqlite::params![
                 report_id,
                 MEASURE_VERSION,
@@ -88,24 +90,19 @@ impl Store {
         if updated != 1 {
             return Err(Error::NotFound(format!("task report {report_id}")));
         }
-        for (skill, level) in &measure.levels {
-            self.connection.execute("INSERT INTO task_levels(report_id, skill, level) VALUES (?1, ?2, ?3)", rusqlite::params![report_id, skill, level])?;
-        }
+        self.write_levels(report_id, &measure.levels)?;
         for (item, cause, quantity) in &measure.flows {
-            self.connection.execute(
-                "INSERT INTO task_flows(report_id, item_name, cause, quantity) VALUES (?1, ?2, ?3, ?4)",
+            self.connection.prepare_cached("INSERT INTO task_flows(report_id, item_name, cause, quantity) VALUES (?1, ?2, ?3, ?4)")?.execute(
                 rusqlite::params![report_id, item, cause, quantity],
             )?;
         }
         for (unit, subject, quantity) in &measure.units {
-            self.connection.execute(
-                "INSERT INTO task_units(report_id, unit, subject, quantity) VALUES (?1, ?2, ?3, ?4)",
+            self.connection.prepare_cached("INSERT INTO task_units(report_id, unit, subject, quantity) VALUES (?1, ?2, ?3, ?4)")?.execute(
                 rusqlite::params![report_id, unit, subject, quantity],
             )?;
         }
         for (kind, item, quantity) in &measure.alerts {
-            self.connection.execute(
-                "INSERT INTO task_alerts(report_id, kind, item_name, quantity) VALUES (?1, ?2, ?3, ?4)",
+            self.connection.prepare_cached("INSERT INTO task_alerts(report_id, kind, item_name, quantity) VALUES (?1, ?2, ?3, ?4)")?.execute(
                 rusqlite::params![report_id, kind, item, quantity],
             )?;
         }
@@ -115,12 +112,12 @@ impl Store {
     /// The contract-2 measure of one report, `None` for a measure-1 row.
     pub fn report_measure(&self, report_id: i64) -> Result<Option<ReportMeasure>, Error> {
         let head = self.connection.query_row(
-            "SELECT measure_version, planner_method, method_source, site, target, tool, combat_style, work_ticks, pause_ticks \
+            "SELECT measure_version, planner_method, method_source, site, target, tool, combat_style, work_ticks, pause_ticks, account, levels_mode \
              FROM task_reports WHERE report_id = ?1",
             rusqlite::params![report_id],
             |row| {
                 Ok((
-                    row.get::<_, i64>(0)?,
+                    (row.get::<_, i64>(0)?, row.get::<_, String>(9)?, row.get::<_, i64>(10)?),
                     ReportMeasure {
                         planner_method: row.get(1)?,
                         method_source: row.get(2)?,
@@ -135,7 +132,7 @@ impl Store {
                 ))
             },
         );
-        let (version, mut measure) = match head {
+        let ((version, account, levels_mode), mut measure) = match head {
             Ok(found) => found,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Err(Error::NotFound(format!("task report {report_id}"))),
             Err(other) => return Err(other.into()),
@@ -143,25 +140,15 @@ impl Store {
         if version < MEASURE_VERSION {
             return Ok(None);
         }
-        measure.levels = self.pairs("SELECT skill, level FROM task_levels WHERE report_id = ?1 ORDER BY skill", report_id)?;
+        measure.levels = self.levels_of(&account, report_id, levels_mode)?;
         measure.flows = self.triples("SELECT item_name, cause, quantity FROM task_flows WHERE report_id = ?1 ORDER BY flow_id", report_id)?;
         measure.units = self.triples("SELECT unit, subject, quantity FROM task_units WHERE report_id = ?1 ORDER BY unit, subject", report_id)?;
         measure.alerts = self.triples("SELECT kind, item_name, quantity FROM task_alerts WHERE report_id = ?1 ORDER BY alert_id", report_id)?;
         Ok(Some(measure))
     }
 
-    fn pairs(&self, sql: &str, report_id: i64) -> Result<Vec<(String, i64)>, Error> {
-        let mut statement = self.connection.prepare(sql)?;
-        let rows = statement.query_map(rusqlite::params![report_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
-    }
-
     fn triples(&self, sql: &str, report_id: i64) -> Result<Vec<(String, String, i64)>, Error> {
-        let mut statement = self.connection.prepare(sql)?;
+        let mut statement = self.connection.prepare_cached(sql)?;
         let rows = statement.query_map(rusqlite::params![report_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
         let mut out = Vec::new();
         for row in rows {
@@ -173,7 +160,7 @@ impl Store {
     /// Contract-2 reports after `after_id`, oldest first, at most
     /// `limit` (the rates snapshot rebuilds from them page by page).
     pub fn measures_after(&self, after_id: i64, limit: i64) -> Result<Vec<StoredMeasure>, Error> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT report_id, account, stop, created_clock FROM task_reports WHERE measure_version >= ?1 AND report_id > ?2 ORDER BY report_id LIMIT ?3",
         )?;
         let rows = statement.query_map(rusqlite::params![MEASURE_VERSION, after_id, limit], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?)))?;

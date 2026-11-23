@@ -7,6 +7,11 @@ edition = "2021"
 name = "lifescape_sdk"
 path = "src/lib.rs"
 
+[features]
+# Test builds only (dev-dependency of every crate that drives a Bot): the
+# failure dossiers go to a temp dir, never the real `run/failures`.
+test-isolation = []
+
 [lints]
 workspace = true
 
