@@ -482,9 +482,10 @@ mod tests {
 
     #[test]
     fn farm_routes_by_drop_source() {
-        let (script, args) = map_method("farm:bronze_axe", &obtain(), None).expect("farm maps");
-        assert_eq!(script, "melee");
-        assert!(args.contains(&"goblins".to_string()), "axes drop from goblins, got {args:?}");
+        // Axes drop from the armoured goblins of the Goblin Village, never
+        // from the Lumbridge `goblin` the spot hunts: no spot, no route
+        // (live 2026-11-23: nature runes farmed 12 h at the goblins, 0 found).
+        assert_eq!(map_method("farm:bronze_axe", &obtain(), None), None, "axes drop from no hunted goblin");
         let (script, args) = map_method("farm:feather", &obtain(), None).expect("farm maps");
         assert_eq!(script, "melee");
         assert!(args.contains(&"chickens".to_string()), "feathers drop from chickens, got {args:?}");

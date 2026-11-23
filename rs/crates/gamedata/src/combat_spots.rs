@@ -263,7 +263,7 @@ pub fn drop_spots(item: &str) -> Vec<CombatSpot> {
     let mut out: Vec<CombatSpot> = SPOTS
         .iter()
         .filter(|spot| spot.access.is_none() || toll_gated(spot))
-        .filter(|spot| npcs.iter().any(|npc| spot.npc_names.iter().any(|hunted| npc.starts_with(hunted))))
+        .filter(|spot| npcs.iter().any(|npc| spot.npc_names.contains(&npc.as_str())))
         .filter(|spot| !positions(spot.key).is_empty())
         .copied()
         .collect();
@@ -337,6 +337,18 @@ pub fn raw_positions(key: &str) -> Vec<(i64, i64, i64)> {
 mod tests {
     use super::{all_spots, best_catalogue_spot, best_spot, by_key, catalogue_spots, positions};
     use crate::free_zones::is_free;
+
+    /// Live 2026-11-23, Zezima: 12 h of `farm:naturerune` at the goblins
+    /// for 0 nature runes. `goblin_greenarmour` drops them, the spot
+    /// hunts `goblin` only: a prefix match credited the spot with a table
+    /// of an NPC it never kills.
+    #[test]
+    fn drop_spots_match_the_hunted_npc_exactly() {
+        let nature: Vec<&str> = super::drop_spots("naturerune").iter().map(|spot| spot.key).collect();
+        assert!(!nature.contains(&"goblins"), "goblins drop no nature rune: {nature:?}");
+        let feathers: Vec<&str> = super::drop_spots("feather").iter().map(|spot| spot.key).collect();
+        assert!(feathers.contains(&"chickens"), "chickens still drop feathers: {feathers:?}");
+    }
 
     #[test]
     fn spot_progression() {
