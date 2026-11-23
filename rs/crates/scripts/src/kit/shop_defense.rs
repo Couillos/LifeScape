@@ -17,6 +17,8 @@ use crate::ScriptError;
 pub const DEFENCE_TICKS: u64 = 600;
 /// Ticks between two Attack clicks on the same foe.
 const RECLICK_TICKS: u64 = 5;
+/// Ticks one walk to a foe's open side may take (the hunt's own budget).
+const APPROACH_TICKS: u64 = 100;
 
 /// Npcs fighting us right now: slot and tile of every non-staff npc
 /// whose target (FACE_ENTITY) is our player slot.
@@ -36,16 +38,21 @@ pub fn defence_over(meal: Meal) -> bool {
     meal == Meal::Starving
 }
 
-/// Kills what attacks us until nobody does, eating as needed. Returns
-/// nothing once nobody attacks us. Typed `Failed` when the
+/// Kills what attacks us until nobody does, eating as needed: walks to
+/// an open side of each foe first; one no route reaches (behind a wall)
+/// is left, the sale goes on. Returns once nobody reachable attacks us. Typed `Failed` when the
 /// bot dies, starves under attack, or the defence passes `DEFENCE_TICKS`.
 pub fn defend(bot: &mut Bot, names: &[&str]) -> Result<(), ScriptError> {
     let started = bot.world.ticks;
     let max_hit = foe_max_hit(names);
     let mut last_click = 0u64;
+    let mut unreachable: Vec<u16> = Vec::new();
     loop {
-        let foes = attackers(bot);
+        let foes: Vec<(u16, i32, i32)> = attackers(bot).into_iter().filter(|(slot, _, _)| !unreachable.contains(slot)).collect();
         if foes.is_empty() {
+            if !unreachable.is_empty() {
+                bot.log(&format!("shopsell: {} attacker(s) out of reach (wall, no route), back to the sale", unreachable.len()));
+            }
             return Ok(());
         }
         if bot.world.ticks.saturating_sub(started) >= DEFENCE_TICKS {
@@ -59,8 +66,22 @@ pub fn defend(bot: &mut Bot, names: &[&str]) -> Result<(), ScriptError> {
         }
         if bot.world.ticks.saturating_sub(last_click) >= RECLICK_TICKS || last_click == 0 {
             last_click = bot.world.ticks;
-            bot.log(&format!("shopsell: {} attacker(s), fighting npc {} at ({},{})", foes.len(), foes[0].0, foes[0].1, foes[0].2));
-            bot.op_npc(2, foes[0].0)?;
+            let (slot, x, z) = foes[0];
+            // The fight's own approach (`attack_nearest`): walk round the
+            // walls to an open side of the foe before the click (live
+            // 2026-11-23, eva_dale clicked a bandit through a wall).
+            if let Err(error) = bot.approach_npc(slot, APPROACH_TICKS) {
+                if matches!(error, lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)) {
+                    return Err(error.into());
+                }
+                bot.log(&format!("shopsell: attacker npc {slot} at ({x},{z}) unreachable: {error}"));
+                unreachable.push(slot);
+                // The next foe is clicked at once (the approach pumped).
+                last_click = 0;
+                continue;
+            }
+            bot.log(&format!("shopsell: {} attacker(s), fighting npc {slot} at ({x},{z})", foes.len()));
+            bot.op_npc(2, slot)?;
         }
         bot.pump(2)?;
     }

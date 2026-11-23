@@ -297,7 +297,9 @@ mod tests {
             7,
             lifescape_sdk::world::NpcInfo { npc_type: 804, x: 3276, z: 3193, level: 0, name: None, anim: None, face_entity: None, hit_tick: None, spotanim: None },
         );
-        bot.approach_npc(7, 60).expect("adjacent tile needs no walk");
+        // Offline: no nav service to read the touched side's walls, so the
+        // contact is checked by geometry only (`approach_npc` asks the flags).
+        assert!(bot.adjacent_to_npc(7), "adjacent tile needs no walk");
         let err = bot.op_npc(TANNER_TRADE_OP, 7).expect_err("dead socket fails loud");
         assert!(format!("{err}").contains("not logged in"), "Trade send attempted, got: {err}");
     }

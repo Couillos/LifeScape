@@ -109,6 +109,22 @@ impl Bot {
         })
     }
 
+    /// True when no wall stands between our tile and the NPC's side we
+    /// touch (the same `facing_wall` test `npc_stands` applies to a ring
+    /// tile). Live 2026-11-23, eva_dale at the Bandit Camp: side-adjacent
+    /// to a bandit through a wall, clicked Attack for 600 ticks and never
+    /// reached it. False when not on the ring or the slot left view.
+    pub fn side_open_to_npc(&mut self, slot: u16) -> Result<bool> {
+        let Some(npc) = self.world.npcs.get(&slot) else { return Ok(false) };
+        let size = (self.tables.npc_size)(npc.npc_type).max(1) as i32;
+        let here = (self.world.x, self.world.z);
+        let Some((_, facing_wall)) = npc_ring((npc.x, npc.z), size).into_iter().find(|(tile, _)| *tile == here) else {
+            return Ok(false);
+        };
+        let rows = self.tiles_flags(&[(here.0, here.1, self.world.level)])?;
+        Ok(rows.first().is_some_and(|row| row.flags & facing_wall == 0))
+    }
+
     /// Stand on a tile touching an NPC's footprint by a side: the server
     /// only accepts NPC clicks from a side, never from a corner. A size-2
     /// cow has two such tiles per side, not just the SW anchor's four.
@@ -126,11 +142,11 @@ impl Bot {
             if npc.level != self.world.level {
                 return Err(Error::Unreachable(format!("NPC {slot} is on level {} at {:?}", npc.level, self.position())));
             }
-            if self.adjacent_to_npc(slot) {
-                return Ok(());
-            }
             let size = (self.tables.npc_size)(npc.npc_type).max(1) as i32;
             let (anchor, npc_type) = ((npc.x, npc.z), npc.npc_type);
+            if self.adjacent_to_npc(slot) && self.side_open_to_npc(slot)? {
+                return Ok(());
+            }
             let ring = self.npc_stands(anchor, size)?;
             if ring.is_empty() {
                 let name = (self.tables.npc_name)(npc_type).unwrap_or_else(|| format!("type {npc_type}"));
@@ -168,7 +184,7 @@ impl Bot {
             if !moved {
                 self.pump(1)?;
             }
-            if self.adjacent_to_npc(slot) {
+            if self.adjacent_to_npc(slot) && self.side_open_to_npc(slot)? {
                 return Ok(());
             }
         }
@@ -339,7 +355,9 @@ mod tests {
         fn size_two(_npc_type: u16) -> u8 {
             2
         }
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".").with_tables(Tables { npc_size: size_two, ..NOTABLES });
+        // Served: the wall test of the touched side reads the tile flags.
+        let (served, _service) = served_bot(3198, 3333, "sdk-size-two");
+        let mut bot = served.with_tables(Tables { npc_size: size_two, ..NOTABLES });
         bot.world.level = 0;
         bot.world.npcs.insert(472, NpcInfo { npc_type: 81, x: 3198, z: 3331, level: 0, name: None, anim: None, face_entity: None, hit_tick: None, spotanim: None });
         for tile in [(3198, 3333), (3199, 3333), (3200, 3331), (3197, 3332), (3199, 3330)] {
@@ -423,5 +441,17 @@ mod tests {
         assert_eq!(bot.world.ticks, start_ticks, "no pump ran offline");
         assert!(bot.approach_opened.is_empty(), "per-call memory cleared");
         assert_eq!(bot.approach_depth, 0, "depth restored");
+    }
+
+    /// Live 2026-11-23, eva_dale at the Bandit Camp: side-adjacent to a
+    /// bandit through a wall is no contact; the approach walks round to
+    /// an open side instead of answering Ok where she stands.
+    #[test]
+    fn a_wall_between_the_bot_and_the_npc_is_no_contact() {
+        use crate::world::NpcInfo;
+        let (mut bot, _service) = served_bot(3025, 3699, "sdk-wall-contact");
+        bot.world.npcs.insert(273, NpcInfo { npc_type: 0, x: 3025, z: 3698, level: 0, name: None, anim: None, face_entity: None, hit_tick: None, spotanim: None });
+        assert!(bot.adjacent_to_npc(273), "the tiles touch by a side");
+        assert!(!bot.side_open_to_npc(273).expect("service answers"), "a wall stands between (3025,3699) and (3025,3698)");
     }
 }
