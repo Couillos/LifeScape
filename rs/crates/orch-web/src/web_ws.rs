@@ -19,22 +19,6 @@ use crate::web::{Dispatch, WS_INTERVAL};
 /// the mapscene origin ride no pixel, the map is the static PNG.
 const LOC_FIELDS: &[&str] = &["id", "cosmetic"];
 
-/// Job columns on the wire: exactly what the spectator bot table renders
-/// (status/name/level/hp/script/zone/position). Phase/ticks/errors ride the
-/// followed state, not the list. Goal/task come from the life file
-/// (`job_lives`), not from the job.
-const JOB_LIST_FIELDS: &[&str] = &[
-    "account",
-    "account_name",
-    "combat",
-    "position",
-    "zone",
-    "status",
-    "paused",
-    "script",
-    "hitpoints",
-];
-
 /// Pack-backed ground and sprite renderer, shared by every connection.
 pub(crate) fn shared_maps() -> &'static Minimap {
     static MAPS: OnceLock<Minimap> = OnceLock::new();
@@ -122,11 +106,18 @@ pub fn state_payload(
     account: &str,
     previous: Option<&Value>,
 ) -> (Value, Option<Value>) {
-    let jobs = dispatch(object(vec![("cmd", str_value("status"))]));
+    state_payload_with(dispatch, account, previous, &build_job_list(dispatch))
+}
+
+/// The bot list of a frame: the daemon's `job_list` rows (the columns of
+/// `jobs::LIST_FIELDS` only, no bot described, lot 1.2) plus the goal and
+/// task of each life file.
+fn build_job_list(dispatch: &Dispatch) -> Vec<Value> {
+    let jobs = dispatch(object(vec![("cmd", str_value("job_list"))]));
     let mut listed = Vec::new();
     for job in jobs.get("jobs").as_arr().map(|items| items.to_vec()).unwrap_or_default() {
         let mut slim = std::collections::BTreeMap::new();
-        for field in JOB_LIST_FIELDS {
+        for field in crate::jobs::LIST_FIELDS {
             slim.insert(field.to_string(), job.get(field).clone());
         }
         if let Some(life) = job.get("account").as_str().and_then(crate::web_job_lives::summary_for) {
@@ -136,7 +127,37 @@ pub fn state_payload(
         }
         listed.push(Value::Obj(slim));
     }
-    let mut payload = object(vec![("jobs", Value::Arr(listed))]);
+    listed
+}
+
+/// How long a built bot list is shared between the open tabs. Under the
+/// 1 s refresh: a lone tab always rebuilds (its frames are 1 s apart),
+/// N tabs build at most twice a second instead of N times.
+const JOB_LIST_SHARE: Duration = Duration::from_millis(500);
+
+/// The bot list shared between connections (production: one dispatch).
+fn shared_job_list(dispatch: &Dispatch) -> std::sync::Arc<Vec<Value>> {
+    static SHARED: OnceLock<std::sync::Mutex<Option<(std::time::Instant, std::sync::Arc<Vec<Value>>)>>> = OnceLock::new();
+    let slot = SHARED.get_or_init(Default::default);
+    let mut guard = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((built, list)) = guard.as_ref() {
+        if built.elapsed() < JOB_LIST_SHARE {
+            return list.clone();
+        }
+    }
+    let list = std::sync::Arc::new(build_job_list(dispatch));
+    *guard = Some((std::time::Instant::now(), list.clone()));
+    list
+}
+
+/// `state_payload` over a bot list already built.
+pub(crate) fn state_payload_with(
+    dispatch: &Dispatch,
+    account: &str,
+    previous: Option<&Value>,
+    listed: &[Value],
+) -> (Value, Option<Value>) {
+    let mut payload = object(vec![("jobs", Value::Arr(listed.to_vec()))]);
     let mut remembered = None;
     if !account.is_empty() {
         let mut state = dispatch(object(vec![
@@ -370,7 +391,7 @@ pub(crate) fn ws_session(mut sock: TcpStream, dispatch: &Dispatch) {
             .map(|span| span.as_secs_f64())
             .unwrap_or(0.0);
         if now - last_send >= WS_INTERVAL {
-            let (mut payload, full) = state_payload(dispatch, &account, last_state.as_ref());
+            let (mut payload, full) = state_payload_with(dispatch, &account, last_state.as_ref(), &shared_job_list(dispatch));
             last_state = full.or(last_state);
             // Market live tail on the same 1 Hz frame: the last prints
             // per item let the market graph stretch its candle live.
@@ -482,7 +503,7 @@ mod tests {
     fn ws_payload_keeps_displayed_drops_dead_weight() {
         fn live_dispatch(ticks: i64, loc_id: i64) -> Dispatch {
             Arc::new(move |request: Value| match request.get("cmd").as_str().unwrap_or("") {
-            "status" => object(vec![("jobs", Value::Arr(Vec::new()))]),
+            "job_list" => object(vec![("jobs", Value::Arr(Vec::new()))]),
             _ => object(vec![("state", object(vec![
                 ("account", str_value("bob")),
                 ("position", Value::Arr(vec![Value::Int(0), Value::Int(1), Value::Int(2)])),
@@ -569,7 +590,7 @@ mod tests {
         let dispatch: Dispatch = {
             let job = job.clone();
             Arc::new(move |request: Value| match request.get("cmd").as_str().unwrap_or("") {
-                "status" => object(vec![("jobs", Value::Arr(Vec::new()))]),
+                "job_list" => object(vec![("jobs", Value::Arr(Vec::new()))]),
                 _ => object(vec![("state", job.describe())]),
             })
         };
@@ -590,6 +611,94 @@ mod tests {
         assert_eq!(npc.as_arr().and_then(|cells| cells.get(1).and_then(Value::as_i64)), Some(3232), "npc x moved");
         let player = frame.get("players_at").as_arr().and_then(|rows| rows.first().cloned()).unwrap_or(Value::Null);
         assert_eq!(player.as_arr().and_then(|cells| cells.get(1).and_then(Value::as_i64)), Some(3230), "player x moved");
+    }
+
+    /// Lot 1.2: the frame built from the list rows (`Job::list_row`) is
+    /// byte-identical to the one built from `describe()` rows sliced to
+    /// the same columns (the former `status` path), on bots in every
+    /// state the daemon holds: full snapshot, idle, paused with a script,
+    /// no snapshot with a heartbeat file, no snapshot and no file, an
+    /// empty snapshot, and a wedged job (lock held).
+    #[test]
+    fn the_list_frame_equals_the_described_frame_byte_for_byte() {
+        let skills: Vec<Value> = (0..23).map(|stat| object(vec![("id", Value::Int(stat)), ("xp", Value::Int(stat * 977))])).collect();
+        let full = |zone: &str, hitpoints: i64| {
+            object(vec![
+                ("account", str_value("x")),
+                ("position", Value::Arr(vec![Value::Int(0), Value::Int(3222), Value::Int(3218)])),
+                ("zone", str_value(zone)),
+                ("hitpoints", Value::Arr(vec![Value::Int(hitpoints), Value::Int(30)])),
+                ("combat", Value::Int(12)),
+                ("skills", Value::Arr(skills.clone())),
+                ("trail", Value::Arr((0..400).map(Value::Int).collect())),
+                ("inv", Value::Arr(vec![object(vec![("name", str_value("coins")), ("count", Value::Int(5))])])),
+            ])
+        };
+        let mut jobs: Vec<Arc<crate::jobs::Job>> = Vec::new();
+        for (account, status, paused, script, live) in [
+            ("amy_gray", "running", false, Some("mining"), Some(full("Lumbridge", 25))),
+            ("ben_idle", "idle", false, None, Some(full("Varrock", 30))),
+            ("cal_rest", "idle", true, Some("fishing"), Some(full("Draynor", 3))),
+            ("dee_file", "running", false, Some("smelt"), None),
+            ("eve_bare", "starting", false, None, None),
+            ("fay_empty", "running", true, None, Some(object(vec![]))),
+            ("gus_null", "idle", false, None, Some(Value::Null)),
+            ("hal_wedged", "running", false, Some("cook"), Some(full("Al Kharid", 20))),
+        ] {
+            let job = Arc::new(crate::jobs::Job::new(account));
+            {
+                let mut inner = job.inner.lock().unwrap();
+                inner.status = status.to_string();
+                inner.paused = paused;
+                inner.script = script.map(str::to_string);
+                inner.live = live;
+            }
+            jobs.push(job);
+        }
+        // `dee_file` has no pushed snapshot: its heartbeat file answers.
+        let (_merged, partial, _log) = paths::user_paths("dee_file");
+        std::fs::create_dir_all(partial.parent().unwrap()).unwrap();
+        std::fs::write(&partial, r#"{"position":[0,3100,3200],"zone":"Falador","hitpoints":[9,9],"combat":5}"#).unwrap();
+        let wedged = jobs.last().unwrap().clone();
+        let _held = wedged.inner.lock().unwrap();
+        let described = {
+            let jobs = jobs.clone();
+            let dispatch: Dispatch = Arc::new(move |request: Value| match request.get("cmd").as_str().unwrap_or("") {
+                "job_list" => {
+                    let mut rows: Vec<Value> = jobs.iter().map(|job| {
+                        let mut entry = job.describe();
+                        if let Value::Obj(map) = &mut entry {
+                            map.insert("account_name".to_string(), str_value(&crate::jobs::humanize(job.account.as_str())));
+                        }
+                        entry
+                    }).collect();
+                    crate::jobs::sort_status_rows(&mut rows);
+                    object(vec![("ok", Value::Bool(true)), ("jobs", Value::Arr(rows))])
+                }
+                _ => object(vec![]),
+            });
+            dispatch
+        };
+        let listed = {
+            let jobs = jobs.clone();
+            let dispatch: Dispatch = Arc::new(move |request: Value| match request.get("cmd").as_str().unwrap_or("") {
+                "job_list" => {
+                    let mut rows: Vec<Value> = jobs.iter().map(|job| job.list_row()).collect();
+                    crate::jobs::sort_status_rows(&mut rows);
+                    object(vec![("ok", Value::Bool(true)), ("jobs", Value::Arr(rows))])
+                }
+                _ => object(vec![]),
+            });
+            dispatch
+        };
+        let (old, _) = state_payload(&described, "", None);
+        let (new, _) = state_payload(&listed, "", None);
+        assert_eq!(json::stringify(&old), json::stringify(&new));
+        assert_eq!(new.get("jobs").as_arr().map(Vec::len), Some(8), "every bot is listed");
+        let text = json::stringify(&new);
+        for needle in ["contended", "Falador", "Lumbridge", "\"paused\": null"] {
+            assert!(text.contains(needle), "{needle} missing from {text}");
+        }
     }
 
     #[test]

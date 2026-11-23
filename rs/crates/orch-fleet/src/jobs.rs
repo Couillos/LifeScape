@@ -59,6 +59,21 @@ pub struct JobInner {
     pub state_written_at: f64,
 }
 
+/// Columns of the dashboard's bot list, exactly what the spectator table
+/// renders (status/name/level/hp/script/zone/position); `account_name` is
+/// the humanized account. Goal/task come from the life file, in the web
+/// layer. Phase/ticks/errors ride the followed state, not the list.
+pub const LIST_FIELDS: &[&str] = &["account", "account_name", "combat", "position", "zone", "status", "paused", "script", "hitpoints"];
+
+/// Rows of `status` in the order the dashboard and the CLI show them:
+/// busy bots first, then idle ones, by account. Stable.
+pub fn sort_status_rows(rows: &mut [Value]) {
+    rows.sort_by(|a, b| {
+        let idle = |v: &Value| v.get("status").as_str() == Some("idle");
+        (idle(a), a.get("account").as_str().unwrap_or("")).cmp(&(idle(b), b.get("account").as_str().unwrap_or("")))
+    });
+}
+
 impl JobInner {
     /// Deep copy of the last pushed snapshot (35 to 85 KB of JSON tree),
     /// tallied for the brain thread (`cpu-profile tally`: `live_copy`).
@@ -138,6 +153,47 @@ impl Job {
         if !session.get("last_code").is_null() {
             inner.last_code = Some(session.get("last_code").clone());
         }
+    }
+
+    /// The dashboard's list row (`LIST_FIELDS`), the same values as
+    /// `describe()` plus `account_name` sliced to those columns, without
+    /// describing the bot: only the small fields are copied out of the
+    /// snapshot, never the 35 to 85 KB tree (lot 1.2). A wedged job gives
+    /// the contended stub's row (columns it lacks read null).
+    pub fn list_row(&self) -> Value {
+        let (_merged, partial, _log) = paths::user_paths(&self.account);
+        let (status, paused, script, from_live) = match self.inner.try_lock() {
+            Ok(guard) => {
+                let pick = |bot: &Value| [bot.get("combat").clone(), bot.get("position").clone(), bot.get("zone").clone(), bot.get("hitpoints").clone()];
+                let from_live = guard.live.as_ref().map(pick);
+                let script = match &guard.script {
+                    Some(name) => Value::Str(name.clone()),
+                    None => Value::Null,
+                };
+                (str_value(&guard.status), Value::Bool(guard.paused), script, Some(from_live))
+            }
+            Err(_) => (str_value("contended"), Value::Null, Value::Null, None),
+        };
+        let [combat, position, zone, hitpoints] = match from_live {
+            // No pushed snapshot yet: the heartbeat file, as `describe` reads it.
+            Some(None) => {
+                let bot = paths::read_json(&partial).unwrap_or(Value::Null);
+                [bot.get("combat").clone(), bot.get("position").clone(), bot.get("zone").clone(), bot.get("hitpoints").clone()]
+            }
+            Some(Some(fields)) => fields,
+            None => [Value::Null, Value::Null, Value::Null, Value::Null],
+        };
+        object(vec![
+            ("account", str_value(&self.account)),
+            ("account_name", str_value(&humanize(self.account.as_str()))),
+            ("combat", combat),
+            ("position", position),
+            ("zone", zone),
+            ("status", status),
+            ("paused", paused),
+            ("script", script),
+            ("hitpoints", hitpoints),
+        ])
     }
 
     /// Merged daemon + bot view, written to run/users/<account>.json.

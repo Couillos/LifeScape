@@ -776,12 +776,18 @@ impl Orchestrator {
                         entry
                     })
                     .collect();
-                described.sort_by(|a, b| {
-                    let idle = |v: &Value| v.get("status").as_str() == Some("idle");
-                    (idle(a), a.get("account").as_str().unwrap_or(""))
-                        .cmp(&(idle(b), b.get("account").as_str().unwrap_or("")))
-                });
+                crate::jobs::sort_status_rows(&mut described);
                 return object(vec![("ok", Value::Bool(true)), ("jobs", Value::Arr(described))]);
+            }
+            "job_list" => {
+                // The dashboard's bot list (lot 1.2): `status` sliced to the
+                // columns the list shows, built from those fields only.
+                let live: HashMap<String, Arc<Job>> = self.jobs.lock().unwrap().clone();
+                let mut names: Vec<&String> = live.keys().collect();
+                names.sort();
+                let mut rows: Vec<Value> = names.iter().filter_map(|name| live.get(*name)).map(|job| job.list_row()).collect();
+                crate::jobs::sort_status_rows(&mut rows);
+                return object(vec![("ok", Value::Bool(true)), ("jobs", Value::Arr(rows))]);
             }
             "items" => {
                 let described = crate::holdings::described_jobs(self);
