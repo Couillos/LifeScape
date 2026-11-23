@@ -16,10 +16,10 @@ use crate::guide_model::{GuideFilter, Quote, Supply, TrainingRow};
 use crate::guide_training::training_guide;
 use crate::model::{Archetype, Profile};
 
-const EARTH_STRIKE: &str = "fight:magic/earth_strike/cows";
+const EARTH_STRIKE: &str = "fight:magic/earth_strike/ladder";
 const CRUMBLE: &str = "fight:magic/crumble_undead/wild_skeletons";
 
-/// Earth strike on cows (cheap runes, slow) and crumble undead on the
+/// Earth strike on the ladder (cheap runes, slow) and crumble undead on the
 /// skeletons (fast, a chaos rune a cast, rich drops), a window each.
 fn magic_world() -> Fixture {
     let mut fixture = Fixture::new();
@@ -64,7 +64,7 @@ fn ranked_now(rows: &[TrainingRow], filter: &GuideFilter) -> Vec<String> {
 
 /// The chaos runes the market prices at ~2 000 and the keepers no longer
 /// hold: crumble undead is out of reach (2 runes on the asks for a
-/// window of 900) and dear; the earth strike on cows trains.
+/// window of 900) and dear; the earth strike on the ladder trains.
 #[test]
 fn a_mage_trains_with_runes_it_can_get_never_with_drained_chaos_runes() {
     let mut fixture = magic_world();

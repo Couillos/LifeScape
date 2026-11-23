@@ -119,8 +119,10 @@ pub fn drop_value(name: &str) -> i64 {
 
 /// True when the brain's skip list names this ground object (coins are
 /// never skipped).
-pub fn skipped_loot(skip: &std::collections::HashSet<String>, name: &str) -> bool {
-    name != "coins" && skip.contains(name)
+pub fn skipped_loot(skip: &std::collections::HashSet<String>, obj_id: u16) -> bool {
+    // The skip list holds debug names (`raw_chicken`), the live tables
+    // display names ("Raw chicken"): match the object's own debug name.
+    knowledge::obj_by_id(usize::from(obj_id)).and_then(|entry| entry.name).is_some_and(|name| name != "coins" && skip.contains(name))
 }
 
 /// Take ground drops nearest-first, coins first, buryables never (the
@@ -153,7 +155,7 @@ pub fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
         }
         // Not worth its pickup ticks at the bot's rate (plan marché M5:
         // a player never picks up feathers at 1 coin): left lying.
-        if skipped_loot(&bot.loot_skip, &name) {
+        if skipped_loot(&bot.loot_skip, oid) {
             continue;
         }
         // Dead socket, not a missed pickup: typed instead of skipping.
@@ -294,7 +296,7 @@ pub fn bury_bones(bot: &mut Bot) -> Result<u32, ScriptError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bury_op, drop_value, pick_kill_bones};
+    use super::{bury_op, drop_value, pick_kill_bones, skipped_loot};
     use lifescape_gamedata as knowledge;
 
     fn obj(name: &str) -> u16 {
@@ -324,6 +326,18 @@ mod tests {
         assert_eq!(pick_kill_bones(&off_tile, (3250, 3290), buryable), Some(((3251, 3291), 532)), "diagonal neighbour still the kill's");
         let elsewhere = vec![((3250, 3290), 1739), ((3252, 3290), 526)];
         assert_eq!(pick_kill_bones(&elsewhere, (3250, 3290), buryable), None, "two tiles off is another kill");
+    }
+
+    /// The brain's `--skip-loot` names are debug names (`raw_chicken`,
+    /// from the drop tables): a ground object is skipped by its obj id,
+    /// whatever its display name ("Raw chicken"). Live 2026-11-23: the
+    /// display name never matched, a skipped drop was picked up anyway.
+    #[test]
+    fn skip_loot_matches_the_debug_name_of_the_ground_object() {
+        let skip: std::collections::HashSet<String> = ["raw_chicken".to_string(), "coins".to_string()].into_iter().collect();
+        assert!(skipped_loot(&skip, obj("raw_chicken")), "raw_chicken skipped");
+        assert!(!skipped_loot(&skip, obj("feather")), "feather not in the list");
+        assert!(!skipped_loot(&skip, obj("coins")), "coins are never skipped");
     }
 
     /// Reference value: known junk prices above zero, unknown never wins.

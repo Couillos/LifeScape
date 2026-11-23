@@ -59,6 +59,24 @@ fn push(out: &mut Vec<GuideMethod>, method: String) {
     out.push(GuideMethod { method, style: style.to_string() });
 }
 
+/// True for `fight:magic/<spell>/ladder`.
+pub fn is_magic_ladder(method: &str) -> bool {
+    method.starts_with("fight:magic/") && crate::tranches::is_ladder(method)
+}
+
+/// Every combat spell that hits any foe, cast on the ladder: the camp
+/// follows the player's levels, gear and food at run time (`magic ladder
+/// --spell`, user 2026-11-23: the magic target depends on the combat
+/// level as the melee one does), never a fixed chicken or cow camp the
+/// first cast kills. The brain picks the spell from its cost per XP.
+fn magic_ladder_methods() -> Vec<String> {
+    lifescape_gamedata::spells::all_spells()
+        .into_iter()
+        .filter(|spell| !spell.members && spell.deals_damage() && lifescape_gamedata::spells::target_param(&spell.spell).is_none())
+        .map(|spell| format!("fight:magic/{}/{}", spell.spell, crate::tranches::MELEE_LADDER))
+        .collect()
+}
+
 fn compute_catalogue() -> Vec<GuideMethod> {
     let mut methods: Vec<String> = Vec::new();
     let mut made: Vec<String> = Vec::new();
@@ -83,12 +101,12 @@ fn compute_catalogue() -> Vec<GuideMethod> {
     for level in (1..=99u8).step_by(5) {
         // The fixed camps: a ladder (every style from 10) is no activity.
         methods.push(format!("fight:ranged/{}", crate::tranches::starter_camp(level)));
-        let spot = crate::tranches::starter_camp(level);
-        methods.push(format!("fight:magic/{}/{spot}", crate::method_way::best_combat_spell_at(level, &spot)));
-        for skill in SKILLS {
+        // Magic is listed below, on the ladder (`magic_ladder_methods`).
+        for skill in SKILLS.iter().filter(|skill| **skill != "magic") {
             methods.push(crate::activity::activity_of_method(&crate::tranches::reach_method(skill, level)));
         }
     }
+    methods.extend(magic_ladder_methods());
     methods.extend(crate::spell_methods::all_spell_methods());
     for recipe in lifescape_gamedata::extra_recipes::by_kind("firemaking") {
         // The recipe lists the tinderbox beside the log: only a log burns.
@@ -98,8 +116,10 @@ fn compute_catalogue() -> Vec<GuideMethod> {
         methods.extend(recipe.inputs.iter().map(|(bones, _)| format!("bury:{bones}")));
     }
     methods.extend(made.iter().filter(|item| crate::alchemy::alch_value(item, true).is_some()).map(|item| format!("alch:{item}")));
-    // The ladders pick their rung at run time: each melee rung is listed.
-    methods.retain(|method| !crate::tranches::is_ladder(method));
+    // The melee and ranged ladders pick their rung at run time: each melee
+    // rung is listed. The magic ladder is listed per spell (the brain
+    // chooses the spell, the script the camp).
+    methods.retain(|method| !crate::tranches::is_ladder(method) || is_magic_ladder(method));
     methods.sort();
     methods.dedup();
     let mut out = Vec::new();
@@ -246,10 +266,25 @@ mod tests {
         assert!(methods.iter().any(|entry| entry.method.starts_with("fight:magic/") && entry.style == "magic"));
     }
 
+    /// User 2026-11-23: the magic target follows the combat level (the
+    /// ladder), never a chicken or cow camp the first cast kills.
+    #[test]
+    fn combat_spells_train_on_the_ladder_not_on_fixed_camps() {
+        let magic: Vec<&str> = catalogue().iter().filter(|entry| entry.method.starts_with("fight:magic/")).map(|entry| entry.method.as_str()).collect();
+        for spell in ["wind_strike", "earth_strike", "fire_strike", "wind_bolt", "fire_bolt", "wind_blast", "fire_blast"] {
+            let method = format!("fight:magic/{spell}/ladder");
+            assert!(magic.contains(&method.as_str()), "{method} listed");
+        }
+        let fixed: Vec<&&str> = magic.iter().filter(|method| method.ends_with("/chickens") || method.ends_with("/cows")).collect();
+        assert!(fixed.is_empty(), "no fixed starter camp for a combat spell: {fixed:?}");
+        assert!(magic.contains(&"fight:magic/crumble_undead/wild_skeletons"), "the undead spell keeps its camp");
+    }
+
     #[test]
     fn gates_and_tools_follow_the_level() {
         assert_eq!(gate_level("smelt:steel_bar"), 30);
         assert_eq!(gate_level("fight:magic/fire_strike/cows"), 13);
+        assert_eq!(gate_level("fight:magic/fire_strike/ladder"), 13);
         assert_eq!(gate_level("alch:iron_platebody"), 21);
         assert_eq!(tool_at("gather:mining/coal", "", 41), "rune_pickaxe");
         assert_eq!(tool_at("gather:mining/coal", "", 1), "iron_pickaxe");
