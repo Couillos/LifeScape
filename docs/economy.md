@@ -2880,3 +2880,7 @@ sorciers, 2/128) : bots bloqués sur `missing:water_talisman`.
 
 
 Prix du marché, source unique (2026-11-23) : `rates_price::price_estimate` lit la mémoire du `MarketService` quand le daemon tourne (plus de 5 lectures SQL par objet), la base seulement sans service ; voir `docs/decisions.md`.
+
+## Offres d'échange : avoirs lus une fois (lot 1.1, 2026-11-24)
+
+`brain_trade::publish` (offres 100 % marché, étiquette `trade.publish`) lit les avoirs du bot par `brain_plan::Holdings::of(job)` comme `brain_money::publish_keeping` : l'état vivant et les verrous du marché sont lus une fois, chaque objet n'est compté qu'une fois. Avant, la fermeture `held` appelait `holdings_count` pour chaque objet de chaque ligne du guide (une copie profonde de l'état vivant et 2 requêtes en base sous le verrou commun à chaque appel, 0,13 cœur en moyenne). Les offres sont les mêmes ; preuve : `brain_trade_holdings_tests.rs` (720 scénarios sur les 9 vies réelles de `tests/fixtures/lives`, `Job` à état vivant JSON, `ready_ctx`, `free_coins`, `claimed_by_others`, `ctx.trades` et `ctx.trade_wallet` identiques à l'ancien corps).
