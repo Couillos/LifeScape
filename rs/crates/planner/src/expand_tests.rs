@@ -182,7 +182,7 @@ fn ready_resolution_prices_and_picks() {
     // produces; an object it cannot make is bought and waited for.
     let mut nodes = expand_goal(&GoalKind::Obtain { item: "feather".to_string(), count: 200 }, &profile());
     let mut ctx = ReadyCtx::blind(0.72);
-    ctx.coins_per_tick = 2.0;
+    ctx.coins_per_tick = 0.5;
     ctx.price = 3;
     ctx.shop_price = 5;
     ctx.yield_per_6000 = 3500.0;
@@ -270,6 +270,8 @@ fn obtain_blocks_on_level_then_coins() {
     let mut ready_sword = expand_goal(&GoalKind::Obtain { item: "bronze_sword".to_string(), count: 1 }, &profile());
     ctx.levels = vec![("smithing".to_string(), 4)];
     ctx.tools = vec!["hammer".to_string()];
+    // A sword dearer than the smith's hour: smithing is cheaper than buying.
+    ctx.price = 1_000_000;
     resolve_ready(&mut ready_sword[0], &ctx);
     assert_eq!(ready_sword[0].method.as_deref(), Some("smith:bronze_sword"), "at 4 it smiths: {:?}", ready_sword[0].status);
 
@@ -284,6 +286,7 @@ fn obtain_blocks_on_level_then_coins() {
     let mut runes = expand_goal(&GoalKind::Obtain { item: "naturerune".to_string(), count: 10 }, &profile());
     let mut weak = ReadyCtx::blind(0.5);
     weak.coins = 0;
+    weak.yield_per_6000 = 300.0;
     resolve_ready(&mut runes[0], &weak);
     // Nature runes drop from wizards: farmable, so the drop farm runs.
     assert_eq!(runes[0].method.as_deref(), Some("farm:naturerune"), "got {:?}", runes[0].status);
@@ -616,10 +619,10 @@ fn a_keeper_short_of_the_need_is_not_the_first_seller() {
     let mut nodes = expand_goal(&GoalKind::Obtain { item: "uncut_sapphire".to_string(), count: 70 }, &profile());
     let mut ctx = ReadyCtx::blind(0.72);
     ctx.coins_per_tick = 2.0;
-    ctx.price = 45;
+    ctx.price = 450;
     ctx.shop_price = 25;
     ctx.coins = 100000;
-    ctx.best_ask = Some(42);
+    ctx.best_ask = Some(420);
     ctx.shop_window_units = Some(2);
     let mut short = nodes[0].clone();
     resolve_ready(&mut short, &ctx);

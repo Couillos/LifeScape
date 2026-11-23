@@ -86,7 +86,8 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     let need = (count - ctx.held).max(1);
     let legs = production_legs(item);
     let candidates: Vec<String> = node.alternatives.iter().map(|alt| alt.method.clone()).collect();
-    let market_ok = !ctx.ironman && tradeable_f2p(item) && candidates.iter().any(|method| method == "market:buy");
+    // Coins are earned, never bought with coins.
+    let market_ok = !ctx.ironman && item != "coins" && tradeable_f2p(item) && candidates.iter().any(|method| method == "market:buy");
     let unit = ctx.best_ask.unwrap_or(ctx.price).max(1);
     let mut priced: Vec<Alternative> = Vec::new();
     let mut workable: Vec<Alternative> = Vec::new();
@@ -196,6 +197,14 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         .min_by_key(|alt| alt.est_ticks)
         .or_else(|| workable.iter().min_by_key(|alt| alt.est_ticks))
         .cloned();
+    // Every leg competes with the purchase in ticks (the grind of its
+    // price at the bot's coin rate): a leg dearer than buying is no
+    // production, the wallet short or not (the bot then earns the coins,
+    // `missing:coins`). A measured yield near zero is a huge cost and
+    // loses on its own (live 2026-11-23: 12 h of `farm:naturerune`).
+    let buy_ticks = cost_market_buy(ctx.trip_ticks, unit, need, ctx.coins_per_tick.max(0.01));
+    let cheaper_to_buy = producible.as_ref().is_some_and(|alt| market_ok && alt.est_ticks > buy_ticks);
+    let producible = producible.filter(|_| !cheaper_to_buy);
     // A light quest that unlocks a way (essence behind Rune Mysteries) or
     // hands the object over (the Duke's air talisman) comes before a
     // resting bid: without the quest nobody fills it (live 2026-11-14:
@@ -268,6 +277,10 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         // 5. Typed block: the cheapest thing that unlocks a way.
         let reason = if let (true, Some(quest)) = (quest_first, quest_gap.as_ref()) {
             Some(format!("missing:quest:{quest}"))
+        } else if cheaper_to_buy {
+            // A leg was workable but dearer than the purchase: the gap is
+            // the coins of the purchase, whatever the other legs lack.
+            Some(format!("missing:coins:{}", wallet_for(ctx, unit * need)))
         } else if let Some((skill, level)) = level_gap {
             Some(format!("missing:level:{skill}:{level}"))
         } else if let Some(tool) = tool_gap {

@@ -109,6 +109,8 @@ fn a_smith_answers_the_scimitar_bids_and_fills_them() {
     let mut bar_ctx = ctx.clone();
     bar_ctx.best_ask = Some(5);
     bar_ctx.price = 5;
+    // A slow earner: smelting the bars is cheaper in ticks than buying them.
+    bar_ctx.coins_per_tick = 0.1;
     resolve_ready(&mut life.nodes[bars], &bar_ctx);
     // D-B: the standing bid takes the 5-coin ask at once while the smith
     // smelts meanwhile; whichever lands first closes the sub-task.
