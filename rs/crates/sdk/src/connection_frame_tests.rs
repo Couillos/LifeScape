@@ -81,3 +81,112 @@ fn an_unknown_opcode_drops_the_connection() {
     assert!(conn.recv().is_err(), "nothing is read after the desync");
     server.join().expect("server thread");
 }
+
+/// One synthesized server stream: real opcodes and sizes of the zone,
+/// interface and chat families, fixed, byte-length and short-length
+/// frames, empty bodies and the 255/256 length edges. Returns the wire
+/// bytes (ISAAC-shifted) and the frames expected back `(name, body)`.
+fn sample_stream(seed: [i32; 4]) -> (Vec<u8>, Vec<(&'static str, Vec<u8>)>) {
+    let mut cipher = Isaac::new(seed);
+    let mut wire = Vec::new();
+    let mut expected = Vec::new();
+    let filler = |len: usize, salt: usize| -> Vec<u8> { (0..len).map(|i| ((i * 31 + salt * 7) % 251) as u8).collect() };
+    let mut push = |opcode: u8, body: Vec<u8>| {
+        let (name, size) = crate::protocol::server_op(opcode).expect("known opcode");
+        wire.push(opcode.wrapping_add(cipher.next_int() as u8));
+        match size {
+            -1 => wire.push(body.len() as u8),
+            -2 => wire.extend_from_slice(&(body.len() as u16).to_be_bytes()),
+            fixed => assert_eq!(fixed as usize, body.len(), "{name} fixed size"),
+        }
+        wire.extend_from_slice(&body);
+        expected.push((name, body));
+    };
+    for round in 0..3usize {
+        push(153, filler(2, round)); // UPDATE_ZONE_FULL_FOLLOWS
+        push(138, filler(4, round)); // LOC_ADD_CHANGE
+        push(138, filler(4, round + 1));
+        push(32, filler(2, round)); // UPDATE_ZONE_PARTIAL_FOLLOWS
+        push(195, filler(2 + 4 * (round + 1) + 5, round)); // UPDATE_ZONE_PARTIAL_ENCLOSED
+        push(81, filler(5, round)); // OBJ_ADD
+        push(183, filler(4, round)); // IF_SETCOLOUR
+        push(235, filler(8 + 4 + 1 + 17, round)); // MESSAGE_PRIVATE: id, id, rights, huffman text
+        push(161, Vec::new()); // MESSAGE_GAME, empty
+        push(161, filler(255, round)); // MESSAGE_GAME at the byte limit
+        push(44, filler(0, round)); // IF_SETTEXT, empty
+        push(44, filler(256, round)); // IF_SETTEXT, length 0x0100
+        push(44, filler(300, round));
+        push(167, filler(1200, round)); // PLAYER_INFO
+        push(171, Vec::new()); // IF_CLOSE
+        push(106, filler(65, round)); // UPDATE_INV_FULL
+    }
+    (wire, expected)
+}
+
+/// Serve `chunks` of the stream over loopback (no Nagle, a pause between
+/// chunks so each lands as its own read when it can) and decode it all.
+fn decode_with_chunks(seed: [i32; 4], wire: Vec<u8>, chunks: Vec<usize>, total: usize) -> Vec<(String, Vec<u8>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback bind");
+    let port = listener.local_addr().expect("local addr").port();
+    let server = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().expect("accept");
+        sock.set_nodelay(true).expect("nodelay");
+        let mut at = 0;
+        let mut sizes = chunks.into_iter().cycle();
+        while at < wire.len() {
+            let end = (at + sizes.next().expect("cycle").max(1)).min(wire.len());
+            sock.write_all(&wire[at..end]).expect("chunk");
+            at = end;
+            std::thread::sleep(Duration::from_micros(300));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    });
+    let client = TcpStream::connect(("127.0.0.1", port)).expect("loopback dial");
+    client.set_nodelay(true).expect("nodelay");
+    client.set_read_timeout(Some(Duration::from_millis(100))).expect("client read timeout");
+    let mut conn = Connection::new(Duration::from_millis(300));
+    conn.attach_for_test(client, [1, 2, 3, 4], seed);
+    let mut got = Vec::new();
+    while got.len() < total {
+        match conn.recv() {
+            Ok(frame) => got.push((frame.name, frame.body)),
+            Err(crate::error::Error::Timeout(_)) => {}
+            Err(other) => panic!("after {} frames: {other}", got.len()),
+        }
+    }
+    server.join().expect("server thread");
+    got
+}
+
+/// Decoding must not depend on how TCP cut the stream: 1-byte reads,
+/// every fixed chunk size, pseudo-random cuts, and one big write all give
+/// the same frames.
+#[test]
+fn decoding_is_independent_of_segmentation() {
+    let seed = [21, 34, 55, 89];
+    let (wire, expected) = sample_stream(seed);
+    let expected: Vec<(String, Vec<u8>)> = expected.into_iter().map(|(name, body)| (name.to_string(), body)).collect();
+    let mut patterns: Vec<Vec<usize>> = vec![vec![1], vec![wire.len()], vec![2, 1, 3], vec![1, 255, 1]];
+    for size in [2usize, 3, 4, 5, 7, 11, 64, 255, 256, 257, 1460] {
+        patterns.push(vec![size]);
+    }
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    for _ in 0..8 {
+        let cuts: Vec<usize> = (0..64)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                1 + (state % 40) as usize
+            })
+            .collect();
+        patterns.push(cuts);
+    }
+    for pattern in patterns {
+        let got = decode_with_chunks(seed, wire.clone(), pattern.clone(), expected.len());
+        assert_eq!(got.len(), expected.len(), "frame count for cuts {pattern:?}");
+        for (index, (have, want)) in got.iter().zip(&expected).enumerate() {
+            assert_eq!(have, want, "frame {index} for cuts {:?}", &pattern[..pattern.len().min(8)]);
+        }
+    }
+}

@@ -202,11 +202,13 @@ chemin de dépendance) que si elle change. Tests :
 `web_brain_tests.rs`, `web_brain_view_tests.rs`, `node orchestration/static/brain.test.js`.
 Serveur de jeu via `LIFESCAPE_SERVER_HOST` / `LIFESCAPE_SERVER_PORT`
 (défaut `127.0.0.1:43594`), données engine via `LIFESCAPE_ENGINE_DIR`
-(défaut `../lostcity/engine`). Flotte (2026-11-23) : démarrer le daemon
-avec `LIFESCAPE_SERVER_HOST=<IP du conteneur lostcity>` (aujourd'hui
-`172.19.0.2`, `docker inspect lostcity`) ; les workers en héritent. Par
-`127.0.0.1`, chaque paquet passe par `docker-proxy` (relais en espace
-utilisateur, 8 à 17 % d'un cœur pour 74 bots à 60 ms/tick).
+(défaut `../lostcity/engine`). Par `127.0.0.1`, chaque paquet passe par
+`docker-proxy` (relais en espace utilisateur, 8 à 17 % d'un cœur pour 74
+bots à 60 ms/tick). Le chemin direct (`LIFESCAPE_SERVER_HOST=172.19.0.2`,
+IP du conteneur) supprime ce coût mais a fait monter les désynchros de
+protocole (`io: protocol desync`, 0/h par le relais contre ~83/h en direct,
+2026-11-24) : rester sur `127.0.0.1` tant que la lecture des trames du
+client n'est pas corrigée.
 
 Ne jamais lancer un bot en direct hors orchestrateur (ni rescue manuel) :
 sessions orphelines et états faux. Diagnostics aussi via l'orchestrateur
