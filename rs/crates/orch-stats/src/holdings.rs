@@ -534,28 +534,51 @@ pub fn snapshot(described: &[Value]) -> Value {
     snapshot_in(described, &items_dir(), &lifescape_sdk::save::default_save_dir())
 }
 
+#[cfg(test)]
 fn maybe_sample_in(described: &[Value], items: &Path, save_dir: &str, now: i64) -> bool {
+    maybe_sample_lazy(&|| described.to_vec(), items, save_dir, now)
+}
+
+/// `maybe_sample_in` that describes the bots only when a point is due
+/// (lot 1.3): the sampler wakes every minute for one point an hour, and
+/// 59 wake-ups out of 60 described all the bots and summed every save
+/// file just to find the last point recent. The point written is the same.
+fn maybe_sample_lazy(describe: &dyn Fn() -> Vec<Value>, items: &Path, save_dir: &str, now: i64) -> bool {
     ensure_imported(items);
-    let holdings = current_holdings(described, save_dir);
+    // `Some(store)` when the last point is old enough (or none yet).
+    let due_store = || -> Option<crate::store_pool::PooledStore> {
+        let store = match crate::store_pool::open(&store_path(items)) {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("holdings: sample dropped, store unreachable: {error}");
+                return None;
+            }
+        };
+        match store.holdings_latest() {
+            Ok(Some(latest)) if now - latest < INTERVAL_SECONDS => None,
+            Ok(_) => Some(store),
+            Err(error) => {
+                eprintln!("holdings: sample dropped, latest unreadable: {error}");
+                None
+            }
+        }
+    };
+    // A store that exists says first whether a point is due: the bots are
+    // described only then. Without a store file nothing is created for an
+    // empty fleet (no holdings, no file), as before.
+    let mut store = None;
+    if store_path(items).exists() {
+        store = Some(due_store());
+        if store.as_ref().is_some_and(Option::is_none) {
+            return false;
+        }
+    }
+    let holdings = current_holdings(&describe(), save_dir);
     let pairs: Vec<(i64, i64)> = holdings.into_iter().filter(|(_, count)| *count > 0).collect();
     if pairs.is_empty() {
         return false;
     }
-    let store = match crate::store_pool::open(&store_path(items)) {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!("holdings: sample dropped, store unreachable: {error}");
-            return false;
-        }
-    };
-    match store.holdings_latest() {
-        Ok(Some(latest)) if now - latest < INTERVAL_SECONDS => return false,
-        Ok(_) => {}
-        Err(error) => {
-            eprintln!("holdings: sample dropped, latest unreadable: {error}");
-            return false;
-        }
-    }
+    let Some(store) = store.unwrap_or_else(due_store) else { return false };
     match store.record_holdings(now, &pairs) {
         Ok(()) => {
             println!("holdings: {} item kinds across all accounts", pairs.len());
@@ -568,10 +591,10 @@ fn maybe_sample_in(described: &[Value], items: &Path, save_dir: &str, now: i64) 
     }
 }
 
-/// Append one point when the last is older than one hour. True when
-/// a point was written.
-pub fn maybe_sample(described: &[Value]) -> bool {
-    maybe_sample_in(described, &items_dir(), &lifescape_sdk::save::default_save_dir(), jobs::now_secs() as i64)
+/// Append one point when the last is older than one hour (`describe`
+/// is called only then). True when a point was written.
+pub fn maybe_sample(describe: &dyn Fn() -> Vec<Value>) -> bool {
+    maybe_sample_lazy(describe, &items_dir(), &lifescape_sdk::save::default_save_dir(), jobs::now_secs() as i64)
 }
 
 /// Live describes for the endpoint and the sampler: pushed snapshots
@@ -593,7 +616,7 @@ pub fn start_sampler(orch: Arc<dyn crate::fleet::Fleet>) {
                 if !orch.is_running() {
                     break;
                 }
-                maybe_sample(&described_jobs(&*orch));
+                maybe_sample(&|| described_jobs(&*orch));
             }
         })
         .expect("holdings sampler spawns");
@@ -916,6 +939,35 @@ mod tests {
         let store = lifescape_store::Store::open(&store_path(&items)).unwrap();
         assert_eq!(store.hourly_points(Some(995)).unwrap().len(), 2);
         assert_eq!(store.daily_points(Some(995)).unwrap().len(), 1, "same day: last measure wins");
+    }
+
+    /// Lot 1.3: the bots are described only when a point is due; the
+    /// points written are those of the eager path.
+    #[test]
+    fn the_sampler_describes_the_bots_only_when_a_point_is_due() {
+        let dir = temp_dir("sampling_lazy");
+        let items = dir.join("items");
+        std::fs::create_dir_all(&items).unwrap();
+        let saves = dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        let save_arg = saves.to_string_lossy().to_string();
+        let now = 1_762_675_200;
+        let live = vec![described("t01", jobs::now_secs(), vec![(995, 7)], vec![])];
+        let described_calls = std::cell::Cell::new(0);
+        let describe = || {
+            described_calls.set(described_calls.get() + 1);
+            live.clone()
+        };
+        assert!(maybe_sample_lazy(&describe, &items, &save_arg, now), "no point yet: described, written");
+        assert_eq!(described_calls.get(), 1);
+        for minutes in 1..60 {
+            assert!(!maybe_sample_lazy(&describe, &items, &save_arg, now + minutes * 60), "minute {minutes}: no point due");
+        }
+        assert_eq!(described_calls.get(), 1, "59 quiet wake-ups described nobody");
+        assert!(maybe_sample_lazy(&describe, &items, &save_arg, now + INTERVAL_SECONDS));
+        assert_eq!(described_calls.get(), 2);
+        let store = lifescape_store::Store::open(&store_path(&items)).unwrap();
+        assert_eq!(store.hourly_points(Some(995)).unwrap().len(), 2);
     }
 
     #[test]

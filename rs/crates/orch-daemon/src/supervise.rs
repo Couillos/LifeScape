@@ -227,6 +227,34 @@ const FAIL_TELEPORTS: &[(i64, i64, i64)] = &[
     (0, 3083, 3469), (2, 3104, 3163), (0, 3218, 9618), (0, 3263, 3424),
 ];
 
+/// True when a FRESH pushed snapshot shows none of the random-event
+/// geography (maze/mime rooms, fail tiles, a carried cube): the daemon
+/// event it replays is then over. A non-object or stale snapshot says
+/// nothing (false).
+pub(crate) fn event_is_gone(state: &Value, now: f64) -> bool {
+    if state.as_obj().is_none() {
+        return false;
+    }
+    let fresh = state.get("updated").as_f64().is_some_and(|at| now - at < 10.0);
+    if !fresh {
+        return false;
+    }
+    let empty: Vec<Value> = Vec::new();
+    let pos = state.get("position").as_arr().unwrap_or(&empty);
+    let (level, x, z) = (
+        pos.first().and_then(|v| v.as_i64()).unwrap_or(-1),
+        pos.get(1).and_then(|v| v.as_i64()).unwrap_or(0),
+        pos.get(2).and_then(|v| v.as_i64()).unwrap_or(0),
+    );
+    let present = MAZE_X.0 <= x && x < MAZE_X.1 && MAZE_Z.0 <= z && z < MAZE_Z.1
+        || MIME_X.0 <= x && x < MIME_X.1 && MIME_Z.0 <= z && z < MIME_Z.1
+        || FAIL_TELEPORTS.contains(&(level, x, z))
+        || state.get("inv").as_arr().unwrap_or(&empty).iter().any(|entry| {
+            entry.get("name").as_str() == Some("macro_cube") || entry.as_str() == Some("macro_cube")
+        });
+    !present
+}
+
 impl Orchestrator {
     /// E8 single supervisor entry: registered above, polled by the one
     /// `supervise-all` thread. Telemetry still arrives as worker pushes.
@@ -285,38 +313,18 @@ impl Orchestrator {
     /// shows none (maze/mime rooms, fail tiles, carried cube). Rescues
     /// replay a stale unresolved event every tick otherwise.
     fn clear_event_if_gone(&self, job: &Arc<Job>) {
-        let state = match job.inner.try_lock().map(|inner| inner.live_copy()) {
-            Ok(Some(state)) => state,
-            // No push yet (daemon just restarted) or wedged job: wait
-            // for the next pass instead of parking the supervisor.
-            _ => return,
+        // Read in place under the lock (lot 1.3: no copy of the 35 to 85 KB
+        // snapshot for a check that reads a position and a pack). No push
+        // yet (daemon just restarted) or wedged job: wait for the next
+        // pass instead of parking the supervisor.
+        let gone = match job.inner.try_lock() {
+            Ok(inner) => match inner.live.as_ref() {
+                Some(state) => event_is_gone(state, now_secs()),
+                None => return,
+            },
+            Err(_) => return,
         };
-        if state.as_obj().is_none() {
-            return;
-        }
-        let fresh = state
-            .get("updated")
-            .as_f64()
-            .is_some_and(|at| now_secs() - at < 10.0);
-        if !fresh {
-            return;
-        }
-        let pos = state.get("position").as_arr().cloned().unwrap_or_default();
-        let (level, x, z) = (
-            pos.first().and_then(|v| v.as_i64()).unwrap_or(-1),
-            pos.get(1).and_then(|v| v.as_i64()).unwrap_or(0),
-            pos.get(2).and_then(|v| v.as_i64()).unwrap_or(0),
-        );
-        let mut present = MAZE_X.0 <= x && x < MAZE_X.1 && MAZE_Z.0 <= z && z < MAZE_Z.1
-            || MIME_X.0 <= x && x < MIME_X.1 && MIME_Z.0 <= z && z < MIME_Z.1
-            || FAIL_TELEPORTS.contains(&(level, x, z));
-        if !present {
-            let inv = state.get("inv").as_arr().cloned().unwrap_or_default();
-            present = inv.iter().any(|entry| {
-                entry.get("name").as_str() == Some("macro_cube") || entry.as_str() == Some("macro_cube")
-            });
-        }
-        if present {
+        if !gone {
             return;
         }
         let Ok(mut inner) = job.inner.try_lock() else {
@@ -383,7 +391,8 @@ impl Orchestrator {
 
 #[cfg(test)]
 mod tests {
-    use super::{backoff_active, backoff_secs, should_log_contended, CONTEND_LOG_EVERY, CONTEND_LOG_FIRST};
+    use super::{backoff_active, backoff_secs, event_is_gone, should_log_contended, CONTEND_LOG_EVERY, CONTEND_LOG_FIRST, FAIL_TELEPORTS, MAZE_X, MAZE_Z, MIME_X, MIME_Z};
+    use lifescape_json::{object, str_value, Value};
 
     /// Defaut 5: contention names itself on a fixed cadence (10, 60,
     /// 120...), never silently and never every pass.
@@ -405,5 +414,79 @@ mod tests {
         assert!(backoff_active(100.0, 99.9), "deadline in the future skips the RPC");
         assert!(!backoff_active(100.0, 100.0), "expired deadline polls again");
         assert!(!backoff_active(100.0, 101.0), "past deadline polls again");
+    }
+
+    /// `clear_event_if_gone` as it stood before lot 1.3 (a copy of the
+    /// snapshot, `cloned()` position and pack), reduced to its verdict.
+    fn event_gone_by_copy(state: Value, now: f64) -> bool {
+        if state.as_obj().is_none() {
+            return false;
+        }
+        let fresh = state.get("updated").as_f64().is_some_and(|at| now - at < 10.0);
+        if !fresh {
+            return false;
+        }
+        let pos = state.get("position").as_arr().cloned().unwrap_or_default();
+        let (level, x, z) = (
+            pos.first().and_then(|v| v.as_i64()).unwrap_or(-1),
+            pos.get(1).and_then(|v| v.as_i64()).unwrap_or(0),
+            pos.get(2).and_then(|v| v.as_i64()).unwrap_or(0),
+        );
+        let mut present = MAZE_X.0 <= x && x < MAZE_X.1 && MAZE_Z.0 <= z && z < MAZE_Z.1
+            || MIME_X.0 <= x && x < MIME_X.1 && MIME_Z.0 <= z && z < MIME_Z.1
+            || FAIL_TELEPORTS.contains(&(level, x, z));
+        if !present {
+            let inv = state.get("inv").as_arr().cloned().unwrap_or_default();
+            present = inv.iter().any(|entry| entry.get("name").as_str() == Some("macro_cube") || entry.as_str() == Some("macro_cube"));
+        }
+        !present
+    }
+
+    /// Lot 1.3: reading the snapshot in place gives the verdict of the
+    /// copy, over every geography (maze, mime, each fail tile, plain),
+    /// the cube as an object or a bare name, stale or missing `updated`,
+    /// missing position, and non-object snapshots.
+    #[test]
+    fn the_in_place_read_gives_the_verdict_of_the_copy() {
+        let now = 1_800_000_000.0;
+        let at = |level: i64, x: i64, z: i64| Value::Arr(vec![Value::Int(level), Value::Int(x), Value::Int(z)]);
+        let mut positions: Vec<Option<Value>> = vec![None, Some(at(0, 3222, 3218)), Some(at(0, 2900, 4560)), Some(at(0, 2900, 4608)), Some(at(1, 2000, 4750)), Some(at(0, 1983, 4750)), Some(Value::Arr(vec![]))];
+        positions.extend(FAIL_TELEPORTS.iter().map(|(level, x, z)| Some(at(*level, *x, *z))));
+        positions.extend(FAIL_TELEPORTS.iter().map(|(level, x, z)| Some(at(*level + 1, *x, *z))));
+        let packs: Vec<Option<Value>> = vec![
+            None,
+            Some(Value::Arr(vec![])),
+            Some(Value::Arr(vec![object(vec![("name", str_value("coins"))])])),
+            Some(Value::Arr(vec![object(vec![("name", str_value("macro_cube"))])])),
+            Some(Value::Arr(vec![str_value("macro_cube")])),
+            Some(Value::Arr(vec![str_value("coins"), Value::Int(3)])),
+        ];
+        let updates: Vec<Option<Value>> = vec![None, Some(Value::Float(now - 1.0)), Some(Value::Float(now - 9.9)), Some(Value::Float(now - 10.0)), Some(Value::Float(now - 600.0)), Some(Value::Str("x".to_string()))];
+        let (mut checked, mut gone_count) = (0, 0);
+        for position in &positions {
+            for pack in &packs {
+                for update in &updates {
+                    let mut fields = vec![("zone", str_value("Lumbridge")), ("trail", Value::Arr(vec![Value::Int(1); 50]))];
+                    if let Some(position) = position {
+                        fields.push(("position", position.clone()));
+                    }
+                    if let Some(pack) = pack {
+                        fields.push(("inv", pack.clone()));
+                    }
+                    if let Some(update) = update {
+                        fields.push(("updated", update.clone()));
+                    }
+                    let state = object(fields);
+                    let expected = event_gone_by_copy(state.clone(), now);
+                    assert_eq!(event_is_gone(&state, now), expected, "{state:?}");
+                    checked += 1;
+                    gone_count += usize::from(expected);
+                }
+            }
+        }
+        for state in [Value::Null, Value::Arr(vec![]), Value::Int(3), Value::Str("s".to_string())] {
+            assert_eq!(event_is_gone(&state, now), event_gone_by_copy(state.clone(), now));
+        }
+        assert!(gone_count > 100 && gone_count < checked, "both verdicts are reached: {gone_count}/{checked}");
     }
 }

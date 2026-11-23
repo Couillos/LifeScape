@@ -75,7 +75,7 @@ impl PushHub {
     /// One scan over every persistent stream: non-blocking reads, frame
     /// dispatch, dead streams reaped. Runs on the single `push-read`
     /// thread; no thread per message, ever.
-    fn scan_once(&self, dispatch: &Arc<dyn Fn(Value) + Send + Sync>) {
+    fn scan_once(&self, dispatch: &Arc<dyn Fn(Value, u64) + Send + Sync>) {
         // Snapshot the keys so a slow stream never holds the map lock.
         let accounts: Vec<String> = self
             .streams
@@ -110,8 +110,11 @@ impl PushHub {
             match outcome {
                 Ok(Some(frames)) => {
                     for frame in frames {
+                        // The received line's length is the frame's byte
+                        // count (the worker writes `stringify` + newline):
+                        // no re-serialisation of the parsed frame.
                         match json::parse(&frame) {
-                            Ok(value) => dispatch(value),
+                            Ok(value) => dispatch(value, frame.len() as u64),
                             Err(error) => eprintln!("push hub {account}: bad frame: {error}"),
                         }
                     }
@@ -131,11 +134,12 @@ impl PushHub {
     }
 }
 
-/// Start the hub: one `push-accept` thread plus one `push-read` thread,
+/// Start the hub (`dispatch` gets each parsed frame with the byte length of
+/// the line it came from): one `push-accept` thread plus one `push-read` thread,
 /// both named for `top -H`. The first frame on a stream names its
 /// account (`{"hello":"push","account":"t01"}`); later frames are the
 /// usual push frames. Unknown first lines are dropped loudly.
-pub fn start_push_hub(dispatch: Arc<dyn Fn(Value) + Send + Sync>) -> std::io::Result<()> {
+pub fn start_push_hub(dispatch: Arc<dyn Fn(Value, u64) + Send + Sync>) -> std::io::Result<()> {
     let sock = socket_path();
     if sock.exists() {
         if UnixStream::connect(&sock).is_ok() {
@@ -202,6 +206,71 @@ mod tests {
         let frames = extract_frames(&mut buffer);
         assert_eq!(frames, vec!["{\"c\":3}".to_string()]);
         assert!(buffer.is_empty());
+    }
+
+    /// Lot 1.3: the byte count the hub hands over (the received line's
+    /// length) is what `res-stats` counted before from a re-serialisation
+    /// of the parsed frame, on every shape of frame a worker writes (full
+    /// state, light flow, event, report; escapes, unicode, floats,
+    /// negatives, large ints, empty containers).
+    #[test]
+    fn the_received_line_length_equals_the_reserialised_length() {
+        use super::{PushHub, UnixStream};
+        use lifescape_json::{self as json, object, str_value, Value};
+        use std::collections::HashMap;
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+        let snapshot = object(vec![
+            ("account", str_value("amy_gray")),
+            ("position", Value::Arr(vec![Value::Int(0), Value::Int(-3222), Value::Int(3218)])),
+            ("zone", str_value("Lumbridge \"swamp\" \u{e9}\u{4e16} \\ \n tab\t")),
+            ("updated", Value::Float(1795477612.123456)),
+            ("speed", Value::Float(1.0)),
+            ("tiny", Value::Float(0.000001234)),
+            ("big", Value::Int(i64::MAX)),
+            ("neg", Value::Int(i64::MIN + 1)),
+            ("empty_arr", Value::Arr(Vec::new())),
+            ("empty_obj", Value::Obj(Default::default())),
+            ("flag", Value::Bool(true)),
+            ("none", Value::Null),
+            ("trail", Value::Arr((0..300).map(|n| Value::Arr(vec![Value::Int(3200 + n), Value::Int(3200 - n), Value::Int(0)])).collect())),
+            ("inv", Value::Arr(vec![object(vec![("name", str_value("coins")), ("count", Value::Int(5_000_000))])])),
+        ]);
+        let frames = vec![
+            object(vec![("type", str_value("snapshot")), ("account", str_value("amy_gray")), ("snapshot", snapshot.clone())]),
+            lifescape_orch_session::heartbeat_flows::light_value(
+                "amy_gray", "mining", "running", (0, 3228, 3298), 100, "Lumbridge", "fight", 1795477612.5,
+                Value::Arr(vec![Value::Arr(vec![Value::Int(837), Value::Int(3231), Value::Int(3301)])]),
+                Value::Arr(vec![Value::Arr(vec![str_value("will_field"), Value::Int(3229), Value::Int(3301)])]),
+            ),
+            object(vec![("type", str_value("event")), ("account", str_value("amy_gray")), ("event", str_value("maze")), ("resolved", Value::Bool(false)), ("tick", Value::Int(77)), ("message", str_value("na\u{ef}ve \"quoted\""))]),
+            object(vec![("type", str_value("task_report")), ("account", str_value("amy_gray")), ("report", object(vec![("stop", str_value("goal_reached")), ("ticks", Value::Int(1501)), ("flows", Value::Arr(Vec::new()))]))]),
+        ];
+        let hub = PushHub { streams: Mutex::new(HashMap::new()), pending: Mutex::new(HashMap::new()) };
+        let (mut worker_end, daemon_end) = UnixStream::pair().expect("socket pair");
+        hub.insert("amy_gray".to_string(), daemon_end);
+        let mut lines = Vec::new();
+        for frame in &frames {
+            let line = json::stringify(frame);
+            worker_end.write_all(line.as_bytes()).expect("write");
+            worker_end.write_all(b"\n").expect("write");
+            lines.push(line);
+        }
+        let seen: Arc<Mutex<Vec<(Value, u64)>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let dispatch: Arc<dyn Fn(Value, u64) + Send + Sync> = Arc::new(move |value, bytes| sink.lock().unwrap().push((value, bytes)));
+        for _ in 0..50 {
+            hub.scan_once(&dispatch);
+            if seen.lock().unwrap().len() == frames.len() {
+                break;
+            }
+        }
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), frames.len(), "every frame reaches the dispatch");
+        for ((value, bytes), line) in seen.iter().zip(&lines) {
+            assert_eq!(*bytes, line.len() as u64);
+            assert_eq!(*bytes, json::stringify(value).len() as u64, "same count as the re-serialisation: {}", &line[..line.len().min(80)]);
+        }
     }
 
     /// A runaway line resets instead of growing the hub forever.

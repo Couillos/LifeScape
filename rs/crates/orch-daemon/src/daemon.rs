@@ -517,7 +517,14 @@ impl Orchestrator {
     /// merged state at once. Fire-and-forget from the worker side: a lost
     /// frame is a missed heartbeat, the next pump pushes again.
     pub fn ingest_push(&self, frame: &Value) -> Value {
-        crate::res_stats::record_push(json::stringify(frame).len() as u64);
+        self.ingest_push_sized(frame, json::stringify(frame).len() as u64)
+    }
+
+    /// `ingest_push` with the frame's byte count already known (the push
+    /// hub passes the length of the line it received: no re-serialisation
+    /// of every frame just to count it, lot 1.3).
+    pub fn ingest_push_sized(&self, frame: &Value, bytes: u64) -> Value {
+        crate::res_stats::record_push(bytes);
         let account = frame.get("account").as_str().unwrap_or("").to_string();
         if account.is_empty() {
             return object(vec![("ok", Value::Bool(false)), ("error", str_value("account is required"))]);
