@@ -309,6 +309,24 @@ pub(crate) fn prefer_purchase_over_combat(node: &mut Node, ctx: &ReadyCtx) {
         .map(|alt| alt.est_coins)
         .min();
     if let Some(cost) = cheapest {
+        // A wallet that already pays the purchase never files coins to
+        // earn (live 2026-11-23, david_clay: `missing:coins:63200` with
+        // 1.44M free, a `have_coins` closed "done" every 3 s): the
+        // purchase leg is the method, placed like any other pick.
+        if wallet_for(ctx, cost) <= ctx.coins {
+            let covered = node
+                .alternatives
+                .iter()
+                .filter(|alt| matches!(alt.method.as_str(), "market:buy" | "shop:buy" | "dialogue:buy") && alt.est_coins == cost)
+                .map(|alt| alt.method.clone())
+                .next();
+            if let Some(method) = covered {
+                node.method = Some(method);
+                node.status = NodeStatus::Ready;
+                crate::expand::place_on_site(node, ctx);
+                return;
+            }
+        }
         node.status = NodeStatus::Blocked { reason: format!("missing:coins:{}", wallet_for(ctx, cost)) };
     }
 }

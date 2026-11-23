@@ -103,8 +103,18 @@ pub fn run_stringing(bot: &mut Bot, args: &[String]) -> ScriptResult {
 /// (nothing when the bank holds none or the booth is far: the caller
 /// reports `blocked`). Live admin 2026-11-15: one ball per load strung
 /// one amulet per bank trip.
+/// Pure: the fill may open the bank: the booth is in reach, or the known
+/// bank view holds amulets or wool and the withdrawal walks there. Live
+/// 2026-11-22 arthur_75: a clean pack made the bank trip a no-op (no
+/// walk), the old fixed 12-tile guard then skipped the fill with the
+/// amulet banked: `blocked, missing: unstrung_emerald_amulet` six times
+/// while the gate counted it held.
+pub fn fill_reaches_bank(bot: &Bot, bank: &lifescape_gamedata::banks::Bank, unstrung: u16, ball: u16) -> bool {
+    !crate::kit::withdraw::bank_far(bank, bot.world.x, bot.world.z) || crate::kit::withdraw::fetch_walk_needed(bot, bank, &[unstrung, ball])
+}
+
 fn fill_string(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, unstrung: u16, ball: u16) -> Result<(), ScriptError> {
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !fill_reaches_bank(bot, bank, unstrung, ball) {
         return Ok(());
     }
     let (amulets, balls) = pair_load(free_slots(bot) as u32, pack_total(bot, unstrung), pack_total(bot, ball));
@@ -183,6 +193,23 @@ mod tests {
         assert_eq!(strung_for("UNSTRUNG_DIAMOND_AMULET"), Some("strung_diamond_amulet"), "case-insensitive");
         assert!(strung_for("strung_gold_amulet").is_none(), "already strung never strings");
         assert!(strung_for("coins").is_none(), "junk never strings");
+    }
+
+    /// Live 2026-11-22 arthur_75: a far bot with the amulet banked fills
+    /// from the bank (walks there); with nothing known banked it does not.
+    #[test]
+    fn a_far_bot_with_banked_amulets_still_fills() {
+        let bank = crate::kit::spots::nearest_bank_at(3252, 3419, 0).expect("Varrock east bank");
+        let mut bot = offline_bot();
+        bot.world.level = 0;
+        bot.world.x = 2990;
+        bot.world.z = 3340;
+        let unstrung = obj_id(&bot, "unstrung_emerald_amulet").expect("amulet");
+        let ball = obj_id(&bot, BALL).expect("ball");
+        let com = (bot.tables.com_id)("bank_main:inv").expect("bank com");
+        assert!(!super::fill_reaches_bank(&bot, &bank, unstrung, ball), "nothing known banked: no empty trek");
+        bot.world.seed_closed_inv(com, &[(unstrung, 1u32)].into_iter().collect());
+        assert!(super::fill_reaches_bank(&bot, &bank, unstrung, ball), "banked amulet: the fill walks to the bank");
     }
 
     /// Wool and every unstrung/strung pair resolve through live tables.

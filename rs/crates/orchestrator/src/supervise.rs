@@ -347,7 +347,7 @@ impl Orchestrator {
         }
         let reply = self.send_worker(
             &job.account,
-            &object(vec![("cmd", str_value("unload"))]),
+            &object(vec![("cmd", str_value("settle"))]),
             Duration::from_secs(WORKER_TIMEOUT),
         );
         if let Ok(reply) = reply {

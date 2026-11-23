@@ -50,6 +50,7 @@ pub mod economy_guard;
 pub mod economy_outcomes;
 pub mod brain_fold;
 pub mod brain_food;
+pub mod brain_coin_need;
 pub mod brain_gear;
 pub mod brain_gear_fleet;
 pub mod brain_gear_hold;

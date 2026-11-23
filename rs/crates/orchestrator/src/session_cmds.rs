@@ -90,6 +90,19 @@ fn cmd_run(shared: &Arc<Shared>, script: &str, args: &[Value]) -> Value {
     object(vec![("ok", Value::Bool(true)), ("session", shared.describe())])
 }
 
+/// Settle a finished run back to idle, never stopping a live one. The
+/// daemon read `finished` off a stale snapshot while the idle drain had
+/// already started a posed delivery: a plain `unload` then stopped it
+/// ("run stopped", the deals reported `failed timeout`: 115289, 115532,
+/// 115555, 115657, 115750 on 2026-11-22, every one a pose landing in the
+/// second after a run's end). With a live script this is a no-op.
+pub(crate) fn cmd_settle(shared: &Arc<Shared>) -> Value {
+    if shared.inner.lock().unwrap().script_alive {
+        return object(vec![("ok", Value::Bool(true)), ("session", shared.describe())]);
+    }
+    cmd_unload(shared)
+}
+
 fn cmd_unload(shared: &Arc<Shared>) -> Value {
     {
         let mut inner = shared.inner.lock().unwrap();
@@ -355,6 +368,7 @@ pub(crate) fn dispatch(shared: &Arc<Shared>, request: &Value) -> Value {
         }
         "run" => cmd_run(shared, request.get("script").as_str().unwrap_or(""), &request.get("args").as_arr().cloned().unwrap_or_default()),
         "unload" => cmd_unload(shared),
+        "settle" => cmd_settle(shared),
         "pause" => cmd_pause(shared),
         "hold" => cmd_hold(shared),
         "resume" => cmd_resume(shared),

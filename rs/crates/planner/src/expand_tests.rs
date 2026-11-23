@@ -640,3 +640,24 @@ fn a_keeper_short_of_the_need_is_not_the_first_seller() {
     resolve_ready(&mut nodes[0], &covered);
     assert_eq!(nodes[0].method.as_deref(), Some("shop:buy"), "the window covers the need: the keeper");
 }
+
+/// Live 2026-11-23, david_clay: 100 uncut diamonds, 1.44M free coins,
+/// ask 632. The drop farm was picked beside the bid, no site was safe at
+/// the bot's combat level, and `prefer_purchase_over_combat` filed
+/// `missing:coins:63200` although the wallet paid it: the resolve looped
+/// every 3 s on a `have_coins` already met. A covered purchase is the
+/// method, never a coin block.
+#[test]
+fn a_covered_purchase_replaces_an_unsafe_farm() {
+    use crate::model::NodeStatus;
+    let mut nodes = expand_goal(&GoalKind::Obtain { item: "uncut_diamond".to_string(), count: 100 }, &profile());
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.coins = 1_443_264;
+    ctx.price = 632;
+    ctx.best_ask = Some(632);
+    ctx.combat = 3;
+    ctx.position = Some((3222, 3218, 0));
+    resolve_ready(&mut nodes[0], &ctx);
+    assert!(!matches!(&nodes[0].status, NodeStatus::Blocked { .. }), "got {:?} {:?}", nodes[0].status, nodes[0].alternatives);
+    assert_eq!(nodes[0].method.as_deref(), Some("market:buy"));
+}

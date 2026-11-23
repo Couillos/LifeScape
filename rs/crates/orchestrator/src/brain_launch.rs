@@ -55,16 +55,6 @@ pub(crate) fn block_outcome(fold: &lifescape_planner::FailureFold) -> &'static s
     }
 }
 
-/// A `coins:N` need computed on the free wallet: the wallet to earn adds
-/// back the coins the bot's other resting buys commit, so the
-/// `have_coins` target it files really frees `N` (other needs unchanged).
-pub(crate) fn lift_coin_need(need: &str, committed: i64) -> String {
-    match need.strip_prefix("coins:").and_then(|amount| amount.parse::<i64>().ok()) {
-        Some(amount) => format!("coins:{}", amount.saturating_add(committed.max(0))),
-        None => need.to_string(),
-    }
-}
-
 fn now_unix() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0)
 }
@@ -643,7 +633,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if let NodeStatus::Blocked { reason } = life.nodes[position].status.clone() {
         // A priced training pick blocks on everything it lacks at once
         // (`missing:hammer,bronze_bar`).
-        let missing: Vec<String> = reason.strip_prefix("missing:").map(|needs| needs.split(',').map(|need| lift_coin_need(need, committed)).collect()).unwrap_or_default();
+        let missing: Vec<String> = reason.strip_prefix("missing:").map(|needs| needs.split(',').filter(|need| !crate::brain_coin_need::met(need, ctx.coins)).map(|need| crate::brain_coin_need::lift(need, committed)).collect()).unwrap_or_default();
         let id = life.nodes[position].id.clone();
         // Every site of every candidate full or cooled (tour 3 point 1):
         // the method cools, the node stays open (next method, D6).
@@ -957,21 +947,4 @@ pub(crate) fn note_launch(account: &str) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(account.to_string(), std::time::Instant::now());
-}
-
-#[cfg(test)]
-mod tests {
-    use super::lift_coin_need;
-
-    /// Review 2026-11-13 (finding 6): a graph buy bids on the coins the
-    /// bot's standing bids leave free; the wallet it must earn adds those
-    /// commitments back, or the `have_coins` target is met while the
-    /// purchase still cannot be afforded.
-    #[test]
-    fn a_coin_need_adds_the_committed_coins() {
-        assert_eq!(lift_coin_need("coins:120", 40), "coins:160");
-        assert_eq!(lift_coin_need("coins:120", 0), "coins:120");
-        assert_eq!(lift_coin_need("tool:pickaxe", 40), "tool:pickaxe");
-        assert_eq!(lift_coin_need("coins:many", 40), "coins:many");
-    }
 }

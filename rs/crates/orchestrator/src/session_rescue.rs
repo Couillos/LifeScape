@@ -705,6 +705,20 @@ mod tests {
         assert!(shared.pending_market.lock().unwrap().is_none(), "pending consumed once");
     }
 
+    /// Live 2026-11-22 (deals 115532/115555 and four more): the daemon
+    /// settled a "finished" run with a plain unload while a posed
+    /// delivery had just started; `settle` leaves a live script alone.
+    #[test]
+    fn settle_never_stops_a_live_delivery() {
+        let shared = std::sync::Arc::new(script_shared(idle_bot_at(0, 3220, 3220)));
+        let reply = crate::session_cmds::cmd_settle(&shared);
+        assert_eq!(reply.get("ok").as_bool(), Some(true));
+        assert!(!shared.stop_requested.load(std::sync::atomic::Ordering::SeqCst), "no stop requested");
+        assert!(shared.inner.lock().unwrap().script_alive, "the delivery keeps running");
+        let idle = std::sync::Arc::new(test_shared(idle_bot_at(0, 3220, 3220)));
+        assert_eq!(crate::session_cmds::cmd_settle(&idle).get("ok").as_bool(), Some(true), "idle settles");
+    }
+
     /// Live 2026-11-13 (t01, deals 1664 then 1671/1672/1684): the idle
     /// serve thread pumps too; a pose run inline there blocked the socket
     /// for the whole delivery and the daemon resent the stale convocation

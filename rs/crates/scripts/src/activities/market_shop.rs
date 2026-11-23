@@ -135,7 +135,7 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 }
                 pauses_at_load = Some(bot.pauses_done);
                 walked = false;
-                let held = carry_coins(bot, coins, need.saturating_add(bot.fare_reserve), item_id, entry.stackable, qty)?;
+                let held = carry_coins(bot, coins, need, item_id, entry.stackable, qty)?;
                 bot.log(&format!("shopbuy {item} x{qty}: carrying {held} coins, {} free slots", free_slots(bot)));
                 let reserve = crate::kit::toll::pack_reserve(bot);
                 if let Some(blocked) = unpaid_load(held, price_each, need, reserve) {
@@ -226,6 +226,12 @@ pub fn load_lack(bot: &Bot, coins: u16, want: u32, item: u16, stackable: bool, q
     LoadLack { coins: short, bank_load: free_slots(bot) < room }
 }
 
+/// Pure: coins a shop load carries: the order's price and the fares its
+/// routes keep in the pack.
+pub fn coins_wanted(need: u32, fare_reserve: u32) -> u32 {
+    need.saturating_add(fare_reserve)
+}
+
 /// Coins in the pack up to `want` and room for the bought object
 /// (pack-first, bank-backed): a fresh session has not seen its bank yet
 /// (live 2026-11-12: harry_page went to the shop "carrying 0 coins" with
@@ -233,7 +239,17 @@ pub fn load_lack(bot: &Bot, coins: u16, want: u32, item: u16, stackable: bool, q
 /// pack without the room banks its load first, keeping what stays
 /// (tools, held objects), the coins and the object (`kit::toll::fare_keep`
 /// rule). Returns the coins carried.
-fn carry_coins(bot: &mut Bot, coins: u16, want: u32, item: u16, stackable: bool, qty: u32) -> Result<u32, ScriptError> {
+fn carry_coins(bot: &mut Bot, coins: u16, need: u32, item: u16, stackable: bool, qty: u32) -> Result<u32, ScriptError> {
+    // A toll-only run arms no fares (`bot.allow_paid = true`, reserve 0):
+    // the bank trip prices its reserve AFTER the want was computed, took
+    // it from the withdrawal and `unpaid_load` blocked `coins:25` with
+    // 884k banked (live 2026-11-22 sean_lane). The reserve is priced
+    // first, so the want carries it.
+    if bot.allow_paid && bot.assigned_site.is_some() && bot.fare_bank.is_none() {
+        let bank = crate::kit::bank::nearest_bank(bot)?;
+        crate::kit::toll::refresh_reserve(bot, (bank.x as i32, bank.z as i32, bank.level as i32))?;
+    }
+    let want = coins_wanted(need, bot.fare_reserve);
     let lack = load_lack(bot, coins, want, item, stackable, qty);
     if lack == (LoadLack { coins: 0, bank_load: false }) {
         return Ok(pack_total(bot, coins));
@@ -339,6 +355,15 @@ mod tests {
         }
         assert!(super::unpaid_load(5, 5, 3250, 0).is_none(), "one unit paid: the shop sells what it can");
         assert!(super::unpaid_load(40, 20, 20, 30).is_some(), "the fares come on top");
+    }
+
+    /// Live 2026-11-22 sean_lane: want 5 (price) while the bank trip then
+    /// priced a 20-coin reserve out of that same withdrawal and the load
+    /// blocked `coins:25`. The want always includes the priced reserve.
+    #[test]
+    fn the_wanted_coins_carry_the_priced_reserve() {
+        assert_eq!(super::coins_wanted(5, 20), 25);
+        assert!(super::unpaid_load(super::coins_wanted(5, 20), 5, 5, 20).is_none(), "a load carrying the want is never unpaid");
     }
 
     #[test]
