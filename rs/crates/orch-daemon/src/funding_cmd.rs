@@ -49,7 +49,7 @@ fn gather(orch: &Orchestrator, service: &MarketService) -> (Vec<MakerNeed>, Vec<
     for job in &jobs {
         let account = job.account.clone();
         online.insert(account.clone());
-        let live = job.inner.try_lock().ok().and_then(|inner| inner.live.clone());
+        let live = job.inner.try_lock().ok().and_then(|inner| inner.live_copy());
         let coins = live.as_ref().and_then(live_coins);
         let pending_in = sum_for(&flying, &|gift| gift.1 == account);
         let pending_out = sum_for(&flying, &|gift| gift.0 == account);

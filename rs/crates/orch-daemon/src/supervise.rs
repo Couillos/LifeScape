@@ -134,6 +134,7 @@ fn supervise_all() {
             written.clear();
             continue;
         }
+        let sweep = crate::cpu_profile::Probe::start();
         for (orch, job) in &pairs {
             let now = crate::jobs::now_secs();
             // Circuit breaker: skip the blocking RPC while cooling down.
@@ -161,7 +162,9 @@ fn supervise_all() {
             // The registry only ever holds the daemon's own `Orchestrator`.
             let Some(daemon) = orch.as_any().downcast_ref::<Orchestrator>() else { continue };
             let pass_start = crate::jobs::now_secs();
+            let once = crate::cpu_profile::Probe::start();
             daemon.supervise_once(job, &mut written);
+            crate::cpu_profile::supervise().finish(once, "once");
             let after_once = crate::jobs::now_secs();
             let elapsed = after_once - pass_start;
             if elapsed > 10.0 {
@@ -206,6 +209,7 @@ fn supervise_all() {
             };
             crate::brain::on_supervise(orch, job, report);
         }
+        crate::cpu_profile::supervise().finish(sweep, "sweep");
     }
 }
 
@@ -281,7 +285,7 @@ impl Orchestrator {
     /// shows none (maze/mime rooms, fail tiles, carried cube). Rescues
     /// replay a stale unresolved event every tick otherwise.
     fn clear_event_if_gone(&self, job: &Arc<Job>) {
-        let state = match job.inner.try_lock().map(|inner| inner.live.clone()) {
+        let state = match job.inner.try_lock().map(|inner| inner.live_copy()) {
             Ok(Some(state)) => state,
             // No push yet (daemon just restarted) or wedged job: wait
             // for the next pass instead of parking the supervisor.

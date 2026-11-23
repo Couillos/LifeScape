@@ -91,3 +91,44 @@ fn labels_and_phases() {
     mark_brain_thread();
     assert!(phase("load_life").probe.is_some());
 }
+
+/// Delay buckets of the report -> fold line (edges inclusive).
+#[test]
+fn report_delays_fall_in_buckets() {
+    let secs = Duration::from_secs;
+    assert_eq!(delay_bucket(Duration::from_millis(900)), "le_1s");
+    assert_eq!(delay_bucket(secs(1)), "le_1s");
+    assert_eq!(delay_bucket(Duration::from_millis(1001)), "le_5s");
+    assert_eq!(delay_bucket(secs(7)), "le_10s");
+    assert_eq!(delay_bucket(secs(20)), "le_20s");
+    assert_eq!(delay_bucket(secs(31)), "gt_20s");
+}
+
+/// Counted events: one kind, `count` calls, and the line shows them.
+#[test]
+fn counted_events_sum_into_one_kind() {
+    let mut window = Window::new(Instant::now());
+    window.add_n("locked_items", 40, 0, 0);
+    window.add_n("locked_items", 2, 0, 0);
+    let (rows, span) = window.take(Instant::now());
+    assert_eq!(rows[0].1, Totals { count: 42, wall_ns: 0, cpu_ns: 0 });
+    assert!(summary_line("tally", &rows, span).contains(" locked_items=42/0.0/0.0"));
+}
+
+/// Tallies count on the brain thread only and are cleared by the flush.
+#[test]
+fn tallies_count_on_the_brain_thread_only() {
+    std::thread::spawn(|| {
+        tally("off_brain");
+        assert!(TALLIES.with(|cell| cell.borrow().is_empty()), "other threads never count");
+        mark_brain_thread();
+        tally("locked_items");
+        tally("locked_items");
+        tally("live_copy");
+        assert_eq!(TALLIES.with(|cell| cell.borrow().clone()), vec![("locked_items", 2), ("live_copy", 1)]);
+        flush_tallies();
+        assert!(TALLIES.with(|cell| cell.borrow().is_empty()));
+    })
+    .join()
+    .expect("thread");
+}

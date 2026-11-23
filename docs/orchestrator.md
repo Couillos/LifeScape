@@ -599,3 +599,13 @@ Deux outils hors démon, en lecture seule, dans `tools/` :
 
 - `tools/baseline.py [--hours 1] [--end UNIX] [--json]` : ouvre `run/lifescape.db` en `?mode=ro` et lit, par horloge Unix (fenêtre `[fin - heures, fin)`, par défaut la dernière heure pleine), les rapports par heure et la part de chaque `stop` (`goal_reached`, `blocked`, `failed`, `budget_exhausted`…), les ticks de travail et de pause par heure, l'XP par heure (`task_yields.xp`), les `error_events` par heure et par type, et le délai rapport → prise en compte (seule donnée tirée du journal du démon, lu sur sa fin : ligne `task_report … (push)` puis `folded report` du même bot). À lancer pour l'heure d'avant un déploiement et pour l'heure d'après, puis à comparer.
 - `tools/cpu_sample.py <fenêtres> <secondes>` : CPU par groupe de fils du démon (nom du fil sans son numéro final), des ouvriers, du serveur de jeu et du relais, lu dans `/proc`. Deux relevés à une heure d'écart donnent des chiffres voisins.
+
+### Profil du démon complet (lot 0.2, 2026-11-24)
+
+Cinq lignes `cpu-profile` par minute (le journal du démon) :
+
+- `cpu-profile threads (60s): cpu_ms <groupe>=<ms>x<fils> … exited=<ms> total=<ms> threads=<n>` (`orch-core/src/thread_profile.rs`) : le CPU de TOUS les fils du démon, par nom de fil (numéro final retiré). Rien n'est sans attribution : `total` est le CPU du processus (utime + stime), `exited` ce qu'ont consommé les fils morts dans la minute (`worker-connect`, `session-conn`…), et somme des groupes + `exited` = `total`. Les fils sans nom (dont le principal) forment le groupe `orchestrator`.
+- `cpu-profile brain` : inchangée, plus la phase `resize_session_inputs` (le suspect de la part non étiquetée du cerveau).
+- `cpu-profile tally` : compteurs d'appels du fil du cerveau, `count` = appels dans la minute (les rapporter à `ticks`) : `locked_items` (2 requêtes en base chacun), `live_copy` (copie profonde de l'état vivant `JobInner::live_copy`), `ticks`.
+- `cpu-profile supervise` : `sweep` = un tour complet du superviseur sur tous les bots (sommeil de 500 ms exclu), `once` = un `supervise_once` (appel `status` bloquant compris).
+- `cpu-profile fold` : délai rapport → prise en compte par le cerveau (reçu par le canal des battements, `note_report_received`, jusqu'à `note_report_folded`), un genre par tranche (`le_1s`, `le_5s`, `le_10s`, `le_20s`, `gt_20s`), `count` = rapports, `wall_ms` = délai cumulé (moyenne = `wall_ms / count`). Remplace le script `latency.py` : plus besoin de relire le journal.

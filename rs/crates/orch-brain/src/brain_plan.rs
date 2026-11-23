@@ -198,7 +198,7 @@ pub(crate) struct Holdings {
 impl Holdings {
     /// The job's holdings as they stand now.
     pub(crate) fn of(job: &Job) -> Self {
-        let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+        let live = job.inner.try_lock().map(|inner| inner.live_copy()).unwrap_or(None).unwrap_or(Value::Null);
         Holdings { live, locks: crate::brain_locks::locked_items(&job.account), counted: Default::default() }
     }
 
@@ -216,7 +216,7 @@ impl Holdings {
 
 /// Every unit held, listed or not (pack, bank, worn).
 pub(crate) fn raw_holdings_count(job: &Job, item_debug: &str) -> i64 {
-    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    let live = job.inner.try_lock().map(|inner| inner.live_copy()).unwrap_or(None).unwrap_or(Value::Null);
     // By object id, never by the shared display (tour 3 point 7: 7
     // unstrung emerald amulets read as 7 strung ones).
     crate::live_items::live_units(&live, item_debug)
@@ -226,7 +226,7 @@ pub(crate) fn raw_holdings_count(job: &Job, item_debug: &str) -> i64 {
 /// L8: cleanup at 55 of 60 F2P slots). Name or id keys the type, so both
 /// live snapshot shapes count.
 pub(crate) fn bank_types(job: &Job) -> usize {
-    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    let live = job.inner.try_lock().map(|inner| inner.live_copy()).unwrap_or(None).unwrap_or(Value::Null);
     bank_types_of(&live)
 }
 
@@ -295,7 +295,7 @@ pub fn live_debug_name(entry: &Value) -> Option<String> {
 }
 
 fn live_names(job: &Job, key: &str) -> Vec<String> {
-    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    let live = job.inner.try_lock().map(|inner| inner.live_copy()).unwrap_or(None).unwrap_or(Value::Null);
     names_of(&live, key)
 }
 
@@ -332,7 +332,7 @@ pub(crate) fn carried_tools(job: &Job) -> Vec<String> {
 
 /// Live `(debug name, count)` entries of one container.
 fn live_entries(job: &Job, key: &str) -> Vec<(String, i64)> {
-    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    let live = job.inner.try_lock().map(|inner| inner.live_copy()).unwrap_or(None).unwrap_or(Value::Null);
     let mut out = Vec::new();
     for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
         let count = entry.get("count").as_i64().unwrap_or(1);
@@ -349,7 +349,7 @@ fn live_entries(job: &Job, key: &str) -> Vec<(String, i64)> {
 /// Live carried + banked stacks (debug name, summed quantity), a
 /// banknote under its object's name (`stacks_of`).
 pub(crate) fn live_stacks(job: &Job) -> Vec<(String, i64)> {
-    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    let live = job.inner.try_lock().map(|inner| inner.live_copy()).unwrap_or(None).unwrap_or(Value::Null);
     stacks_of(&live)
 }
 

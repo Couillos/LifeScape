@@ -595,6 +595,7 @@ impl Orchestrator {
                     report.get("activity").as_str().unwrap_or("?"),
                     report.get("ticks").as_i64().unwrap_or(-1),
                 );
+                crate::cpu_profile::note_report_received(&account);
                 // E8: stage grouped for the future store import, flag the
                 // single supervisor (brain trigger) immediately.
                 if let Err(error) = crate::store_queue::stage_report(&report) {

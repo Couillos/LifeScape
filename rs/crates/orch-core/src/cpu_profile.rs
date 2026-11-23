@@ -16,7 +16,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Summary period.
@@ -40,8 +40,8 @@ pub struct Totals {
 }
 
 impl Totals {
-    fn add(&mut self, wall_ns: u64, cpu_ns: u64) {
-        self.count += 1;
+    fn add_n(&mut self, count: u64, wall_ns: u64, cpu_ns: u64) {
+        self.count += count;
         self.wall_ns = self.wall_ns.saturating_add(wall_ns);
         self.cpu_ns = self.cpu_ns.saturating_add(cpu_ns);
     }
@@ -59,13 +59,18 @@ impl Window {
     }
 
     pub fn add(&mut self, kind: &str, wall_ns: u64, cpu_ns: u64) {
+        self.add_n(kind, 1, wall_ns, cpu_ns);
+    }
+
+    /// `count` events at once (the tallies: one line entry, many calls).
+    pub fn add_n(&mut self, kind: &str, count: u64, wall_ns: u64, cpu_ns: u64) {
         let kind = clip_label(kind);
         if let Some(totals) = self.by_kind.get_mut(kind) {
-            totals.add(wall_ns, cpu_ns);
+            totals.add_n(count, wall_ns, cpu_ns);
             return;
         }
         let key = if self.by_kind.len() >= MAX_KINDS { "other" } else { kind };
-        self.by_kind.entry(key.to_string()).or_default().add(wall_ns, cpu_ns);
+        self.by_kind.entry(key.to_string()).or_default().add_n(count, wall_ns, cpu_ns);
     }
 
     pub fn due(&self, now: Instant) -> bool {
@@ -134,11 +139,16 @@ impl Profile {
 
     /// Adds one sample; the first sample past the window logs the line.
     pub fn record(&self, kind: &str, wall_ns: u64, cpu_ns: u64) {
+        self.record_n(kind, 1, wall_ns, cpu_ns);
+    }
+
+    /// Adds `count` events of one kind in one sample.
+    pub fn record_n(&self, kind: &str, count: u64, wall_ns: u64, cpu_ns: u64) {
         let now = Instant::now();
         let flushed = {
             let mut slot = self.window.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let window = slot.get_or_insert_with(|| Window::new(now));
-            window.add(kind, wall_ns, cpu_ns);
+            window.add_n(kind, count, wall_ns, cpu_ns);
             if window.due(now) { Some(window.take(now)) } else { None }
         };
         if let Some((rows, span)) = flushed {
@@ -155,6 +165,9 @@ impl Profile {
 
 static POOL: Profile = Profile::new("pool");
 static BRAIN: Profile = Profile::new("brain");
+static SUPERVISE: Profile = Profile::new("supervise");
+static FOLD: Profile = Profile::new("fold");
+static TALLY: Profile = Profile::new("tally");
 
 /// Daemon/market socket pool profile.
 pub fn pool() -> &'static Profile {
@@ -164,6 +177,58 @@ pub fn pool() -> &'static Profile {
 /// `brain-tick` profile.
 pub fn brain() -> &'static Profile {
     &BRAIN
+}
+
+/// `supervise-all` profile (lot 0.2): `sweep` = one pass over every
+/// account (the 500 ms sleep excluded), `once` = one `supervise_once`.
+pub fn supervise() -> &'static Profile {
+    &SUPERVISE
+}
+
+/// Brain call counters (`n:<name>`, count = calls over the minute), a
+/// profile of their own: zero-CPU kinds would fall off the `brain`
+/// line's top by CPU.
+pub fn tally_profile() -> &'static Profile {
+    &TALLY
+}
+
+/// Report -> fold delay profile (lot 0.2): one kind per delay bucket,
+/// count = reports, wall = their summed delay (mean = wall / count).
+pub fn fold() -> &'static Profile {
+    &FOLD
+}
+
+/// Bucket label of a report -> fold delay.
+pub fn delay_bucket(delay: Duration) -> &'static str {
+    match delay.as_millis() {
+        0..=1_000 => "le_1s",
+        1_001..=5_000 => "le_5s",
+        5_001..=10_000 => "le_10s",
+        10_001..=20_000 => "le_20s",
+        _ => "gt_20s",
+    }
+}
+
+/// Task reports received by the daemon, not folded by the brain yet.
+fn received_reports() -> &'static Mutex<HashMap<String, Instant>> {
+    static RECEIVED: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    RECEIVED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A pushed task report reached the daemon (a second one before the
+/// fold replaces the first: the delay is that of the report folded).
+pub fn note_report_received(account: &str) {
+    received_reports().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(account.to_string(), Instant::now());
+}
+
+/// The brain folded the report of `account`: records the delay since
+/// `note_report_received` (nothing when the report was never noted).
+pub fn note_report_folded(account: &str) {
+    let received = received_reports().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(account);
+    if let Some(at) = received {
+        let delay = at.elapsed();
+        fold().record(delay_bucket(delay), u64::try_from(delay.as_nanos()).unwrap_or(u64::MAX), 0);
+    }
 }
 
 /// Wall + thread CPU at a start point.
@@ -197,6 +262,8 @@ thread_local! {
     /// True on the `brain-tick` thread only: phases elsewhere are no-ops
     /// (`load_life` also runs on web/CLI threads).
     static BRAIN_THREAD: Cell<bool> = const { Cell::new(false) };
+    /// Call counters of the brain thread, flushed once per tick.
+    static TALLIES: RefCell<Vec<(&'static str, u64)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Calling thread's CPU time in ns: `schedstat` (exact run time), else
@@ -240,6 +307,30 @@ pub fn take_label() -> String {
 /// Marks the calling thread as the brain thread (phases record).
 pub fn mark_brain_thread() {
     BRAIN_THREAD.with(|flag| flag.set(true));
+}
+
+/// Counts one call of `name` on the brain thread (no-op elsewhere): the
+/// per-pass reads the phases cannot show (`locked_items`, `live` copies).
+/// `flush_tallies` publishes them to the `tally` profile (count = calls).
+pub fn tally(name: &'static str) {
+    if !BRAIN_THREAD.with(|flag| flag.get()) {
+        return;
+    }
+    TALLIES.with(|cell| {
+        let mut rows = cell.borrow_mut();
+        match rows.iter_mut().find(|(known, _)| *known == name) {
+            Some((_, count)) => *count += 1,
+            None => rows.push((name, 1)),
+        }
+    });
+}
+
+/// Publishes and clears this thread's tallies (end of one brain tick).
+pub fn flush_tallies() {
+    let rows = TALLIES.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+    for (name, count) in rows {
+        tally_profile().record_n(name, count, 0, 0);
+    }
 }
 
 /// Scope guard for one brain phase: records on drop, no-op off the

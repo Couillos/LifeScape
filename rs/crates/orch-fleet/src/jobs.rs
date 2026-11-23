@@ -59,6 +59,15 @@ pub struct JobInner {
     pub state_written_at: f64,
 }
 
+impl JobInner {
+    /// Deep copy of the last pushed snapshot (35 to 85 KB of JSON tree),
+    /// tallied for the brain thread (`cpu-profile tally`: `live_copy`).
+    pub fn live_copy(&self) -> Option<Value> {
+        crate::cpu_profile::tally("live_copy");
+        self.live.clone()
+    }
+}
+
 pub struct Job {
     pub account: String,
     pub inner: Mutex<JobInner>,
@@ -141,7 +150,7 @@ impl Job {
         // only the last-breath fallback before the first push arrives.
         let (live, inner) = match self.inner.try_lock() {
             Ok(guard) => {
-                let live = guard.live.clone();
+                let live = guard.live_copy();
                 let copied = (
                     guard.phase.clone(),
                     guard.script.clone(),
@@ -411,7 +420,7 @@ pub fn supervised() -> &'static Mutex<Vec<(Arc<dyn crate::fleet::Fleet>, Arc<Job
 pub fn live_of(account: &str) -> Option<Value> {
     let job = supervised().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().find(|(_, job)| job.account == account).map(|(_, job)| job.clone())?;
     let inner = job.inner.try_lock().ok()?;
-    inner.live.clone()
+    inner.live_copy()
 }
 
 /// Merge a light frame into the cached full state: only the light keys

@@ -157,7 +157,7 @@ pub(crate) fn other_lives(account: &str) -> Vec<Life> {
 fn live_of(orch: &dyn Fleet, account: &str) -> Option<Value> {
     let job = orch.jobs().try_lock().ok()?.get(account).cloned()?;
     let inner = job.inner.try_lock().ok()?;
-    inner.live.clone()
+    inner.live_copy()
 }
 /// Gaps the rest of the fleet leaves open, whether another bot holds
 /// this life's primary group too, and the kinds the other bots hold

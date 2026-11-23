@@ -110,6 +110,8 @@ fn daemon_main() -> i32 {
         Err(error) => eprintln!("static map unavailable: {error}"),
     }
     web::start_web(dispatch, port);
+    // One `cpu-profile threads` line a minute: every daemon thread group.
+    lifescape_orchestrator::thread_profile::start();
     // Pathfinding service: one snapshot for every worker. Any load
     // error leaves it down (every plan then fails `nav-down`, never a
     // local plan); the daemon itself never depends on it.

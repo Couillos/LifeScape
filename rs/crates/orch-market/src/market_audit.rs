@@ -268,7 +268,7 @@ impl MarketService {
         let now = crate::jobs::now_secs();
         let mut lives: HashMap<String, Value> = HashMap::new();
         for job in jobs {
-            if let Ok(Some(live)) = job.inner.try_lock().map(|inner| inner.live.clone()) {
+            if let Ok(Some(live)) = job.inner.try_lock().map(|inner| inner.live_copy()) {
                 if live.get("updated").as_f64().is_some_and(|at| now - at < 120.0) {
                     lives.insert(job.account.to_lowercase(), live);
                 }
@@ -418,7 +418,7 @@ impl MarketService {
             .unwrap_or(995);
         let now = crate::jobs::now_secs();
         for job in jobs {
-            let live = match job.inner.try_lock().map(|inner| inner.live.clone()) {
+            let live = match job.inner.try_lock().map(|inner| inner.live_copy()) {
                 Ok(Some(live)) => live,
                 _ => continue,
             };

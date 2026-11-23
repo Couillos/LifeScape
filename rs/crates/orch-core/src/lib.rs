@@ -36,4 +36,5 @@ pub mod store_queue;
 pub mod names;
 pub mod api_shapes;
 pub mod nav_profile;
+pub mod thread_profile;
 pub mod economy_guard;

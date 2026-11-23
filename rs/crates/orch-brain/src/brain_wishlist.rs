@@ -112,7 +112,7 @@ pub fn wishes(style: Style, levels: &[(&str, i64)], owned: &[String], tools: &[&
 }
 
 fn live_of(job: &Job) -> Value {
-    job.inner.try_lock().ok().and_then(|inner| inner.live.clone()).unwrap_or(Value::Null)
+    job.inner.try_lock().ok().and_then(|inner| inner.live_copy()).unwrap_or(Value::Null)
 }
 
 /// The bot's current wishes (empty without a live snapshot). Melee and

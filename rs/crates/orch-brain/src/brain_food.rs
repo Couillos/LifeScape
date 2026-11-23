@@ -36,7 +36,7 @@ pub(crate) fn afford_food_needs(job: &Job, method: &str, missing: Vec<String>) -
     let coins = crate::brain_plan::holdings_count(job, "coins");
     let reader = crate::brain_bids::MarketReader::live(&job.account);
     let price_of = |item: &str| reader.view(item).and_then(|view| view.best_ask().or(view.current));
-    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    let live = job.inner.try_lock().map(|inner| inner.live_copy()).unwrap_or(None).unwrap_or(Value::Null);
     let levels = crate::brain_market::live_levels(&live);
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
     // Owned stacks (pack, bank) and worn gear, read once.

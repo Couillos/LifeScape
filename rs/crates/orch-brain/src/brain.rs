@@ -569,14 +569,19 @@ fn ensure_brain(orch: &Arc<dyn Fleet>) {
                             handle_report(&orch, &job, &report);
                         }
                         crate::brain_inflight::folded(&account);
+                        crate::cpu_profile::note_report_folded(&account);
                         crate::logln!("brain {}: folded report stop={}", account, report.get("stop").as_str().unwrap_or("?"));
                         let _phase = crate::cpu_profile::phase("tick.ingest_report");
                         if let Err(error) = crate::rates_ingest::ingest_report_persisted(&report) {
                             crate::logln!("job {account}: rates ingest failed: {error}");
                         }
                     }
-                    let _phase = crate::cpu_profile::phase("tick.maybe_launch");
-                    crate::brain_chain::run(&orch, &job);
+                    crate::cpu_profile::tally("ticks");
+                    {
+                        let _phase = crate::cpu_profile::phase("tick.maybe_launch");
+                        crate::brain_chain::run(&orch, &job);
+                    }
+                    crate::cpu_profile::flush_tallies();
                 }
             })
             .expect("brain thread spawns");

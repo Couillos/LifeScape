@@ -91,7 +91,7 @@ pub(crate) fn refresh_report_flags(job: &Job, inputs: &mut LaunchInputs) {
 /// locks and listings of the bot's resting sells, the coins its resting
 /// buys commit, the fleet's sites.
 pub(crate) fn gather_market(job: &Job, inputs: &mut LaunchInputs) {
-    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    let live = job.inner.try_lock().map(|inner| inner.live_copy()).unwrap_or(None).unwrap_or(Value::Null);
     inputs.inv = read_stacks(&live, "inv");
     inputs.bank = read_stacks(&live, "bank");
     inputs.wearing = read_stacks(&live, "worn");
