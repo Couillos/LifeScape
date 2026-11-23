@@ -95,6 +95,11 @@ fn apply(life: &mut Life, live: &Value, judged: Vec<(String, ServeVerdict)>) -> 
         return false;
     }
     for (id, item, per_tick, time_value) in &aside {
+        // Cooled like any set-aside milestone: `resume_set_aside` waits the
+        // cooldown out instead of resuming it on the next pass (2026-11-23:
+        // a loop of one cycle a second, set aside then resumed at once).
+        let key = lifescape_planner::milestone_cool_key(&kind, id);
+        crate::brain::push_history(life, lifescape_planner::cooldown::COOL_NODE, &lifescape_planner::cooldown::cool_entry(&key, lifescape_planner::AMBITION_CHANGE_TICKS, "set aside, unpaying"));
         crate::logln!("brain {account}: milestone {id} (demand:{item}) set aside, ambition {kind} kept: {per_tick:.4} coins a tick of the bot < a tick worth {time_value:.2}, inputs bought at a real ask or made at its own ticks, no ban");
     }
     let running_aside = running.as_ref().is_some_and(|origin| aside.iter().any(|entry| &entry.0 == origin));
@@ -169,6 +174,20 @@ mod tests {
         assert!(lifescape_planner::set_aside(stone), "{stone:?}");
         assert_ne!(stone.status, MilestoneStatus::Done);
         assert_ne!(life.goal_origin.as_deref(), Some("m90"));
+    }
+
+    /// The set-aside cools, so the resume (cooldown over, nothing else
+    /// drawable) does not bring it back on the next pass.
+    #[test]
+    fn the_unpaying_set_aside_is_cooled_and_not_resumed_at_once() {
+        let mut life = crafter();
+        assert!(apply(&mut life, &object(vec![]), unpaying()));
+        let cooled = lifescape_planner::cooldown::cooled_keys(&life.history, &|_| 0);
+        let ambition = life.ambition.as_mut().expect("ambition");
+        for stone in ambition.milestones.iter_mut().filter(|stone| stone.id != "m90") {
+            stone.status = MilestoneStatus::Done;
+        }
+        assert!(lifescape_planner::resume_set_aside(ambition, &cooled).is_empty(), "cooled: {cooled:?}");
     }
 
     /// A paying milestone, or one with no data, decides nothing.

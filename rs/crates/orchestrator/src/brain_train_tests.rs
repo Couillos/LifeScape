@@ -409,3 +409,23 @@ fn a_combat_level_climbs_its_styles_lowest_skill() {
     assert_eq!(super::combat_climb_skill("fight:magic/chickens", &levels), "magic");
     assert_eq!(super::combat_climb_skill("fight:melee/chickens", &|_: &str| 20), "attack", "a tie trains attack");
 }
+
+/// 2026-11-23, oscar_cole: 5913 iron arrows held, no bronze ones. The
+/// obtain node counted the family ("done without launch"); the pick read
+/// `bronze_arrow` alone, found it missing and blocked: a loop of 507
+/// cycles in 34 min. The pick reads the family too.
+#[test]
+fn iron_arrows_cover_the_bronze_arrows_of_a_ranged_pick() {
+    let set = set_with(vec![line("ranged", "fight:ranged/cows", Supply::Autonomous, 90_000.0, 800.0)]);
+    let life = life_with(0.5, 0.5);
+    let in_pack = |name: &str| if name == "iron_arrow" { 5913 } else { 0 };
+    let family = |item: &str| super::family_units(item, &in_pack);
+    let found = pick(&set, "ranged", 58, 60, &life, &[], &family).expect("a line");
+    assert_eq!(found.pick.method, "fight:ranged/cows");
+    assert!(found.pick.missing.is_empty(), "{:?}", found.pick.missing);
+    let exact = |item: &str| in_pack(item);
+    let alone = pick(&set, "ranged", 58, 60, &life, &[], &exact).expect("a line");
+    assert!(alone.pick.missing.iter().any(|item| item == "bronze_arrow"), "the exact read is the bug: {:?}", alone.pick.missing);
+    let staff = |name: &str| if name == "staff_of_air" { 1 } else { 0 };
+    assert_eq!(super::family_units("airrune", &staff), 0, "a staff is not counted as units");
+}

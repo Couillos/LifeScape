@@ -158,6 +158,17 @@ pub(crate) fn guide_covers(set: &GuideSet, skill: &str, from: u8, to: u8, profil
     !rank_classed(&lines, profile, per_coin, &|row| class_for(row, bot)).is_empty()
 }
 
+/// Units of `item` the bot holds for its work, its tier family counted
+/// (iron arrows meet `bronze_arrow`, like the obtain node's own
+/// `family_held`: 2026-11-23, an obtain "done without launch" on iron
+/// arrows while the pick found `bronze_arrow` missing, 507 loops in 34
+/// min). Staffs are left out: `missing_inputs_with` already lets a staff
+/// stand for its runes, and counting one here would size a stock batch
+/// without bound.
+pub(crate) fn family_units(item: &str, count_of: &dyn Fn(&str) -> i64) -> i64 {
+    lifescape_planner::tools::tool_family(item).iter().filter(|name| !name.starts_with("staff_of_")).map(|name| count_of(name).max(0)).fold(0, i64::saturating_add)
+}
+
 /// Units one action of `method` at `level` burns of each stock input the
 /// bot holds: the batch of a stock line (what its stock casts or makes).
 fn stock_batch(row: &TrainingRow, level: u8, held: &dyn Fn(&str) -> i64, rate: RateReader) -> i64 {
@@ -248,7 +259,8 @@ pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Valu
         return;
     };
     let locks = crate::brain_locks::locked_items(&life.account);
-    let held = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item)) as f64;
+    let free_of = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item));
+    let held = |item: &str| family_units(item, &free_of) as f64;
     let levels = ctx.levels.clone();
     let level_of = |name: &str| levels.iter().find(|(known, _)| known == name).map(|(_, known)| *known).unwrap_or(1);
     let asks = |item: &str| crate::brain_trade::cycle_asks(&set, item);
