@@ -46,7 +46,11 @@ pub mod route_splice;
 pub mod service;
 pub mod service_accept;
 pub mod service_codec;
+mod service_admission;
+mod service_caches;
+mod service_counters;
 mod service_fast;
+mod service_reads;
 #[cfg(test)]
 mod service_costs_tests;
 #[cfg(test)]

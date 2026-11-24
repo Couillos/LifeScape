@@ -1,5 +1,4 @@
-//! Costs cache (service side): keyed by the target SET and the full
-//! options (danger included), counted in `walk_costs_hits`.
+//! `walk_costs` batches (service side): one search each, priced per tile.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -31,25 +30,29 @@ fn costs_hits(client: &PlanClient) -> i64 {
     reply.get("walk_costs_hits").as_i64().expect("walk_costs_hits counter")
 }
 
-/// The same window re-ordered hits (costs follow their tiles); a
-/// different danger set misses (it prices steps, never shared across
-/// combat levels); a moved bot misses.
+/// A re-ordered or repeated window prices the same per tile (costs
+/// follow their tiles), whatever the order the batch lists them in; a
+/// danger set and a moved start price their own search. There is no batch
+/// cache any more (lot N6: 1 % live hit rate, the key holds the exact
+/// start tile): every batch is a search, none counts as a cache hit.
 #[test]
-fn costs_cache_keys_on_target_set_and_danger() {
+fn walk_costs_price_each_tile_whatever_the_window_order() {
     let service = service("costs-set");
     let client = PlanClient::new(service.socket_path(), "costs-set");
     let from = Tile { x: 3230, z: 3241, level: 0 };
     let near = Tile { x: 3203, z: 3246, level: 0 };
     let far = Tile { x: 3228, z: 3214, level: 0 };
     let (first, _) = client.walk_costs(from, &[far, near], &options(Vec::new()), "costs-set").expect("serves");
-    assert_eq!(costs_hits(&client), 0, "cold cache");
     let (swapped, _) = client.walk_costs(from, &[near, far, near], &options(Vec::new()), "costs-set").expect("serves");
-    assert_eq!(costs_hits(&client), 1, "re-ordered window hits");
     assert_eq!(swapped, vec![first[1], first[0], first[1]], "costs follow their tiles");
+    let (again, _) = client.walk_costs(from, &[far, near], &options(Vec::new()), "costs-set").expect("serves");
+    assert_eq!(again, first, "the same batch prices the same");
+    assert_eq!(costs_hits(&client), 0, "no batch cache: nothing is served without a search");
     let danger = vec![DangerZone { x: 3215, z: 3243, level: 0, radius: 3 }];
-    client.walk_costs(from, &[far, near], &options(danger), "costs-set").expect("serves");
-    assert_eq!(costs_hits(&client), 1, "danger set is part of the key");
+    let (priced, _) = client.walk_costs(from, &[far, near], &options(danger), "costs-set").expect("serves");
+    assert_eq!(priced.len(), 2);
     let moved = Tile { x: 3231, z: 3241, level: 0 };
-    client.walk_costs(moved, &[far, near], &options(Vec::new()), "costs-set").expect("serves");
-    assert_eq!(costs_hits(&client), 1, "another source misses");
+    let (from_moved, _) = client.walk_costs(moved, &[far, near], &options(Vec::new()), "costs-set").expect("serves");
+    assert_eq!(from_moved.len(), 2);
+    assert_eq!(service.stats().walk_costs, 5, "five batches, five searches");
 }

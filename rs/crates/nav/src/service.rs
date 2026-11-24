@@ -18,24 +18,22 @@
 //! logs it and counts it. A version skew (client vs server snapshot)
 //! refuses stale too; the client resubmits once, never loops.
 
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lifescape_json::{self as json, object, str_value, Value};
 
-use crate::plan::{self, EdgeId, NavOptions, NoRoute, Plan, SharedEdges, Tile};
-use crate::pocket::PocketMemo;
+use crate::plan::{self, EdgeId, NavOptions, NoRoute, Plan, Tile};
 pub(crate) use crate::service_codec::{parse_tile, tile_value};
 pub use crate::service_codec::{decode_noroute, decode_options, decode_plan, encode_noroute, encode_options, encode_plan};
-use crate::route_cache::{Fast, PlanEntry, RouteCache, RouteStats, NEGATIVE_TTL};
+use crate::route_cache::{Fast, PlanEntry, RouteStats, NEGATIVE_TTL};
 use crate::{route_path, route_splice};
-use crate::service_queries;
+use crate::service_admission::{Admission, Polled, Refusal, Submitted};
 use crate::static_world::StaticWorld;
 use crate::tables::Tables;
 use crate::{costs, walk_costs};
@@ -163,39 +161,6 @@ pub(crate) fn edge_key(edge: &EdgeId) -> String {
     }
 }
 
-/// Batch cost cache key (N1): identical (from, dests, options, version)
-/// batches repeat every ranking cycle (spot/foe pickers re-rank the same
-/// window), so the second identical batch serves with no search. Small
-/// and bounded (cleared when full — a cache, never truth); a version
-/// bump makes old keys unreachable, like L1. Cache hits count in `hits`:
-/// served from cache with no compute, plans and batches alike.
-const COSTS_CACHE_CAP: usize = 256;
-
-///
-/// Keyed by the target SET (sorted, distinct): a batch's per-target
-/// costs do not depend on the order it lists them (the search keeps one
-/// entry per distinct tile), so a re-ordered window hits too. The danger
-/// squares are part of the key (they price steps), like `PlanKey`.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct CostsKey {
-    plan: PlanKey,
-    dests: Vec<Tile>,
-}
-
-impl CostsKey {
-    fn of(from: Tile, dests: &[Tile], options: &NavOptions, version: &str) -> Self {
-        CostsKey { plan: PlanKey::of(from, from, options, version), dests: costs_set(dests) }
-    }
-}
-
-/// Sorted distinct targets: the costs cache key and its value order.
-fn costs_set(dests: &[Tile]) -> Vec<Tile> {
-    let mut set = dests.to_vec();
-    set.sort_by_key(|tile| (tile.level, tile.x, tile.z));
-    set.dedup();
-    set
-}
-
 // -- route cache ---------------------------------------------------------------
 //
 // L1 is the central route cache (`route_cache.rs`, CPU 2026-11-14): one
@@ -215,7 +180,7 @@ pub const L1_CAP: usize = 1024;
 /// Entries above this are served once, never stored (§5.9; p99 alert 16 Ko).
 pub const L1_MAX_ENTRY_BYTES: usize = 32 * 1024;
 /// L2 versions kept: the live one plus the draining pre-reload one.
-pub const L2_VERSIONS_CAP: usize = 2;
+pub use crate::service_caches::L2_VERSIONS_CAP;
 
 /// RAM §5.9: 4 Go hard cap (raised from 1 Go 2026-11-15), enforcement
 /// warn 80 % / shed 90 % / abort 95 %, derived from the cap.
@@ -308,23 +273,6 @@ fn rss_bytes() -> u64 {
 
 /// One snapshot version's shared search state: the L2 edge set and the
 /// sealed-pocket verdicts (both static per version).
-type L2Slot = (Arc<SharedEdges>, Arc<PocketMemo>);
-
-struct Job {
-    id: u64,
-    account: String,
-    key: PlanKey,
-    from: Tile,
-    dest: Tile,
-    options: NavOptions,
-    cancel: Arc<AtomicBool>,
-}
-
-enum Slot {
-    Pending { cancel: Arc<AtomicBool> },
-    Ready { plan: Value, polled: bool },
-    Failed { error: Value, polled: bool },
-}
 
 /// Plan server: snapshot shared by the pool, bounded queue, IPC replies.
 /// LOT3: global L1 (plans + negatives, keyed by the full PlanKey), global
@@ -332,67 +280,17 @@ enum Slot {
 /// Field order mirrors the lock discipline (admission, cache, in-flight,
 /// results, snapshot); the pool never holds any lock during a Dijkstra.
 pub struct Service {
-    admission: Mutex<HashMap<String, usize>>,
-    routes: Mutex<RouteCache>,
-    costs_cache: Mutex<HashMap<CostsKey, Vec<Option<u32>>>>,
-    /// N8 best-served baselines: cheapest computed cost per PlanKey. A
-    /// repeated pair must re-price identically (deterministic planner),
-    /// so any excess is a regression, never geometry.
-    best_costs: Mutex<HashMap<PlanKey, u32>>,
-    l2: Mutex<(HashMap<String, L2Slot>, Vec<String>)>,
-    inflight: Mutex<HashMap<PlanKey, u64>>,
-    tickets: Mutex<HashMap<u64, (PlanKey, String)>>,
-    waiters: Mutex<HashMap<u64, usize>>,
-    results: Mutex<HashMap<u64, Slot>>,
+    /// Every counter of the service (`service_counters`).
+    counters: crate::service_counters::Counters,
+    /// Route cache, N8 baselines, L2 edge sets (`service_caches`).
+    caches: crate::service_caches::Caches,
+    /// Tickets, results, queue, waiters (`service_admission`).
+    admission: Admission,
     snapshot: Mutex<Arc<Snapshot>>,
-    queue_tx: SyncSender<Job>,
-    queue_rx: Mutex<Receiver<Job>>,
-    queued: AtomicUsize,
-    next_id: AtomicU64,
-    hits: AtomicU64,
-    misses: AtomicU64,
-    joins: AtomicU64,
-    l2_hits: AtomicU64,
-    l2_miss: AtomicU64,
-    refused_cap: AtomicU64,
-    refused_full: AtomicU64,
-    refused_stale: AtomicU64,
-    unknown_polls: AtomicU64,
-    ram_warn: AtomicU64,
-    ram_shed: AtomicU64,
-    door_defs_served: AtomicU64,
-    tiles_flags_served: AtomicU64,
-    static_locs_served: AtomicU64,
-    f2p_served: AtomicU64,
-    toll_fence_served: AtomicU64,
-    wants_served: AtomicU64,
-    diff_served: AtomicU64,
-    debug_served: AtomicU64,
-    transitions_list_served: AtomicU64,
-    probe_targets_served: AtomicU64,
-    doors_near_served: AtomicU64,
-    submits_served: AtomicU64,
-    polls_served: AtomicU64,
-    walk_costs_served: AtomicU64,
-    /// `walk_costs` batches served from the costs cache (no search).
-    walk_costs_hits: AtomicU64,
-    fast: crate::service_fast::FastCounters,
-    /// Per-kind request meter (lot N0): count, thread CPU, tiles visited.
-    meter: crate::nav_meter::Meter,
-    /// Connections served by the `plan-query` pool (never the acceptor).
-    pooled: AtomicU64,
-    detour_sum: AtomicU64,
-    detour_max: AtomicU32,
-    detour_plans: AtomicU64,
     sock_path: PathBuf,
     /// E3 waiter pool for the `plan` op (single-round-trip plans): bound
     /// filled at `start`, read by `plan_handoff`.
     wait_tx: Mutex<Option<mpsc::SyncSender<crate::service_plan::WaitJob>>>,
-    /// Terminal outcomes stored so far + the condvar `plan` waiters
-    /// sleep on: a finished search wakes them at once instead of the
-    /// next 10 ms poll slice (reactivity, fewer idle wake-ups).
-    completions: Mutex<u64>,
-    completed: Condvar,
 }
 
 impl Service {
@@ -411,58 +309,13 @@ impl Service {
         }
         let listener = UnixListener::bind(sock)
             .map_err(|error| format!("bind {}: {error}", sock.display()))?;
-        let (queue_tx, queue_rx) = mpsc::sync_channel(QUEUE_CAP);
         let service = Arc::new(Service {
-            admission: Mutex::new(HashMap::new()),
-            routes: Mutex::new(RouteCache::new(&snapshot.version)),
-            costs_cache: Mutex::new(HashMap::new()),
-            best_costs: Mutex::new(HashMap::new()),
-            l2: Mutex::new((HashMap::new(), Vec::new())),
-            inflight: Mutex::new(HashMap::new()),
-            tickets: Mutex::new(HashMap::new()),
-            waiters: Mutex::new(HashMap::new()),
-            results: Mutex::new(HashMap::new()),
+            counters: crate::service_counters::Counters::default(),
+            caches: crate::service_caches::Caches::new(&snapshot.version),
+            admission: Admission::new(),
             snapshot: Mutex::new(snapshot),
-            queue_tx,
-            queue_rx: Mutex::new(queue_rx),
-            queued: AtomicUsize::new(0),
-            next_id: AtomicU64::new(1),
-            hits: AtomicU64::new(0),
-            misses: AtomicU64::new(0),
-            joins: AtomicU64::new(0),
-            l2_hits: AtomicU64::new(0),
-            l2_miss: AtomicU64::new(0),
-            refused_cap: AtomicU64::new(0),
-            refused_full: AtomicU64::new(0),
-            refused_stale: AtomicU64::new(0),
-            unknown_polls: AtomicU64::new(0),
-            ram_warn: AtomicU64::new(0),
-            ram_shed: AtomicU64::new(0),
-            door_defs_served: AtomicU64::new(0),
-            tiles_flags_served: AtomicU64::new(0),
-            static_locs_served: AtomicU64::new(0),
-            f2p_served: AtomicU64::new(0),
-            toll_fence_served: AtomicU64::new(0),
-            wants_served: AtomicU64::new(0),
-            diff_served: AtomicU64::new(0),
-            debug_served: AtomicU64::new(0),
-            transitions_list_served: AtomicU64::new(0),
-            probe_targets_served: AtomicU64::new(0),
-            doors_near_served: AtomicU64::new(0),
-            submits_served: AtomicU64::new(0),
-            polls_served: AtomicU64::new(0),
-            walk_costs_served: AtomicU64::new(0),
-            walk_costs_hits: AtomicU64::new(0),
-            fast: crate::service_fast::FastCounters::default(),
-            meter: crate::nav_meter::Meter::default(),
-            pooled: AtomicU64::new(0),
-            detour_sum: AtomicU64::new(0),
-            detour_max: AtomicU32::new(0),
-            detour_plans: AtomicU64::new(0),
             sock_path: sock.to_path_buf(),
             wait_tx: Mutex::new(None),
-            completions: Mutex::new(0),
-            completed: Condvar::new(),
         });
         for index in 0..threads.max(1) {
             let worker = Arc::clone(&service);
@@ -502,9 +355,9 @@ impl Service {
     /// Lot 4 adds the refused_* ones: the fairness verdict reads those.
     pub fn stats(&self) -> CacheStats {
         let routes = self.route_stats();
-        let (fast_hits, fast_zero, fast_declined) = self.fast.read();
+        let (fast_hits, fast_zero, fast_declined) = self.counters.fast.read();
         CacheStats {
-            hits: self.hits.load(Ordering::Relaxed) + routes.exact + routes.dominated + routes.negative,
+            hits: self.counters.hits.load(Ordering::Relaxed) + routes.exact + routes.dominated + routes.negative,
             trunc_hits: routes.prefix,
             suffix_hits: routes.suffix + routes.infix,
             exact_hits: routes.exact,
@@ -512,27 +365,27 @@ impl Service {
             infix_hits: routes.infix,
             splice_hits: routes.splice,
             negative_hits: routes.negative,
-            misses: self.misses.load(Ordering::Relaxed),
-            joins: self.joins.load(Ordering::Relaxed),
-            l2_hits: self.l2_hits.load(Ordering::Relaxed),
-            l2_miss: self.l2_miss.load(Ordering::Relaxed),
+            misses: self.counters.misses.load(Ordering::Relaxed),
+            joins: self.counters.joins.load(Ordering::Relaxed),
+            l2_hits: self.counters.l2_hits.load(Ordering::Relaxed),
+            l2_miss: self.counters.l2_miss.load(Ordering::Relaxed),
             evictions: routes.evictions,
-            refused_cap: self.refused_cap.load(Ordering::Relaxed),
-            refused_full: self.refused_full.load(Ordering::Relaxed),
-            refused_stale: self.refused_stale.load(Ordering::Relaxed),
-            unknown: self.unknown_polls.load(Ordering::Relaxed),
-            ram_warn: self.ram_warn.load(Ordering::Relaxed),
-            ram_shed: self.ram_shed.load(Ordering::Relaxed),
-            submits: self.submits_served.load(Ordering::Relaxed),
-            polls: self.polls_served.load(Ordering::Relaxed),
-            walk_costs: self.walk_costs_served.load(Ordering::Relaxed),
-            detour_sum: self.detour_sum.load(Ordering::Relaxed),
-            detour_max: self.detour_max.load(Ordering::Relaxed),
-            detour_plans: self.detour_plans.load(Ordering::Relaxed),
+            refused_cap: self.counters.refused_cap.load(Ordering::Relaxed),
+            refused_full: self.counters.refused_full.load(Ordering::Relaxed),
+            refused_stale: self.counters.refused_stale.load(Ordering::Relaxed),
+            unknown: self.counters.unknown_polls.load(Ordering::Relaxed),
+            ram_warn: self.counters.ram_warn.load(Ordering::Relaxed),
+            ram_shed: self.counters.ram_shed.load(Ordering::Relaxed),
+            submits: self.counters.submits_served.load(Ordering::Relaxed),
+            polls: self.counters.polls_served.load(Ordering::Relaxed),
+            walk_costs: self.counters.walk_costs_served.load(Ordering::Relaxed),
+            detour_sum: self.counters.detour_sum.load(Ordering::Relaxed),
+            detour_max: self.counters.detour_max.load(Ordering::Relaxed),
+            detour_plans: self.counters.detour_plans.load(Ordering::Relaxed),
             fast_hits,
             fast_zero,
             fast_declined,
-            ops: self.meter.read(),
+            ops: self.counters.meter.read(),
         }
     }
 
@@ -541,29 +394,29 @@ impl Service {
     /// that struct field by field, additive JSON only.
     pub fn query_stats(&self) -> (u64, u64) {
         (
-            self.door_defs_served.load(Ordering::Relaxed),
-            self.tiles_flags_served.load(Ordering::Relaxed),
+            self.counters.door_defs_served.load(Ordering::Relaxed),
+            self.counters.tiles_flags_served.load(Ordering::Relaxed),
         )
     }
 
     /// Script-read counters: one batch served per op, same discipline.
     pub fn query_stats_scripts(&self) -> (u64, u64, u64, u64) {
         (
-            self.static_locs_served.load(Ordering::Relaxed),
-            self.f2p_served.load(Ordering::Relaxed),
-            self.toll_fence_served.load(Ordering::Relaxed),
-            self.wants_served.load(Ordering::Relaxed),
+            self.counters.static_locs_served.load(Ordering::Relaxed),
+            self.counters.f2p_served.load(Ordering::Relaxed),
+            self.counters.toll_fence_served.load(Ordering::Relaxed),
+            self.counters.wants_served.load(Ordering::Relaxed),
         )
     }
 
     /// Diag/bulk counters: one batch served per op, same discipline.
     pub fn query_stats_diag(&self) -> (u64, u64, u64, u64, u64) {
         (
-            self.diff_served.load(Ordering::Relaxed),
-            self.debug_served.load(Ordering::Relaxed),
-            self.transitions_list_served.load(Ordering::Relaxed),
-            self.probe_targets_served.load(Ordering::Relaxed),
-            self.doors_near_served.load(Ordering::Relaxed),
+            self.counters.diff_served.load(Ordering::Relaxed),
+            self.counters.debug_served.load(Ordering::Relaxed),
+            self.counters.transitions_list_served.load(Ordering::Relaxed),
+            self.counters.probe_targets_served.load(Ordering::Relaxed),
+            self.counters.doors_near_served.load(Ordering::Relaxed),
         )
     }
 
@@ -579,10 +432,10 @@ impl Service {
         *guard = snapshot;
         drop(guard);
         // New world, new baselines: old floors never price new geometry.
-        self.best_costs.lock().unwrap().clear();
+        self.caches.reset_baselines();
         // New world, empty route cache: nothing planned on the old one
         // is ever served (in-flight inserts of the old version drop).
-        self.routes.lock().unwrap().reset(&new);
+        self.caches.routes.lock().unwrap().reset(&new);
         (old, new)
     }
 
@@ -590,8 +443,8 @@ impl Service {
     /// the pocket verdicts of its version (lot N4).
     pub(crate) fn state_rows(&self) -> (Arc<Snapshot>, Vec<(u64, u64, Arc<PlanEntry>)>, Vec<(u64, Option<Vec<u64>>)>) {
         let snapshot = self.snapshot();
-        let routes = self.routes.lock().unwrap().export();
-        let pockets = self.l2.lock().unwrap().0.get(&snapshot.version).map(|(_, memo)| memo.export()).unwrap_or_default();
+        let routes = self.caches.routes.lock().unwrap().export();
+        let pockets = self.caches.pocket_rows(&snapshot.version);
         (snapshot, routes, pockets)
     }
 
@@ -605,27 +458,27 @@ impl Service {
                 memo.import(pockets);
             }
         }
-        self.routes.lock().unwrap().restore(&snapshot.version, routes);
+        self.caches.routes.lock().unwrap().restore(&snapshot.version, routes);
     }
 
     /// Route cache counters and occupancy (`nav-stats`, cpu-profile nav).
     pub fn route_stats(&self) -> RouteStats {
-        self.routes.lock().unwrap().snapshot_stats()
+        self.caches.routes.lock().unwrap().snapshot_stats()
     }
 
     /// Sealed-pocket verdicts memoized for the current version.
     pub fn pocket_verdicts(&self) -> usize {
         let version = self.version();
-        self.l2.lock().unwrap().0.get(&version).map(|(_, pockets)| pockets.len()).unwrap_or(0)
+        self.caches.pocket_verdicts(&version)
     }
 
     /// L1 occupancy: entry count and stored bytes (RAM §5.9 evidence).
     pub fn l1_len(&self) -> usize {
-        self.routes.lock().unwrap().len()
+        self.caches.routes.lock().unwrap().len()
     }
 
     pub fn l1_bytes(&self) -> usize {
-        self.routes.lock().unwrap().bytes()
+        self.caches.routes.lock().unwrap().bytes()
     }
 
     /// Lot 4 operator metrics: queue depth now, in-flight tickets now, L1
@@ -635,15 +488,15 @@ impl Service {
     /// still queued counts until the pool drops it: admission already
     /// released, so the cap never wedges on it).
     pub fn queue_depth(&self) -> usize {
-        self.queued.load(Ordering::Relaxed)
+        self.admission.queue_depth()
     }
 
     pub fn inflight_total(&self) -> usize {
-        self.admission.lock().unwrap().values().sum()
+        self.admission.tickets_held()
     }
 
     pub fn l1_oldest_age_ms(&self) -> Option<u128> {
-        self.routes
+        self.caches.routes
             .lock()
             .unwrap()
             .oldest_age()
@@ -663,7 +516,7 @@ impl Service {
 
     /// One pooled connection (`plan-query` lane): counted, then served.
     pub(crate) fn serve_pooled(&self, stream: UnixStream) {
-        self.pooled.fetch_add(1, Ordering::Relaxed);
+        self.counters.pooled.fetch_add(1, Ordering::Relaxed);
         self.serve_one(stream);
     }
 
@@ -725,14 +578,14 @@ impl Service {
         let probe = crate::nav_meter::Probe::start();
         match crate::fast_hop::short_hop(&snapshot.world, &shared, from, dest, options) {
             Ok(plan) => {
-                self.meter.record(crate::nav_meter::Kind::FastServed, probe);
-                self.fast.answered(&plan);
+                self.counters.meter.record(crate::nav_meter::Kind::FastServed, probe);
+                self.counters.fast.answered(&plan);
                 Some((plan, snapshot.version.clone()))
             }
             Err(crate::fast_hop::Decline::NotShort) => None,
             Err(_) => {
-                self.meter.record(crate::nav_meter::Kind::FastDeclined, probe);
-                self.fast.declined.fetch_add(1, Ordering::Relaxed);
+                self.counters.meter.record(crate::nav_meter::Kind::FastDeclined, probe);
+                self.counters.fast.declined.fetch_add(1, Ordering::Relaxed);
                 None
             }
         }
@@ -819,26 +672,17 @@ impl Service {
     /// count (pool completion already cleaned tickets/inflight/admission;
     /// the Ready/Failed slot stays consumable for joins).
     pub(crate) fn op_release_waiter(&self, id: u64) {
-        let mut waiters = self.waiters.lock().unwrap();
-        match waiters.get(&id).copied() {
-            Some(count) if count > 1 => {
-                waiters.insert(id, count - 1);
-            }
-            _ => {
-                waiters.remove(&id);
-            }
-        }
+        self.admission.release_waiter(id);
     }
 
     /// Completions so far (read BEFORE a poll, then `wait_completion`).
     pub(crate) fn completion_mark(&self) -> u64 {
-        *self.completions.lock().unwrap()
+        self.admission.completion_mark()
     }
 
     /// Sleeps until a search completes after `seen`, at most `slice`.
     pub(crate) fn wait_completion(&self, seen: u64, slice: Duration) {
-        let guard = self.completions.lock().unwrap();
-        let _ = self.completed.wait_timeout_while(guard, slice, |count| *count == seen);
+        self.admission.wait_completion(seen, slice);
     }
 
     /// Served snapshot version for waiter replies.
@@ -858,7 +702,7 @@ impl Service {
         };
         let probe = crate::nav_meter::Probe::start();
         let reply = self.dispatch_op(request);
-        self.meter.record(kind, probe);
+        self.counters.meter.record(kind, probe);
         reply
     }
 
@@ -868,17 +712,6 @@ impl Service {
             "poll" => self.op_poll(request),
             "cancel" => self.op_cancel(request),
             "walk_costs" => self.op_walk_costs(request),
-            "door_defs" => self.op_door_defs(request),
-            "tiles_flags" => self.op_tiles_flags(request),
-            "static_locs_near" => self.op_static_locs_near(request),
-            "in_f2p" => self.op_in_f2p(request),
-            "toll_fence" => self.op_toll_fence(request),
-            "wants" => self.op_wants(request),
-            "diff" => self.op_diff(request),
-            "debug" => self.op_debug(request),
-            "transitions_list" => self.op_transitions_list(request),
-            "probe_targets" => self.op_probe_targets(request),
-            "doors_near" => self.op_doors_near(request),
             "stats" => {
                 let stats = self.stats();
                 object(vec![
@@ -913,35 +746,39 @@ impl Service {
                     ("submits", Value::Int(stats.submits as i64)),
                     ("polls", Value::Int(stats.polls as i64)),
                     ("walk_costs", Value::Int(stats.walk_costs as i64)),
-                    ("walk_costs_hits", Value::Int(self.walk_costs_hits.load(Ordering::Relaxed) as i64)),
+                    ("walk_costs_hits", Value::Int(self.counters.walk_costs_hits.load(Ordering::Relaxed) as i64)),
                     ("fast_hits", Value::Int(stats.fast_hits as i64)),
                     ("fast_zero", Value::Int(stats.fast_zero as i64)),
                     ("fast_declined", Value::Int(stats.fast_declined as i64)),
-                    ("pooled", Value::Int(self.pooled.load(Ordering::Relaxed) as i64)),
+                    ("pooled", Value::Int(self.counters.pooled.load(Ordering::Relaxed) as i64)),
                     ("detour_sum", Value::Int(stats.detour_sum as i64)),
                     ("detour_max", Value::Int(i64::from(stats.detour_max))),
                     ("detour_plans", Value::Int(stats.detour_plans as i64)),
-                    ("door_defs", Value::Int(self.door_defs_served.load(Ordering::Relaxed) as i64)),
-                    ("tiles_flags", Value::Int(self.tiles_flags_served.load(Ordering::Relaxed) as i64)),
-                    ("static_locs_near", Value::Int(self.static_locs_served.load(Ordering::Relaxed) as i64)),
-                    ("in_f2p", Value::Int(self.f2p_served.load(Ordering::Relaxed) as i64)),
-                    ("toll_fence", Value::Int(self.toll_fence_served.load(Ordering::Relaxed) as i64)),
-                    ("wants", Value::Int(self.wants_served.load(Ordering::Relaxed) as i64)),
-                    ("diff", Value::Int(self.diff_served.load(Ordering::Relaxed) as i64)),
-                    ("debug", Value::Int(self.debug_served.load(Ordering::Relaxed) as i64)),
-                    ("transitions_list", Value::Int(self.transitions_list_served.load(Ordering::Relaxed) as i64)),
-                    ("probe_targets", Value::Int(self.probe_targets_served.load(Ordering::Relaxed) as i64)),
-                    ("doors_near", Value::Int(self.doors_near_served.load(Ordering::Relaxed) as i64)),
+                    ("door_defs", Value::Int(self.counters.door_defs_served.load(Ordering::Relaxed) as i64)),
+                    ("tiles_flags", Value::Int(self.counters.tiles_flags_served.load(Ordering::Relaxed) as i64)),
+                    ("static_locs_near", Value::Int(self.counters.static_locs_served.load(Ordering::Relaxed) as i64)),
+                    ("in_f2p", Value::Int(self.counters.f2p_served.load(Ordering::Relaxed) as i64)),
+                    ("toll_fence", Value::Int(self.counters.toll_fence_served.load(Ordering::Relaxed) as i64)),
+                    ("wants", Value::Int(self.counters.wants_served.load(Ordering::Relaxed) as i64)),
+                    ("diff", Value::Int(self.counters.diff_served.load(Ordering::Relaxed) as i64)),
+                    ("debug", Value::Int(self.counters.debug_served.load(Ordering::Relaxed) as i64)),
+                    ("transitions_list", Value::Int(self.counters.transitions_list_served.load(Ordering::Relaxed) as i64)),
+                    ("probe_targets", Value::Int(self.counters.probe_targets_served.load(Ordering::Relaxed) as i64)),
+                    ("doors_near", Value::Int(self.counters.doors_near_served.load(Ordering::Relaxed) as i64)),
                     ("ram_warn", Value::Int(stats.ram_warn as i64)),
                     ("ram_shed", Value::Int(stats.ram_shed as i64)),
                     ("rss_bytes", Value::Int(Self::rss_bytes().min(i64::MAX as u64) as i64)),
                     ("painted_squares", Value::Int(self.painted_squares() as i64)),
                 ])
             }
-            other => object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value(&format!("unknown op {other:?}"))),
-            ]),
+            // Grouped reads (`service_reads`): one prelude, pure reads.
+            other => match crate::service_reads::serve(other, &self.snapshot(), request, &self.counters) {
+                Some(reply) => reply,
+                None => object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&format!("unknown op {other:?}"))),
+                ]),
+            },
         }
     }
 
@@ -950,7 +787,7 @@ impl Service {
     }
 
     fn op_submit(&self, request: &Value) -> Value {
-        self.submits_served.fetch_add(1, Ordering::Relaxed);
+        self.counters.submits_served.fetch_add(1, Ordering::Relaxed);
         let version = self.version();
         let parsed = (|| -> Result<(String, Tile, Tile, NavOptions, String), String> {
             let account = request
@@ -981,7 +818,7 @@ impl Service {
             }
         };
         if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            self.counters.refused_stale.fetch_add(1, Ordering::Relaxed);
             return object(vec![
                 ("ok", Value::Bool(false)),
                 (
@@ -1010,7 +847,7 @@ impl Service {
         // stays operator-driven (TODO(shedding), see §5.9).
         match ram_gate_for(Self::rss_bytes(), RAM_WARN_BYTES, RAM_SHED_BYTES) {
             RamGate::Shed => {
-                self.ram_shed.fetch_add(1, Ordering::Relaxed);
+                self.counters.ram_shed.fetch_add(1, Ordering::Relaxed);
                 eprintln!(
                     "pathfinding ram shed rss={}B: submit refused, nav-down",
                     Self::rss_bytes()
@@ -1022,12 +859,12 @@ impl Service {
                 ]);
             }
             RamGate::Warn => {
-                self.ram_warn.fetch_add(1, Ordering::Relaxed);
+                self.counters.ram_warn.fetch_add(1, Ordering::Relaxed);
                 eprintln!(
                     "pathfinding ram warn rss={}B: L1 halved",
                     Self::rss_bytes()
                 );
-                self.routes.lock().unwrap().evict_half();
+                self.caches.routes.lock().unwrap().evict_half();
             }
             RamGate::Pass => {}
         }
@@ -1036,148 +873,61 @@ impl Service {
         // held): the fast lookup is search-free under the cache lock; a
         // sub-path / splice runs on candidates taken out of it.
         let key = PlanKey::of(from, dest, &options, &version);
-        let fast = self.routes.lock().unwrap().fast(&version, &key, from, dest, &options);
+        let fast = self.caches.routes.lock().unwrap().fast(&version, &key, from, dest, &options);
         match fast {
             Some(Fast::Negative(body)) => return self.instant_slot(false, body),
             Some(Fast::Plan(entry)) => return self.instant_slot(true, encode_plan(&entry.plan)),
             None => {}
         }
-        let candidates = self.routes.lock().unwrap().candidates(&version, from, dest, &options);
+        let candidates = self.caches.routes.lock().unwrap().candidates(&version, from, dest, &options);
         if !candidates.is_empty() {
             let snapshot = self.snapshot.lock().unwrap().clone();
             if let Some((id, kind, plan)) = route_splice::reuse(&snapshot.world, &snapshot.tables, &candidates, from, dest, &options) {
-                self.routes.lock().unwrap().served(id, kind);
+                self.caches.routes.lock().unwrap().served(id, kind);
                 return self.instant_slot(true, encode_plan(&plan));
             }
         }
-        // LOT3 vol en cours: same full key already queued/computing ->
-        // join it, never duplicate the Dijkstra. Sequential locks only
-        // (lock order: inflight, results, waiters, never nested).
-        if let Some(id) = self.inflight.lock().unwrap().get(&key).copied() {
-            let pending =
-                matches!(self.results.lock().unwrap().get(&id), Some(Slot::Pending { .. }));
-            if pending {
-                *self.waiters.lock().unwrap().entry(id).or_insert(1) += 1;
-                self.joins.fetch_add(1, Ordering::Relaxed);
-                return object(vec![
-                    ("ok", Value::Bool(true)),
-                    ("id", Value::Int(id as i64)),
-                    ("version", str_value(&version)),
-                ]);
-            }
-        }
-        {
-            let mut admission = self.admission.lock().unwrap();
-            let in_flight = admission.get(&account).copied().unwrap_or(0);
-            if in_flight >= ACCOUNT_CAP {
-                self.refused_cap.fetch_add(1, Ordering::Relaxed);
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value("refused:account-cap")),
-                    ("version", str_value(&version)),
-                ]);
-            }
-            admission.insert(account.clone(), in_flight + 1);
-        }
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let cancel = Arc::new(AtomicBool::new(false));
-        // Slot BEFORE the queue: the pool must never dequeue a job whose
-        // Pending slot is not yet visible (it would drop a live ticket).
-        // A refused queue removes the slot again — never a dangling id.
-        self.results
-            .lock()
-            .unwrap()
-            .insert(id, Slot::Pending { cancel: Arc::clone(&cancel) });
-        self.inflight.lock().unwrap().insert(key.clone(), id);
-        self.tickets.lock().unwrap().insert(id, (key.clone(), account.clone()));
-        self.waiters.lock().unwrap().insert(id, 1);
-        let job = Job {
-            id,
-            account: account.clone(),
-            key,
-            from,
-            dest,
-            options,
-            cancel,
-        };
-        if let Err(error) = self.queue_tx.try_send(job) {            // The job back: its key recovers the exact in-flight entry
-            // (the tickets map is already cleared below, so it cannot).
-            let job = match error {
-                mpsc::TrySendError::Full(back) | mpsc::TrySendError::Disconnected(back) => back,
-            };
-            self.results.lock().unwrap().remove(&job.id);
-            self.tickets.lock().unwrap().remove(&job.id);
-            self.waiters.lock().unwrap().remove(&job.id);
-            let mut inflight = self.inflight.lock().unwrap();
-            if inflight.get(&job.key) == Some(&job.id) {
-                inflight.remove(&job.key);
-            }
-            let mut admission = self.admission.lock().unwrap();
-            let in_flight = admission.get(&job.account).copied().unwrap_or(1);
-            admission.insert(job.account, in_flight.saturating_sub(1));
-            self.refused_full.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value("refused:queue-full")),
+        // Join the pending identical request, else take an account unit
+        // and queue (`Admission::submit`: join, cap, slot before queue).
+        let ticket = |id: u64| {
+            object(vec![
+                ("ok", Value::Bool(true)),
+                ("id", Value::Int(id as i64)),
                 ("version", str_value(&version)),
-            ]);
+            ])
+        };
+        let refused = |reason: &str| {
+            object(vec![
+                ("ok", Value::Bool(false)),
+                ("error", str_value(reason)),
+                ("version", str_value(&version)),
+            ])
+        };
+        match self.admission.submit(&account, key, from, dest, options) {
+            Submitted::Joined(id) => {
+                self.counters.joins.fetch_add(1, Ordering::Relaxed);
+                ticket(id)
+            }
+            Submitted::Refused(Refusal::AccountCap) => {
+                self.counters.refused_cap.fetch_add(1, Ordering::Relaxed);
+                refused("refused:account-cap")
+            }
+            Submitted::Refused(Refusal::QueueFull) => {
+                self.counters.refused_full.fetch_add(1, Ordering::Relaxed);
+                refused("refused:queue-full")
+            }
+            Submitted::Queued(id) => {
+                self.counters.misses.fetch_add(1, Ordering::Relaxed);
+                ticket(id)
+            }
         }
-        self.queued.fetch_add(1, Ordering::Relaxed);
-        self.misses.fetch_add(1, Ordering::Relaxed);
-        object(vec![
-            ("ok", Value::Bool(true)),
-            ("id", Value::Int(id as i64)),
-            ("version", str_value(&version)),
-        ])
     }
 
     /// A cache hit answers as a fresh terminal ticket (poll reads it
     /// once, same shape as a computed plan, no queue involved).
-    /// Reap one consumable terminal when `results` overflows: a polled
-    /// (already consumed) terminal first, oldest id first so the choice
-    /// is FIFO-deterministic; an unpolled one only when no polled
-    /// terminal exists (the bound holds, never a pending). The waiter
-    /// orphan goes down with its slot: without this, every evicted id
-    /// leaked one `waiters` entry forever (`unknown-ticket` storm
-    /// artefact). One lock at a time, never nested.
-    /// Returns false when nothing is consumable (pendings only): the
-    /// caller breaks instead of spinning.
-    fn evict_one(&self) -> bool {
-        let victim = self
-            .results
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(_, slot)| matches!(slot, Slot::Ready { .. } | Slot::Failed { .. }))
-            .min_by_key(|(id, slot)| {
-                let consumed = matches!(slot, Slot::Ready { polled: true, .. } | Slot::Failed { polled: true, .. });
-                (!consumed, **id)
-            })
-            .map(|(id, _)| *id);
-        if let Some(id) = victim {
-            self.results.lock().unwrap().remove(&id);
-            self.waiters.lock().unwrap().remove(&id);
-            true
-        } else {
-            false
-        }
-    }
     fn instant_slot(&self, is_plan: bool, body: Value) -> Value {
         let version = self.version();
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.waiters.lock().unwrap().insert(id, 1);
-        let mut results = self.results.lock().unwrap();
-        if is_plan {
-            results.insert(id, Slot::Ready { plan: body, polled: false });
-        } else {
-            results.insert(id, Slot::Failed { error: body, polled: false });
-        }
-        drop(results);
-        while self.results.lock().unwrap().len() > RESULTS_CAP {
-            if !self.evict_one() {
-                break;
-            }
-        }
+        let id = self.admission.instant(is_plan, body);
         object(vec![
             ("ok", Value::Bool(true)),
             ("id", Value::Int(id as i64)),
@@ -1186,7 +936,7 @@ impl Service {
     }
 
     fn op_poll(&self, request: &Value) -> Value {
-        self.polls_served.fetch_add(1, Ordering::Relaxed);
+        self.counters.polls_served.fetch_add(1, Ordering::Relaxed);
         self.poll_slot(request)
     }
 
@@ -1205,40 +955,26 @@ impl Service {
                 ])
             }
         };
-        // LOT3 shared tickets: Ready/Failed answers clone out WITHOUT
-        // consuming the slot (N waiters poll the same id); eviction by
-        // RESULTS_CAP reaps them, polled ones first. Pending stays until
-        // computed/cancelled. A first poll marks the terminal consumed so
-        // the eviction prefers it over a never-polled one.
-        let mut results = self.results.lock().unwrap();
-        match results.get_mut(&id) {
-            Some(Slot::Pending { .. }) => object(vec![
+        match self.admission.poll(id) {
+            Polled::Pending => object(vec![
                 ("ok", Value::Bool(true)),
                 ("status", str_value("pending")),
                 ("version", str_value(&version)),
             ]),
-            Some(Slot::Ready { plan, polled }) => {
-                *polled = true;
-                let plan = plan.clone();
-                object(vec![
-                    ("ok", Value::Bool(true)),
-                    ("status", str_value("ready")),
-                    ("plan", plan),
-                    ("version", str_value(&version)),
-                ])
-            }
-            Some(Slot::Failed { error, polled }) => {
-                *polled = true;
-                let error = error.clone();
-                object(vec![
-                    ("ok", Value::Bool(true)),
-                    ("status", str_value("failed")),
-                    ("error", error),
-                    ("version", str_value(&version)),
-                ])
-            }
-            None => {
-                self.unknown_polls.fetch_add(1, Ordering::Relaxed);
+            Polled::Ready(plan) => object(vec![
+                ("ok", Value::Bool(true)),
+                ("status", str_value("ready")),
+                ("plan", plan),
+                ("version", str_value(&version)),
+            ]),
+            Polled::Failed(error) => object(vec![
+                ("ok", Value::Bool(true)),
+                ("status", str_value("failed")),
+                ("error", error),
+                ("version", str_value(&version)),
+            ]),
+            Polled::Unknown => {
+                self.counters.unknown_polls.fetch_add(1, Ordering::Relaxed);
                 object(vec![
                     ("ok", Value::Bool(false)),
                     ("error", str_value("unknown-ticket")),
@@ -1258,37 +994,7 @@ impl Service {
                 ])
             }
         };
-        // LOT3 shared tickets: only the last waiter truly cancels; the
-        // others keep polling the same id. The last cancel also releases
-        // the account admission NOW (lot 4): a cancelled ticket must not
-        // wedge the cap until the pool dequeues and drops it. Double
-        // release is harmless (`release` on a missing key is a no-op) and
-        // the over-admit window is one ticket for milliseconds.
-        let last = {
-            let mut waiters = self.waiters.lock().unwrap();
-            match waiters.get(&id).copied() {
-                Some(count) if count > 1 => {
-                    waiters.insert(id, count - 1);
-                    false
-                }
-                _ => {
-                    waiters.remove(&id);
-                    true
-                }
-            }
-        };
-        if last {
-            if let Some(Slot::Pending { cancel }) = self.results.lock().unwrap().remove(&id) {
-                cancel.store(true, Ordering::Relaxed);
-            }
-            if let Some((key, owner)) = self.tickets.lock().unwrap().remove(&id) {
-                let mut inflight = self.inflight.lock().unwrap();
-                if inflight.get(&key) == Some(&id) {
-                    inflight.remove(&key);
-                }
-                self.release(&owner);
-            }
-        }
+        self.admission.cancel(id);
         object(vec![("ok", Value::Bool(true))])
     }
 
@@ -1299,7 +1005,7 @@ impl Service {
     /// version discipline as the other direct reads: the worker adopts
     /// the served version and retries once, never plans local.
     fn op_walk_costs(&self, request: &Value) -> Value {
-        self.walk_costs_served.fetch_add(1, Ordering::Relaxed);
+        self.counters.walk_costs_served.fetch_add(1, Ordering::Relaxed);
         let version = self.version();
         let parsed = match walk_costs::decode_request(request) {
             Ok(parsed) => parsed,
@@ -1312,7 +1018,7 @@ impl Service {
             }
         };
         if !parsed.version.is_empty() && !version.is_empty() && parsed.version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            self.counters.refused_stale.fetch_add(1, Ordering::Relaxed);
             return object(vec![
                 ("ok", Value::Bool(false)),
                 (
@@ -1326,18 +1032,6 @@ impl Service {
             ]);
         }
         let snapshot = self.snapshot.lock().unwrap().clone();
-        // Batch cache first: identical ranking windows repeat every cycle.
-        let key = CostsKey::of(parsed.from, &parsed.dests, &parsed.options, &version);
-        if let Some(found) = self.costs_cache.lock().unwrap().get(&key).cloned() {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            self.walk_costs_hits.fetch_add(1, Ordering::Relaxed);
-            let costs = parsed
-                .dests
-                .iter()
-                .map(|dest| key.dests.binary_search_by_key(&(dest.level, dest.x, dest.z), |tile| (tile.level, tile.x, tile.z)).ok().and_then(|slot| found[slot]))
-                .collect();
-            return walk_costs::encode_response(&walk_costs::WalkCostsResp { costs, version });
-        }
         let Some((shared, pockets)) = self.shared_edges(&snapshot) else {
             // The L2 builds infallibly here (no yield gate): all-None
             // keeps the caller on Manhattan order instead of inventing
@@ -1356,386 +1050,7 @@ impl Service {
             &shared,
             Some(&pockets),
         );
-        // Bounded batch cache (cleared when full, never truth): the next
-        // identical ranking window serves with no search.
-        {
-            let mut cache = self.costs_cache.lock().unwrap();
-            if cache.len() >= COSTS_CACHE_CAP {
-                cache.clear();
-            }
-            let by_set = key
-                .dests
-                .iter()
-                .map(|tile| parsed.dests.iter().position(|dest| dest == tile).and_then(|index| found[index]))
-                .collect();
-            cache.insert(key, by_set);
-        }
         walk_costs::encode_response(&walk_costs::WalkCostsResp { costs: found, version })
-    }
-
-    /// Direct read, no ticket: defs for a batch of loc ids off the shared
-    /// snapshot. Version skew refuses stale like a submit; the worker
-    /// adopts the served version and retries once, never plans local.
-    fn op_door_defs(&self, request: &Value) -> Value {
-        let version = self.version();
-        let client_version = request.get("version").as_str().unwrap_or("");
-        if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
-        }
-        let locs = match service_queries::parse_door_defs_request(request) {
-            Ok(locs) => locs,
-            Err(error) => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&error)),
-                    ("version", str_value(&version)),
-                ])
-            }
-        };
-        let snapshot = self.snapshot.lock().unwrap().clone();
-        let defs = service_queries::door_defs(&snapshot, &locs);
-        self.door_defs_served.fetch_add(1, Ordering::Relaxed);
-        service_queries::encode_door_defs_reply(&defs, &version)
-    }
-
-    /// Direct read, no ticket: static flags for a batch of tiles off the
-    /// shared snapshot (diagnosis, stepping). Same version discipline.
-    fn op_tiles_flags(&self, request: &Value) -> Value {
-        let version = self.version();
-        let client_version = request.get("version").as_str().unwrap_or("");
-        if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
-        }
-        let tiles = match service_queries::parse_tiles_flags_request(request) {
-            Ok(tiles) => tiles,
-            Err(error) => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&error)),
-                    ("version", str_value(&version)),
-                ])
-            }
-        };
-        let snapshot = self.snapshot.lock().unwrap().clone();
-        let rows = service_queries::tiles_flags(&snapshot, &tiles);
-        self.tiles_flags_served.fetch_add(1, Ordering::Relaxed);
-        service_queries::encode_tiles_flags_reply(&rows, &version)
-    }
-
-    /// Direct read, no ticket: static locs near a center tile, nearest
-    /// first. Same version discipline as the other direct reads.
-    fn op_static_locs_near(&self, request: &Value) -> Value {
-        let version = self.version();
-        let client_version = request.get("version").as_str().unwrap_or("");
-        if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
-        }
-        let center = match service_queries::parse_static_locs_near_request(request) {
-            Ok(center) => center,
-            Err(error) => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&error)),
-                    ("version", str_value(&version)),
-                ])
-            }
-        };
-        let snapshot = self.snapshot.lock().unwrap().clone();
-        let locs = service_queries::static_locs_near(&snapshot, center.0, center.1, center.2, center.3);
-        self.static_locs_served.fetch_add(1, Ordering::Relaxed);
-        service_queries::encode_static_locs_near_reply(&locs, &version)
-    }
-
-    /// Direct read, no ticket: one F2P verdict per tile, in request
-    /// order. Same version discipline.
-    fn op_in_f2p(&self, request: &Value) -> Value {
-        let version = self.version();
-        let client_version = request.get("version").as_str().unwrap_or("");
-        if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
-        }
-        let tiles = match service_queries::parse_tiles_flags_request(request) {
-            Ok(tiles) => tiles,
-            Err(error) => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&error)),
-                    ("version", str_value(&version)),
-                ])
-            }
-        };
-        let snapshot = self.snapshot.lock().unwrap().clone();
-        let inside = service_queries::in_f2p_batch(&snapshot, &tiles);
-        self.f2p_served.fetch_add(1, Ordering::Relaxed);
-        service_queries::encode_in_f2p_reply(&inside, &version)
-    }
-
-    /// Direct read, no ticket: nearest toll-gate tile on this level
-    /// within the radius, or null. Same version discipline.
-    fn op_toll_fence(&self, request: &Value) -> Value {
-        let version = self.version();
-        let client_version = request.get("version").as_str().unwrap_or("");
-        if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
-        }
-        let center = match service_queries::parse_toll_fence_request(request) {
-            Ok(center) => center,
-            Err(error) => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&error)),
-                    ("version", str_value(&version)),
-                ])
-            }
-        };
-        let snapshot = self.snapshot.lock().unwrap().clone();
-        self.toll_fence_served.fetch_add(1, Ordering::Relaxed);
-        // Additive covering list (`region_lists`): the worker re-serves
-        // every query inside it with no round trip. Same region read.
-        let Some(list_radius) = crate::region_lists::list_radius(request) else {
-            let gate = service_queries::toll_fence(&snapshot, center.0, center.1, center.2, center.3);
-            return service_queries::encode_toll_fence_reply(gate, &version);
-        };
-        let gates = snapshot.world.toll_gates_within(center.0, center.1, center.2, list_radius.max(center.3));
-        let radius = center.3.max(0);
-        let gate = gates
-            .iter()
-            .find(|gate| (gate.0 - center.0).abs() + (gate.1 - center.1).abs() <= radius)
-            .copied();
-        let mut reply = service_queries::encode_toll_fence_reply(gate, &version);
-        if let Value::Obj(fields) = &mut reply {
-            fields.insert(crate::region_lists::GATES_FIELD.to_string(), crate::region_lists::encode_gates(&gates));
-        }
-        reply
-    }
-
-    /// Direct read, no ticket: every tag a plan may require, sorted and
-    /// distinct. The worker satisfies them from live state; the reply
-    /// version keys its cache. Same stale discipline.
-    fn op_wants(&self, request: &Value) -> Value {
-        let version = self.version();
-        let client_version = request.get("version").as_str().unwrap_or("");
-        if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
-        }
-        let snapshot = self.snapshot.lock().unwrap().clone();
-        let tags = service_queries::wants(&snapshot);
-        self.wants_served.fetch_add(1, Ordering::Relaxed);
-        service_queries::encode_wants_reply(&tags, &version)
-    }
-
-    /// Direct read, no ticket: static/live mismatches for a dossier
-    /// window. Same version discipline as the other direct reads.
-    fn op_diff(&self, request: &Value) -> Value {
-        let version = self.version();
-        let client_version = request.get("version").as_str().unwrap_or("");
-        if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
-        }
-        let cells = match service_queries::parse_diff_request(request) {
-            Ok(cells) => cells,
-            Err(error) => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&error)),
-                    ("version", str_value(&version)),
-                ])
-            }
-        };
-        let snapshot = self.snapshot.lock().unwrap().clone();
-        let entries = service_queries::diff_cells(&snapshot, &cells);
-        self.diff_served.fetch_add(1, Ordering::Relaxed);
-        service_queries::encode_diff_reply(&entries, &version)
-    }
-
-    /// Direct read, no ticket: flags here/dest, template locs near dest
-    /// and the plan (or NoRoute) for the same inputs `travel_to` uses.
-    /// The Dijkstra runs inline on the acceptor (admin-only, one caller):
-    /// a slow exhaustive NoRoute still lands inside the poll guard.
-    fn op_debug(&self, request: &Value) -> Value {
-        let version = self.version();
-        let client_version = request.get("version").as_str().unwrap_or("");
-        if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
-        }
-        let (from, dest, options) = match service_queries::parse_debug_request(request) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&error)),
-                    ("version", str_value(&version)),
-                ])
-            }
-        };
-        let snapshot = self.snapshot.lock().unwrap().clone();
-        let (flags_here, flags_dest, locs, defs) = service_queries::debug_static(&snapshot, &from, &dest);
-        let outcome = plan::plan(&snapshot.world, &snapshot.tables, from, dest, &options);
-        self.debug_served.fetch_add(1, Ordering::Relaxed);
-        service_queries::encode_debug_reply(flags_here, flags_dest, &locs, &defs, &outcome, &version)
-    }
-
-    /// Direct read, no ticket: every transition row, in table order.
-    /// Same version discipline as the other direct reads.
-    fn op_transitions_list(&self, request: &Value) -> Value {
-        let version = self.version();
-        let client_version = request.get("version").as_str().unwrap_or("");
-        if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
-        }
-        let snapshot = self.snapshot.lock().unwrap().clone();
-        let rows = service_queries::transitions_list(&snapshot);
-        self.transitions_list_served.fetch_add(1, Ordering::Relaxed);
-        service_queries::encode_transitions_list_reply(&rows, &version)
-    }
-
-    /// Direct read, no ticket: stands and expects for the filtered rows,
-    /// prober options. Same version discipline.
-    fn op_probe_targets(&self, request: &Value) -> Value {
-        let version = self.version();
-        let client_version = request.get("version").as_str().unwrap_or("");
-        if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
-        }
-        let filter = request.get("filter").as_str().map(str::to_string);
-        let snapshot = self.snapshot.lock().unwrap().clone();
-        let targets = service_queries::probe_targets(&snapshot, filter.as_deref());
-        self.probe_targets_served.fetch_add(1, Ordering::Relaxed);
-        service_queries::encode_probe_targets_reply(&targets, &version)
-    }
-
-    /// Direct read, no ticket: template doors within the radius, nearest
-    /// first. Same version discipline.
-    fn op_doors_near(&self, request: &Value) -> Value {
-        let version = self.version();
-        let client_version = request.get("version").as_str().unwrap_or("");
-        if !client_version.is_empty() && !version.is_empty() && client_version != version {
-            self.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
-        }
-        let center = match service_queries::parse_center_radius(request) {
-            Ok(center) => center,
-            Err(error) => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&error)),
-                    ("version", str_value(&version)),
-                ])
-            }
-        };
-        let snapshot = self.snapshot.lock().unwrap().clone();
-        let doors = service_queries::doors_near(&snapshot, center.0, center.1, center.2, center.3);
-        self.doors_near_served.fetch_add(1, Ordering::Relaxed);
-        service_queries::encode_static_locs_near_reply(&doors, &version)
     }
 
     /// Pool worker: one job at a time, snapshot cloned per job, no lock
@@ -1744,30 +1059,7 @@ impl Service {
     /// serve every search); the outcome lands in L1 under the full key
     /// (negatives included, Aborted never).
     fn serve_plans(&self) {
-        loop {
-            let job = {
-                let queue = self.queue_rx.lock().unwrap();
-                queue.recv().map_err(|_| "closed".to_string())
-            };
-            let Ok(job) = job else {
-                break;
-            };
-            self.queued.fetch_sub(1, Ordering::Relaxed);
-            if !self.results.lock().unwrap().contains_key(&job.id) {
-                // Cancelled while queued: the canceller already dropped
-                // the maps and released admission. Release only when we
-                // still own them, never twice for one ticket (a double
-                // release stole a live ticket's cap unit and let the
-                // effective concurrency drift above ACCOUNT_CAP).
-                if self.tickets.lock().unwrap().remove(&job.id).is_some() {
-                    let mut inflight = self.inflight.lock().unwrap();
-                    if inflight.get(&job.key) == Some(&job.id) {
-                        inflight.remove(&job.key);
-                    }
-                    self.release(&job.account);
-                }
-                continue;
-            }
+        while let Some(job) = self.admission.next_job() {
             let snapshot = self.snapshot.lock().unwrap().clone();
             let shared = self.shared_edges(&snapshot);
             let cancel = Arc::clone(&job.cancel);
@@ -1785,26 +1077,20 @@ impl Service {
                 ),
                 None => Err(plan::aborted_no_route(job.from)),
             };
-            self.meter.record(crate::nav_meter::Kind::PlanComputed, probe);
+            self.counters.meter.record(crate::nav_meter::Kind::PlanComputed, probe);
             // N8 detour, best-served baseline: the planner is deterministic,
             // so a repeated pair must cost exactly its cheapest served
             // cost. `detour` is the excess over that baseline (0 on
             // healthy traffic: straight walks, obstacle walks, door
             // clicks and transition rides all re-price identically);
             // only a regression — a worse plan for a known pair — moves
-            // the gauge. Bounded like the costs cache: a full map clears
-            // and re-baselines at zero, never spikes.
+            // the gauge. Bounded: a full map clears and re-baselines at
+            // zero, never spikes.
             if let Ok(plan) = &outcome {
-                let mut best = self.best_costs.lock().unwrap();
-                if best.len() >= BEST_COSTS_CAP {
-                    best.clear();
-                }
-                let (detour, floor) = best_detour(best.get(&job.key).copied(), plan.cost);
-                best.insert(job.key.clone(), floor);
-                drop(best);
-                self.detour_sum.fetch_add(u64::from(detour), Ordering::Relaxed);
-                self.detour_plans.fetch_add(1, Ordering::Relaxed);
-                self.detour_max.fetch_max(detour, Ordering::Relaxed);
+                let detour = self.caches.note_cost(&job.key, plan.cost);
+                self.counters.detour_sum.fetch_add(u64::from(detour), Ordering::Relaxed);
+                self.counters.detour_plans.fetch_add(1, Ordering::Relaxed);
+                self.counters.detour_max.fetch_max(detour, Ordering::Relaxed);
             }
             // Encode + route cache first (no results lock held: lock order
             // stays sequential). A cancelled outcome still caches: same
@@ -1831,106 +1117,23 @@ impl Service {
                         danger: job.options.danger.clone(),
                         info,
                     };
-                    self.routes.lock().unwrap().insert_plan(&snapshot.version, entry);
+                    self.caches.routes.lock().unwrap().insert_plan(&snapshot.version, entry);
                 }
                 Err(no) if no.reason.cacheable() => {
-                    self.routes.lock().unwrap().insert_negative(&snapshot.version, key, body.clone(), NEGATIVE_TTL);
+                    self.caches.routes.lock().unwrap().insert_negative(&snapshot.version, key, body.clone(), NEGATIVE_TTL);
                 }
                 Err(_) => {}
             }
-            // One critical section: Pending becomes Ready/Failed with no
-            // poll-visible hole (a poll never sees a missing live ticket).
-            // A missing slot means every waiter cancelled: drop the outcome.
-            let mut results = self.results.lock().unwrap();
-            if matches!(results.get(&job.id), Some(Slot::Pending { .. })) {
-                if is_plan {
-                    results.insert(job.id, Slot::Ready { plan: body, polled: false });
-                } else {
-                    results.insert(job.id, Slot::Failed { error: body, polled: false });
-                }
-                // Bound stored results: evict a consumable outcome (never
-                // a pending); its owner already gave up and fell back sync.
-                drop(results);
-                while self.results.lock().unwrap().len() > RESULTS_CAP {
-                    if !self.evict_one() {
-                        break;
-                    }
-                }
-                *self.completions.lock().unwrap() += 1;
-                self.completed.notify_all();
-            }
-            // A cancelled ticket drops its outcome; a served one leaves
-            // its terminal slot for every waiter to poll. Admission is
-            // released exactly once per ticket: a cancel already released
-            // it and dropped the maps, so only the owner still holding
-            // the ticket entry releases here.
-            {
-                let mut inflight = self.inflight.lock().unwrap();
-                if inflight.get(&job.key) == Some(&job.id) {
-                    inflight.remove(&job.key);
-                }
-            }
-            if self.tickets.lock().unwrap().remove(&job.id).is_some() {
-                self.release(&job.account);
-            }
+            self.admission.finish(&job, is_plan, body);
         }
     }
 
     /// LOT3 L2: one edge set per data version, shared by every search.
-    /// A reload drains the old version while the new one computes once.
-    fn shared_edges(&self, snapshot: &Arc<Snapshot>) -> Option<L2Slot> {
-        if let Some(shared) = self.l2.lock().unwrap().0.get(&snapshot.version).cloned() {
-            self.l2_hits.fetch_add(1, Ordering::Relaxed);
-            return Some(shared);
-        }
-        self.l2_miss.fetch_add(1, Ordering::Relaxed);
-        // The L2 is the permissive superset (requires/tolls/F2P lifted):
-        // identical for every job, so a default options fits all.
-        let mut always = || true;
-        let edges = plan::prepare_shared(&snapshot.world, &snapshot.tables, &NavOptions::default(), &mut always)?;
-        let shared: L2Slot = (Arc::new(edges), Arc::new(PocketMemo::default()));
-        let mut l2 = self.l2.lock().unwrap();
-        if let Some(raced) = l2.0.get(&snapshot.version) {
-            // Another thread built it first: share its memo too.
-            return Some(raced.clone());
-        }
-        {
-            l2.1.push(snapshot.version.clone());
-            l2.0.insert(snapshot.version.clone(), shared.clone());
-            while l2.0.len() > L2_VERSIONS_CAP {
-                let oldest = l2.1.remove(0);
-                l2.0.remove(&oldest);
-            }
-        }
-        Some(shared)
+    fn shared_edges(&self, snapshot: &Arc<Snapshot>) -> Option<crate::service_caches::L2Slot> {
+        self.caches.shared_edges(snapshot, &self.counters)
     }
 
-    fn release(&self, account: &str) {
-        let mut admission = self.admission.lock().unwrap();
-        let in_flight = admission.get(account).copied().unwrap_or(1);
-        if in_flight <= 1 {
-            admission.remove(account);
-        } else {
-            admission.insert(account.to_string(), in_flight - 1);
-        }
-    }
 }
-
-/// N8 baseline core, pure: excess over the cheapest served cost for
-/// the pair, and the new floor. First sighting and improvements read
-/// 0 and re-baseline; a regression keeps the old floor so every bad
-/// plan counts, not just the first.
-fn best_detour(known: Option<u32>, cost: u32) -> (u32, u32) {
-    match known {
-        None => (0, cost),
-        Some(floor) if cost <= floor => (0, cost),
-        Some(floor) => (cost - floor, floor),
-    }
-}
-
-/// Best-served baseline cap: pairs, not bytes (keys are small). A full
-/// map clears and re-baselines at zero, like the costs cache.
-const BEST_COSTS_CAP: usize = 4096;
 
 // -- client ------------------------------------------------------------------
 
@@ -2101,8 +1304,10 @@ pub fn test_socket(prefix: &str) -> PathBuf {
 mod tests {
     use super::*;
     use crate::plan::{NoRouteReason, Segment};
+    use crate::service_admission::Slot;
     use crate::service_codec::ride_value;
     use std::collections::HashSet;
+    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
     fn workspace_root() -> PathBuf {
@@ -2869,14 +2074,15 @@ mod tests {
         let after = service.stats();
         assert_eq!(after.misses - before.misses, 0, "no plan ticket consumed");
         assert_eq!(after.walk_costs - before.walk_costs, 1, "one batch counted");
-        // Repeat batch: cached, no search, counted as a cache hit.
+        // Repeat batch: another search (no batch cache since lot N6),
+        // the same prices.
         let (again, _) = client
             .walk_costs(from, &[far, near, near], &short_options(), "costs-op")
             .expect("repeat serves");
         assert_eq!(again, found, "repeat serves identical costs");
-        let cached = service.stats();
-        assert_eq!(cached.walk_costs - before.walk_costs, 2, "each batch is one op");
-        assert!(cached.hits > after.hits, "repeat batch serves from cache");
+        let repeated = service.stats();
+        assert_eq!(repeated.walk_costs - before.walk_costs, 2, "each batch is one op");
+        assert_eq!(repeated.hits, after.hits, "a batch is never a cache hit");
         // Same prices as the unit plans, without any ticket.
         let (world, tables) = shared_world();
         for (dest, cost) in [far, near].iter().zip([found[0], found[1]].iter()) {
@@ -2935,11 +2141,11 @@ mod tests {
     /// floor so every bad plan counts.
     #[test]
     fn best_detour_prices_regressions_only() {
-        assert_eq!(super::best_detour(None, 13), (0, 13), "first sighting baselines");
-        assert_eq!(super::best_detour(Some(13), 13), (0, 13), "identical re-price reads zero");
-        assert_eq!(super::best_detour(Some(13), 9), (0, 9), "improvement re-baselines");
-        assert_eq!(super::best_detour(Some(10), 13), (3, 10), "regression reads the excess");
-        assert_eq!(super::best_detour(Some(0), 207), (207, 0), "worst case keeps the floor");
+        assert_eq!(crate::service_caches::best_detour(None, 13), (0, 13), "first sighting baselines");
+        assert_eq!(crate::service_caches::best_detour(Some(13), 13), (0, 13), "identical re-price reads zero");
+        assert_eq!(crate::service_caches::best_detour(Some(13), 9), (0, 9), "improvement re-baselines");
+        assert_eq!(crate::service_caches::best_detour(Some(10), 13), (3, 10), "regression reads the excess");
+        assert_eq!(crate::service_caches::best_detour(Some(0), 207), (207, 0), "worst case keeps the floor");
     }
 
     /// N8 acceptance: healthy traffic — straight walks, a door leg, an
@@ -3423,7 +2629,7 @@ mod tests {
         loop {
             match client.poll(live).expect("poll answers") {
                 (Poll::Pending, _) => {
-                    let held = service.admission.lock().unwrap().get(account).copied();
+                    let held = service.admission.held_by(account);
                     assert_eq!(held, Some(1), "live ticket counted exactly once, got {held:?}");
                 }
                 (Poll::Ready(_), _) | (Poll::Failed(_), _) | (Poll::Unknown, _) => break,
@@ -3432,7 +2638,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         // B done: the cap is empty again, never negative, never stuck.
-        assert_eq!(service.admission.lock().unwrap().get(account).copied(), None, "cap empty after completion");
+        assert_eq!(service.admission.held_by(account), None, "cap empty after completion");
     }
 
     /// Shared helper: submit on a fresh-service account (submit path
@@ -3460,8 +2666,8 @@ mod tests {
         .expect("service starts");
         let terminal = |polled: bool| Slot::Ready { plan: object(vec![("k", str_value("v"))]), polled };
         {
-            let mut results = service.results.lock().unwrap();
-            let mut waiters = service.waiters.lock().unwrap();
+            let mut results = service.admission.results.lock().unwrap();
+            let mut waiters = service.admission.waiters.lock().unwrap();
             results.insert(7, terminal(true));
             results.insert(8, terminal(true));
             results.insert(9, terminal(false));
@@ -3470,21 +2676,21 @@ mod tests {
                 waiters.insert(id, 1);
             }
         }
-        assert!(service.evict_one(), "a consumable terminal exists");
-        assert!(!service.results.lock().unwrap().contains_key(&7), "oldest consumed reaped first");
-        assert!(service.results.lock().unwrap().contains_key(&8), "newer consumed waits its turn");
-        assert!(service.results.lock().unwrap().contains_key(&9), "unconsumed survives while consumed exist");
-        assert!(!service.waiters.lock().unwrap().contains_key(&7), "waiter orphan reaped with its slot");
-        assert!(service.evict_one(), "one consumed left");
-        assert!(!service.results.lock().unwrap().contains_key(&8), "second consumed gone");
-        assert!(service.results.lock().unwrap().contains_key(&9), "unconsumed still survives");
-        assert!(service.evict_one(), "last resort reaps the unconsumed");
-        assert!(!service.results.lock().unwrap().contains_key(&9), "unconsumed falls last");
-        assert!(!service.waiters.lock().unwrap().contains_key(&9), "orphan cleaned");
-        assert!(!service.evict_one(), "pendings only: nothing to reap");
-        let results = service.results.lock().unwrap();
+        assert!(service.admission.evict_one(), "a consumable terminal exists");
+        assert!(!service.admission.results.lock().unwrap().contains_key(&7), "oldest consumed reaped first");
+        assert!(service.admission.results.lock().unwrap().contains_key(&8), "newer consumed waits its turn");
+        assert!(service.admission.results.lock().unwrap().contains_key(&9), "unconsumed survives while consumed exist");
+        assert!(!service.admission.waiters.lock().unwrap().contains_key(&7), "waiter orphan reaped with its slot");
+        assert!(service.admission.evict_one(), "one consumed left");
+        assert!(!service.admission.results.lock().unwrap().contains_key(&8), "second consumed gone");
+        assert!(service.admission.results.lock().unwrap().contains_key(&9), "unconsumed still survives");
+        assert!(service.admission.evict_one(), "last resort reaps the unconsumed");
+        assert!(!service.admission.results.lock().unwrap().contains_key(&9), "unconsumed falls last");
+        assert!(!service.admission.waiters.lock().unwrap().contains_key(&9), "orphan cleaned");
+        assert!(!service.admission.evict_one(), "pendings only: nothing to reap");
+        let results = service.admission.results.lock().unwrap();
         assert!(matches!(results.get(&10), Some(Slot::Pending { .. })), "pending never evicted");
-        assert!(service.waiters.lock().unwrap().contains_key(&10), "pending waiter untouched");
+        assert!(service.admission.waiters.lock().unwrap().contains_key(&10), "pending waiter untouched");
     }
 
     /// Storm scenario at the protocol level: the slot disappears (here
@@ -3515,7 +2721,7 @@ mod tests {
         }
         assert_eq!(service.stats().unknown, 1, "one unknown poll counted");
         client.cancel(id).expect("cancel on a missing id stays ok");
-        assert!(!service.waiters.lock().unwrap().contains_key(&id), "no waiter orphan left");
+        assert!(!service.admission.waiters.lock().unwrap().contains_key(&id), "no waiter orphan left");
         assert_eq!(service.stats().unknown, 1, "the cleanup cancel polls nothing");
     }
 }
