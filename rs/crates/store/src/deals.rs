@@ -172,8 +172,9 @@ impl Store {
         }
     }
 
-    /// Open deals where the account is buyer or seller, oldest first.
-    pub fn open_deals_for_account(&self, account: &str) -> Result<Vec<Deal>, Error> {
+    /// Open deals where the account is buyer or seller, oldest first (the
+    /// database read; callers use the cached `open_deals_for_account`).
+    pub fn fresh_open_deals_for_account(&self, account: &str) -> Result<Vec<Deal>, Error> {
         let query = format!(
             "SELECT {DEAL_COLUMNS} FROM deals \
              WHERE (buyer = ?1 OR seller = ?1) AND status NOT IN ('settled','failed') \

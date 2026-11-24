@@ -379,8 +379,9 @@ impl Store {
         Ok(book)
     }
 
-    /// Every non-final order of one account.
-    pub fn account_orders(&self, account: &str) -> Result<Vec<Order>, Error> {
+    /// Every non-final order of one account (the uncached database read, public so tests compare it; callers use
+    /// the cached `account_orders`).
+    pub fn fresh_account_orders(&self, account: &str) -> Result<Vec<Order>, Error> {
         let query = format!(
             "SELECT {ORDER_COLUMNS} FROM orders \
              WHERE account = ?1 AND status IN ('open','matched') ORDER BY created_clock"

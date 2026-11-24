@@ -133,7 +133,7 @@ pub(crate) struct RawWorld<'a> {
     pub market: Option<&'a TestMarket>,
 }
 
-fn place(service: &MarketService, account: &str, side: &str, item: i64, qty: i64, price: i64) {
+pub(crate) fn place(service: &MarketService, account: &str, side: &str, item: i64, qty: i64, price: i64) {
     place_with(service, account, side, item, qty, price, "");
 }
 
@@ -215,6 +215,19 @@ impl<'a> RawWorld<'a> {
         }
     }
 
+    /// The cached account reads (`Store::account_orders`,
+    /// `open_deals_for_account`: what the pass's locks, listings and
+    /// committed coins come from) equal the database read for the bot and
+    /// its seller.
+    pub(crate) fn assert_account_views_fresh(&self) {
+        let Some(market) = self.market else { return };
+        let store = market.service.lock_store();
+        for account in [self.job.account.clone(), self.seller()] {
+            assert_eq!(store.account_orders(&account).expect("cached"), store.fresh_account_orders(&account).expect("fresh"), "orders of {account}");
+            assert_eq!(store.open_deals_for_account(&account).expect("cached"), store.fresh_open_deals_for_account(&account).expect("fresh"), "deals of {account}");
+        }
+    }
+
     /// The launch pass's reads up to the resolve context, through the
     /// production functions: `gather` at the start, `build_ctx` (which runs
     /// `ready_ctx`, `gather_market` and the publishers) at its point.
@@ -224,6 +237,7 @@ impl<'a> RawWorld<'a> {
             let quests_done = crate::brain_rescue::quests_done(life);
             let mut pass = LaunchPass { orch: &self.orch, job: &self.job, life: life.clone(), live: self.live.clone(), inputs, dirty: false, quoting: false, waiting: Vec::new() };
             let picked = crate::brain_launch_node::build_ctx(&mut pass, position, quests_done);
+            self.assert_account_views_fresh();
             (pass.inputs, picked.ctx, picked.committed)
         })
     }

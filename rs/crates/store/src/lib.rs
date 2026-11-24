@@ -14,6 +14,7 @@
 //! Candles are a cache: `executions` is the source of truth and any candle
 //! set can be rebuilt with [`Store::rebuild_candles`].
 
+pub mod account_views;
 pub mod amends;
 pub mod live_guard;
 pub mod balance;
@@ -117,6 +118,7 @@ fn is_busy(source: &rusqlite::Error) -> bool {
 /// SQLite backing store. Open once per process (the daemon).
 pub struct Store {
     connection: rusqlite::Connection,
+    views: std::cell::RefCell<account_views::AccountViews>,
 }
 
 impl Store {
@@ -145,7 +147,7 @@ impl Store {
         if found != schema::SCHEMA_VERSION {
             return Err(Error::SchemaMismatch { found, expected: schema::SCHEMA_VERSION });
         }
-        Ok(Self { connection })
+        Ok(Self { connection, views: account_views::empty() })
     }
 
     /// In-memory database with the same schema. Tests and offline tools.
@@ -164,7 +166,7 @@ impl Store {
         // Also ensures the reports-by-time index (`schema::REPORT_CLOCK_INDEX`:
         // measured gains, the brain's likely shop stock) without a version change.
         schema::apply_migrations(&connection)?;
-        Ok(Self { connection })
+        Ok(Self { connection, views: account_views::empty() })
     }
 
     /// Switches to WAL. On a fresh file the switch returns SQLITE_BUSY at

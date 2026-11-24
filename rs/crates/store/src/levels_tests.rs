@@ -119,7 +119,7 @@ fn levels_migration_is_lossless() -> Result<(), Error> {
         expected.push((id, owned(levels)));
     }
     schema::apply_migrations(&connection)?;
-    let store = Store { connection };
+    let store = Store { connection, views: crate::account_views::empty() };
     assert_eq!(store.schema_version()?, schema::SCHEMA_VERSION);
     for (id, levels) in expected {
         let measure = store.report_measure(id)?.expect("measure 2");
