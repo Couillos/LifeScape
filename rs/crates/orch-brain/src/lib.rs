@@ -81,6 +81,9 @@ pub mod method_health;
 pub mod funding_cmd;
 pub mod funding_plan;
 pub mod rares_cmd;
+pub mod web_brain;
+pub mod web_brain_view;
+pub mod web_job_lives;
 #[cfg(test)]
 mod brain_bids_seat_tests;
 #[cfg(test)]

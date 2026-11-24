@@ -12,9 +12,21 @@
 use std::sync::{Arc, OnceLock};
 
 use lifescape_json::Value;
+use lifescape_store::Store;
 
 use crate::fleet::Fleet;
 use crate::jobs::Job;
+
+/// The daemon's request dispatcher as the web server hands it down.
+pub type Dispatch = Arc<dyn Fn(Value) -> Value + Send + Sync>;
+
+/// Goal and task of a life file, as the dashboard's bot list shows them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LifeLine {
+    pub goal: String,
+    pub task: String,
+    pub task_title: String,
+}
 
 /// The brain's entry points for the daemon and the web server. Every
 /// method has an inert default (what `NoAutopilot` does), so a test double
@@ -58,6 +70,29 @@ pub trait Autopilot: Send + Sync {
     /// item's bid (`brain_bids::explain_for`, on the live handles).
     fn explain_for(&self, _account: &str, _item: &str) -> Result<Vec<String>, String> {
         Err("no brain registered".to_string())
+    }
+
+    /// The brain's own wishlist (`BrainWishes` command, Brain tab of the
+    /// Lives page): `job` is the account's connected job, if any.
+    fn wishes_reply(&self, _job: Option<&Job>, _account: &str) -> Value {
+        lifescape_json::object(vec![("ok", Value::Bool(false)), ("error", lifescape_json::str_value("no brain registered"))])
+    }
+
+    /// `/api/brain/<account>`: the Brain tab payload (`web_brain::brain_response`).
+    fn brain_view(&self, _account: &str, _dispatch: &Dispatch) -> Value {
+        lifescape_json::object(vec![("ok", Value::Bool(false)), ("error", lifescape_json::str_value("no brain registered"))])
+    }
+
+    /// Goal and task of the account's life file, cached on the file's
+    /// stamp (`web_job_lives::summary_for`).
+    fn life_line(&self, _account: &str) -> Option<LifeLine> {
+        None
+    }
+
+    /// The market makers' rows of the economy page (operator info):
+    /// `market_maker_report::maker_rows` as JSON.
+    fn maker_rows(&self, _store: &Store, _lives_dir: &std::path::Path) -> Vec<Value> {
+        Vec::new()
     }
 
     /// `fund-makers`: the plan's lines, and the gifts unless `dry_run`

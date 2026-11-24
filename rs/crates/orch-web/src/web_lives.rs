@@ -218,7 +218,7 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
     let guides = crate::guides_store::current();
     let activities = guides.as_deref().map(guide_activities).unwrap_or_default();
     // Market makers (plan marché Q6): operator info, never read by a bot.
-    let makers: Vec<Value> = crate::market_maker_report::maker_rows(&store, &lives_dir(run_dir)).iter().map(crate::market_maker_report::row_value).collect();
+    let makers: Vec<Value> = crate::autopilot::current().maker_rows(&store, &lives_dir(run_dir));
     // 100 % market lots (plan rendements R5): predicted vs realized.
     let trade_rows = crate::trade_report::trade_rows(&store, &lives_dir(run_dir));
     let (closed, predicted, realized) = crate::trade_report::closed_totals(&trade_rows);
@@ -329,8 +329,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The economy page's maker card is the brain's rows (`Autopilot::maker_rows`,
+    /// whose real source is proved in `orch-brain`, `market_maker_report`):
+    /// here a double stands in and the page must pass its rows through.
+    struct MakerDouble;
+
+    impl lifescape_orch_fleet::autopilot::Autopilot for MakerDouble {
+        fn maker_rows(&self, _store: &lifescape_store::Store, _lives_dir: &std::path::Path) -> Vec<Value> {
+            vec![object(vec![("account", str_value("m1")), ("phase", str_value("quoting")), ("slice", Value::Int(4)), ("capital", Value::Int(91_000))])]
+        }
+    }
+
     #[test]
     fn life_and_economy_shapes() {
+        lifescape_orch_fleet::autopilot::register(Arc::new(MakerDouble));
         let root = std::env::temp_dir().join(format!("lifescape-l10-{}", std::process::id()));
         let run = root.join("run");
         std::fs::create_dir_all(run.join("lives")).expect("scratch lives dir");

@@ -8,7 +8,8 @@
 use std::sync::Arc;
 
 use lifescape_json::Value;
-use lifescape_orch_fleet::autopilot::{self, Autopilot};
+use lifescape_orch_fleet::autopilot::{self, Autopilot, Dispatch, LifeLine};
+use lifescape_store::Store;
 
 use crate::fleet::Fleet;
 use crate::jobs::Job;
@@ -59,5 +60,21 @@ impl Autopilot for BrainAutopilot {
 
     fn explain_for(&self, account: &str, item: &str) -> Result<Vec<String>, String> {
         crate::brain_bids::explain_for(account, item, &crate::brain_deps::BrainDeps::live())
+    }
+
+    fn wishes_reply(&self, job: Option<&Job>, account: &str) -> Value {
+        crate::web_brain::wishes_reply(job, account)
+    }
+
+    fn brain_view(&self, account: &str, dispatch: &Dispatch) -> Value {
+        crate::web_brain::brain_response(account, dispatch)
+    }
+
+    fn life_line(&self, account: &str) -> Option<LifeLine> {
+        crate::web_job_lives::summary_for(account).map(|life| LifeLine { goal: life.goal, task: life.task, task_title: life.task_title })
+    }
+
+    fn maker_rows(&self, store: &Store, lives_dir: &std::path::Path) -> Vec<Value> {
+        crate::market_maker_report::maker_rows(store, lives_dir).iter().map(crate::market_maker_report::row_value).collect()
     }
 }

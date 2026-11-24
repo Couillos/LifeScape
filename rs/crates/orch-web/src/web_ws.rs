@@ -120,7 +120,7 @@ fn build_job_list(dispatch: &Dispatch) -> Vec<Value> {
         for field in crate::jobs::LIST_FIELDS {
             slim.insert(field.to_string(), job.get(field).clone());
         }
-        if let Some(life) = job.get("account").as_str().and_then(crate::web_job_lives::summary_for) {
+        if let Some(life) = job.get("account").as_str().and_then(|account| crate::autopilot::current().life_line(account)) {
             slim.insert("goal".to_string(), str_value(&life.goal));
             slim.insert("task".to_string(), str_value(&life.task));
             slim.insert("task_title".to_string(), str_value(&life.task_title));

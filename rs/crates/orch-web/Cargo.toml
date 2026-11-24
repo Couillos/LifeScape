@@ -21,7 +21,6 @@ lifescape-orch-world = { path = "../orch-world" }
 lifescape-orch-fleet = { path = "../orch-fleet" }
 lifescape-orch-market = { path = "../orch-market" }
 lifescape-orch-stats = { path = "../orch-stats" }
-lifescape-orch-brain = { path = "../orch-brain" }
 lifescape-orch-session = { path = "../orch-session" }
 
 [dev-dependencies]

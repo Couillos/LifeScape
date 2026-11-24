@@ -22,7 +22,6 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
 use std::time::Duration;
 
 use lifescape_json::{self as json, Value, object, str_value};
@@ -31,7 +30,7 @@ use crate::paths;
 pub const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 pub const WS_INTERVAL: f64 = 1.0;
 
-pub type Dispatch = Arc<dyn Fn(Value) -> Value + Send + Sync>;
+pub use lifescape_orch_fleet::autopilot::Dispatch;
 pub use crate::web_lives::{economy_response, economy_response_in, life_response, life_response_in, lives_response, lives_response_in};
 pub use crate::web_market::snap_range;
 pub use crate::web_ws::state_payload;
@@ -276,7 +275,7 @@ pub(crate) fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Respon
         }
         if parts.len() >= 2 && parts[..2] == ["api", "brain"] {
             let name = if parts.len() > 2 { parts[2] } else { "" };
-            return Ok(ok_json(crate::web_brain::brain_response(name, dispatch)));
+            return Ok(ok_json(crate::autopilot::current().brain_view(name, dispatch)));
         }
         if parts == ["brain.js"] {
             return Ok(Response {

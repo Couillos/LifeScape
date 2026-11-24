@@ -163,7 +163,7 @@ impl Orchestrator {
             // Brain tab of the Lives page: the brain's own wishlist.
             OperatorCommand::BrainWishes => {
                 let job = self.jobs.lock().unwrap().get(account).cloned();
-                crate::web_brain::wishes_reply(job.as_deref(), account)
+                crate::autopilot::current().wishes_reply(job.as_deref(), account)
             }
             // Market socket API over HTTP: {cmd:"market", op, ...}.
             OperatorCommand::Market => crate::market_service::handle(request),

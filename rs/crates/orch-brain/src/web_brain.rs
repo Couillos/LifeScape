@@ -18,7 +18,11 @@
 use lifescape_json::{self as json, object, str_value, Value};
 use lifescape_planner::{ban_states, life_from_value, BanState, HistoryEntry, Life, Node, NodeKind, NodeStatus};
 
-use crate::web::{err_json, Dispatch};
+use lifescape_orch_fleet::autopilot::Dispatch;
+
+fn err_json(message: String) -> Value {
+    object(vec![("ok", Value::Bool(false)), ("error", str_value(&message))])
+}
 use crate::web_brain_view::{
     ambition_view, cooling, cooling_view, filler_view, goal_origin_view, is_value_draw, logged_value, training_view, LoggedValue, PlanInfo, TrainingInput,
 };
@@ -524,7 +528,7 @@ fn progression_sources(run_dir: &std::path::Path, account: &str, life_value: &Va
             let levels = crate::brain_market::live_levels(live);
             let level_of = |skill: &str| levels.iter().find(|(known, _)| known == skill).map(|(_, level)| *level).unwrap_or(1);
             let skill = skills[0].clone();
-            let pending = crate::brain_value::pending_investments(&skill, &level_of, &lifescape_orch_brain::brain_deps::BrainDeps::live());
+            let pending = crate::brain_value::pending_investments(&skill, &level_of, &crate::brain_deps::BrainDeps::live());
             Some(TrainingInput { skill, own_rate: crate::brain_d17::coin_rate(account), pending })
         }
         _ => None,

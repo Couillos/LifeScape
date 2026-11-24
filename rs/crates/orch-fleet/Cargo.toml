@@ -12,6 +12,7 @@ lifescape-json = { path = "../json" }
 lifescape-scripts = { path = "../scripts" }
 lifescape-planner = { path = "../planner" }
 lifescape-orch-core = { path = "../orch-core" }
+lifescape-store = { path = "../store" }
 
 [dev-dependencies]
 # Test isolation (see orch-core `test-isolation`): run/ state resolves to a temp root.

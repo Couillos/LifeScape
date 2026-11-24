@@ -280,4 +280,31 @@ mod tests {
         assert_eq!(unknown.capital, None, "no snapshot: unknown, never 0");
         assert!(row_value(&unknown).get("capital").is_null());
     }
+
+    /// The economy page's maker card (served to the web crate through
+    /// `Autopilot::maker_rows`): a maker life file with no deal yet gives
+    /// its row, the capital at its switch, from an empty store.
+    #[test]
+    fn the_maker_life_file_drives_the_card() {
+        use lifescape_orch_fleet::autopilot::Autopilot;
+        let root = std::env::temp_dir().join(format!("lifescape-makers-{}", std::process::id()));
+        let lives = root.join("lives");
+        std::fs::create_dir_all(&lives).expect("scratch lives dir");
+        std::fs::write(
+            lives.join("m1.json"),
+            r#"{"schema":1,"account":"m1","created_at":1,"seed":9,
+                "profile":{"ironman":false,"market_affinity":0.5,"price_patience":0.5,"archetype":"market_maker",
+                  "maker":{"slice":4,"slices":11,"capital_target":90000,"phase":"quoting","capital_at_switch":91000,"switched_at":1}},
+                "goal":{"kind":"make_market"},"nodes":[],"engagement":null,"active":null,"history":[]}"#,
+        )
+        .expect("scratch life file");
+        let store = Store::open(&root.join("lifescape.db")).expect("scratch store");
+        let makers = crate::autopilot_impl::BrainAutopilot.maker_rows(&store, &lives);
+        assert_eq!(makers.len(), 1, "the maker life file drives the card");
+        assert_eq!(makers[0].get("account").as_str(), Some("m1"));
+        assert_eq!(makers[0].get("phase").as_str(), Some("quoting"));
+        assert_eq!(makers[0].get("slice").as_i64(), Some(4));
+        assert_eq!(makers[0].get("capital").as_i64(), Some(91_000), "no deal yet: the capital at its switch");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
