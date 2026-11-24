@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use lifescape_json::{self as json, Value, object, str_value};
 
+use crate::worker_command::WorkerCommand;
+
 use crate::session::{now_secs, reconnect_flow, spawn_script_thread, worker_out, write_heartbeat, QueuedCall, Shared};
 use crate::session_calls::{execute_write, method_lists, read_from_snapshot};
 
@@ -354,37 +356,41 @@ fn cmd_close(shared: &Arc<Shared>) -> Value {
     object(vec![("ok", Value::Bool(true)), ("session", session), ("closing", Value::Bool(true))])
 }
 
+/// One request, from a per-call connection or from the durable channel
+/// (lot 5.9): read once into a typed command (`WorkerCommand::decode`), then
+/// dispatched on the type. `set_locks` (sent by the brain, not part of the
+/// daemon's operator commands) and the unknown words keep the key reading.
 pub(crate) fn dispatch(shared: &Arc<Shared>, request: &Value) -> Value {
-    match request.get("cmd").as_str().unwrap_or("") {
-        "ping" => object(vec![("ok", Value::Bool(true))]),
-        "status" => object(vec![("ok", Value::Bool(true)), ("session", shared.describe())]),
-        "methods" => {
-            let (reads, writes) = method_lists(request.get("admin").as_bool().unwrap_or(false));
+    match WorkerCommand::decode(request) {
+        Some(command) => dispatch_typed(shared, command),
+        None => match request.get("cmd").as_str().unwrap_or("") {
+            "set_locks" => crate::session_locks::cmd_set_locks(request),
+            unknown => object(vec![("ok", Value::Bool(false)), ("error", str_value(&format!("unknown command {unknown:?}")))]),
+        },
+    }
+}
+
+/// The worker's command loop body: one typed command, one reply.
+pub(crate) fn dispatch_typed(shared: &Arc<Shared>, command: WorkerCommand) -> Value {
+    match command {
+        WorkerCommand::Ping => object(vec![("ok", Value::Bool(true))]),
+        WorkerCommand::Status => object(vec![("ok", Value::Bool(true)), ("session", shared.describe())]),
+        WorkerCommand::Methods { admin } => {
+            let (reads, writes) = method_lists(admin);
             object(vec![
                 ("ok", Value::Bool(true)),
                 ("reads", Value::Arr(reads.into_iter().map(|name| str_value(&name)).collect())),
                 ("writes", Value::Arr(writes.into_iter().map(|name| str_value(&name)).collect())),
             ])
         }
-        "run" => cmd_run(shared, request.get("script").as_str().unwrap_or(""), &request.get("args").as_arr().cloned().unwrap_or_default()),
-        "unload" => cmd_unload(shared),
-        "settle" => cmd_settle(shared),
-        "pause" => cmd_pause(shared),
-        "hold" => cmd_hold(shared),
-        "resume" => cmd_resume(shared),
-        "set_locks" => crate::session_locks::cmd_set_locks(request),
-        "pose_market" => cmd_pose_market(
-            shared,
-            request.get("script").as_str().unwrap_or(""),
-            &request.get("args").as_arr().cloned().unwrap_or_default(),
-        ),
-        "call" => cmd_call(
-            shared,
-            request.get("method").as_str().unwrap_or(""),
-            &request.get("args").as_arr().cloned().unwrap_or_default(),
-            request.get("admin").as_bool().unwrap_or(false),
-        ),
-        "close" => cmd_close(shared),
-        unknown => object(vec![("ok", Value::Bool(false)), ("error", str_value(&format!("unknown command {unknown:?}")))]),
+        WorkerCommand::Run { script, args } => cmd_run(shared, &script, &args),
+        WorkerCommand::Unload => cmd_unload(shared),
+        WorkerCommand::Settle => cmd_settle(shared),
+        WorkerCommand::Pause => cmd_pause(shared),
+        WorkerCommand::Hold => cmd_hold(shared),
+        WorkerCommand::Resume => cmd_resume(shared),
+        WorkerCommand::PoseMarket { script, args } => cmd_pose_market(shared, &script, &args.iter().map(|arg| str_value(arg)).collect::<Vec<Value>>()),
+        WorkerCommand::Call { method, args, admin } => cmd_call(shared, &method, &args, admin),
+        WorkerCommand::Close => cmd_close(shared),
     }
 }

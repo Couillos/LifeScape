@@ -44,7 +44,27 @@ impl Orchestrator {
     /// frame per connexion, so persistence needs its serve loop, and
     /// these calls are operator-paced, never steady-state traffic
     /// (pushes ride the persistent hub, plans the single `plan` op).
+    ///
+    /// Lot 5.9: a worker that announced a durable channel (its hello said
+    /// so) is called on its heartbeat stream: no connection, no thread, no
+    /// wait on its accept loop (100 ms to 1 s). Without a durable
+    /// connection (old worker, daemon just restarted and the worker not
+    /// yet redialled, write failure) nothing was sent and the per-call path
+    /// below answers exactly as before; a durable call that failed after
+    /// the command left (no answer in time) is NOT retried
+    /// there: the command may have run.
     pub(crate) fn send_worker(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, CallError> {
+        match crate::push_hub::durable_call(account, request, timeout) {
+            crate::push_hub::Durable::Reply(reply) => return Ok(reply),
+            crate::push_hub::Durable::Failed(error) => return Err(error),
+            crate::push_hub::Durable::Unavailable => {}
+        }
+        self.send_worker_per_call(account, request, timeout)
+    }
+
+    /// The per-call path: one connection, one frame, one reply (E14); the
+    /// fallback of `send_worker` while the durable channel is down.
+    fn send_worker_per_call(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, CallError> {
         let (sock_path, _ready) = paths::session_paths(account);
         let stream = match connect_worker(&sock_path, timeout) {
             Ok(stream) => stream,

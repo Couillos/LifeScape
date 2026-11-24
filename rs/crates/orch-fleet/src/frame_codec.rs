@@ -291,6 +291,56 @@ impl EventFrame {
     }
 }
 
+// -- the durable channel (lot 5.9) --------------------------------------------
+//
+// The worker's heartbeat connection carries the daemon's commands too: the
+// daemon writes `{"type":"cmd","id":N,"request":{..}}` on it, the worker
+// answers `{"type":"reply","id":N,"reply":{..}}` on the same stream. The
+// request and the reply are exactly what one per-call connection carried
+// (`WorkerCommand::encode` and the worker's reply object).
+
+/// The hello a durable worker sends first (`durable`: it reads commands on
+/// this stream; an old worker's hello has no such key and keeps the
+/// per-call path).
+pub fn encode_hello(account: &str, durable: bool) -> Value {
+    let mut entries = vec![("hello", str_value("push")), ("account", str_value(account))];
+    if durable {
+        entries.push(("durable", Value::Bool(true)));
+    }
+    object(entries)
+}
+
+/// Does this hello announce a durable worker?
+pub fn hello_is_durable(hello: &Value) -> bool {
+    hello.get("durable").as_bool() == Some(true)
+}
+
+/// A command frame for the worker.
+pub fn encode_command(id: u64, request: &Value) -> Value {
+    object(vec![("type", str_value("cmd")), ("id", Value::Int(id as i64)), ("request", request.clone())])
+}
+
+/// `(id, request)` of a command frame; `None` for any other frame.
+pub fn decode_command(frame: &Value) -> Option<(u64, Value)> {
+    if frame.get("type").as_str() != Some("cmd") {
+        return None;
+    }
+    Some((u64::try_from(frame.get("id").as_i64()?).ok()?, frame.get("request").clone()))
+}
+
+/// A reply frame for the daemon.
+pub fn encode_reply(id: u64, reply: &Value) -> Value {
+    object(vec![("type", str_value("reply")), ("id", Value::Int(id as i64)), ("reply", reply.clone())])
+}
+
+/// `(id, reply)` of a reply frame; `None` for any other frame.
+pub fn decode_reply(frame: &Value) -> Option<(u64, Value)> {
+    if frame.get("type").as_str() != Some("reply") {
+        return None;
+    }
+    Some((u64::try_from(frame.get("id").as_i64()?).ok()?, frame.get("reply").clone()))
+}
+
 #[cfg(test)]
 #[path = "frame_codec_tests.rs"]
 mod tests;

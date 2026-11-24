@@ -13,14 +13,18 @@
 //! The CLI socket keeps its 1 req/1 reply shape untouched.
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use lifescape_json::{self as json, Value};
+
+use crate::frame_codec;
+use crate::worker_call::CallError;
 
 /// Dedicated push socket next to `run/orchestrator.sock`.
 pub fn socket_path() -> PathBuf {
@@ -68,16 +72,117 @@ pub fn extract_frames(buffer: &mut Vec<u8>) -> Vec<String> {
 const READER_STACK_BYTES: usize = 512 * 1024;
 
 /// One persistent stream per account (lot 4.1): the map keeps a clone of
-/// each stream (to shut a replaced connection down) and its generation (a
+/// each stream (to shut a replaced connection down, and, since lot 5.9, to
+/// write the daemon's commands to a durable worker) and its generation (a
 /// reader only reaps its own entry, never its successor's).
+struct Conn {
+    generation: u64,
+    stream: UnixStream,
+    /// The worker's hello said it reads commands on this stream.
+    durable: bool,
+    /// One writer at a time: command frames never interleave.
+    writing: Arc<Mutex<()>>,
+}
+
+/// A call waiting for its reply frame: the account (to fail it when the
+/// connection ends) and where to hand the reply.
+type Waiting = (String, Sender<Result<Value, ()>>);
+
 struct PushHub {
-    streams: Mutex<HashMap<String, (u64, UnixStream)>>,
+    streams: Mutex<HashMap<String, Conn>>,
     generation: AtomicU64,
+    calls: Mutex<HashMap<u64, Waiting>>,
+    next_call: AtomicU64,
+}
+
+/// What a call on the durable channel came to (lot 5.9).
+#[derive(Debug)]
+pub enum Durable {
+    /// No durable connection for the account (or the command could not be
+    /// written): nothing was sent, the per-call path takes over.
+    Unavailable,
+    /// The worker's reply (empty when its connection ended with none, as a
+    /// per-call connection closed without a reply reads).
+    Reply(Value),
+    /// The command was sent and the call failed (no answer in time): never
+    /// retried on the per-call path, the command may have run.
+    Failed(CallError),
 }
 
 impl PushHub {
     fn new() -> Self {
-        PushHub { streams: Mutex::new(HashMap::new()), generation: AtomicU64::new(0) }
+        PushHub { streams: Mutex::new(HashMap::new()), generation: AtomicU64::new(0), calls: Mutex::new(HashMap::new()), next_call: AtomicU64::new(1) }
+    }
+
+    /// One command to a durable worker on its heartbeat stream, one reply
+    /// (lot 5.9): no connection and no thread per call, no wait on the
+    /// worker's accept loop.
+    fn call(&self, account: &str, request: &Value, timeout: Duration) -> Durable {
+        let (stream, writing, generation) = {
+            let streams = self.streams.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            match streams.get(account).filter(|conn| conn.durable) {
+                Some(conn) => match conn.stream.try_clone() {
+                    Ok(stream) => (stream, Arc::clone(&conn.writing), conn.generation),
+                    Err(_) => return Durable::Unavailable,
+                },
+                None => return Durable::Unavailable,
+            }
+        };
+        let id = self.next_call.fetch_add(1, Ordering::Relaxed);
+        let (reply_to, reply) = channel();
+        self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id, (account.to_string(), reply_to));
+        let mut wire = json::stringify(&frame_codec::encode_command(id, request));
+        wire.push('\n');
+        let written = {
+            let _one_writer = writing.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let _ = stream.set_write_timeout(Some(timeout));
+            (&stream).write_all(wire.as_bytes())
+        };
+        if written.is_err() {
+            // Nothing (or a line without its newline, which the worker
+            // never serves) went out: the connection is broken, drop it
+            // and let the per-call path answer.
+            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id);
+            let mut streams = self.streams.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if streams.get(account).is_some_and(|conn| conn.generation == generation) {
+                if let Some(conn) = streams.remove(account) {
+                    let _ = conn.stream.shutdown(std::net::Shutdown::Both);
+                }
+            }
+            return Durable::Unavailable;
+        }
+        let outcome = reply.recv_timeout(timeout);
+        self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id);
+        match outcome {
+            Ok(Ok(value)) => Durable::Reply(value),
+            // A connection that ends with no answer is what a per-call
+            // connection closed with no reply was: an empty reply (a worker
+            // that exits on `close` or `unload` may leave before it writes).
+            Ok(Err(())) | Err(RecvTimeoutError::Disconnected) => Durable::Reply(lifescape_json::object(vec![])),
+            Err(RecvTimeoutError::Timeout) => Durable::Failed(CallError::TimedOut(format!("worker for {account} did not answer in time (busy script or wedged session)"))),
+        }
+    }
+
+    /// A reply frame came in: hand it to its caller (an unknown id, a call
+    /// that timed out already, is dropped).
+    fn route_reply(&self, account: &str, id: u64, reply: Value) {
+        let waiting = self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id);
+        if let Some((owner, reply_to)) = waiting {
+            if owner == account {
+                let _ = reply_to.send(Ok(reply));
+            }
+        }
+    }
+
+    /// The account's connection ended: its waiting calls fail now.
+    fn fail_calls_of(&self, account: &str) {
+        let mut calls = self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let ended: Vec<u64> = calls.iter().filter(|(_, (owner, _))| owner == account).map(|(id, _)| *id).collect();
+        for id in ended {
+            if let Some((_, reply_to)) = calls.remove(&id) {
+                let _ = reply_to.send(Err(()));
+            }
+        }
     }
 
     /// Adopt a stream: ONE `push-read` thread blocked in `read` for its
@@ -86,7 +191,7 @@ impl PushHub {
     /// connection for the same account replaces the first, which is shut
     /// down so its reader ends. Frames of one account are dispatched in
     /// arrival order by its single reader.
-    fn attach(self: &Arc<Self>, account: String, stream: UnixStream, dispatch: Arc<dyn Fn(Value, u64) + Send + Sync>) -> std::io::Result<()> {
+    fn attach(self: &Arc<Self>, account: String, stream: UnixStream, durable: bool, dispatch: Arc<dyn Fn(Value, u64) + Send + Sync>) -> std::io::Result<()> {
         stream.set_nonblocking(false).ok();
         let keep = stream.try_clone()?;
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
@@ -94,9 +199,11 @@ impl PushHub {
             .streams
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(account.clone(), (generation, keep));
-        if let Some((_, old)) = previous {
-            let _ = old.shutdown(std::net::Shutdown::Both);
+            .insert(account.clone(), Conn { generation, stream: keep, durable, writing: Arc::new(Mutex::new(())) });
+        if let Some(old) = previous {
+            let _ = old.stream.shutdown(std::net::Shutdown::Both);
+            // Calls waiting on the replaced connection will never be answered.
+            self.fail_calls_of(&account);
         }
         let hub = self.clone();
         let spawned = std::thread::Builder::new()
@@ -105,15 +212,17 @@ impl PushHub {
             .spawn(move || {
                 hub.read_loop(&account, stream, &dispatch);
                 let mut streams = hub.streams.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                if streams.get(&account).is_some_and(|(current, _)| *current == generation) {
+                if streams.get(&account).is_some_and(|conn| conn.generation == generation) {
                     streams.remove(&account);
+                    drop(streams);
+                    hub.fail_calls_of(&account);
                 }
             });
         match spawned {
             Ok(_) => Ok(()),
             Err(error) => {
                 let mut streams = self.streams.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                streams.retain(|_, (current, _)| *current != generation);
+                streams.retain(|_, conn| conn.generation != generation);
                 Err(error)
             }
         }
@@ -136,7 +245,11 @@ impl PushHub {
                 // (the worker writes `stringify` + newline): no
                 // re-serialisation of the parsed frame.
                 match json::parse(&frame) {
-                    Ok(value) => dispatch(value, frame.len() as u64),
+                    Ok(value) => match frame_codec::decode_reply(&value) {
+                        // A reply to a command the daemon sent (lot 5.9).
+                        Some((id, reply)) => self.route_reply(account, id, reply),
+                        None => dispatch(value, frame.len() as u64),
+                    },
                     Err(error) => eprintln!("push hub {account}: bad frame: {error}"),
                 }
             }
@@ -149,6 +262,18 @@ impl PushHub {
         let mut names: Vec<String> = self.streams.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).keys().cloned().collect();
         names.sort();
         names
+    }
+}
+
+/// The running hub, for `durable_call`.
+static HUB: OnceLock<Arc<PushHub>> = OnceLock::new();
+
+/// A command on the account's durable channel (lot 5.9), or `Unavailable`
+/// when the daemon runs no hub or the worker has no durable connection.
+pub fn durable_call(account: &str, request: &Value, timeout: Duration) -> Durable {
+    match HUB.get() {
+        Some(hub) => hub.call(account, request, timeout),
+        None => Durable::Unavailable,
     }
 }
 
@@ -168,6 +293,7 @@ pub fn start_push_hub(dispatch: Arc<dyn Fn(Value, u64) + Send + Sync>) -> std::i
     }
     let listener = UnixListener::bind(&sock)?;
     let hub = Arc::new(PushHub::new());
+    let _ = HUB.set(Arc::clone(&hub));
     std::thread::Builder::new()
         .name("push-accept".to_string())
         .spawn(move || {
@@ -176,7 +302,7 @@ pub fn start_push_hub(dispatch: Arc<dyn Fn(Value, u64) + Send + Sync>) -> std::i
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                 let _ = stream.set_nonblocking(false);
                 let mut line = String::new();
-                let hello = (|| -> Option<String> {
+                let hello = (|| -> Option<(String, bool)> {
                     use std::io::{BufRead, BufReader};
                     // Byte-wise through the stream itself: a BufReader
                     // would swallow frames sent right after the hello.
@@ -186,15 +312,15 @@ pub fn start_push_hub(dispatch: Arc<dyn Fn(Value, u64) + Send + Sync>) -> std::i
                     if value.get("hello").as_str() != Some("push") {
                         return None;
                     }
-                    Some(value.get("account").as_str().unwrap_or("").to_string())
+                    Some((value.get("account").as_str().unwrap_or("").to_string(), frame_codec::hello_is_durable(&value)))
                 })();
-                let Some(account) = hello.filter(|name| !name.is_empty()) else {
+                let Some((account, durable)) = hello.filter(|(name, _)| !name.is_empty()) else {
                     eprintln!("push hub: rejecting non-hello first line");
                     continue;
                 };
                 let _ = stream.set_read_timeout(None);
                 crate::res_stats::record_connection();
-                if let Err(error) = hub.attach(account.clone(), stream, dispatch.clone()) {
+                if let Err(error) = hub.attach(account.clone(), stream, durable, dispatch.clone()) {
                     eprintln!("push hub {account}: reader not started: {error}");
                 }
             }
@@ -283,7 +409,7 @@ mod tests {
         let seen: Arc<Mutex<Vec<(Value, u64)>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = seen.clone();
         let dispatch: Arc<dyn Fn(Value, u64) + Send + Sync> = Arc::new(move |value, bytes| sink.lock().unwrap().push((value, bytes)));
-        hub.attach("amy_gray".to_string(), daemon_end, dispatch).expect("reader starts");
+        hub.attach("amy_gray".to_string(), daemon_end, false, dispatch).expect("reader starts");
         let mut lines = Vec::new();
         for frame in &frames {
             let line = json::stringify(frame);
@@ -316,7 +442,7 @@ mod tests {
         let hub = Arc::new(PushHub::new());
         let (seen, dispatch) = recorder();
         let (mut worker_end, daemon_end) = UnixStream::pair().expect("pair");
-        hub.attach("t01".to_string(), daemon_end, dispatch).expect("attach");
+        hub.attach("t01".to_string(), daemon_end, false, dispatch).expect("attach");
         worker_end.write_all(b"{\"n\":1}\n{\"n\":2}\n{\"n\"").unwrap();
         wait_for(|| seen.lock().unwrap().len() == 2);
         worker_end.write_all(b":3}\n").unwrap();
@@ -334,9 +460,9 @@ mod tests {
         let hub = Arc::new(PushHub::new());
         let (seen, dispatch) = recorder();
         let (old_worker, old_daemon) = UnixStream::pair().expect("pair");
-        hub.attach("t01".to_string(), old_daemon, dispatch.clone()).expect("attach");
+        hub.attach("t01".to_string(), old_daemon, false, dispatch.clone()).expect("attach");
         let (mut new_worker, new_daemon) = UnixStream::pair().expect("pair");
-        hub.attach("t01".to_string(), new_daemon, dispatch.clone()).expect("attach again");
+        hub.attach("t01".to_string(), new_daemon, false, dispatch.clone()).expect("attach again");
         // The old reader ends at the shutdown and must leave the new entry alone.
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(hub.connected(), vec!["t01".to_string()]);
@@ -358,7 +484,7 @@ mod tests {
         let mut workers = Vec::new();
         for index in 0..74 {
             let (worker_end, daemon_end) = UnixStream::pair().expect("pair");
-            hub.attach(format!("b{index:02}"), daemon_end, dispatch.clone()).expect("attach");
+            hub.attach(format!("b{index:02}"), daemon_end, false, dispatch.clone()).expect("attach");
             workers.push((index, worker_end));
         }
         let writers: Vec<_> = workers
@@ -380,6 +506,132 @@ mod tests {
             let own: Vec<String> = seen.iter().filter(|(text, _)| text.starts_with(&format!("{{\"a\": {index},"))).map(|(text, _)| text.clone()).collect();
             let expected: Vec<String> = (0..20).map(|n| format!("{{\"a\": {index}, \"n\": {n}}}")).collect();
             assert_eq!(own, expected, "account b{index:02}");
+        }
+    }
+
+    /// A fake worker on a socket pair: reads command frames and answers
+    /// each with `answer(request)` (None: stays silent).
+    fn fake_worker(stream: UnixStream, answer: impl Fn(&Value) -> Option<Value> + Send + 'static) {
+        use std::io::{BufRead, BufReader};
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    return;
+                }
+                let frame = lifescape_json::parse(&line).expect("frame");
+                let Some((id, request)) = crate::frame_codec::decode_command(&frame) else { continue };
+                if let Some(reply) = answer(&request) {
+                    let mut wire = lifescape_json::stringify(&crate::frame_codec::encode_reply(id, &reply));
+                    wire.push('\n');
+                    (&stream).write_all(wire.as_bytes()).expect("reply");
+                }
+            }
+        });
+    }
+
+    fn attach_worker(hub: &Arc<PushHub>, account: &str, durable: bool) -> (UnixStream, Seen) {
+        let (seen, dispatch) = recorder();
+        let (worker_end, daemon_end) = UnixStream::pair().expect("pair");
+        hub.attach(account.to_string(), daemon_end, durable, dispatch).expect("attach");
+        (worker_end, seen)
+    }
+
+    /// Lot 5.9: a command goes out on the heartbeat stream and its reply
+    /// comes back to the right caller, concurrent calls kept apart; the
+    /// replies never reach the frame dispatch.
+    #[test]
+    fn a_durable_call_gets_its_own_reply() {
+        use lifescape_json::{object, str_value};
+        let hub = Arc::new(PushHub::new());
+        let (worker, seen) = attach_worker(&hub, "d01", true);
+        fake_worker(worker, |request| Some(object(vec![("ok", Value::Bool(true)), ("echo", request.get("n").clone())])));
+        let callers: Vec<_> = (0..8)
+            .map(|n| {
+                let hub = hub.clone();
+                std::thread::spawn(move || hub.call("d01", &object(vec![("cmd", str_value("ping")), ("n", Value::Int(n))]), Duration::from_secs(5)))
+            })
+            .collect();
+        for (n, caller) in callers.into_iter().enumerate() {
+            match caller.join().expect("caller") {
+                super::Durable::Reply(reply) => assert_eq!(reply.get("echo").as_i64(), Some(n as i64), "caller {n} got another's reply"),
+                other => panic!("call {n}: {other:?}"),
+            }
+        }
+        assert!(seen.lock().unwrap().is_empty(), "replies are not push frames");
+    }
+
+    /// No durable connection (old worker, or none yet) is `Unavailable`
+    /// with nothing sent: the per-call path answers.
+    #[test]
+    fn without_a_durable_connection_the_call_is_unavailable() {
+        use lifescape_json::{object, str_value};
+        let hub = Arc::new(PushHub::new());
+        let request = object(vec![("cmd", str_value("ping"))]);
+        assert!(matches!(hub.call("nobody", &request, Duration::from_millis(50)), super::Durable::Unavailable));
+        let (mut old_worker, _seen) = attach_worker(&hub, "old01", false);
+        assert!(matches!(hub.call("old01", &request, Duration::from_millis(50)), super::Durable::Unavailable), "a push-only stream is no channel");
+        old_worker.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        let mut byte = [0u8; 1];
+        assert!(std::io::Read::read(&mut old_worker, &mut byte).is_err(), "nothing was written to an old worker");
+    }
+
+    /// A frozen worker (reads nothing back) times out as before; a worker
+    /// whose connection ends mid-call ends the call at once with an empty
+    /// reply (what the per-call path read from a connection closed without
+    /// an answer); neither is retried on the per-call path (the command may
+    /// have run).
+    #[test]
+    fn a_silent_worker_times_out_and_a_lost_connection_fails_the_call() {
+        use lifescape_json::{object, str_value};
+        let hub = Arc::new(PushHub::new());
+        let request = object(vec![("cmd", str_value("status"))]);
+        let (frozen, _seen) = attach_worker(&hub, "frozen", true);
+        fake_worker(frozen, |_| None);
+        let started = Instant::now();
+        match hub.call("frozen", &request, Duration::from_millis(300)) {
+            super::Durable::Failed(error) => assert!(matches!(error, crate::worker_call::CallError::TimedOut(_)) && error.text().contains("frozen"), "{error}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(started.elapsed() >= Duration::from_millis(300));
+        let (dying, _seen) = attach_worker(&hub, "dying", true);
+        let closer = std::thread::spawn({
+            let dying = dying.try_clone().unwrap();
+            move || {
+                use std::io::{BufRead, BufReader};
+                let mut line = String::new();
+                BufReader::new(&dying).read_line(&mut line).unwrap();
+                let _ = dying.shutdown(std::net::Shutdown::Both);
+            }
+        });
+        let started = Instant::now();
+        match hub.call("dying", &request, Duration::from_secs(5)) {
+            super::Durable::Reply(reply) => assert!(reply.as_obj().is_some_and(|map| map.is_empty()), "an empty reply, like a closed per-call connection"),
+            other => panic!("{other:?}"),
+        }
+        assert!(started.elapsed() < Duration::from_secs(3), "the loss is told at once, not after the timeout");
+        closer.join().unwrap();
+        drop(dying);
+        wait_for(|| hub.connected().iter().all(|name| name != "dying"));
+        assert!(matches!(hub.call("dying", &request, Duration::from_millis(50)), super::Durable::Unavailable), "the dead stream is gone: the per-call path takes over");
+    }
+
+    /// A reconnecting worker (a second connection for the account) replaces
+    /// the first: calls on the old one fail, the new one answers.
+    #[test]
+    fn a_reconnected_worker_answers_on_its_new_stream() {
+        use lifescape_json::{object, str_value};
+        let hub = Arc::new(PushHub::new());
+        let request = object(vec![("cmd", str_value("ping"))]);
+        let (first, _seen) = attach_worker(&hub, "again", true);
+        fake_worker(first, |_| Some(object(vec![("ok", Value::Bool(true)), ("from", str_value("first"))])));
+        let (second, _seen) = attach_worker(&hub, "again", true);
+        fake_worker(second, |_| Some(object(vec![("ok", Value::Bool(true)), ("from", str_value("second"))])));
+        match hub.call("again", &request, Duration::from_secs(5)) {
+            super::Durable::Reply(reply) => assert_eq!(reply.get("from").as_str(), Some("second")),
+            other => panic!("{other:?}"),
         }
     }
 }

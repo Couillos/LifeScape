@@ -8,7 +8,7 @@
 //! the CLI socket so rolling upgrades never lose telemetry.
 
 use std::collections::VecDeque;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
@@ -27,11 +27,53 @@ fn held() -> &'static Mutex<HeldConn> {
     HELD.get_or_init(|| Mutex::new(HeldConn { stream: None }))
 }
 
+/// The commands the daemon sent on the held stream, waiting for the serve
+/// loop (lot 5.9). The loop serves them exactly as it serves a per-call
+/// connection (it accepts, then a thread runs the command): a worker whose
+/// loop is wedged answers neither, so the daemon's call timeouts still
+/// tell a wedged worker from a healthy one.
+struct Inbox {
+    commands: Mutex<VecDeque<(u64, Value)>>,
+    arrived: Condvar,
+}
+
+fn inbox() -> &'static Inbox {
+    static INBOX: OnceLock<Inbox> = OnceLock::new();
+    INBOX.get_or_init(|| Inbox { commands: Mutex::new(VecDeque::new()), arrived: Condvar::new() })
+}
+
+/// The worker serves commands from the held stream: from now on its hello
+/// says `durable` and a reader thread queues the daemon's commands for the
+/// serve loop. Called by the session before its first push (a stream
+/// dialled before it stays a push-only one, the daemon keeps its per-call
+/// path).
+pub fn enable_commands() {
+    DURABLE.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+static DURABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn durable() -> bool {
+    DURABLE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The commands that arrived since the last call (oldest first).
+pub fn take_commands() -> Vec<(u64, Value)> {
+    inbox().commands.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).drain(..).collect()
+}
+
+/// The serve loop's rest: up to `rest`, cut short when a command arrives
+/// (the per-call path waited the whole rest, 100 ms to 1 s, for its accept).
+pub fn rest(rest: Duration) {
+    let inbox = inbox();
+    let queued = inbox.commands.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if queued.is_empty() {
+        let _ = inbox.arrived.wait_timeout(queued, rest);
+    }
+}
+
 fn hello_frame(account: &str) -> String {
-    let mut frame = json::stringify(&lifescape_json::object(vec![
-        ("hello", lifescape_json::str_value("push")),
-        ("account", lifescape_json::str_value(account)),
-    ]));
+    let mut frame = json::stringify(&lifescape_orch_fleet::frame_codec::encode_hello(account, durable()));
     frame.push('\n');
     frame
 }
@@ -40,7 +82,48 @@ fn dial_hub(account: &str) -> Option<UnixStream> {
     let stream = UnixStream::connect(crate::paths::push_socket_path()).ok()?;
     stream.set_write_timeout(Some(PUSH_WRITE_TIMEOUT)).ok()?;
     (&stream).write_all(hello_frame(account).as_bytes()).ok()?;
+    if durable() {
+        // The daemon's commands arrive on this same stream (lot 5.9).
+        if let Ok(reader) = stream.try_clone() {
+            let spawned = std::thread::Builder::new().name("session-commands".to_string()).spawn(move || command_reader(reader));
+            if spawned.is_err() {
+                crate::logln!("push: command reader not started, the daemon keeps its per-call path");
+            }
+        }
+    }
     Some(stream)
+}
+
+/// Blocked in `read` on the held stream: one command frame per line
+/// (`frame_codec::decode_command`), queued for the serve loop. Ends with
+/// the stream.
+fn command_reader(stream: UnixStream) {
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+        let Ok(frame) = json::parse(&line) else { continue };
+        let Some(command) = lifescape_orch_fleet::frame_codec::decode_command(&frame) else { continue };
+        let inbox = inbox();
+        inbox.commands.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push_back(command);
+        inbox.arrived.notify_all();
+    }
+}
+
+/// Writes one reply frame on the held stream (the daemon matches it to its
+/// waiting call by id; a reply for a connection that is gone is dropped
+/// there). Shares the held-stream lock with the push frames.
+pub fn send_reply(id: u64, reply: &Value) {
+    let mut wire = json::stringify(&lifescape_orch_fleet::frame_codec::encode_reply(id, reply));
+    wire.push('\n');
+    let guard = held().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(stream) = guard.stream.as_ref() {
+        let _ = (&*stream).write_all(wire.as_bytes());
+    }
 }
 
 fn legacy_one_shot(frame: &str) {
@@ -186,5 +269,25 @@ mod tests {
         assert!(hello.ends_with('\n'));
         assert!(hello.contains("\"t07\""), "hub files by account, got {hello}");
         assert!(hello.contains("\"push\""));
+    }
+
+    /// Lot 5.9: the daemon's command frames, read off the stream, wait in
+    /// the inbox for the serve loop and cut its rest short; frames of
+    /// other kinds are ignored.
+    #[test]
+    fn commands_read_off_the_stream_wake_the_serve_loop() {
+        use std::io::Write;
+        let (mut daemon_end, worker_end) = std::os::unix::net::UnixStream::pair().expect("pair");
+        std::thread::spawn(move || super::command_reader(worker_end));
+        let request = lifescape_json::object(vec![("cmd", str_value("ping"))]);
+        let mut wire = lifescape_json::stringify(&lifescape_orch_fleet::frame_codec::encode_command(41, &request));
+        wire.push('\n');
+        daemon_end.write_all(b"{\"type\":\"snapshot\"}\nnot json\n").unwrap();
+        daemon_end.write_all(wire.as_bytes()).unwrap();
+        let started = std::time::Instant::now();
+        super::rest(std::time::Duration::from_secs(10));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "the rest was cut short by the command");
+        assert_eq!(super::take_commands(), vec![(41, request)]);
+        assert!(super::take_commands().is_empty());
     }
 }

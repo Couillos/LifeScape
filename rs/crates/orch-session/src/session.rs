@@ -678,9 +678,27 @@ fn serve_client(shared: Arc<Shared>, stream: UnixStream) {
     let _ = (&stream).write_all(buf.as_bytes());
 }
 
+/// Serves the commands the daemon sent on the heartbeat stream: each one
+/// on its own thread, like a per-call connection, its reply written back
+/// on the same stream.
+fn serve_durable(shared: &Arc<Shared>) {
+    for (id, request) in crate::push_conn::take_commands() {
+        let worker = Arc::clone(shared);
+        let thread_name = format!("session-conn-{}", worker.account);
+        let spawned = std::thread::Builder::new().name(thread_name).spawn(move || {
+            let reply = crate::session_cmds::dispatch(&worker, &request);
+            crate::push_conn::send_reply(id, &reply);
+        });
+        if spawned.is_err() {
+            crate::push_conn::send_reply(id, &object(vec![("ok", Value::Bool(false)), ("error", str_value("worker cannot start a command thread"))]));
+        }
+    }
+}
+
 fn serve(shared: &Arc<Shared>, listener: UnixListener) {
     listener.set_nonblocking(true).ok();
     while !shared.inner.lock().unwrap().closing {
+        serve_durable(shared);
         match listener.accept() {
             Ok((stream, _)) => {
                 let worker = Arc::clone(shared);
@@ -704,7 +722,8 @@ fn serve(shared: &Arc<Shared>, listener: UnixListener) {
                 && shared.pending_rescue.lock().unwrap().is_none()
                 && shared.pending_market.lock().unwrap().is_none()
         };
-        std::thread::sleep(Duration::from_millis(if resting { IDLE_REST_MS } else { IDLE_POLL_MS }));
+        // A durable command cuts the rest short (the per-call path waited it out).
+        crate::push_conn::rest(Duration::from_millis(if resting { IDLE_REST_MS } else { IDLE_POLL_MS }));
     }
 }
 
@@ -837,6 +856,10 @@ pub fn run_session(account: &str) -> i32 {
     shared.inner.lock().unwrap().status = "idle".to_string();
     write_heartbeat(&shared);
     let _ = std::fs::write(&ready_path, json::stringify(&object(vec![("ok", Value::Bool(true)), ("error", str_value(""))])));
+    // Lot 5.9: the daemon's commands also arrive on the heartbeat stream
+    // (the serve loop below takes them; the accept loop stays the per-call
+    // fallback).
+    crate::push_conn::enable_commands();
     {
         // Event observer for the whole session life, idle and running:
         // poses `pending_rescue` for the pause gate / idle drain.

@@ -2,9 +2,9 @@
 //! shapes the worker's encoders write (`session_push`, `heartbeat_flows`)
 //! as they travel on `push.sock`, with the lot 4.2 envelope.
 
-use lifescape_json::{self as json, Value};
+use lifescape_json::{self as json, object, str_value, Value};
 
-use super::{Frame, FrameError};
+use super::{decode_command, decode_reply, encode_command, encode_hello, encode_reply, hello_is_durable, Frame, FrameError};
 use crate::job_state::{Phase, Status};
 
 const FULL: &str = r#"{"type":"snapshot","account":"amy_gray","phase":"running","status":"running","sent":1795477612.5,"snapshot":{"account":"amy_gray","updated":1795477612.123456,"position":[0,3228,3298],"zone":"Lumbridge","speed":1.0,"ticks":4410,"inv":[{"name":"coins","count":5000000}],"bank":[],"skills":[{"id":14,"xp":83000}],"npcs_at":[[837,3231,3301]],"players_at":[]}}"#;
@@ -69,4 +69,21 @@ fn what_the_daemon_cannot_take_is_a_typed_error() {
     assert_eq!(unknown, FrameError::UnknownType { account: "a".to_string(), kind: "mystery".to_string() });
     assert_eq!(unknown.account(), "a");
     assert_eq!(Frame::decode(parse(r#"{"account":"a"}"#)), Err(FrameError::UnknownType { account: "a".to_string(), kind: String::new() }), "no type is an unknown type");
+}
+
+#[test]
+fn the_durable_channel_frames_round_trip() {
+    let request = crate::worker_command::WorkerCommand::Run { script: "woodcut".to_string(), args: vec![str_value("oak")] }.encode();
+    let command = encode_command(7, &request);
+    assert_eq!(command.get("type").as_str(), Some("cmd"));
+    assert_eq!(decode_command(&command), Some((7, request.clone())));
+    assert_eq!(decode_reply(&command), None, "a command is no reply");
+    let reply = object(vec![("ok", Value::Bool(true))]);
+    let frame = encode_reply(7, &reply);
+    assert_eq!(decode_reply(&frame), Some((7, reply)));
+    assert_eq!(decode_command(&frame), None);
+    assert_eq!(decode_command(&parse(r#"{"type":"cmd","id":-1,"request":{}}"#)), None, "a negative id is no id");
+    assert!(hello_is_durable(&encode_hello("t01", true)));
+    assert!(!hello_is_durable(&encode_hello("t01", false)), "an old worker's hello announces nothing");
+    assert_eq!(encode_hello("t01", false).get("account").as_str(), Some("t01"));
 }
