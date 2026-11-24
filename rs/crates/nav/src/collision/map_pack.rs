@@ -240,6 +240,11 @@ impl MapPack {
         self.loaded.len()
     }
 
+    /// Squares painted so far, in no order.
+    pub fn loaded_list(&self) -> Vec<(i32, i32)> {
+        self.loaded.iter().copied().collect()
+    }
+
     /// True once this square painted (read-lock fast path of the world).
     pub fn is_loaded(&self, square_x: i32, square_z: i32) -> bool {
         self.loaded.contains(&(square_x, square_z))

@@ -30,8 +30,9 @@ use std::hash::BuildHasherDefault;
 use std::sync::{Arc, Mutex};
 
 use crate::bfs::can_step;
-use crate::collision::{tile_walkable, CollisionMap};
+use crate::collision::tile_walkable;
 use crate::plan::{IdHash, SharedEdges, Tile, U64Map};
+use crate::search::Search;
 use crate::static_world::StaticWorld;
 use crate::tables::Tables;
 
@@ -47,42 +48,8 @@ pub(crate) const POCKET_CAP: usize = 512;
 /// sides ignored): the widest walk the planner could take. Doors the
 /// overrides block tile by tile stay shut, as in the planner.
 pub(crate) fn permissive_flags(world: &StaticWorld, tables: &Tables, tile: Tile) -> u32 {
-    permissive_flags_with(world, tables, tile, &mut |near| world.door_at(near.x, near.z, near.level))
-}
-
-/// Same view with the door reads going through `door_at` (the flood
-/// caches them: each tile's door is read by its 9 neighbours' views).
-fn permissive_flags_with(world: &StaticWorld, tables: &Tables, tile: Tile, door_at: &mut dyn FnMut(Tile) -> Option<(u16, u8, u8)>) -> u32 {
-    let mut doors = Vec::new();
-    for dx in -1..=1 {
-        for dz in -1..=1 {
-            let near = Tile { x: tile.x + dx, z: tile.z + dz, level: tile.level };
-            let Some((id, shape, angle)) = door_at(near) else {
-                continue;
-            };
-            if tables.is_blocked(id, near) {
-                continue;
-            }
-            if world.loc_def(id as usize).and_then(|def| def.open_op).is_none() {
-                continue;
-            }
-            doors.push((near, id, shape, angle));
-        }
-    }
-    if doors.is_empty() {
-        return world.get(tile.x, tile.z, tile.level);
-    }
-    let mut scratch = CollisionMap::new();
-    for dx in -1..=1 {
-        for dz in -1..=1 {
-            let near = Tile { x: tile.x + dx, z: tile.z + dz, level: tile.level };
-            scratch.set(near.x, near.z, near.level, world.get(near.x, near.z, near.level));
-        }
-    }
-    for (near, id, shape, angle) in doors {
-        world.unpaint_into(&mut scratch, id, shape, angle, near.x, near.z, near.level);
-    }
-    scratch.get(tile.x, tile.z, tile.level)
+    let options = crate::plan::NavOptions::default();
+    Search::permissive(world, tables, &options).open(tile)
 }
 
 /// Start-independent flood verdict of one destination tile. `Closed`
@@ -96,38 +63,25 @@ pub(crate) enum PocketVerdict {
     Closed { members: U64Set },
 }
 
-/// Flood reads shared by one verdict: permissive flags and door reads,
-/// each cached per tile (a tile's door is read by its 9 neighbours').
+/// Flood reads shared by one verdict: the permissive view of the one
+/// search reader (`search::Search::permissive`), cached per tile (a
+/// tile's door is read by its 9 neighbours').
 struct FloodView<'a> {
     world: &'a StaticWorld,
     tables: &'a Tables,
-    flags: U64Map<u32>,
-    doors: U64Map<Option<(u16, u8, u8)>>,
+    search: Search<'a>,
 }
 
 impl FloodView<'_> {
     /// Every door with an open op swung, except tile-blocked ones.
     fn permissive(&mut self, tile: Tile) -> u32 {
-        if let Some(known) = self.flags.get(&tile.key()) {
-            return *known;
-        }
-        let (world, tables) = (self.world, self.tables);
-        let doors = &mut self.doors;
-        let mut door_at = |near: Tile| *doors.entry(near.key()).or_insert_with(|| world.door_at(near.x, near.z, near.level));
-        let found = permissive_flags_with(world, tables, tile, &mut door_at);
-        self.flags.insert(tile.key(), found);
-        found
+        self.search.open(tile)
     }
 
     /// A door on this tile the planner could ever swing (open op, not
     /// blocked on this tile).
     fn openable(&mut self, tile: Tile) -> Option<u16> {
-        let world = self.world;
-        let (id, _, _) = (*self.doors.entry(tile.key()).or_insert_with(|| world.door_at(tile.x, tile.z, tile.level)))?;
-        if self.tables.is_blocked(id, tile) || world.loc_def(id as usize).and_then(|def| def.open_op).is_none() {
-            return None;
-        }
-        Some(id)
+        self.search.usable_door(tile).map(|(id, _, _)| id)
     }
 
     /// The planner's own move rule (`plan::dijkstra`), widened only where
@@ -140,14 +94,14 @@ impl FloodView<'_> {
     /// door the planner may read as shut (toll, requirement) keeps the
     /// plain walk onto its tile.
     fn planner_may_step(&mut self, from: Tile, to: Tile) -> bool {
-        let world = self.world;
-        let mut shut = |x: i32, z: i32| world.get(x, z, to.level);
+        let search = &mut self.search;
+        let mut shut = |x: i32, z: i32| search.base(Tile { x, z, level: to.level });
         let shut_step = can_step(&mut shut, from.x, from.z, to.x, to.z);
         if let Some(id) = self.openable(to) {
             if self.tables.side_ok(id, to, from) {
                 return true;
             }
-            let conditional = world.is_toll(to.x, to.z, to.level) || self.tables.requirements.iter().any(|row| row.at == to);
+            let conditional = self.world.is_toll(to.x, to.z, to.level) || self.tables.requirements.iter().any(|row| row.at == to);
             return conditional && shut_step;
         }
         shut_step || self.openable(from).is_some()
@@ -162,7 +116,8 @@ impl FloodView<'_> {
 /// 2026-11-17: ladders (3022,3517) / (3011,3514) land inside, their
 /// stands are upstairs, reached only by the ladders from inside).
 pub(crate) fn verdict(world: &StaticWorld, tables: &Tables, shared: &SharedEdges, dest: Tile) -> PocketVerdict {
-    let mut view = FloodView { world, tables, flags: U64Map::default(), doors: U64Map::default() };
+    let options = crate::plan::NavOptions::default();
+    let mut view = FloodView { world, tables, search: Search::permissive(world, tables, &options) };
     if !tile_walkable(view.permissive(dest)) {
         return PocketVerdict::Open;
     }
@@ -274,6 +229,42 @@ impl PocketMemo {
             }
         };
         sealed_by(&found, from, dest)
+    }
+
+    /// Every verdict as (destination key, members): `None` for an open
+    /// one, the sorted member keys for a sealed one. Sorted by key, so a
+    /// saved file is the same bytes for the same memo (lot N4).
+    pub(crate) fn export(&self) -> Vec<(u64, Option<Vec<u64>>)> {
+        let verdicts = self.verdicts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut rows: Vec<(u64, Option<Vec<u64>>)> = verdicts
+            .iter()
+            .map(|(dest, verdict)| match verdict.as_ref() {
+                PocketVerdict::Open => (*dest, None),
+                PocketVerdict::Closed { members } => {
+                    let mut keys: Vec<u64> = members.iter().copied().collect();
+                    keys.sort_unstable();
+                    (*dest, Some(keys))
+                }
+            })
+            .collect();
+        rows.sort_unstable_by_key(|(dest, _)| *dest);
+        rows
+    }
+
+    /// Put verdicts back (lot N4): same entries `verdict()` would have
+    /// computed, kept under the memo's bound.
+    pub(crate) fn import(&self, rows: Vec<(u64, Option<Vec<u64>>)>) {
+        let mut verdicts = self.verdicts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (dest, members) in rows {
+            if verdicts.len() >= MEMO_CAP {
+                break;
+            }
+            let verdict = match members {
+                None => PocketVerdict::Open,
+                Some(keys) => PocketVerdict::Closed { members: keys.into_iter().collect() },
+            };
+            verdicts.entry(dest).or_insert_with(|| Arc::new(verdict));
+        }
     }
 
     pub fn len(&self) -> usize {

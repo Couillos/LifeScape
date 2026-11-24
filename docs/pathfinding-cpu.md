@@ -685,3 +685,78 @@ mesure). Limite dure 1 Go opposable posée au §5.9 (2026-11-08) : budget
 mesurer au lot 2 — ce § fait foi sur tout chiffre RAM antérieur.
 L'ancien thread-par-worker subsiste uniquement comme ÉTAPE
 TRANSITOIRE revertable (§5.5), jamais comme cible.*
+
+## 7. Grille dense, tableaux denses, état gardé, `Service` découpé (lots N0 à N6, 2026-11-24)
+
+Plan : `docs/plan-architecture.md` piste N ; diagnostic : `docs/analyse-architecture-2026-11-24.md` §1.4 et §3.
+Règle dure : plans et coûts **identiques à l'octet** (pas d'ALT, pas de hiérarchique, ni l'horizon de `walk_costs` ni le plafond des poches touchés).
+
+### Preuve et mesure
+
+- **Empreinte du rejeu** (`service_replay_tests.rs`) : FNV-1a du texte `Debug` de chaque réponse de plan et de chaque réponse `walk_costs`, dans l'ordre. Extrait de 8 740 requêtes réelles (les 115 dernières lignes `nav plan` de chaque journal de `run/logs`, relues sans les modifier), 2 000 de chauffe, un `walk_costs` par tiers de plans courts, profils d'options et liste de danger vivante. Empreinte avant tout lot : `plans=41ede8cd5e5bafe3 walk_costs=f98ca99051466f72` ; **la même après chaque lot** (N0 à N6). Les mesures ci-dessous sont les temps de CPU des fils `plan-*` (`/proc/self/task/*/schedstat`) ; la machine porte la flotte (charge 12), d'où une dispersion de ±10 % d'un rejeu à l'autre : le chiffre le plus stable est le coût par visite du calcul de plans.
+- Goldens (`tests/golden.rs` et les autres bancs d'intégration du crate) et la suite du crate : verts à chaque lot (seul `ipc_overhead_measured_against_5ms_bar` échoue sous forte charge, avant comme après : mur d'horloge de 5 ms ; seul, il passe).
+
+| Lot | CPU total du rejeu | `plan-pool` | µs par case visitée (plans calculés) |
+|---|---|---|---|
+| avant (base) | 36,5 à 37,2 s | 31,7 à 32,1 s | 2,6 à 2,8 |
+| N0 (compteur) | 41,4 à 42,0 s | 36,1 à 36,4 s | 2,76 |
+| N1 (un lecteur) | 40,5 s | 35,4 s | 2,63 |
+| N2 (grille dense) | 18,2 s | 13,5 s | 1,03 |
+| N3 (`dist`/`prev` denses) | 15,5 s | 10,8 s | 0,81 |
+| N4 (état gardé, rejeu à froid sans) | 15,4 s | 10,9 s | 0,81 |
+| N6 (`Service` découpé, cache `walk_costs` retiré) | 15,5 s | 10,9 s | 0,82 |
+
+Soit **−58 %** du CPU du rejeu entre la base et N6 (−70 % de CPU par case visitée), pour des empreintes identiques. Le N0 coûte à lui seul un peu de CPU (lecture de `/proc/thread-self/schedstat` deux fois par requête, ~10 µs) : à retenir si la ligne est jugée trop chère, `Probe::start` est le seul endroit.
+
+### N0 : où va le CPU (ligne `cpu-profile nav`, segment ` | ops …`)
+
+`nav_meter.rs` compte par type de requête (`walk_costs`, `fast`, `fast_declined`, `plan_computed`, `grouped`, `debug`, `toll_fence`, `other`) : nombre, CPU de fil, cases visitées ; puis, pour `walk_costs` et pour les plans calculés, les recherches finies sans atteindre toutes les cibles (`costs_unreached=N/Cv`, `plan_unreached=N/Cv`, `horizon_cut=` dont l'horizon, le plafond de visites ou l'échéance a coupé). Sur le rejeu (avant N2) :
+
+| | requêtes | CPU | cases visitées |
+|---|---|---|---|
+| `plan_computed` | 1 496 | 34,7 s | 12,56 M |
+| `walk_costs` | 1 420 | 0,38 s | 0,10 M |
+| `fast` (saut court servi) | 3 133 | 16 ms | 38 k |
+| `fast_declined` | 1 825 | 3 ms | 12,6 k |
+| `walk_costs` finies sans toutes les cibles | 21 | | 6,6 k (0,1 %) |
+| plans finis sans atteindre la cible (`Closest`, `OverBudget`) | 14 | | 1,23 M (9,7 %) |
+
+Le CPU de navigation du rejeu est donc celui des **plans calculés** (97 %), pas celui des lots `walk_costs`. La part des `walk_costs` qui balayent jusqu'à l'horizon est négligeable sur cet extrait.
+
+### N1 et N2 : un lecteur du monde, une grille dense
+
+- `reader.rs` (lecteur unique : drapeaux, porte, zone F2P, péage, définition de loc) et `search.rs` (la vue « portes ouvertes » : `usable_door`, `open`, `step_open`, `step_closed`, avec la règle permissive des poches) remplacent les quatre copies de `plan.rs`, `costs.rs`, `fast_hop.rs` et `pocket.rs`.
+- `grid.rs` : un `Square` immuable par carré 64×64 et par niveau (`flags` finaux, un bit « porte sur la case », un bit « porte dans le 3×3 » — mis sur tout l'anneau de bord du carré, où le voisin peut être dans un autre carré —, un bit F2P par zone 8×8), rangés dans un tableau plat de `OnceLock<Arc<Square>>` indexé par (niveau, carré z, carré x) : 262 144 cases, peint à la première demande, lu sans verrou, sans `unsafe`. Les trois setters (`set_f2p`, `set_sky_floors`, `set_npc_blockers`) remplacent la grille par une grille vide. Une case hors de la plage (négative, au-delà de 16 384, niveau > 3) ou un carré illisible retombe sur l'ancienne lecture.
+- Une recherche tient un `Arc<Grid>` pris une fois ; la vue « portes ouvertes » d'une case sans porte dans son 3×3 est sa vue de base (un test de bit remplace 9 recherches) ; les tables par recherche ne restent que pour les cases voisines d'une porte.
+- **L'ancienne lecture reste l'oracle** (`StaticWorld::get_paged`, `door_at`, `in_f2p`). `grid_tests.rs` compare, pour **chacun des 483 carrés du pack, aux 4 niveaux (7 913 472 cases)**, drapeaux, porte, F2P et bit « porte dans le 3×3 » : **0 écart** ; plus les carrés absents du pack (sol en bas, vide au-dessus, planchers de `sky_floors`), les cases hors plage et l'effet des setters.
+- **Constat sur l'ancienne lecture (écart assumé, à connaître)** : une loc posée dans un carré voisin (mur, objet de plusieurs cases) peint des cases de ce carré-ci ; l'ancienne lecture répondait donc une valeur différente selon que le voisin avait déjà été peint ou non (386 cases sur 33 carrés échantillonnés, jusqu'à la 2ᵉ case depuis le bord, test `painting_order_only_touches_the_edge`). Un carré dense n'est construit qu'**après** la peinture de ses 8 voisins : il sert toujours la valeur finale, quel que soit l'ordre de peinture. Le rejeu (empreinte identique) et les goldens ne voient aucune différence ; en direct, seules des cases à 1-2 pas du bord d'un carré dont le voisin n'était pas encore peint pouvaient lire une valeur incomplète. Coût : peindre un carré en peint jusqu'à 8 autres (1,4 ms chacun) : le premier plan à froid d'un processus coûte ~100 ms de plus (le monde entier tient en 483 carrés, ~0,7 s) ; le banc `black_knights` chauffe donc le monde avant de chronométrer le verdict de poche scellée. L'état gardé (N4) sort ce coût du chemin chaud du démon.
+- Mémoire : 17 Ko par carré et par niveau construit (la grille vide : 4 Mo par monde chargé).
+
+### N3 : `dist` et `prev` denses
+
+`dense.rs` : `DenseMap` (un bloc de 4 096 cases par carré touché, retrouvé par une petite table et un cache du dernier bloc), `Dist` (cases simples denses, états « porte ouverte » `FRESH` dans une petite table), `Parents` (un octet par pas de marche : le pas pris, plus 8 si le parent est un état ouvert ; table annexe pour portes, rides, customs et enfants ouverts). Le tas, le départage par clé de case et tous les coûts sont ceux du planificateur. `costs.rs` prend `DenseMap` pour `dist` (la table `dist_open` reste en hachage).
+
+### N4 : caches gardés entre redémarrages
+
+`nav_state.rs` : `Service::save_state` / `restore_state`. Le fichier `run/nav-state.json` (écrit à l'arrêt propre par `plan_service::save_state`, relu au démarrage par un fil `nav-restore`) porte le format (`FORMAT = "nav-state-1"`), la **version des données** (hash des tables, surcharges, loctypes, zones F2P et du pack) et : les routes positives (plan, options, ordre d'insertion et de récence ; l'analyse du chemin est recalculée à la lecture par la même `route_path::analyze` que le direct), les verdicts de poches, les carrés peints (repeints et grilles construites à la lecture). Absent, illisible, d'un autre format ou d'une autre version des données : ignoré, le service démarre à froid comme avant (jamais une erreur). Les négatifs (TTL 60 s) ne sont pas gardés. Écriture par fichier temporaire puis renommage. **`FORMAT` est le bouton** pour un changement de planificateur qui garde les données mais change les plans : le monter avec ce changement.
+
+Preuve (`nav_state_tests.rs`) : un service restauré tient les mêmes plans dans le même ordre d'insertion et de récence, la même analyse de chemin, les mêmes verdicts ; il sert les mêmes trames sans aucun calcul ; un fichier d'une autre version ou d'un autre format est refusé sans rien charger. Rejeu (`NAV_REPLAY_STATE_SAVE` / `NAV_REPLAY_STATE_LOAD`) : la partie mesurée (6 740 requêtes après 2 000 de chauffe) donne la **même empreinte** (`a739625f7fe56ca5`) en rejouant la chauffe qu'en restaurant l'état ; sans état (démarrage à froid, chauffe sautée) : 1 747 plans calculés contre 1 504 avec état restauré (−14 %), CPU `plan-pool` 15,4 s contre 12,3 s (−20 %). Le taux de succès des 5 premières minutes en direct reste à relever au déploiement.
+
+### N5 : composantes connexes — **non faites**
+
+Condition du plan : les recherches finissant à l'horizon pèsent encore plus de 20 % après N2 et N3. Mesure après N3 (rejeu, `visits` de la ligne `ops`) : `walk_costs` finies sans toutes les cibles = **0,1 %** des cases visitées ; plans finis sans atteindre la cible = **6,2 %** (12 recherches sur 1 496, dont 9 coupées par le plafond ou l'échéance, que des composantes connexes ne raccourciraient pas). Total 6,3 % < 20 % : lot sauté. À remesurer au déploiement avec la ligne `ops` du direct (le rejeu synthétise ses `walk_costs`).
+
+### N6 : `Service` découpé
+
+`service.rs` passe de 3 472 à ~2 700 lignes (dont ~1 300 de tests). Quatre objets, chacun testable sans socket, ni fil, ni `Service` :
+
+- `service_counters.rs` : tous les compteurs atomiques (`Counters`) ;
+- `service_caches.rs` : cache de routes, bases N8, jeux d'arêtes L2 et mémo des poches (`Caches`) ;
+- `service_admission.rs` : comptes, tickets, résultats, file bornée, attentes partagées, signal de complétion (`Admission` : `submit`, `join`, `cancel`, `poll`, `next_job`, `finish`, `evict_one`…), avec ses propres tests (un `Job` n'est que des données) ;
+- `service_reads.rs` : les onze lectures groupées (`door_defs`, `tiles_flags`, `static_locs_near`, `in_f2p`, `toll_fence`, `wants`, `diff`, `debug`, `transitions_list`, `probe_targets`, `doors_near`) : un seul préambule (version périmée refusée et comptée, requête lue), puis la lecture pure de `service_queries`.
+
+**Cache `walk_costs` supprimé** : sa clé contient la case de départ exacte ; 32 succès sur 3 010 lots en direct (1 %). Sur le rejeu il en sert 22 % (320 sur 1 420), mais les lots y sont synthétiques (un anneau par tiers de plans courts, mêmes arrivées répétées) et un lot ne coûte que 0,1 ms après N2/N3 : les 320 succès économisaient ~45 ms de CPU sur 16 s, autant que coûtent la construction et la comparaison de la clé (liste de danger comprise). Réponses identiques (empreinte `walk_costs` inchangée) ; le compteur `walk_costs_hits` reste dans la trame `stats` (à 0). Le test `costs_cache_keys_on_target_set_and_danger` devient `walk_costs_price_each_tile_whatever_the_window_order`.
+
+### Test de caractérisation de `reach_wall`
+
+`reach/wall_table_tests.rs` : 200 lignes (formes 0, 1, 2, 3 et 9 × 4 angles × 10 drapeaux) × 25 positions du poseur autour du mur, **tirées de `ReachStrategy.reached` du moteur** (bun, simulacre de `CollisionEngine` répondant un drapeau partout) ; `reach_wall` et `reached` doivent répondre pareil. La fonction n'est pas restructurée.

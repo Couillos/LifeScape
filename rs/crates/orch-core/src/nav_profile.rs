@@ -71,6 +71,11 @@ pub fn nav_line(
         bytes as f64 / (1024.0 * 1024.0),
         delta(|s| s.evictions),
     ));
+    // Lot N0: what the CPU went on, per kind of request (count / thread
+    // CPU / tiles visited), then the `walk_costs` searches that ended
+    // without reaching every target. Appended: the fields above keep
+    // their place for the readers of the line.
+    line.push_str(&format!(" | ops {}", lifescape_nav::nav_meter::ops_segment(&before.ops, &after.ops)));
     line
 }
 
@@ -112,6 +117,7 @@ mod tests {
         let line = nav_line(Duration::from_secs(60), &cpu_before, &cpu_after, &before, &after, (10, 2, 1024 * 1024, 5));
         assert!(line.starts_with("cpu-profile nav (60s): cpu_ms plan-pool=50 plan-query=2 total=52"), "{line}");
         assert!(line.contains("plans=32 fast=20 fast_zero=1 fast_declined=4 hit=83% exact=6 dominated=0 prefix=1 suffix=1 infix=1 splice=1 negative=0 miss=2"), "{line}");
-        assert!(line.contains("walk_costs=3 | routes=10+2neg/1.0MiB evict=0 pockets=5"), "{line}");
+        assert!(line.contains("walk_costs=3 | routes=10+2neg/1.0MiB evict=0 pockets=5 | ops "), "{line}");
+        assert!(line.ends_with("plan_unreached=0/0v horizon_cut=0"), "{line}");
     }
 }

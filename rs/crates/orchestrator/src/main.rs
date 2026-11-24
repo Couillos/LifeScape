@@ -220,6 +220,9 @@ fn daemon_main() -> i32 {
     // before the process ends (a SIGTERM cannot be caught std-only: that
     // path loses at most one `FLUSH_PERIOD` of ingests, see `rates_flush`).
     lifescape_orchestrator::rates_flush::flush_now();
+    // Navigation caches for the next start (lot N4): routes, pocket
+    // verdicts, painted squares; ignored there if the data changed.
+    lifescape_orchestrator::plan_service::save_state();
     let _ = std::fs::remove_file(paths::socket_path());
     let _ = std::fs::remove_file(lifescape_orchestrator::plan_service::socket_path());
     let _ = std::fs::remove_file(lifescape_orchestrator::market_service::socket_path());

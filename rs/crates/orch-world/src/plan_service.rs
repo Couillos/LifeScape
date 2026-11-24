@@ -59,11 +59,50 @@ pub fn load_snapshot() -> Result<Arc<Snapshot>, String> {
     ))
 }
 
-/// Spawn the pool + acceptor on the daemon socket.
+/// File of the caches kept across restarts (route cache, pocket verdicts,
+/// painted squares): written at a clean shutdown, read at the next start
+/// when the data version still matches (lot N4, `nav_state`).
+pub fn state_path() -> PathBuf {
+    paths::run_dir().join("nav-state.json")
+}
+
+/// Spawn the pool + acceptor on the daemon socket, and warm the caches
+/// from the saved state on a side thread (the service answers meanwhile:
+/// a file that is absent or of other data leaves it cold, as before).
 pub fn start(snapshot: Arc<Snapshot>) -> Result<Arc<Service>, String> {
     let service = Service::start(snapshot, &socket_path(), service::PLAN_THREADS)?;
     *registry().lock().unwrap() = Some(service.clone());
+    let warm = service.clone();
+    let spawned = std::thread::Builder::new().name("nav-restore".to_string()).spawn(move || match warm.restore_state(&state_path()) {
+        Ok(counts) => crate::logln!(
+            "nav state restored: routes={} pockets={} squares={} in {} ms",
+            counts.routes,
+            counts.pockets,
+            counts.squares,
+            counts.millis
+        ),
+        Err(why) => crate::logln!("nav state ignored: {why}"),
+    });
+    if let Err(error) = spawned {
+        eprintln!("nav-restore thread spawn failed ({error}): cold start");
+    }
     Ok(service)
+}
+
+/// Clean shutdown: write the caches for the next start. A failure is
+/// logged and never blocks the exit.
+pub fn save_state() {
+    let Some(service) = registry().lock().unwrap().clone() else { return };
+    match service.save_state(&state_path()) {
+        Ok(counts) => crate::logln!(
+            "nav state saved: routes={} pockets={} squares={} in {} ms",
+            counts.routes,
+            counts.pockets,
+            counts.squares,
+            counts.millis
+        ),
+        Err(why) => crate::logln!("nav state not saved: {why}"),
+    }
 }
 
 /// Operator `reload-nav` (lot 3): rebuild the snapshot beside the live

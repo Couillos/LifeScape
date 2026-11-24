@@ -34,10 +34,11 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use crate::bfs::can_step;
-use crate::collision::{self, leaf_step_extra, CollisionMap};
+use crate::collision::{self, leaf_step_extra};
 use crate::plan::{EdgeId, NavOptions, SharedEdges, Tile, U64Map, DOOR_COST, TRANSITION_COST};
+use crate::dense::DenseMap;
 use crate::reach;
+use crate::search::Search;
 use crate::static_world::StaticWorld;
 use crate::tables::Tables;
 
@@ -62,112 +63,6 @@ fn key_of(tile: Tile) -> Key {
 
 fn tile_of(key: Key) -> Tile {
     Tile { x: key.0, z: key.1, level: key.2 }
-}
-
-struct Search<'a> {
-    world: &'a StaticWorld,
-    tables: &'a Tables,
-    options: &'a NavOptions,
-    // Tile-key maps with the planner's identity hash (CPU 2026-11-14:
-    // SipHash over (x, z, level) tuples, and the world lock per F2P read,
-    // were most of a batch once the danger map stopped dominating).
-    base_flags: U64Map<u32>,
-    open_flags: U64Map<u32>,
-    doors: U64Map<Option<(u16, u8, u8)>>,
-    f2p_zones: U64Map<bool>,
-}
-
-impl Search<'_> {
-    fn in_bounds(&mut self, tile: Tile) -> bool {
-        if !self.options.f2p_only {
-            return true;
-        }
-        let zone = Tile { x: tile.x >> 3, z: tile.z >> 3, level: 0 }.key();
-        if let Some(inside) = self.f2p_zones.get(&zone) {
-            return *inside;
-        }
-        let inside = self.world.in_f2p(tile.x, tile.z);
-        self.f2p_zones.insert(zone, inside);
-        inside
-    }
-
-    fn base(&mut self, tile: Tile) -> u32 {
-        if let Some(flags) = self.base_flags.get(&tile.key()) {
-            return *flags;
-        }
-        let flags = self.world.get(tile.x, tile.z, tile.level);
-        self.base_flags.insert(tile.key(), flags);
-        flags
-    }
-
-    fn door_at(&mut self, tile: Tile) -> Option<(u16, u8, u8)> {
-        if let Some(found) = self.doors.get(&tile.key()) {
-            return *found;
-        }
-        let found = self.world.door_at(tile.x, tile.z, tile.level);
-        self.doors.insert(tile.key(), found);
-        found
-    }
-
-    fn usable_door(&mut self, tile: Tile) -> Option<(u16, u8, u8)> {
-        let (id, shape, angle) = self.door_at(tile)?;
-        if self.tables.is_blocked(id, tile) {
-            return None;
-        }
-        let def = self.world.loc_def(id as usize)?;
-        def.open_op?;
-        if self.world.is_toll(tile.x, tile.z, tile.level) && !self.options.allow_paid {
-            return None;
-        }
-        if !self.tables.missing(id, tile, &self.options.satisfied).is_empty() {
-            return None;
-        }
-        Some((id, shape, angle))
-    }
-
-    fn open(&mut self, tile: Tile) -> u32 {
-        if let Some(flags) = self.open_flags.get(&tile.key()) {
-            return *flags;
-        }
-        let mut doors = Vec::new();
-        for dx in -1..=1 {
-            for dz in -1..=1 {
-                let near = Tile { x: tile.x + dx, z: tile.z + dz, level: tile.level };
-                if let Some(found) = self.usable_door(near) {
-                    doors.push((near, found));
-                }
-            }
-        }
-        let flags = if doors.is_empty() {
-            self.base(tile)
-        } else {
-            let mut scratch = CollisionMap::new();
-            for dx in -1..=1 {
-                for dz in -1..=1 {
-                    let near = Tile { x: tile.x + dx, z: tile.z + dz, level: tile.level };
-                    scratch.set(near.x, near.z, near.level, self.base(near));
-                }
-            }
-            for (near, (id, shape, angle)) in doors {
-                self.world.unpaint_into(&mut scratch, id, shape, angle, near.x, near.z, near.level);
-            }
-            scratch.get(tile.x, tile.z, tile.level)
-        };
-        self.open_flags.insert(tile.key(), flags);
-        flags
-    }
-
-    fn step_open(&mut self, from: Tile, to: Tile) -> bool {
-        let level = from.level;
-        let mut step = |x: i32, z: i32| self.open(Tile { x, z, level });
-        can_step(&mut step, from.x, from.z, to.x, to.z)
-    }
-
-    fn step_closed(&mut self, from: Tile, to: Tile) -> bool {
-        let level = from.level;
-        let mut step = |x: i32, z: i32| self.base(Tile { x, z, level });
-        can_step(&mut step, from.x, from.z, to.x, to.z)
-    }
 }
 
 /// Walkable targets still to settle, each with the least price of a path
@@ -207,19 +102,23 @@ fn goal_bound(here: Tile, pending: &[(Tile, u32)]) -> u32 {
 }
 
 fn relax(
-    dist: &mut U64Map<u32>,
+    dist: &mut DenseMap<u32>,
     dist_open: &mut U64Map<u32>,
     heap: &mut BinaryHeap<(Reverse<u32>, Reverse<Key>, bool)>,
     next: Key,
     cost: u32,
     opened: bool,
 ) {
-    let map = if opened { dist_open } else { dist };
-    let slot = tile_of(next).key();
-    if map.get(&slot).is_some_and(|known| *known <= cost) {
+    let at = tile_of(next);
+    let known = if opened { dist_open.get(&at.key()).copied() } else { dist.cost(at) };
+    if known.is_some_and(|known| known <= cost) {
         return;
     }
-    map.insert(slot, cost);
+    if opened {
+        dist_open.insert(at.key(), cost);
+    } else {
+        dist.set(at, cost);
+    }
     heap.push((Reverse(cost), Reverse(next), opened));
 }
 
@@ -266,15 +165,7 @@ pub(crate) fn plan_costs_capped(
     memo: Option<&crate::pocket::PocketMemo>,
     cap: u32,
 ) -> Vec<Option<u32>> {
-    let mut search = Search {
-        world,
-        tables,
-        options,
-        base_flags: U64Map::default(),
-        open_flags: U64Map::default(),
-        doors: U64Map::default(),
-        f2p_zones: U64Map::default(),
-    };
+    let mut search = Search::new(world, tables, options, false, options.allow_paid, false);
     let danger = crate::plan::DangerMap::new(&options.danger);
     let (rides, customs) = shared;
     // Walkable targets settle on pop (first pop is optimal by Dijkstra).
@@ -312,24 +203,26 @@ pub(crate) fn plan_costs_capped(
         }
     }
     let mut costs: Vec<Option<u32>> = vec![None; dests.len()];
-    let mut dist: U64Map<u32> = U64Map::default();
+    let mut dist: DenseMap<u32> = DenseMap::new(u32::MAX);
     // Tiles reached through a door click (door stands open), apart from
     // the cheap walked-onto shut tiles (same rule as `dijkstra`). No prev
     // map here: costs never rebuild a chain.
     let mut dist_open: U64Map<u32> = U64Map::default();
     let mut heap: BinaryHeap<(Reverse<u32>, Reverse<Key>, bool)> = BinaryHeap::new();
-    dist.insert(from.key(), 0);
+    dist.set(from, 0);
     heap.push((Reverse(0), Reverse(key_of(from)), false));
     let mut visits = 0usize;
     let horizon = horizon(from, dests).min(cap);
     let mut pending = goal_floors(shared, dests, &settle);
+    let mut horizon_cut = false;
     while let Some((Reverse(cost), Reverse(found), opened)) = heap.pop() {
-        let known = if opened { &dist_open } else { &dist };
-        if known.get(&tile_of(found).key()).is_some_and(|known| *known != cost) {
+        let known = if opened { dist_open.get(&tile_of(found).key()).copied() } else { dist.cost(tile_of(found)) };
+        if known.is_some_and(|known| known != cost) {
             continue;
         }
         visits += 1;
         if visits > MAX_VISITS || cost > horizon {
+            horizon_cut = true;
             break;
         }
         if let Some(indices) = settle.remove(&tile_of(found).key()) {
@@ -337,6 +230,7 @@ pub(crate) fn plan_costs_capped(
                 costs[index] = Some(cost);
             }
             if settle.is_empty() && blocked.is_empty() {
+                crate::nav_meter::add_visits(visits);
                 return costs;
             }
             pending.retain(|(target, _)| key_of(*target) != found);
@@ -375,6 +269,7 @@ pub(crate) fn plan_costs_capped(
         if finalized {
             blocked.retain(|target| !target.indices.is_empty());
             if settle.is_empty() && blocked.is_empty() {
+                crate::nav_meter::add_visits(visits);
                 return costs;
             }
         }
@@ -500,11 +395,15 @@ pub(crate) fn plan_costs_capped(
             }
         }
     }
+    crate::nav_meter::add_visits(visits);
     for target in &blocked {
-        let best = dist.get(&target.best.key()).copied();
+        let best = dist.cost(target.best);
         for index in &target.indices {
             costs[*index] = best;
         }
+    }
+    if costs.iter().any(Option::is_none) {
+        crate::nav_meter::note_unreached(visits, horizon_cut);
     }
     costs
 }

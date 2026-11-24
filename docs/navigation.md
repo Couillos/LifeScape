@@ -31,7 +31,8 @@ borné `plan-query` (2 threads, file 128, `service_accept.rs`, compteur
 d'écriture pour peindre, un de lecture pour lire, au lieu de deux par
 tuile ; `toll_fence` r150 5,8 ms → 7 µs). Cache `walk_costs` service
 indexé par l'ENSEMBLE des cibles + options complètes (danger inclus,
-il manquait) ; compteur `walk_costs_hits`. Côté worker,
+il manquait) ; compteur `walk_costs_hits` (cache supprimé le 24/11, lot N6 :
+1 % de succès en direct, le compteur reste à 0). Côté worker,
 `sdk/src/client/static_cache.rs` répond sans aller-retour aux requêtes
 statiques déjà servies sous la même version : `door_defs`, `tiles_flags`,
 `in_f2p` (par clé, lot servi seulement s'il est entier en cache),

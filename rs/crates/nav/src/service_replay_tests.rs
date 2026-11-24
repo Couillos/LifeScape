@@ -153,11 +153,38 @@ fn service_replay() {
     let mut fresh_wall = std::time::Duration::ZERO;
     let (mut checked, mut excess_sum, mut excess_max, mut over_eps, mut verdict_mismatch) = (0u64, 0u64, 0u32, 0u64, 0u64);
     let warm = warm.min(requests.len());
+    // Lot N4 evidence: `NAV_REPLAY_STATE_SAVE=<file>` writes the caches at
+    // the end of the warm-up; `NAV_REPLAY_STATE_LOAD=<file>` restores them
+    // at the start and skips the warm-up requests (the measured part then
+    // starts from the restored caches, not from a replayed history).
+    let state_load = std::env::var("NAV_REPLAY_STATE_LOAD").ok();
+    if let Some(path) = &state_load {
+        match service.restore_state(std::path::Path::new(path)) {
+            Ok(counts) => println!("state restored {counts:?}"),
+            Err(why) => println!("state ignored: {why}"),
+        }
+    }
+    let mut measured_digest = 0xcbf29ce484222325u64;
     // (requests, misses, wall ms) per logged cost class: <=5, <=50, >50.
     let mut by_class = [(0u64, 0u64, 0f64); 3];
     let mut costs_wall: Vec<f64> = Vec::new();
+    // Byte-identity proof of the navigation lots: FNV-1a over the Debug
+    // text of every plan outcome and every `walk_costs` answer, in
+    // replay order (warm-up included). Same extract, same digests.
+    let (mut plan_digest, mut costs_digest) = (0xcbf29ce484222325u64, 0xcbf29ce484222325u64);
+    let fold = |digest: &mut u64, text: &str| {
+        for byte in text.bytes() {
+            *digest = (*digest ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+        }
+    };
     for (index, request) in requests.iter().enumerate() {
+        if state_load.is_some() && index < warm {
+            continue;
+        }
         if index == warm {
+            if let Ok(path) = std::env::var("NAV_REPLAY_STATE_SAVE") {
+                println!("state saved {:?}", service.save_state(std::path::Path::new(&path)));
+            }
             // Warm L1 like the live daemon: measure from here on.
             before = service.stats();
             cpu_before = thread_cpu();
@@ -179,6 +206,10 @@ fn service_replay() {
             }
             by_class[class].2 += plan_start.elapsed().as_secs_f64() * 1000.0;
         }
+        fold(&mut plan_digest, &format!("{:?}", outcome));
+        if index >= warm {
+            fold(&mut measured_digest, &format!("{:?}", outcome));
+        }
         match &outcome {
             Ok((Poll::Ready(_), _)) => served += 1,
             _ => failed += 1,
@@ -191,7 +222,8 @@ fn service_replay() {
                 .collect();
             if !ring.is_empty() {
                 let costs_start = Instant::now();
-                let _ = client.walk_costs(request.from, &ring, &options, &version);
+                let answer = client.walk_costs(request.from, &ring, &options, &version);
+                fold(&mut costs_digest, &format!("{:?}", answer));
                 if index >= warm {
                     costs_wall.push(costs_start.elapsed().as_secs_f64() * 1000.0);
                 }
@@ -258,6 +290,17 @@ fn service_replay() {
         );
     }
     println!("routes {:?} pockets={}", service.route_stats(), service.pocket_verdicts());
+    println!("ops {}", crate::nav_meter::ops_segment(&before.ops, &after.ops));
+    let total_visits: u64 = after.ops.iter().zip(before.ops.iter()).map(|(now, was)| now.visits - was.visits).sum();
+    let unreached = |slot: usize| after.ops[slot].unreached_visits - before.ops[slot].unreached_visits;
+    println!(
+        "visits total={total_visits} walk_costs_unreached={} ({:.1}%) plan_unreached={} ({:.1}%)",
+        unreached(0),
+        100.0 * unreached(0) as f64 / total_visits.max(1) as f64,
+        unreached(3),
+        100.0 * unreached(3) as f64 / total_visits.max(1) as f64
+    );
+    println!("digest plans={plan_digest:016x} walk_costs={costs_digest:016x} measured={measured_digest:016x}");
     println!(
         "quality checked={checked} excess_sum={excess_sum} excess_max={excess_max} over_epsilon={over_eps} verdict_mismatch={verdict_mismatch}"
     );

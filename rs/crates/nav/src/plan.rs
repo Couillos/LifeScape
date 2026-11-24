@@ -12,11 +12,12 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::time::Duration;
 
-use crate::bfs::can_step;
 use crate::collision::leaf_step_extra;
 use crate::fallback::walled_off;
-use crate::collision::{tile_walkable, CollisionMap, BLOCK_EAST, BLOCK_NORTH, BLOCK_SOUTH, BLOCK_WEST};
+use crate::collision::{tile_walkable, BLOCK_EAST, BLOCK_NORTH, BLOCK_SOUTH, BLOCK_WEST};
 use crate::reach;
+use crate::dense::{Dist, Parents};
+use crate::search::Search;
 use crate::static_world::StaticWorld;
 use crate::tables::{Tables, Transition, Verdict};
 
@@ -64,7 +65,7 @@ pub const DOOR_COST: u32 = 10;
 /// same tile and only `rebuild` must carry the full key. One extra state
 /// per door tile: a walked-onto tile is cheap but shut (its click would
 /// be a refused src==dest), the clicked tile costs more but steps off.
-const FRESH: u64 = 1 << 63;
+pub(crate) const FRESH: u64 = 1 << 63;
 /// One transition ride: 20 walk steps of climbing and waiting.
 pub const TRANSITION_COST: u32 = 20;
 /// Riding blind: the prober never saw this transition work.
@@ -675,125 +676,6 @@ pub(crate) enum Outcome {
     Aborted,
 }
 
-struct Search<'a> {
-    world: &'a StaticWorld,
-    tables: &'a Tables,
-    options: &'a NavOptions,
-    ignore_requires: bool,
-    allow_paid: bool,
-    ignore_f2p: bool,
-    base_flags: U64Map<u32>,
-    open_flags: U64Map<u32>,
-    doors: U64Map<Option<(u16, u8, u8)>>,
-    /// F2P verdict per 8x8 zone (`in_f2p` takes the world lock: it ran
-    /// for every neighbour of every visit).
-    f2p_zones: U64Map<bool>,
-}
-
-impl Search<'_> {
-    fn in_bounds(&mut self, tile: Tile) -> bool {
-        if !self.options.f2p_only || self.ignore_f2p {
-            return true;
-        }
-        let zone = Tile { x: tile.x >> 3, z: tile.z >> 3, level: 0 }.key();
-        if let Some(inside) = self.f2p_zones.get(&zone) {
-            return *inside;
-        }
-        let inside = self.world.in_f2p(tile.x, tile.z);
-        self.f2p_zones.insert(zone, inside);
-        inside
-    }
-
-    fn base(&mut self, tile: Tile) -> u32 {
-        if let Some(flags) = self.base_flags.get(&tile.key()) {
-            return *flags;
-        }
-        let flags = self.world.get(tile.x, tile.z, tile.level);
-        self.base_flags.insert(tile.key(), flags);
-        flags
-    }
-
-    fn door_at(&mut self, tile: Tile) -> Option<(u16, u8, u8)> {
-        if let Some(found) = self.doors.get(&tile.key()) {
-            return *found;
-        }
-        let found = self.world.door_at(tile.x, tile.z, tile.level);
-        self.doors.insert(tile.key(), found);
-        found
-    }
-
-    /// A door this search may swing: openable, untolled (or paid), with
-    /// its requirement tags in hand, and not hand-blocked tile by tile.
-    fn usable_door(&mut self, tile: Tile) -> Option<(u16, u8, u8)> {
-        let (id, shape, angle) = self.door_at(tile)?;
-        if self.tables.is_blocked(id, tile) {
-            return None;
-        }
-        let def = self.world.loc_def(id as usize)?;
-        def.open_op?;
-        if self.world.is_toll(tile.x, tile.z, tile.level) && !self.allow_paid {
-            return None;
-        }
-        if !self.ignore_requires && !self.tables.missing(id, tile, &self.options.satisfied).is_empty() {
-            return None;
-        }
-        Some((id, shape, angle))
-    }
-
-    /// Collision with usable doors swung open: the exact wall removal
-    /// over the tiles it touches, never a blanket OPEN. Wall locs paint
-    /// shared edges onto their neighbours, so the scratch map carries
-    /// the 3x3 around the tile and every usable door inside unpaints
-    /// into it before the centre tile is read. 3x3 is exact: paint
-    /// reaches at most the neighbour tiles, so any door touching the
-    /// centre always shows one of its tiles inside the window.
-    fn open(&mut self, tile: Tile) -> u32 {
-        if let Some(flags) = self.open_flags.get(&tile.key()) {
-            return *flags;
-        }
-        let mut doors = Vec::new();
-        for dx in -1..=1 {
-            for dz in -1..=1 {
-                let near = Tile { x: tile.x + dx, z: tile.z + dz, level: tile.level };
-                if let Some(found) = self.usable_door(near) {
-                    doors.push((near, found));
-                }
-            }
-        }
-        let flags = if doors.is_empty() {
-            self.base(tile)
-        } else {
-            let mut scratch = CollisionMap::new();
-            for dx in -1..=1 {
-                for dz in -1..=1 {
-                    let near = Tile { x: tile.x + dx, z: tile.z + dz, level: tile.level };
-                    scratch.set(near.x, near.z, near.level, self.base(near));
-                }
-            }
-            for (near, (id, shape, angle)) in doors {
-                self.world.unpaint_into(&mut scratch, id, shape, angle, near.x, near.z, near.level);
-            }
-            scratch.get(tile.x, tile.z, tile.level)
-        };
-        self.open_flags.insert(tile.key(), flags);
-        flags
-    }
-
-    /// Walk step in the planning view (usable doors read open).
-    fn step_open(&mut self, from: Tile, to: Tile) -> bool {
-        let level = from.level;
-        let mut step = |x: i32, z: i32| self.open(Tile { x, z, level });
-        can_step(&mut step, from.x, from.z, to.x, to.z)
-    }
-
-    /// Walk step with every door shut.
-    fn step_closed(&mut self, from: Tile, to: Tile) -> bool {
-        let level = from.level;
-        let mut step = |x: i32, z: i32| self.base(Tile { x, z, level });
-        can_step(&mut step, from.x, from.z, to.x, to.z)
-    }
-}
-
 /// Search keepalive gate: the visit-count abort stays (operator stop
 /// must bite even on a fast search), plus a wall-clock yield so a slow
 /// search — live doors, toll detours — still proves the session alive
@@ -816,19 +698,7 @@ pub(crate) fn dijkstra(
     yield_: &mut dyn FnMut() -> bool,
     deadline: std::time::Instant,
 ) -> Outcome {
-    let mut search = Search {
-        world,
-        tables,
-        options,
-        ignore_requires,
-        allow_paid,
-        ignore_f2p,
-        base_flags: U64Map::default(),
-        open_flags: U64Map::default(),
-        doors: U64Map::default(),
-        f2p_zones: U64Map::default(),
-
-    };
+    let mut search = Search::new(world, tables, options, ignore_requires, allow_paid, ignore_f2p);
     let dest_walkable = tile_walkable(search.open(dest));
     // Blocked destination: the best rank prefix any tile can reach.
     let floor = if dest_walkable {
@@ -838,10 +708,10 @@ pub(crate) fn dijkstra(
     };
     let danger = DangerMap::new(&options.danger);
     let (rides, customs) = shared;
-    let mut dist: U64Map<u32> = U64Map::default();
-    let mut prev: U64Map<(u64, PrevEdge)> = U64Map::default();
+    let mut dist = Dist::new();
+    let mut prev = Parents::new();
     let mut heap: BinaryHeap<(Reverse<u32>, Reverse<u64>)> = BinaryHeap::new();
-    dist.insert(from.key(), 0);
+    dist.set(from.key(), 0);
     heap.push((Reverse(0), Reverse(from.key())));
     let mut best = from;
     let mut best_rank = from.fallback_rank(dest, 0, walled_off(&mut |tile| search.open(tile), from, dest));
@@ -858,13 +728,14 @@ pub(crate) fn dijkstra(
     // Lowest cost first, lowest tile key breaking ties: the same world
     // always yields the same plan.
     while let Some((Reverse(cost), Reverse(key))) = heap.pop() {
-        if dist.get(&key).is_some_and(|known| *known != cost) {
+        if dist.get(key).is_some_and(|known| known != cost) {
             continue;
         }
         visits += 1;
         if yield_due(visits, last_yield) {
             last_yield = std::time::Instant::now();
             if !yield_() {
+                crate::nav_meter::add_visits(visits);
                 return Outcome::Aborted;
             }
         }
@@ -876,6 +747,8 @@ pub(crate) fn dijkstra(
         // never a Closest (Disconnected) nor a blocked-dest adjustment
         // to wherever the cut fell. The operator stop still wins above.
         if visits > MAX_VISITS || cost > cost_cap || (visits % 1024 == 0 && std::time::Instant::now() >= deadline) {
+            crate::nav_meter::add_visits(visits);
+            crate::nav_meter::note_unreached(visits, true);
             return Outcome::OverBudget(best);
         }
         let here = unkey(key);
@@ -893,6 +766,7 @@ pub(crate) fn dijkstra(
         // tiles past it (CPU 2026-11-14: adjusted plans swept ~8-16k
         // tiles each, a start already beside the target included).
         if best == here && !fresh && floor == Some((best_rank.0, best_rank.1, best_rank.2)) {
+            crate::nav_meter::add_visits(visits);
             return Outcome::Found(rebuild(&prev, from, best), cost, best);
         }
         if key == dest_key && dest_walkable {
@@ -902,6 +776,7 @@ pub(crate) fn dijkstra(
                     loop_start.elapsed(),
                 );
             }
+            crate::nav_meter::add_visits(visits);
             return Outcome::Found(rebuild(&prev, from, dest), cost, dest);
         }
         // Walk and door neighbours, eight directions in fixed order.
@@ -1063,9 +938,10 @@ pub(crate) fn dijkstra(
             }
         }
     }
+    crate::nav_meter::add_visits(visits);
     // Blocked destination (tree, counter): the closest tile is the plan.
-    if !dest_walkable && best.key() != dest_key && dist.contains_key(&best.key()) {
-        let cost = dist[&best.key()];
+    if !dest_walkable && best.key() != dest_key && dist.get(best.key()).is_some() {
+        let cost = dist.get(best.key()).expect("best was reached");
         if std::env::var("PLAN_DEBUG").is_ok() {
             eprintln!("plan adjusted visits={visits} {:?}", loop_start.elapsed());
         }
@@ -1075,27 +951,28 @@ pub(crate) fn dijkstra(
     if std::env::var("PLAN_DEBUG").is_ok() {
         eprintln!("plan closest visits={visits} {:?}", loop_start.elapsed());
     }
+    crate::nav_meter::note_unreached(visits, false);
     Outcome::Closest(best)
 }
 
 fn relax(
-    dist: &mut U64Map<u32>,
-    prev: &mut U64Map<(u64, PrevEdge)>,
+    dist: &mut Dist,
+    prev: &mut Parents,
     heap: &mut BinaryHeap<(Reverse<u32>, Reverse<u64>)>,
     from_key: u64,
     next_key: u64,
     cost: u32,
     edge: PrevEdge,
 ) {
-    if dist.get(&next_key).is_some_and(|known| *known <= cost) {
+    if dist.get(next_key).is_some_and(|known| known <= cost) {
         return;
     }
-    dist.insert(next_key, cost);
-    prev.insert(next_key, (from_key, edge));
+    dist.set(next_key, cost);
+    prev.set(from_key, next_key, edge);
     heap.push((Reverse(cost), Reverse(next_key)));
 }
 
-fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, dest: Tile) -> Vec<(Tile, PrevEdge)> {
+fn rebuild(prev: &Parents, from: Tile, dest: Tile) -> Vec<(Tile, PrevEdge)> {
     // Full keys, FRESH mark included: an opened tile and its shut twin
     // are different search states with different parents (the open one
     // continues the click, the shut one the walk that reached the stand).
@@ -1103,20 +980,8 @@ fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, dest: Tile) -> Vec<(Tile,
     let mut chain = Vec::new();
     let mut at_key = dest.key();
     while at_key != from.key() {
-        let Some((parent, _)) = prev.get(&at_key) else {
+        let Some((parent_key, edge)) = prev.get(at_key) else {
             break;
-        };
-        let parent_key = *parent;
-        let Some((_, edge)) = prev.get(&at_key) else {
-            break;
-        };
-        let edge = match edge {
-            PrevEdge::Walk => PrevEdge::Walk,
-            PrevEdge::Door(door) => PrevEdge::Door(door.clone()),
-            PrevEdge::Ride { index, dest, pre_open } => {
-                PrevEdge::Ride { index: *index, dest: *dest, pre_open: pre_open.clone() }
-            }
-            PrevEdge::Custom { index, dest } => PrevEdge::Custom { index: *index, dest: *dest },
         };
         chain.push((unkey(at_key), edge));
         at_key = parent_key;
@@ -1137,18 +1002,7 @@ pub(crate) fn prepare_shared(
     options: &NavOptions,
     yield_: &mut dyn FnMut() -> bool,
 ) -> Option<(U64Map<Vec<RideEdge>>, U64Map<Vec<CustomPrepared>>)> {
-    let mut permissive = Search {
-        world,
-        tables,
-        options,
-        ignore_requires: true,
-        allow_paid: true,
-        ignore_f2p: true,
-        base_flags: U64Map::default(),
-        open_flags: U64Map::default(),
-        doors: U64Map::default(),
-        f2p_zones: U64Map::default(),
-    };
+    let mut permissive = Search::new(world, tables, options, true, true, true);
     prepare_edges(&mut permissive, yield_)
 }
 
@@ -1324,18 +1178,7 @@ fn stands(search: &mut Search, row: &Transition) -> Vec<Tile> {
 /// open and no requirement tags are held: geometric candidates, of which
 /// the planner may use a subset.
 pub fn ride_stands(world: &StaticWorld, tables: &Tables, options: &NavOptions, row: &Transition) -> Vec<Tile> {
-    let mut search = Search {
-        world,
-        tables,
-        options,
-        ignore_requires: false,
-        allow_paid: true,
-        ignore_f2p: false,
-        base_flags: U64Map::default(),
-        open_flags: U64Map::default(),
-        doors: U64Map::default(),
-        f2p_zones: U64Map::default(),
-    };
+    let mut search = Search::new(world, tables, options, false, true, false);
     stands(&mut search, row)
 }
 
