@@ -559,7 +559,11 @@ impl Orchestrator {
 
     /// Lot 4.2: the phase and status a heartbeat frame carries.
     fn note_frame_state(&self, job: &Arc<Job>, frame: &Value) {
-        let _effect = job.note_frame(frame, now_secs());
+        // Lot 4.4: a phase turning idle asks the brain for a decision now
+        // (the report may have been folded a few ms before the frame).
+        if job.note_frame(frame, now_secs()).is_some_and(|effect| effect.became_idle) {
+            crate::wake_hub::post(&job.account, crate::wake_hub::Event::Idle);
+        }
     }
 
     /// The ingest: `taken` is the snapshot already moved out of `frame`.

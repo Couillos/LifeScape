@@ -466,33 +466,35 @@ pub(crate) fn push_history(life: &mut Life, node: &str, outcome: &str) {
 /// Inbox room: every account's pending tick plus a burst of reports.
 const INBOX_CAPACITY: usize = 128;
 
-/// Accounts with a plain tick already queued (deduplication).
-/// Wall time between two plain brain ticks of one account (CPU, VPS
-/// 2026-11-14: a full `maybe_launch` every 500 ms supervisor pass burnt
-/// 30–85 % of a core doing nothing new). A report always goes through at
-/// once; a plain tick (idle detection, parked buys, periodic sales)
-/// waits at most this long. Time, not a pass count (live 2026-11-14, 60
-/// bots: one supervisor sweep took ~8 s, so "every 6th pass" meant one
-/// tick per ~50–90 s and idle bots waited that long between decisions:
-/// ryan_mason one node per ~1.5 min, owen_wood/lily_brook 2 min idle
-/// after a gear step closed without a launch).
-pub(crate) const PLAIN_TICK_SECS: f64 = 3.0;
+/// Wall time between two safety passes of one account (lot 4.4). The
+/// brain paces its own safety pass: idle detection, parked buys, periodic
+/// sales, everything that is not an event. It is the cadence the live fleet
+/// had until now (a supervisor sweep of 8 to 11 s carried one plain tick
+/// per account, after the 2026-11-14 rule "time, not a pass count": a full
+/// `maybe_launch` every 500 ms pass burnt 30 to 85 % of a core doing
+/// nothing new). Events (a report, a phase turning idle, an order filled)
+/// do not wait for it: they are messages in the account's mailbox.
+pub(crate) const SAFETY_TICK_SECS: f64 = 10.0;
 
-/// True when this supervisor pass carries the account's plain tick:
-/// at least `PLAIN_TICK_SECS` since the last one (`None`: never ticked).
-pub(crate) fn plain_tick_due(last: &mut Option<f64>, now: f64) -> bool {
-    if last.is_some_and(|at| now - at < PLAIN_TICK_SECS) {
-        return false;
-    }
-    *last = Some(now);
-    true
+/// How often the brain clock looks at the accounts (and the longest a
+/// post waits when the clock is busy; posts themselves wake it at once).
+const CLOCK_SCAN_SECS: f64 = 1.0;
+
+/// True when the account's safety pass is due: `SAFETY_TICK_SECS` since
+/// its last pass of any kind (`None`: never decided, a fresh account).
+pub(crate) fn safety_tick_due(last_pass: Option<f64>, now: f64) -> bool {
+    last_pass.is_none_or(|at| now - at >= SAFETY_TICK_SECS)
 }
 
-fn plain_tick_passes() -> &'static std::sync::Mutex<std::collections::HashMap<String, Option<f64>>> {
-    static PASSES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<f64>>>> = std::sync::OnceLock::new();
+/// When each account last went through the brain (a tick, a report or a
+/// wake): the clock measures its safety pass from here, so a bot that just
+/// decided on an event is not ticked again right after.
+fn last_passes() -> &'static std::sync::Mutex<std::collections::HashMap<String, f64>> {
+    static PASSES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, f64>>> = std::sync::OnceLock::new();
     PASSES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
+/// Accounts with a tick or a wake already queued (deduplication).
 fn queued_ticks() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
     static QUEUED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
     QUEUED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
@@ -572,6 +574,7 @@ fn ensure_brain(orch: &Arc<dyn Fleet>) {
         let mut slot = inbox().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         *slot = Some(senders);
     }
+    start_clock();
     for (index, receiver) in receivers.into_iter().enumerate() {
         let orch = orch.clone();
         std::thread::Builder::new()
@@ -586,6 +589,7 @@ fn ensure_brain(orch: &Arc<dyn Fleet>) {
                     if report.is_none() {
                         queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&account);
                     }
+                    last_passes().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(account.clone(), crate::jobs::now_secs());
                     let job = orch.jobs().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&account).cloned();
                     let Some(job) = job else {
                         if report.is_some() {
@@ -630,51 +634,102 @@ pub fn on_supervise(orch: &Arc<dyn Fleet>, job: &Arc<Job>, report: Option<Value>
     ensure_brain(orch);
     // No silent idle (2026-11-14): a brain-run worker idle 5 min alerts.
     crate::brain_idle::watch(job);
-    let had_report = report.is_some();
-    // One plain tick per account in flight: the supervisor passes every
-    // 500 ms over ~26 jobs (~52 ticks/s) and a capacity-16 inbox was
-    // always full — 2 340 "inbox full" lines in 36 min, every decision
-    // delayed for nothing. A report always goes through.
-    if !had_report {
-        let mut passes = plain_tick_passes().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !plain_tick_due(passes.entry(job.account.clone()).or_insert(None), crate::jobs::now_secs()) {
-            return;
-        }
-    }
-    if !had_report {
-        let mut waiting = queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !waiting.insert(job.account.clone()) {
-            return;
-        }
-    }
+    // Lot 4.4: the plain tick is the brain clock's now (`start_clock`,
+    // every `SAFETY_TICK_SECS`, plus wakes on events). The supervisor only
+    // carries a report it drained (fallback of the heartbeat wake, lot 4.3);
+    // a report always goes through.
+    let Some(report) = report else { return };
     // Counted before the send: the brain thread may fold it at once.
-    if had_report {
-        crate::brain_inflight::queued(&job.account);
-    }
-    let mail = report.map_or(Mail::Tick, Mail::Report);
+    crate::brain_inflight::queued(&job.account);
     let queued = inbox()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .as_ref()
-        .map(|senders| senders[shard_of(&job.account, senders.len())].try_send((job.account.clone(), mail)))
+        .map(|senders| senders[shard_of(&job.account, senders.len())].try_send((job.account.clone(), Mail::Report(report))))
         .is_some_and(|sent| sent.is_ok());
-    if had_report && !queued {
-        crate::brain_inflight::folded(&job.account);
-    }
-    if !queued && !had_report {
-        queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&job.account);
-    }
     if !queued {
+        crate::brain_inflight::folded(&job.account);
         // The drained report goes back to pending (`last_report` still
         // holds it): dropped here, its node read "no report" later.
-        let kept = had_report && job.inner.try_lock().map(|mut inner| inner.report_pending = true).is_ok();
-        let note = match (had_report, kept) {
-            (true, true) => " (report kept pending)",
-            (true, false) => " (report dropped: job contended)",
-            _ => "",
-        };
+        let kept = job.inner.try_lock().map(|mut inner| inner.report_pending = true).is_ok();
+        let note = if kept { " (report kept pending)" } else { " (report dropped: job contended)" };
         crate::logln!("brain {}: inbox full, tick deferred to next pass{note}", job.account);
     }
+}
+
+/// Queue a tick-like message (`Tick` or `Wake`) for an account unless one
+/// already waits: one pending pass per account. False when deduplicated or
+/// the inbox is full (the next clock scan retries).
+fn send_pass(account: &str, mail: Mail) -> bool {
+    if !queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(account.to_string()) {
+        return false;
+    }
+    let queued = inbox()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .map(|senders| senders[shard_of(account, senders.len())].try_send((account.to_string(), mail)))
+        .is_some_and(|sent| sent.is_ok());
+    if !queued {
+        queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(account);
+    }
+    queued
+}
+
+/// The brain clock (lot 4.4): ONE thread that (a) blocks on the wake hub
+/// and turns each event post into a mailbox wake at once, and (b) once a
+/// second queues the safety tick of every supervised account whose last
+/// pass is `SAFETY_TICK_SECS` old. The brain paces itself; the supervisor
+/// no longer carries ticks.
+fn start_clock() {
+    std::thread::Builder::new()
+        .name("brain-clock".to_string())
+        .spawn(move || {
+            let mut last_scan = 0.0_f64;
+            loop {
+                let posts = lifescape_orch_fleet::wake_hub::wait(std::time::Duration::from_millis(500));
+                if !posts.is_empty() {
+                    let jobs: std::collections::HashMap<String, Arc<Job>> = crate::jobs::supervised()
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .iter()
+                        .map(|(_, job)| (job.account.clone(), job.clone()))
+                        .collect();
+                    for (account, event) in posts {
+                        if !jobs.contains_key(&account) {
+                            continue;
+                        }
+                        let reason = match event {
+                            lifescape_orch_fleet::wake_hub::Event::Idle => WakeReason::Idle,
+                            lifescape_orch_fleet::wake_hub::Event::Fill => WakeReason::Event,
+                        };
+                        if send_pass(&account, Mail::Wake(reason)) {
+                            crate::cpu_profile::supervise().record_n(reason.label(), 1, 0, 0);
+                        }
+                    }
+                }
+                let now = crate::jobs::now_secs();
+                if now - last_scan < CLOCK_SCAN_SECS {
+                    continue;
+                }
+                last_scan = now;
+                let accounts: Vec<String> = crate::jobs::supervised()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .iter()
+                    .filter(|(orch, _)| orch.is_running())
+                    .map(|(_, job)| job.account.clone())
+                    .collect();
+                let due: Vec<String> = {
+                    let passes = last_passes().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    accounts.into_iter().filter(|account| safety_tick_due(passes.get(account).copied(), now)).collect()
+                };
+                for account in due {
+                    send_pass(&account, Mail::Tick);
+                }
+            }
+        })
+        .expect("brain clock spawns");
 }
 
 /// True while a plain tick or a wake of `account` waits in its mailbox.
@@ -699,22 +754,11 @@ pub fn on_report_push(orch: &Arc<dyn Fleet>, job: &Arc<Job>) -> bool {
 
 /// An event asks for a decision now (lot 4.4): a message in the account's
 /// mailbox, deduplicated with the plain tick already waiting (one pending
-/// pass per account), never paced by `PLAIN_TICK_SECS`.
+/// pass per account), never paced by `SAFETY_TICK_SECS`.
 pub fn wake(orch: &Arc<dyn Fleet>, job: &Arc<Job>, reason: WakeReason) {
     ensure_brain(orch);
-    let first = queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(job.account.clone());
-    if !first {
-        return;
-    }
-    crate::cpu_profile::supervise().record_n(reason.label(), 1, 0, 0);
-    let queued = inbox()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .as_ref()
-        .map(|senders| senders[shard_of(&job.account, senders.len())].try_send((job.account.clone(), Mail::Wake(reason))))
-        .is_some_and(|sent| sent.is_ok());
-    if !queued {
-        queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&job.account);
+    if send_pass(&job.account, Mail::Wake(reason)) {
+        crate::cpu_profile::supervise().record_n(reason.label(), 1, 0, 0);
     }
 }
 
@@ -744,19 +788,62 @@ mod tests {
         assert!(pinned_start("hitpoints", 99, 11).is_err());
     }
 
-    /// A plain tick is due on wall time, whatever the sweep length: a
-    /// slow sweep (60 bots, ~8 s) ticks every account each sweep, a fast
-    /// one (500 ms) every `PLAIN_TICK_SECS`.
+    /// Lot 4.4, brain CPU: passes per account-hour of the old pacing (a
+    /// supervisor sweep of 8 to 11 s carries one plain tick when 3 s have
+    /// passed, plus one pass per report at its sweep) against the brain's
+    /// own pacing (a clock scan every second queues a safety pass 10 s after
+    /// the last pass of any kind; events add a wake pass, and a pass
+    /// resets the safety timer). 74 accounts, 5 reports and 5 fills per
+    /// account-hour (the live rate: 27 622 reports in 72 h over 74 bots).
     #[test]
-    fn plain_ticks_fire_on_wall_time_not_pass_count() {
-        let mut last = None;
-        assert!(super::plain_tick_due(&mut last, 100.0), "the first pass ticks at once (fresh account)");
-        let fast: Vec<bool> = (1..=12).map(|step| super::plain_tick_due(&mut last, 100.0 + f64::from(step) * 0.5)).collect();
-        assert_eq!(fast.iter().filter(|fired| **fired).count(), 2, "6 s of 500 ms passes: one tick per {} s", super::PLAIN_TICK_SECS);
-        let mut slow = Some(200.0);
-        for step in 1..=5 {
-            assert!(super::plain_tick_due(&mut slow, 200.0 + f64::from(step) * 8.0), "an 8 s sweep ticks every pass");
+    fn the_brains_own_pacing_does_not_add_passes() {
+        let hour = 3600.0;
+        let accounts = 74usize;
+        let (mut old_passes, mut new_passes, mut wake_passes) = (0u64, 0u64, 0u64);
+        for account in 0..accounts {
+            // Old: sweeps of 8 + (account % 4) s; the account's slot in the sweep is fixed.
+            let sweep = 8.0 + (account % 4) as f64;
+            let mut last: Option<f64> = None;
+            let mut at = (account as f64 * 0.11) % sweep;
+            while at < hour {
+                let due = last.is_none_or(|previous| at - previous >= 3.0);
+                if due {
+                    old_passes += 1;
+                    last = Some(at);
+                }
+                at += sweep;
+            }
+            old_passes += 5; // one pass per report, at its sweep
+            // New: 1 s scans, events at fixed offsets (reports every 700 s, fills every 650 s).
+            let events: Vec<f64> = (1..=5).flat_map(|k| [k as f64 * 700.0 + account as f64, k as f64 * 650.0 + account as f64 * 2.0]).filter(|time| *time < hour).collect();
+            let mut last_pass: Option<f64> = None;
+            let mut next_event = 0usize;
+            let mut now = 0.0;
+            while now < hour {
+                while next_event < events.len() && events[next_event] <= now {
+                    wake_passes += 1;
+                    new_passes += 1;
+                    last_pass = Some(events[next_event]);
+                    next_event += 1;
+                }
+                if super::safety_tick_due(last_pass, now) {
+                    new_passes += 1;
+                    last_pass = Some(now);
+                }
+                now += super::CLOCK_SCAN_SECS;
+            }
         }
+        assert!(wake_passes > 0);
+        assert!(new_passes <= old_passes, "new {new_passes} passes <= old {old_passes} per {accounts} account-hours");
+        let per_account_hour = new_passes as f64 / accounts as f64;
+        assert!(per_account_hour <= 3600.0 / super::SAFETY_TICK_SECS + 12.0, "{per_account_hour} passes per account-hour");
+    }
+
+    #[test]
+    fn safety_ticks_fire_on_wall_time() {
+        assert!(super::safety_tick_due(None, 100.0), "a fresh account is ticked at once");
+        assert!(!super::safety_tick_due(Some(100.0), 109.9));
+        assert!(super::safety_tick_due(Some(100.0), 110.0));
     }
 
     #[test]

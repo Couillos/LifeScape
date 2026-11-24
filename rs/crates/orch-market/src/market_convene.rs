@@ -246,6 +246,9 @@ impl MarketService {
             engine.matched += 1;
         }
         self.remember_fill(fill);
+        // Lot 4.4: both sides' brains decide on the match now.
+        lifescape_orch_fleet::wake_hub::post(&fill.buyer, lifescape_orch_fleet::wake_hub::Event::Fill);
+        lifescape_orch_fleet::wake_hub::post(&fill.seller, lifescape_orch_fleet::wake_hub::Event::Fill);
         let (tile_x, tile_y) = {
             let engine = self.lock_engine();
             let slot = (engine.deals.len() % crate::market_service::RING.len()) as usize;
