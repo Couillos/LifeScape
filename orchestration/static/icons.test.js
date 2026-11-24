@@ -23,6 +23,15 @@ check('count 1: no step', LifeIcons.item(995, 1), '<span class="ic ic-item ic-i9
 check('skill slot', LifeIcons.skill('Attack'), '<span class="ic ic-skill ic-s-attack" aria-hidden="true"></span>');
 check('bad skill name: neutral slot', LifeIcons.skill('stat30'), '<span class="ic ic-skill" aria-hidden="true"></span>');
 
+var cellIndex = { items: { slot: [0, 1, 0, 4], count: { 3: { 2: 5, 25: 7 } } } };
+check('item cell: plain icon', LifeIcons.itemCell(cellIndex, 1, 1), 1);
+check('item cell: stack below the first step keeps the base icon', LifeIcons.itemCell(cellIndex, 3, 1), 4);
+check('item cell: last step reached', LifeIcons.itemCell(cellIndex, 3, 30), 7);
+check('item cell: step in between', LifeIcons.itemCell(cellIndex, 3, 2), 5);
+check('item cell: no icon', LifeIcons.itemCell(cellIndex, 2, 1), 0);
+check('item cell: bad id', LifeIcons.itemCell(cellIndex, 'x', 1), 0);
+check('item cell: no index', LifeIcons.itemCell(null, 1, 1), 0);
+
 var index = {
   items: { file: 'items.png', hash: 'abc', cell: 32, cols: 3, slot: [0, 1, 0, 4], count: { 3: { 2: 5, 25: 7 } } },
   skills: { file: 'skills.png', hash: 'def', cell: 25, cols: 2, slot: { attack: 1, runecraft: 3, 'x-y': 2 } },

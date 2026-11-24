@@ -46,6 +46,23 @@ var LifeIcons = (function () {
     return step ? ' ic-n' + step : '';
   }
 
+  // Sheet cell of an item at a stack count (the cell the CSS rules pick),
+  // 0 = no icon. Pages drawing on a canvas (spectator game tabs) cut the
+  // same sheet with it.
+  function itemCell(index, id, count) {
+    var items = index && index.items;
+    var key = itemKey(id);
+    if (!items || !items.slot || !key) return 0;
+    var slot = items.slot[Number(key)] || 0;
+    var steps = (items.count && items.count[key]) || null;
+    if (!slot || !steps) return slot;
+    var number = Number(count);
+    for (var i = 0; i < COUNT_STEPS.length; i++) {
+      if (number >= COUNT_STEPS[i] && steps[COUNT_STEPS[i]]) slot = steps[COUNT_STEPS[i]];
+    }
+    return slot;
+  }
+
   function itemKey(id) {
     var number = Number(id);
     return Number.isInteger(number) && number >= 0 ? String(number) : '';
@@ -117,6 +134,22 @@ var LifeIcons = (function () {
     document.head.appendChild(style);
   }
 
+  // The index once loaded (null when unreachable), for pages that draw
+  // from the sheets themselves: `onIndex(callback)` runs at once when it
+  // is already there.
+  var loaded = { done: false, index: null, waiting: [] };
+  function onIndex(callback) {
+    if (loaded.done) callback(loaded.index);
+    else loaded.waiting.push(callback);
+  }
+  function settle(index) {
+    loaded.done = true;
+    loaded.index = index;
+    var waiting = loaded.waiting;
+    loaded.waiting = [];
+    for (var i = 0; i < waiting.length; i++) waiting[i](index);
+  }
+
   // Browser: base sizes now (slots take their room at once), sheets when
   // the index arrives.
   function load() {
@@ -126,13 +159,13 @@ var LifeIcons = (function () {
         if (!response.ok) throw new Error('icons ' + response.status);
         return response.json();
       })
-      .then(function (index) { addStyle(rules(index)); })
-      .catch(function () { document.documentElement.classList.add('no-icons'); });
+      .then(function (index) { addStyle(rules(index)); settle(index); })
+      .catch(function () { document.documentElement.classList.add('no-icons'); settle(null); });
   }
 
   if (typeof document !== 'undefined' && typeof fetch !== 'undefined') load();
 
-  return { item: item, skill: skill, itemNode: itemNode, rules: rules, BASE_CSS: BASE_CSS };
+  return { item: item, skill: skill, itemNode: itemNode, itemCell: itemCell, rules: rules, onIndex: onIndex, BASE_CSS: BASE_CSS };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = LifeIcons;

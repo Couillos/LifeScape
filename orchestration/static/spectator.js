@@ -1,19 +1,5 @@
 // Pure panel helpers (node-testable, spectator.test.js).
 var SpectatorPanels = (function () {
-  const SKILLS = ["attack","defence","strength","hitpoints","ranged","prayer","magic","cooking","woodcutting","fletching","fishing","firemaking","crafting","smithing","mining","herblore","agility","thieving","slayer","farming","runecraft"];
-  // Skills table rows: one per skill, in stat order. `level` = current
-  // level (boosted/drained), `base` = level from xp (heartbeat). The
-  // Level column shows the base level (hitpoints: the level, never the
-  // hp left); the current level only when no base is sent.
-  function skillRows(skills) {
-    return (skills || []).map(s => ({ skill: SKILLS[s.id] || ('stat' + s.id), level: s.base != null ? s.base : s.level, base: s.base, xp: s.xp }));
-  }
-  // Total line under the skills table: sum of BASE levels (not the
-  // current ones) and of xp; null (shown '-') when a row lacks the value.
-  function skillTotals(rows) {
-    const sum = (key) => rows.every(row => typeof row[key] === 'number') ? rows.reduce((acc, row) => acc + row[key], 0) : null;
-    return { skill: 'Total', level: sum('base'), xp: sum('xp') };
-  }
   // "il y a 2 h 13 min" from the error's unix time (at_unix); '' without one.
   function errorAge(error, nowSeconds) {
     if (!error || typeof error.at_unix !== 'number') return '';
@@ -30,15 +16,215 @@ var SpectatorPanels = (function () {
     const age = errorAge(error, nowSeconds);
     return label + ': ' + JSON.stringify(error) + (age ? ' (' + age + ')' : '');
   }
-  // Inventory panel lines: headers as text, one line per item (its id
-  // for the icon, "<count>x <name>" when stacked).
-  function inventoryLines(inv, worn) {
-    const items = (list, empty) => (list && list.length)
-      ? list.map(i => ({ id: i.id, count: i.count, text: (i.count > 1 ? i.count + 'x ' : '') + (i.name || 'object') }))
-      : [{ text: empty }];
-    return [{ text: 'Backpack:' }].concat(items(inv, '(empty)'), [{ text: '' }, { text: 'Worn:' }], items(worn, '(nothing)'));
+
+  // ---- Game tabs (2026-11-24): the backpack, worn and stats tabs drawn
+  // like the rev 274 client (Client-TS `drawInterface`, `invNumber`,
+  // `getIfVar`, PixFont), from the layout the icons generator reads in
+  // the interface cache (`/icons/index.json` `tabs`, sheet tabs.png).
+  // These helpers turn a snapshot into a draw list; the page only plots
+  // it (one canvas per tab, redrawn when the list changes).
+
+  // Client.levelExperience: entry i = xp at which level i + 2 starts.
+  const LEVEL_XP = (function () {
+    const table = [];
+    let acc = 0;
+    for (let i = 0; i < 99; i++) {
+      const level = i + 1;
+      acc += Math.floor(level + Math.pow(2, level / 7) * 300);
+      table.push(Math.floor(acc / 4));
+    }
+    return table;
+  })();
+  // Skill.used: the stats the client's "Total Lvl" sums (not slayer 18,
+  // not the unused ids).
+  const USED_STATS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20];
+  // PixFont.updateState colour tags.
+  const TAG_COLOURS = { red: 0xff0000, gre: 0x00ff00, blu: 0x0000ff, yel: 0xffff00, cya: 0x00ffff, mag: 0xff00ff, whi: 0xffffff, bla: 0x000000,
+    lre: 0xff9040, dre: 0x800000, dbl: 0x000080, or1: 0xffb000, or2: 0xff7000, or3: 0xff3000, gr1: 0xc0ff00, gr2: 0x80ff00, gr3: 0x40ff00 };
+  const YELLOW = 0xffff00;
+
+  // Client.invNumber: the stack count of an inventory slot.
+  function invNumber(amount) {
+    if (amount < 100000) return String(amount);
+    if (amount < 10000000) return Math.floor(amount / 1000) + 'K';
+    return Math.floor(amount / 1000000) + 'M';
   }
-  return { SKILLS: SKILLS, skillRows: skillRows, skillTotals: skillTotals, errorAge: errorAge, errorLine: errorLine, inventoryLines: inventoryLines };
+  // Client.inf: a `%1` value.
+  function inf(value) {
+    return value < 999999999 ? String(value) : '*';
+  }
+  // Top-left of an inventory slot (drawInterface TYPE_INV): grid pitch
+  // 32 + margin, plus the slot's own offset for the first 20 slots.
+  function slotXY(inv, slot) {
+    let x = inv.x + (slot % inv.cols) * (inv.mx + 32);
+    let y = inv.y + Math.floor(slot / inv.cols) * (inv.my + 32);
+    if (slot < 20 && inv.off && inv.off[slot]) {
+      x += inv.off[slot][0];
+      y += inv.off[slot][1];
+    }
+    return { x: x, y: y };
+  }
+  // Slot under a point (the client's 32x32 hover square), -1 for none.
+  function slotAt(inv, x, y) {
+    for (let slot = 0; slot < inv.cols * inv.rows; slot++) {
+      const at = slotXY(inv, slot);
+      if (x >= at.x && y >= at.y && x < at.x + 32 && y < at.y + 32) return slot;
+    }
+    return -1;
+  }
+  // Items by slot: an entry's `slot` (worker heartbeat), else its wearpos
+  // (`wear`: worn tab of an older worker), else the first free slot in
+  // list order (backpack of an older worker: packed, gaps unknown).
+  function placeItems(list, capacity, wear) {
+    const slots = new Array(capacity).fill(null);
+    const loose = [];
+    for (const item of list || []) {
+      if (!item || typeof item !== 'object' || item.id === undefined || item.id === null) continue;
+      let slot = Number.isInteger(item.slot) ? item.slot : -1;
+      if (slot < 0 && wear && Number.isInteger(wear[item.id])) slot = wear[item.id];
+      if (slot >= 0 && slot < capacity && !slots[slot]) slots[slot] = item;
+      else loose.push(item);
+    }
+    for (const item of loose) {
+      const free = slots.indexOf(null);
+      if (free >= 0) slots[free] = item;
+    }
+    return slots;
+  }
+  // The client prints a slot's count for a stackable obj (sprite width
+  // 33) or any count other than 1.
+  function showsCount(stack, id, count) {
+    return count !== 1 || (stack ? stack.has(Number(id)) : false);
+  }
+  // Hover layer under a point (addComponentOptions: the last component
+  // whose box holds the point wins), null for none.
+  function hoverLayer(hovers, x, y) {
+    let found = null;
+    for (const hover of hovers || []) {
+      if (x >= hover.x && y >= hover.y && x < hover.x + hover.w && y < hover.y + hover.h) found = hover.layer;
+    }
+    return found;
+  }
+  function skillOf(snapshot, id) {
+    return (snapshot.skills || []).find(skill => skill.id === id) || null;
+  }
+  function baseOf(skill) {
+    return skill ? (typeof skill.base === 'number' ? skill.base : skill.level) : null;
+  }
+  // Client.getIfVar for the ops the tabs use; null when the snapshot
+  // does not carry the value (the text is then left out).
+  function ifValue(text, snapshot) {
+    const skill = text.arg !== undefined ? skillOf(snapshot, text.arg) : null;
+    const num = (value) => (typeof value === 'number' ? value : null);
+    switch (text.op) {
+      case 'stat_level': return skill ? num(skill.level) : null;
+      case 'stat_base_level': return num(baseOf(skill));
+      case 'stat_xp': return skill ? num(skill.xp) : null;
+      case 'stat_xp_remaining': {
+        const base = baseOf(skill);
+        return base >= 1 && base <= 99 ? LEVEL_XP[base - 1] : null;
+      }
+      case 'combat_level': return num(snapshot.combat);
+      case 'total_level': {
+        let total = 0;
+        let seen = false;
+        for (const id of USED_STATS) {
+          const base = baseOf(skillOf(snapshot, id));
+          if (typeof base === 'number') { total += base; seen = true; }
+        }
+        return seen ? total : null;
+      }
+      case 'pushvar': return text.varp === 'qp' ? num(snapshot.quest_points) : null;
+      default: return null;
+    }
+  }
+  function ifText(text, value) {
+    return value === null || value === undefined ? null : text.text.split('%1').join(inf(value));
+  }
+  // PixFont.stringWid: tags take no room.
+  function stringWidth(font, str) {
+    let width = 0;
+    for (let i = 0; i < str.length; i++) {
+      if (str.charAt(i) === '@' && i + 4 < str.length && str.charAt(i + 4) === '@') { i += 4; continue; }
+      const glyph = font.chars[str.charCodeAt(i)];
+      if (glyph) width += glyph[3];
+    }
+    return width;
+  }
+  // PixFont.drawStringTag (centreStringTag when `centre`): one plot per
+  // glyph, its black shadow first at +1,+1. `y` is the baseline.
+  function glyphs(font, str, x, y, colour, shadow, centre) {
+    if (centre) x -= Math.floor(stringWidth(font, str) / 2);
+    y -= font.height;
+    const out = [];
+    for (let i = 0; i < str.length; i++) {
+      if (str.charAt(i) === '@' && i + 4 < str.length && str.charAt(i + 4) === '@') {
+        const tag = TAG_COLOURS[str.substring(i + 1, i + 4)];
+        if (tag !== undefined) colour = tag;
+        i += 4;
+        continue;
+      }
+      const glyph = font.chars[str.charCodeAt(i)];
+      if (!glyph) continue;
+      const [image, offX, offY, advance] = glyph;
+      if (image) {
+        if (shadow) out.push({ glyph: image, x: x + offX + 1, y: y + offY + 1, colour: 0 });
+        out.push({ glyph: image, x: x + offX, y: y + offY, colour: colour });
+      }
+      x += advance;
+    }
+    return out;
+  }
+  // Items a tab shows by slot (null = empty), from the snapshot.
+  function tabItems(index, name, snapshot) {
+    const tab = index.tabs.tabs[name];
+    if (!tab || !tab.inv) return [];
+    const worn = name === 'wornitems';
+    return placeItems(worn ? snapshot.worn : snapshot.inv, tab.inv.cols * tab.inv.rows, worn ? index.items.wear : null);
+  }
+  // Draw list of one tab: the panel, then (inv) each slot's icon and
+  // count or its empty-slot sprite, the `%1` texts, and the hover layer
+  // `layer` on top. `cellOf(id, count)` = the item sheet cell.
+  function tabDraw(index, name, snapshot, layer, cellOf, stack) {
+    const tabs = index.tabs;
+    const tab = tabs.tabs[name];
+    const ops = [{ image: tab.image, x: 0, y: 0 }];
+    if (tab.inv) {
+      const items = tabItems(index, name, snapshot);
+      items.forEach((item, slot) => {
+        const at = slotXY(tab.inv, slot);
+        if (item) {
+          ops.push({ item: cellOf(item.id, item.count), x: at.x, y: at.y });
+          if (showsCount(stack, item.id, item.count)) ops.push(...glyphs(tabs.fonts.p11, invNumber(item.count), at.x, at.y + 9, YELLOW, true, false));
+        } else if (slot < 20 && tab.inv.empty[slot]) {
+          ops.push({ image: tab.inv.empty[slot], x: at.x, y: at.y });
+        }
+      });
+    }
+    const texts = (list, dx, dy) => {
+      for (const text of list) {
+        const str = ifText(text, ifValue(text, snapshot));
+        if (str !== null) ops.push(...glyphs(tabs.fonts[text.font], str, text.x + dx, text.y + dy, text.colour, text.shadow, text.centre));
+      }
+    };
+    texts(tab.texts, 0, 0);
+    const over = layer !== null && layer !== undefined ? tab.layers[layer] : null;
+    if (over) {
+      ops.push({ image: over.image, x: over.x, y: over.y });
+      texts(over.texts, over.x, over.y);
+    }
+    return ops;
+  }
+  // Hover text of an item: its name in the client's menu colour (@lre@),
+  // the full count after it for a stack.
+  function itemLabel(item, stack) {
+    const name = item.name || ('object #' + item.id);
+    const count = showsCount(stack, item.id, item.count) ? '@whi@ x ' + Number(item.count).toLocaleString('en-US') : '';
+    return '@lre@' + name + count;
+  }
+  return { errorAge: errorAge, errorLine: errorLine, LEVEL_XP: LEVEL_XP, invNumber: invNumber, inf: inf, slotXY: slotXY, slotAt: slotAt,
+    placeItems: placeItems, showsCount: showsCount, hoverLayer: hoverLayer, ifValue: ifValue, ifText: ifText, stringWidth: stringWidth,
+    glyphs: glyphs, tabItems: tabItems, tabDraw: tabDraw, itemLabel: itemLabel };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = SpectatorPanels;
 
@@ -173,16 +359,7 @@ if (localStorage.getItem("list-hidden") === "0") toggleList(false);
 // HTML-escaped text for the bot table (esc above only stringifies: it
 // also feeds canvas labels, which must stay raw).
 const escHtml = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-// Item and skill icons (icons.js); absent (daemon without the icon
-// route): none.
-const Icons = typeof LifeIcons !== "undefined" ? LifeIcons : null;
 const dash = (value) => (value === null || value === undefined || value === "") ? "-" : value;
-// Skills table (shared TableSort): raw values sort, xp shows separators.
-const SKILL_COLUMNS = [
-  { key: "skill", label: "Skill", kind: "str", fmt: (value) => (Icons ? Icons.skill(value) : "") + escHtml(dash(value)) },
-  { key: "level", label: "Level", kind: "num" },
-  { key: "xp", label: "XP", kind: "num", fmt: (value) => escHtml(typeof value === "number" ? value.toLocaleString("en-US") : dash(value)) },
-];
 // Bot table columns (shared TableSort, table.js): raw values sort, fmt
 // only changes the display. Goal/task come from the life file (backend
 // web_job_lives.rs); manual bots have none.
@@ -248,12 +425,10 @@ async function select(account) {
   logShown = 0;
   // New bot, new base: drop the previous bot's line nodes and caches so
   // the next frames rebuild from scratch (same as a full server resend).
-  for (const id of ["infotext", "log", "chat", "inv", "scenery"]) {
+  for (const id of ["infotext", "log", "chat", "scenery"]) {
     const pre = document.getElementById(id);
     if (pre) { pre.textContent = ""; pre._lines = undefined; }
   }
-  const skillTable = document.getElementById("skills");
-  skillTable.textContent = ""; skillTable._key = undefined;
   paint(); // drop the previous bot at once; the next state paints the new one
   setTitle("Following: " + account.replace(/_/g, " "), "");
   const picker = document.getElementById("account");
@@ -407,32 +582,172 @@ function syncStatePre(pre, lines, emptyText) {
   });
 }
 
-// Inventory panel: one <div> per line, an item line = icon + text. Line
-// nodes are kept and only rewritten when their item or text changed (a
-// selection survives the 1x/s frames, like syncStatePre).
-function syncItemLines(box, lines) {
-  let nodes = box._lines;
-  if (!nodes) { box.textContent = ""; nodes = box._lines = []; }
-  stickyWrite(box, () => {
-    while (nodes.length < lines.length) {
-      const div = box.appendChild(document.createElement("div"));
-      nodes.push({ div, key: null });
-    }
-    while (nodes.length > lines.length) box.removeChild(nodes.pop().div);
-    for (let at = 0; at < lines.length; at++) {
-      const line = lines[at];
-      const hasItem = line.id !== undefined && line.id !== null;
-      const key = (hasItem ? line.id + "x" + line.count : "") + "|" + line.text;
-      if (nodes[at].key === key) continue;
-      nodes[at].key = key;
-      const div = nodes[at].div;
-      div.className = hasItem ? "itemline" : "textline";
-      div.textContent = "";
-      if (hasItem && Icons) div.appendChild(Icons.itemNode(line.id, line.count));
-      div.appendChild(document.createTextNode(line.text));
-    }
+// Game tabs (backpack, worn, stats): one canvas each at the client's
+// size, plotted from SpectatorPanels.tabDraw with the sheets of
+// /icons/index.json (items.png, tabs.png: two images, no request per
+// icon). A canvas is redrawn only when its draw list changed, so the
+// 1 s frames never flicker; the hover (mouse, or a tap on touch) is kept
+// per tab and re-applied to every frame. Index or sheets unreachable:
+// the canvases stay blank.
+const GameTabs = (() => {
+  const tabs = [
+    { name: "inventory", canvas: document.getElementById("tab-inv") },
+    { name: "wornitems", canvas: document.getElementById("tab-worn") },
+    { name: "stats", canvas: document.getElementById("tab-stats") },
+  ];
+  const tip = document.getElementById("tabtip");
+  const tipCanvas = tip.querySelector("canvas");
+  let assets = null; // { index, sheet, items, stack, tints }
+  let snapshot = null;
+
+  function loadImage(url) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = reject;
+      image.src = url;
+    });
+  }
+  if (typeof LifeIcons !== "undefined") LifeIcons.onIndex((index) => {
+    if (!index || !index.tabs || !index.items) return;
+    const url = (sheet) => "/icons/" + sheet.file + "?v=" + encodeURIComponent(sheet.hash || "");
+    Promise.all([loadImage(url(index.tabs)), loadImage(url(index.items))]).then(([sheet, items]) => {
+      assets = { index, sheet, items, stack: new Set(index.items.stack || []), tints: new Map() };
+      for (const tab of tabs) draw(tab);
+    }).catch(() => {});
   });
-}
+
+  // The tabs sheet with its white glyph masks in one colour (cached).
+  function tint(colour) {
+    let canvas = assets.tints.get(colour);
+    if (!canvas) {
+      canvas = document.createElement("canvas");
+      canvas.width = assets.sheet.width;
+      canvas.height = assets.sheet.height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(assets.sheet, 0, 0);
+      ctx.globalCompositeOperation = "source-in";
+      ctx.fillStyle = "#" + colour.toString(16).padStart(6, "0");
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      assets.tints.set(colour, canvas);
+    }
+    return canvas;
+  }
+  function plot(ctx, ops) {
+    const images = assets.index.tabs.images;
+    const cols = assets.index.items.cols;
+    const cell = assets.index.items.cell;
+    for (const op of ops) {
+      if (op.image) {
+        const [sx, sy, w, h] = images[op.image];
+        ctx.drawImage(assets.sheet, sx, sy, w, h, op.x, op.y, w, h);
+      } else if (op.glyph) {
+        const [sx, sy, w, h] = images[op.glyph];
+        ctx.drawImage(tint(op.colour), sx, sy, w, h, op.x, op.y, w, h);
+      } else if (op.item) {
+        ctx.drawImage(assets.items, (op.item % cols) * cell, Math.floor(op.item / cols) * cell, cell, cell, op.x, op.y, cell, cell);
+      }
+    }
+  }
+  const cellOf = (id, count) => LifeIcons.itemCell(assets.index, id, count);
+
+  function draw(tab) {
+    if (!assets || !snapshot || !tab.canvas) return;
+    const spec = assets.index.tabs.tabs[tab.name];
+    if (!spec) return;
+    const layer = tab.hover && spec.hovers.length ? SpectatorPanels.hoverLayer(spec.hovers, tab.hover.x, tab.hover.y) : null;
+    const ops = SpectatorPanels.tabDraw(assets.index, tab.name, snapshot, layer, cellOf, assets.stack);
+    const key = JSON.stringify(ops);
+    if (key !== tab.key) {
+      tab.key = key;
+      if (tab.canvas.width !== spec.w) tab.canvas.width = spec.w;
+      if (tab.canvas.height !== spec.h) tab.canvas.height = spec.h;
+      const ctx = tab.canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, spec.w, spec.h);
+      plot(ctx, ops);
+    }
+    if (spec.inv) syncTip(tab, spec);
+  }
+
+  // Item hover box: the client's b12 font on the frame colours of its
+  // right-click menu (0x5d5447 border, black inside).
+  let tipOwner = null;
+  function syncTip(tab, spec) {
+    const item = tab.hover ? SpectatorPanels.tabItems(assets.index, tab.name, snapshot)[SpectatorPanels.slotAt(spec.inv, tab.hover.x, tab.hover.y)] : null;
+    if (!item) {
+      if (tipOwner === tab) { tip.hidden = true; tipOwner = null; tip._key = null; }
+      return;
+    }
+    tipOwner = tab;
+    const label = SpectatorPanels.itemLabel(item, assets.stack);
+    if (tip._key !== label) {
+      tip._key = label;
+      const font = assets.index.tabs.fonts.b12;
+      const width = SpectatorPanels.stringWidth(font, label) + 8;
+      const height = font.height + 8;
+      tipCanvas.width = width;
+      tipCanvas.height = height;
+      const ctx = tipCanvas.getContext("2d");
+      ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = "#5d5447";
+      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = "#000";
+      ctx.fillRect(1, 1, width - 2, height - 2);
+      plot(ctx, SpectatorPanels.glyphs(font, label, 4, height - 5, 0xffffff, true, false));
+    }
+    tip.hidden = false;
+    const gap = 14;
+    let left = tab.hover.clientX + gap;
+    let top = tab.hover.touch ? tab.hover.clientY - tipCanvas.height - 2 * gap : tab.hover.clientY + gap;
+    if (left + tipCanvas.width > window.innerWidth - 4) left = Math.max(4, tab.hover.clientX - gap - tipCanvas.width);
+    if (top < 4) top = tab.hover.clientY + gap;
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+  }
+
+  function pointAt(tab, event) {
+    const box = tab.canvas.getBoundingClientRect();
+    return {
+      x: Math.floor((event.clientX - box.left) * tab.canvas.width / box.width),
+      y: Math.floor((event.clientY - box.top) * tab.canvas.height / box.height),
+      clientX: event.clientX,
+      clientY: event.clientY,
+      touch: event.pointerType === "touch" || event.pointerType === "pen",
+    };
+  }
+  for (const tab of tabs) {
+    if (!tab.canvas) continue;
+    tab.canvas.addEventListener("pointermove", (event) => {
+      if (event.pointerType === "touch") return;
+      tab.hover = pointAt(tab, event);
+      draw(tab);
+    });
+    tab.canvas.addEventListener("pointerleave", (event) => {
+      if (event.pointerType === "touch" || event.pointerType === "pen") return;
+      tab.hover = null;
+      draw(tab);
+    });
+    // Touch: a tap shows what is under the finger until the next tap.
+    tab.canvas.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "mouse") return;
+      for (const other of tabs) if (other !== tab && other.hover) { other.hover = null; draw(other); }
+      tab.hover = pointAt(tab, event);
+      draw(tab);
+    });
+  }
+  document.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" || tabs.some((tab) => tab.canvas === event.target)) return;
+    for (const tab of tabs) if (tab.hover) { tab.hover = null; draw(tab); }
+  });
+
+  return {
+    update(next) {
+      snapshot = next;
+      for (const tab of tabs) draw(tab);
+    },
+  };
+})();
 
 function renderLogFull() {
   const pre = document.getElementById("log");
@@ -693,16 +1008,7 @@ function updatePanels() {
   // occupied slots, not the sum of the stacks.
   const occupied = (last.inv || []).filter(i => (i.count || 0) > 0).length;
   setText(document.getElementById('invtitle'), `Inventory (${occupied}/28)`);
-  syncItemLines(document.getElementById('inv'), SpectatorPanels.inventoryLines(last.inv, last.worn));
-  // Rebuilt only when a value changed: a selection or a header click
-  // inside the table survives the other frames.
-  const skillRows = SpectatorPanels.skillRows(last.skills);
-  const skillKey = JSON.stringify(skillRows);
-  const skillTable = document.getElementById('skills');
-  if (skillTable._key !== skillKey) {
-    skillTable._key = skillKey;
-    TableSort.render('skills', SKILL_COLUMNS, skillRows, { footer: SpectatorPanels.skillTotals(skillRows) });
-  }
+  GameTabs.update(last);
 
   const locCounts = {};
   let sceneryCount = 0;

@@ -360,7 +360,7 @@ joueurs dans l'ordre overall. Le front relit l'API toutes les 5 min.
 Tests : `hiscores_tests.rs` (dont la route web servie depuis un snapshot
 fixture), `node orchestration/static/hiscores.test.js`.
 Icônes (2026-11-24) : l'icône de chaque objet et de chaque compétence à
-côté de son nom (Spectate : inventaire et compétences ; Item holdings :
+côté de son nom (Spectate : voir « Onglets de jeu » ci-dessous ; Item holdings :
 liste et titre ; Market : liste, titre, dernières transactions ; Hiscores :
 catégories, titre du classement, scores personnels, « Most valuable
 holdings »). Deux planches de sprites et un index dans
@@ -393,6 +393,43 @@ caveorb4dot, viking_dummy_lid, wearable_stool_white) : case vide. Sans
 `icons.js` (démon pas encore redéployé) ou sans index, les pages
 s'affichent sans icône. Tests : `node orchestration/static/icons.test.js`,
 `web_routes` (`icon_asset`, digest, fichiers servis).
+Onglets de jeu de Spectate (2026-11-24) : les blocs Inventory et Skills
+reproduisent les onglets du client rev 274 au pixel près, taille fixe
+(1 pixel de canvas = 1 pixel CSS, jamais lissé) : sac (`inventory`, 4×7
+cases, pas de 42×36 depuis 16,8), équipement (`wornitems`, 14 cases avec
+leur décalage propre et la silhouette `wornicons` des cases vides, cadres
+`miscgraphics`), stats (`stats`, grille de 3 colonnes, niveau
+courant/niveau de base en p11 jaune, « Combat Lvl », « Total Lvl », « QP »).
+Le générateur (`icons.mts`) lit ces trois interfaces dans le cache
+(`client/interface`, ids de `content/pack/interface.pack`) et les dessine
+avec un portage de `Client.drawInterface` et les primitives du client
+(`Pix2D`, `Pix32`, `PixFont`) sur le fond `invback` : ce qui ne change
+jamais est cuit dans une image par onglet, le reste (cases d'objets,
+textes `%1` décodés de leur script, calques de survol) part en mise en
+page dans `index.json` `tabs`, avec les glyphes des polices p11/p12/b12
+(`client/title`) ; tout dans la planche `tabs.png` (~44 Ko).
+`index.json` gagne aussi `items.stack` (ids empilables : le client écrit
+leur nombre même à 1) et `items.wear` (id → wearpos, de
+`gamedata/data/equipment.json`). Le bas de l'onglet équipement (bonus
+d'attaque/défense, écrits par le serveur à l'ouverture) n'est pas
+reproduit : l'onglet s'arrête à y = 200. Front (`spectator.js`) : fonctions
+pures `SpectatorPanels.tabDraw` & co (liste de tracés : panneau, icône de
+`items.png` par case, nombre de la pile `invNumber` en jaune à +9 avec
+ombre, K dès 100 000, M dès 10 millions ; textes `getIfVar` : niveau,
+base, XP, XP du niveau suivant `levelExperience[base-1]` — à 99 le client
+lit l'entrée 98 = 14 391 160 —, combat, total = somme des bases hors
+slayer, points de quête), puis `GameTabs` trace la liste sur le canvas
+seulement quand elle change (pas de scintillement au rafraîchissement de
+1 s). Survol : nom de l'objet (couleur `@lre@` des menus, nombre complet
+pour une pile) dans une petite boîte aux couleurs du menu du client près
+du curseur ; sur une stat, le calque du client « <Skill> XP: / Next Level
+At: » remplace le cadre du bas. Au toucher, un appui montre la même chose
+jusqu'à l'appui suivant. Emplacements : chaque entrée `inv`/`worn` du
+battement porte `slot` (sac 0..27, équipement = wearpos) et le snapshot
+`quest_points` ; d'un ouvrier plus ancien, l'équipement se place par
+`items.wear` (identique aux sauvegardes serveur sur 8 bots vérifiés) et
+le sac se tasse dans l'ordre (trous inconnus), sans « QP ». Tests :
+`node orchestration/static/spectator.test.js`, `icons.test.js`.
 Guides (2026-11-17) : thread `guides` (`src/guides_store.rs`), premier
 jeu 20 s après le démarrage puis un toutes les 300 s (`REFRESH_PERIOD` :
 prix = médiane des 5 derniers fills, rendement = 3 runs d'une clé, un
