@@ -169,7 +169,7 @@ pub(crate) fn short_hop(world: &StaticWorld, shared: &SharedEdges, from: Tile, d
         let here_flags = window.flags(here.x, here.z);
         for (step_x, step_z) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
             let next = Tile { x: here.x + step_x, z: here.z + step_z, level: here.level };
-            if options.f2p_only && !window.reader.in_f2p(next.x, next.z) {
+            if options.f2p_only && !window.reader.in_f2p(next) {
                 continue;
             }
             if window.door(next.x, next.z) {

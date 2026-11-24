@@ -10,7 +10,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
-use crate::collision::{CollisionMap, LocDef, MapPack, StaticLayers, StaticLocs, NULL, OPEN};
+use crate::grid::{Grid, Square};
+
+use crate::collision::{tile_index, zone_index, CollisionMap, LocDef, MapPack, StaticLayers, StaticLocs, NULL, OPEN};
 
 struct PagedState {
     pack: MapPack,
@@ -28,6 +30,9 @@ struct PagedState {
 pub struct StaticWorld {
     squares: HashSet<(i32, i32)>,
     state: RwLock<PagedState>,
+    /// Dense immutable squares built from `state` (lot N2): swapped for
+    /// an empty grid whenever a setter changes what a read answers.
+    grid: RwLock<Arc<Grid>>,
 }
 
 impl StaticWorld {
@@ -50,6 +55,7 @@ impl StaticWorld {
                 sky_floors: HashSet::new(),
                 npc_blockers: HashSet::new(),
             }),
+            grid: RwLock::new(Arc::new(Grid::new())),
         }))
     }
 
@@ -73,6 +79,16 @@ impl StaticWorld {
     /// planner must not cut through them. `sky_floors` allowlist (real
     /// floors the pack leaves OPEN, proven live) stays OPEN.
     pub fn get(&self, tile_x: i32, tile_z: i32, level: i32) -> u32 {
+        match self.grid().square(self, tile_x, tile_z, level) {
+            Some(square) => square.flags(tile_x, tile_z),
+            None => self.get_paged(tile_x, tile_z, level),
+        }
+    }
+
+    /// The paged reader `get` answered from before the dense grid (lot
+    /// N2), kept as the test oracle and as the fallback for tiles the
+    /// grid does not index.
+    pub(crate) fn get_paged(&self, tile_x: i32, tile_z: i32, level: i32) -> u32 {
         // Read-lock fast path (CPU 2026-11-14): once a square is painted,
         // every read shares the lock. The write lock (exclusive) is only
         // taken to paint a missing square; it used to be taken on EVERY
@@ -117,6 +133,150 @@ impl StaticWorld {
     /// Tiles of static NPCs that block players (`Tables::npc_blockers`).
     pub fn set_npc_blockers(&self, tiles: HashSet<(i32, i32, i32)>) {
         self.state.write().expect("static world lock poisoned").npc_blockers = tiles;
+        self.reset_grid();
+    }
+
+    /// The dense grid of this world state (one clone per search).
+    pub(crate) fn grid(&self) -> Arc<Grid> {
+        Arc::clone(&self.grid.read().expect("grid lock poisoned"))
+    }
+
+    /// Drop every built square: a setter changed what a read answers.
+    fn reset_grid(&self) {
+        *self.grid.write().expect("grid lock poisoned") = Arc::new(Grid::new());
+    }
+
+    /// Paint a pack square and its 8 neighbours. A wall loc on a square's
+    /// border paints the neighbour's edge tile too, and painting only adds
+    /// bits: a square's final flags are known once the 8 around it are
+    /// painted. False when the square itself is in the pack and unreadable.
+    fn paint_with_neighbours(&self, square_x: i32, square_z: i32) -> bool {
+        let wanted: Vec<(i32, i32)> = (-1..=1)
+            .flat_map(|dx| (-1..=1).map(move |dz| (square_x + dx, square_z + dz)))
+            .filter(|(sx, sz)| self.has_square(*sx, *sz))
+            .collect();
+        let all_loaded = {
+            let state = self.state.read().expect("static world lock poisoned");
+            wanted.iter().all(|(sx, sz)| state.pack.is_loaded(*sx, *sz))
+        };
+        if !all_loaded {
+            let mut state = self.state.write().expect("static world lock poisoned");
+            let PagedState { pack, collision, static_locs, static_layers, doors, toll_gates, .. } = &mut *state;
+            for (sx, sz) in &wanted {
+                pack.ensure_square(collision, static_locs, static_layers, doors, toll_gates, *sx, *sz);
+            }
+        }
+        !self.has_square(square_x, square_z)
+            || self.state.read().expect("static world lock poisoned").pack.is_loaded(square_x, square_z)
+    }
+
+    /// Build the dense square of one 64 x 64 square and level from the
+    /// paged state: the same answers `get_paged`, `door_at` and `in_f2p`
+    /// give, tile by tile. `None` when its pack square is unreadable
+    /// (nothing is cached then, the paged reader retries).
+    pub(crate) fn build_square(&self, square_x: i32, square_z: i32, level: i32) -> Option<Arc<Square>> {
+        if !self.paint_with_neighbours(square_x, square_z) {
+            return None;
+        }
+        let state = self.state.read().expect("static world lock poisoned");
+        let in_pack = self.has_square(square_x, square_z);
+        let (base_x, base_z) = (square_x << 6, square_z << 6);
+        let mut flags = Box::new([0u32; 64 * 64]);
+        if in_pack {
+            // Same answer as `painted_flags` per tile, from the zones
+            // (8 x 8 tiles each) read once: collision, then the sky rule
+            // (an upper OPEN tile off the allowlist is void), then the
+            // blocking NPCs.
+            let zones = state.collision.raw_zones();
+            for zone_z in 0..8 {
+                for zone_x in 0..8 {
+                    let (zone_base_x, zone_base_z) = (base_x + zone_x * 8, base_z + zone_z * 8);
+                    let zone = zones.get(&zone_index(zone_base_x, zone_base_z, level));
+                    for dz in 0..8 {
+                        for dx in 0..8 {
+                            let raw = match zone {
+                                Some(words) => words[tile_index(zone_base_x + dx, zone_base_z + dz)],
+                                None => NULL,
+                            };
+                            flags[(((zone_z * 8 + dz) << 6) | (zone_x * 8 + dx)) as usize] = raw;
+                        }
+                    }
+                }
+            }
+            if level > 0 {
+                let mut allowed = [0u64; 64];
+                for (floor_x, floor_z, floor_level) in &state.sky_floors {
+                    if *floor_level == level && floor_x >> 6 == square_x && floor_z >> 6 == square_z {
+                        let slot = (((floor_z & 63) << 6) | (floor_x & 63)) as usize;
+                        allowed[slot >> 6] |= 1u64 << (slot & 63);
+                    }
+                }
+                for (slot, value) in flags.iter_mut().enumerate() {
+                    if *value == OPEN && allowed[slot >> 6] & (1u64 << (slot & 63)) == 0 {
+                        *value = NULL;
+                    }
+                }
+            }
+        } else {
+            for z in 0..64 {
+                for x in 0..64 {
+                    let (tile_x, tile_z) = (base_x + x, base_z + z);
+                    flags[((z << 6) | x) as usize] = if level > 0 {
+                        if state.sky_floors.contains(&(tile_x, tile_z, level)) { OPEN } else { NULL }
+                    } else {
+                        OPEN
+                    };
+                }
+            }
+        }
+        for (block_x, block_z, block_level) in &state.npc_blockers {
+            if *block_level == level && block_x >> 6 == square_x && block_z >> 6 == square_z {
+                // An absent square above ground reads NULL before the
+                // blocker rule (`get_paged` returns it without one).
+                if !in_pack && level > 0 {
+                    continue;
+                }
+                flags[(((block_z & 63) << 6) | (block_x & 63)) as usize] |= crate::collision::LOC;
+            }
+        }
+        let door_slots: Vec<usize> = state
+            .doors
+            .keys()
+            .filter(|(door_x, door_z, door_level)| *door_level == level && door_x >> 6 == square_x && door_z >> 6 == square_z)
+            .map(|(door_x, door_z, _)| (((door_z & 63) << 6) | (door_x & 63)) as usize)
+            .collect();
+        let f2p = match &state.f2p {
+            None => u64::MAX,
+            Some(zones) => {
+                let mut bits = 0u64;
+                for zone_z in 0..8 {
+                    for zone_x in 0..8 {
+                        if zones.contains(&((square_x << 3) + zone_x, (square_z << 3) + zone_z)) {
+                            bits |= 1u64 << ((zone_z << 3) | zone_x);
+                        }
+                    }
+                }
+                bits
+            }
+        };
+        Some(Arc::new(Square::new(flags, &door_slots, f2p)))
+    }
+
+    /// Pack squares painted so far (N4: the list kept across restarts).
+    pub fn painted_square_list(&self) -> Vec<(i32, i32)> {
+        let mut list = self.state.read().expect("static world lock poisoned").pack.loaded_list();
+        list.sort_unstable();
+        list
+    }
+
+    /// Paint the given pack squares now (N4: warm start). Squares absent
+    /// from the pack are skipped.
+    pub fn paint_squares(&self, list: &[(i32, i32)]) {
+        for (square_x, square_z) in list {
+            if self.has_square(*square_x, *square_z) {
+                let _ = self.paint_with_neighbours(*square_x, *square_z);
+            }
+        }
     }
 
     fn ensure(&self, tile_x: i32, tile_z: i32) {
@@ -199,6 +359,7 @@ impl StaticWorld {
     /// `free2play.csv`. Unset means no bounds: every tile is inside.
     pub fn set_f2p(&self, zones: HashSet<(i32, i32)>) {
         self.state.write().expect("static world lock poisoned").f2p = Some(zones);
+        self.reset_grid();
     }
 
     /// Upper tiles that stay walkable despite no painted data (real floors
@@ -206,6 +367,7 @@ impl StaticWorld {
     /// tile reads as void.
     pub fn set_sky_floors(&self, floors: HashSet<(i32, i32, i32)>) {
         self.state.write().expect("static world lock poisoned").sky_floors = floors;
+        self.reset_grid();
     }
 
     /// True when this tile is on free-to-play ground (level ignored, like

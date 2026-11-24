@@ -32,12 +32,12 @@ pub(crate) struct Search<'a> {
     /// Pocket flood: every openable door counts, tolls and requirements
     /// ignored, no F2P bound.
     permissive: bool,
-    base_flags: U64Map<u32>,
+    /// Doors-open flags of the tiles next to a door (the rest read the
+    /// grid's base flags: no door on the 3x3, nothing to swing).
     open_flags: U64Map<u32>,
+    /// Door loc per door tile, read once per search (tolls, requirements
+    /// and the options differ per search, the loc records do not).
     doors: U64Map<Option<(u16, u8, u8)>>,
-    /// F2P verdict per 8x8 zone (`in_f2p` takes the world lock: it ran
-    /// for every neighbour of every visit).
-    f2p_zones: U64Map<bool>,
 }
 
 impl<'a> Search<'a> {
@@ -58,10 +58,8 @@ impl<'a> Search<'a> {
             allow_paid,
             ignore_f2p,
             permissive: false,
-            base_flags: U64Map::default(),
             open_flags: U64Map::default(),
             doors: U64Map::default(),
-            f2p_zones: U64Map::default(),
         }
     }
 
@@ -76,25 +74,17 @@ impl<'a> Search<'a> {
         if !self.options.f2p_only || self.ignore_f2p {
             return true;
         }
-        let zone = Tile { x: tile.x >> 3, z: tile.z >> 3, level: 0 }.key();
-        if let Some(inside) = self.f2p_zones.get(&zone) {
-            return *inside;
-        }
-        let inside = self.reader.in_f2p(tile.x, tile.z);
-        self.f2p_zones.insert(zone, inside);
-        inside
+        self.reader.in_f2p(tile)
     }
 
     pub(crate) fn base(&mut self, tile: Tile) -> u32 {
-        if let Some(flags) = self.base_flags.get(&tile.key()) {
-            return *flags;
-        }
-        let flags = self.reader.flags(tile);
-        self.base_flags.insert(tile.key(), flags);
-        flags
+        self.reader.flags(tile)
     }
 
     pub(crate) fn door_at(&mut self, tile: Tile) -> Option<(u16, u8, u8)> {
+        if !self.reader.has_door(tile) {
+            return None;
+        }
         if let Some(found) = self.doors.get(&tile.key()) {
             return *found;
         }
@@ -133,6 +123,11 @@ impl<'a> Search<'a> {
     /// reaches at most the neighbour tiles, so any door touching the
     /// centre always shows one of its tiles inside the window.
     pub(crate) fn open(&mut self, tile: Tile) -> u32 {
+        // No door within the 3x3 (the grid's bit, exact off the square
+        // border): no usable door either, the open view is the base view.
+        if !self.reader.near_door(tile) {
+            return self.base(tile);
+        }
         if let Some(flags) = self.open_flags.get(&tile.key()) {
             return *flags;
         }

@@ -11,6 +11,9 @@ pub mod danger;
 mod detour;
 pub mod f2p;
 pub mod fare;
+mod grid;
+#[cfg(test)]
+mod grid_tests;
 pub mod fast_hop;
 #[cfg(test)]
 mod fast_hop_tests;

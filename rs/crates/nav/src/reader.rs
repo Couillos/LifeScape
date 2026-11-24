@@ -8,27 +8,60 @@
 //! lives, so one change speeds up every search. A reader is made once per
 //! search and is cheap to copy around by reference.
 
+use std::sync::Arc;
+
 use crate::collision::{CollisionMap, LocDef};
+use crate::grid::{Grid, Square};
 use crate::plan::Tile;
 use crate::static_world::StaticWorld;
 
-/// Static reads of one search.
+/// Static reads of one search. Holds the world's dense grid as it stood
+/// when the search began (one `Arc` clone), so a tile read is an index
+/// and a load, never a lock. A tile the grid does not index, or a pack
+/// square that cannot be read, falls back to the paged reader.
 pub(crate) struct Reader<'a> {
     world: &'a StaticWorld,
+    grid: Arc<Grid>,
 }
 
 impl<'a> Reader<'a> {
     pub(crate) fn new(world: &'a StaticWorld) -> Reader<'a> {
-        Reader { world }
+        Reader { world, grid: world.grid() }
+    }
+
+    fn square(&self, tile: Tile) -> Option<&Square> {
+        self.grid.square(self.world, tile.x, tile.z, tile.level)
     }
 
     /// Collision flags of one tile (`StaticWorld::get`).
     pub(crate) fn flags(&self, tile: Tile) -> u32 {
-        self.world.get(tile.x, tile.z, tile.level)
+        match self.square(tile) {
+            Some(square) => square.flags(tile.x, tile.z),
+            None => self.world.get_paged(tile.x, tile.z, tile.level),
+        }
+    }
+
+    /// False only when no closed door is recorded on this tile.
+    pub(crate) fn has_door(&self, tile: Tile) -> bool {
+        match self.square(tile) {
+            Some(square) => square.has_door(tile.x, tile.z),
+            None => true,
+        }
+    }
+
+    /// False only when no door stands on this tile or its 8 neighbours.
+    pub(crate) fn near_door(&self, tile: Tile) -> bool {
+        match self.square(tile) {
+            Some(square) => square.near_door(tile.x, tile.z),
+            None => true,
+        }
     }
 
     /// Closed door recorded on this tile, if any.
     pub(crate) fn door_at(&self, tile: Tile) -> Option<(u16, u8, u8)> {
+        if !self.has_door(tile) {
+            return None;
+        }
         self.world.door_at(tile.x, tile.z, tile.level)
     }
 
@@ -40,8 +73,12 @@ impl<'a> Reader<'a> {
         self.world.loc_def(loc_id)
     }
 
-    pub(crate) fn in_f2p(&self, tile_x: i32, tile_z: i32) -> bool {
-        self.world.in_f2p(tile_x, tile_z)
+    /// Free-to-play ground (level ignored, like the engine's check).
+    pub(crate) fn in_f2p(&self, tile: Tile) -> bool {
+        match self.square(tile) {
+            Some(square) => square.in_f2p(tile.x, tile.z),
+            None => self.world.in_f2p(tile.x, tile.z),
+        }
     }
 
     /// Remove one door's wall footprint from a scratch map.

@@ -74,6 +74,11 @@ fn inside_walks_out_through_the_front_door() {
 #[test]
 fn outside_never_plans_in() {
     let (world, tables) = setup();
+    // The bar below times the sealed-pocket verdict, not the first touch
+    // of the world: a world square paints (with its 8 neighbours, lot N2)
+    // on first use, which a cold first plan pays once (~100 ms for the
+    // whole transition table). One untimed plan warms it, like the daemon's.
+    let _ = plan::plan(&world, &tables, tile(3094, 3489), tile(3094, 3491), &f2p());
     for (from, dest) in [
         (tile(3031, 3516), tile(3029, 3515)),
         (tile(3094, 3489), tile(3030, 3513)),
