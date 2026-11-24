@@ -24,6 +24,18 @@ pub trait Autopilot: Send + Sync {
     /// A report was pushed on the heartbeat channel and folded by the
     /// daemon: wake the brain for it (`brain::on_report_push`).
     fn on_report_push(&self, fleet: &Arc<dyn Fleet>, job: &Arc<Job>) -> bool;
+    /// The operator unloaded or closed `account` on purpose: the brain must
+    /// not read the stop as a crash (`brain_grace::note_operator_stop`).
+    fn note_operator_stop(&self, account: &str);
+    /// A `logln!` line starting with `brain `: remember it for the idle
+    /// reasons (`brain_idle::remember_line`).
+    fn remember_line(&self, line: &str);
+    /// Does the errors collector want this brain line (abandons, stuck
+    /// goals, bans, strandings, idle alerts)?
+    fn is_collected_brain_line(&self, line: &str) -> bool;
+    /// A `NoRoute` dossier: a walled-in origin strands the bot
+    /// (`brain_stranded::observe_no_route`).
+    fn observe_no_route(&self, account: &str, origin: Option<(i64, i64, i64)>, dest: Option<(i64, i64, i64)>, message: &str);
 }
 
 /// The answer while no brain is registered: nothing happens.
@@ -35,6 +47,16 @@ impl Autopilot for NoAutopilot {
     fn on_report_push(&self, _fleet: &Arc<dyn Fleet>, _job: &Arc<Job>) -> bool {
         false
     }
+
+    fn note_operator_stop(&self, _account: &str) {}
+
+    fn remember_line(&self, _line: &str) {}
+
+    fn is_collected_brain_line(&self, _line: &str) -> bool {
+        false
+    }
+
+    fn observe_no_route(&self, _account: &str, _origin: Option<(i64, i64, i64)>, _dest: Option<(i64, i64, i64)>, _message: &str) {}
 }
 
 static AUTOPILOT: OnceLock<Arc<dyn Autopilot>> = OnceLock::new();

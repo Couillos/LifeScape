@@ -120,18 +120,17 @@ pub fn observe_log_line(line: &str) {
         return;
     }
     // The idle detector's reasons: the account's last brain decisions.
-    crate::brain_idle::remember_line(line);
+    crate::autopilot::current().remember_line(line);
     if SENDER.get().is_none() {
         return;
     }
-    let wanted = line.contains(crate::brain_idle::ALERT_MARKER)
-        || line.contains(" -> abandoned (")
+    let wanted = line.contains(" -> abandoned (")
         || line.contains(": graph stuck")
         || line.contains(": goal stuck")
         || line.contains(" banned ")
         || line.contains(": revive cap reached")
         || line.contains(" no progress: ")
-        || line.contains(crate::brain_stranded::STRANDED_MARKER);
+        || crate::autopilot::current().is_collected_brain_line(line);
     if wanted {
         send(Intake::Brain { line: line.to_string(), clock: now_clock() });
     }
@@ -410,7 +409,7 @@ pub(crate) fn scan_dossiers(
             if row.kind == "NoRoute" {
                 let dest = dossier.get("dest");
                 let dest = dest.get("x").as_i64().zip(dest.get("z").as_i64()).map(|(x, z)| (x, z, dest.get("level").as_i64().unwrap_or(0)));
-                crate::brain_stranded::observe_no_route(&row.account, row.position, dest, &row.message);
+                crate::autopilot::current().observe_no_route(&row.account, row.position, dest, &row.message);
             }
             if now - mtime <= FRESH_DOSSIER_SECS {
                 let (_, script, args) = live_context(orch, &row.account);
@@ -430,16 +429,38 @@ pub(crate) fn scan_dossiers(
 mod tests {
     use super::*;
 
+    /// Records the brain lines the sink hands to the autopilot.
+    struct Recorder;
+
+    static HEARD: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+    impl lifescape_orch_fleet::autopilot::Autopilot for Recorder {
+        fn on_supervise(&self, _fleet: &Arc<dyn crate::fleet::Fleet>, _job: &Arc<crate::jobs::Job>, _report: Option<Value>) {}
+        fn on_report_push(&self, _fleet: &Arc<dyn crate::fleet::Fleet>, _job: &Arc<crate::jobs::Job>) -> bool {
+            false
+        }
+        fn note_operator_stop(&self, _account: &str) {}
+        fn remember_line(&self, line: &str) {
+            HEARD.lock().unwrap().push(line.to_string());
+        }
+        fn is_collected_brain_line(&self, _line: &str) -> bool {
+            false
+        }
+        fn observe_no_route(&self, _account: &str, _origin: Option<(i64, i64, i64)>, _dest: Option<(i64, i64, i64)>, _message: &str) {}
+    }
+
     /// The idle-reason recording rides on the `logln!` sink: once the
     /// binary's registration ran (`register_log_sink`, first thing in
-    /// `main`), a brain line logged anywhere reaches `brain_idle`. A
-    /// missing registration would silently stop the reasons.
+    /// `main`), a brain line logged anywhere reaches the autopilot
+    /// (`remember_line`, the brain's `brain_idle`). A missing registration
+    /// would silently stop the reasons.
     #[test]
     fn logln_reaches_the_idle_reasons_through_the_registered_sink() {
         register_log_sink();
         crate::log_sink::assert_registered();
+        lifescape_orch_fleet::autopilot::register(Arc::new(Recorder));
         crate::logln!("brain sink_probe: no route to the bank");
-        assert!(crate::brain_idle::reasons_of("sink_probe").contains("no route to the bank"));
+        assert!(HEARD.lock().unwrap().iter().any(|line| line.contains("sink_probe: no route to the bank")));
     }
 
     /// Dossiers land once whatever the rescans; non-JSON files and

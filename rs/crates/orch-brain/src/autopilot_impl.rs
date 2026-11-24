@@ -28,4 +28,20 @@ impl Autopilot for BrainAutopilot {
     fn on_report_push(&self, fleet: &Arc<dyn Fleet>, job: &Arc<Job>) -> bool {
         crate::brain::on_report_push(fleet, job)
     }
+
+    fn note_operator_stop(&self, account: &str) {
+        crate::brain_grace::note_operator_stop(account);
+    }
+
+    fn remember_line(&self, line: &str) {
+        crate::brain_idle::remember_line(line);
+    }
+
+    fn is_collected_brain_line(&self, line: &str) -> bool {
+        line.contains(crate::brain_idle::ALERT_MARKER) || line.contains(crate::brain_stranded::STRANDED_MARKER)
+    }
+
+    fn observe_no_route(&self, account: &str, origin: Option<(i64, i64, i64)>, dest: Option<(i64, i64, i64)>, message: &str) {
+        crate::brain_stranded::observe_no_route(account, origin, dest, message);
+    }
 }

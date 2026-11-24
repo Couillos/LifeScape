@@ -137,7 +137,7 @@ impl Orchestrator {
         let Some(_claim) = self.lifecycle.try_claim(account) else {
             return refusal(&format!("busy {account}: an open/close is in flight, retry"));
         };
-        crate::brain_grace::note_operator_stop(account);
+        crate::autopilot::current().note_operator_stop(account);
         let closed = self.close_claimed(account);
         if closed.get("ok").as_bool() != Some(true) {
             let error = closed.get("error").as_str().unwrap_or("close failed").to_string();

@@ -108,14 +108,14 @@ impl Orchestrator {
             OperatorCommand::Open => error_reply("open needs daemon context"),
             OperatorCommand::Run { script, args } => self.run_job(account, &script, &args),
             OperatorCommand::Unload => {
-                crate::brain_grace::note_operator_stop(account);
+                crate::autopilot::current().note_operator_stop(account);
                 self.simple_worker_cmd(account, WorkerCommand::Unload)
             }
             OperatorCommand::Pause => self.simple_worker_cmd(account, WorkerCommand::Pause),
             OperatorCommand::Resume => self.resume_job(account),
             OperatorCommand::Hold => self.hold_job(account),
             OperatorCommand::Close => {
-                crate::brain_grace::note_operator_stop(account);
+                crate::autopilot::current().note_operator_stop(account);
                 self.close_job(account)
             }
             OperatorCommand::Call { method, args } => self.call_job(account, &method, &args),

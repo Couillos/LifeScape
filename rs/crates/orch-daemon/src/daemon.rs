@@ -320,7 +320,7 @@ impl Orchestrator {
         // report, which is a stop, never a crash (live 16:48: a fleet
         // redeploy cost each active node one failure, and the stopped
         // report pushed just before rode the discarded job).
-        crate::brain_grace::note_operator_stop(account);
+        crate::autopilot::current().note_operator_stop(account);
         let job = Arc::new(Job::new(account));
         if let Err(error) = self.spawn(&job, no_login) {
             return object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]);
