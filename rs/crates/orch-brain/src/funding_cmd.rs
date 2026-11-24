@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use lifescape_json::{object, str_value, Value};
 
-use crate::daemon::Orchestrator;
+use crate::fleet::Fleet;
 use crate::funding_plan::{DonorPurse, MakerNeed};
 use crate::jobs::Job;
 use crate::market_service::MarketService;
@@ -39,12 +39,12 @@ fn sum_for(flying: &[(String, String, i64)], wanted: &dyn Fn(&(String, String, i
 
 /// The plan's inputs from the connected jobs, the lives and the gifts in
 /// flight, plus the accounts left out before the plan (no life file).
-fn gather(orch: &Orchestrator, service: &MarketService) -> (Vec<MakerNeed>, Vec<DonorPurse>, Vec<String>) {
-    let mut jobs: Vec<Arc<Job>> = orch.jobs.lock().map(|jobs| jobs.values().cloned().collect()).unwrap_or_default();
+fn gather(orch: &dyn Fleet, service: &MarketService) -> (Vec<MakerNeed>, Vec<DonorPurse>, Vec<String>) {
+    let mut jobs: Vec<Arc<Job>> = orch.jobs().lock().map(|jobs| jobs.values().cloned().collect()).unwrap_or_default();
     jobs.sort_by(|left, right| left.account.cmp(&right.account));
     let flying = service.gifts_in_flight();
     let excluded: BTreeSet<String> = crate::economy_guard::excluded_accounts();
-    let deps = lifescape_orch_brain::brain_deps::BrainDeps::live();
+    let deps = crate::brain_deps::BrainDeps::live();
     let (mut makers, mut donors, mut notes) = (Vec::new(), Vec::new(), Vec::new());
     let mut online: BTreeSet<String> = BTreeSet::new();
     for job in &jobs {
@@ -90,7 +90,7 @@ fn gather(orch: &Orchestrator, service: &MarketService) -> (Vec<MakerNeed>, Vec<
 
 /// The daemon command: the plan's lines, and the gifts created unless
 /// `dry_run`.
-pub fn fund_makers(orch: &Orchestrator, dry_run: bool, force: bool) -> Value {
+pub fn fund_makers(orch: &dyn Fleet, dry_run: bool, force: bool) -> Value {
     let Some(service) = crate::market_service::shared() else {
         return object(vec![("ok", Value::Bool(false)), ("error", str_value("market service down: no gift can be convened"))]);
     };

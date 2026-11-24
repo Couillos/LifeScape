@@ -44,4 +44,16 @@ impl Autopilot for BrainAutopilot {
     fn observe_no_route(&self, account: &str, origin: Option<(i64, i64, i64)>, dest: Option<(i64, i64, i64)>, message: &str) {
         crate::brain_stranded::observe_no_route(account, origin, dest, message);
     }
+
+    fn request(&self, account: &str, kind: &str) -> Result<(), String> {
+        crate::brain_operator::request(account, kind)
+    }
+
+    fn fund_makers(&self, fleet: &dyn Fleet, dry_run: bool, force: bool) -> Value {
+        crate::funding_cmd::fund_makers(fleet, dry_run, force)
+    }
+
+    fn rares_lines(&self, accounts: &[String]) -> Result<Vec<String>, String> {
+        crate::rares_cmd::rares_lines(accounts)
+    }
 }

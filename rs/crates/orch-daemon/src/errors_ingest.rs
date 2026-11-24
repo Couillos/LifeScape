@@ -435,18 +435,9 @@ mod tests {
     static HEARD: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
     impl lifescape_orch_fleet::autopilot::Autopilot for Recorder {
-        fn on_supervise(&self, _fleet: &Arc<dyn crate::fleet::Fleet>, _job: &Arc<crate::jobs::Job>, _report: Option<Value>) {}
-        fn on_report_push(&self, _fleet: &Arc<dyn crate::fleet::Fleet>, _job: &Arc<crate::jobs::Job>) -> bool {
-            false
-        }
-        fn note_operator_stop(&self, _account: &str) {}
         fn remember_line(&self, line: &str) {
             HEARD.lock().unwrap().push(line.to_string());
         }
-        fn is_collected_brain_line(&self, _line: &str) -> bool {
-            false
-        }
-        fn observe_no_route(&self, _account: &str, _origin: Option<(i64, i64, i64)>, _dest: Option<(i64, i64, i64)>, _message: &str) {}
     }
 
     /// The idle-reason recording rides on the `logln!` sink: once the

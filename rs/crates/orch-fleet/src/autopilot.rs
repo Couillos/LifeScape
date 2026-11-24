@@ -16,48 +16,61 @@ use lifescape_json::Value;
 use crate::fleet::Fleet;
 use crate::jobs::Job;
 
-/// The brain's entry points for the daemon and the web server.
+/// The brain's entry points for the daemon and the web server. Every
+/// method has an inert default (what `NoAutopilot` does), so a test double
+/// overrides only what it observes.
 pub trait Autopilot: Send + Sync {
     /// One supervisor visit of `job`: the report it just filed (if any) and
     /// the brain pass it triggers (`brain::on_supervise`).
-    fn on_supervise(&self, fleet: &Arc<dyn Fleet>, job: &Arc<Job>, report: Option<Value>);
+    fn on_supervise(&self, _fleet: &Arc<dyn Fleet>, _job: &Arc<Job>, _report: Option<Value>) {}
+
     /// A report was pushed on the heartbeat channel and folded by the
     /// daemon: wake the brain for it (`brain::on_report_push`).
-    fn on_report_push(&self, fleet: &Arc<dyn Fleet>, job: &Arc<Job>) -> bool;
+    fn on_report_push(&self, _fleet: &Arc<dyn Fleet>, _job: &Arc<Job>) -> bool {
+        false
+    }
+
     /// The operator unloaded or closed `account` on purpose: the brain must
     /// not read the stop as a crash (`brain_grace::note_operator_stop`).
-    fn note_operator_stop(&self, account: &str);
+    fn note_operator_stop(&self, _account: &str) {}
+
     /// A `logln!` line starting with `brain `: remember it for the idle
     /// reasons (`brain_idle::remember_line`).
-    fn remember_line(&self, line: &str);
-    /// Does the errors collector want this brain line (abandons, stuck
-    /// goals, bans, strandings, idle alerts)?
-    fn is_collected_brain_line(&self, line: &str) -> bool;
+    fn remember_line(&self, _line: &str) {}
+
+    /// Does the errors collector want this brain line (idle alerts and
+    /// strandings; the daemon tests the other markers itself)?
+    fn is_collected_brain_line(&self, _line: &str) -> bool {
+        false
+    }
+
     /// A `NoRoute` dossier: a walled-in origin strands the bot
     /// (`brain_stranded::observe_no_route`).
-    fn observe_no_route(&self, account: &str, origin: Option<(i64, i64, i64)>, dest: Option<(i64, i64, i64)>, message: &str);
+    fn observe_no_route(&self, _account: &str, _origin: Option<(i64, i64, i64)>, _dest: Option<(i64, i64, i64)>, _message: &str) {}
+
+    /// Operator ambition request (`ambition <kind>`): Ok once the brain
+    /// holds it for the account's next draw (`brain_operator::request`).
+    fn request(&self, _account: &str, _kind: &str) -> Result<(), String> {
+        Err("no brain registered".to_string())
+    }
+
+    /// `fund-makers`: the plan's lines, and the gifts unless `dry_run`
+    /// (`funding_cmd::fund_makers`); the reply is the command's JSON.
+    fn fund_makers(&self, _fleet: &dyn Fleet, _dry_run: bool, _force: bool) -> Value {
+        lifescape_json::object(vec![("ok", Value::Bool(false)), ("error", lifescape_json::str_value("no brain registered"))])
+    }
+
+    /// `rares`: the report lines for the connected accounts
+    /// (`rares_cmd::rares_lines`).
+    fn rares_lines(&self, _accounts: &[String]) -> Result<Vec<String>, String> {
+        Err("no brain registered".to_string())
+    }
 }
 
 /// The answer while no brain is registered: nothing happens.
 pub struct NoAutopilot;
 
-impl Autopilot for NoAutopilot {
-    fn on_supervise(&self, _fleet: &Arc<dyn Fleet>, _job: &Arc<Job>, _report: Option<Value>) {}
-
-    fn on_report_push(&self, _fleet: &Arc<dyn Fleet>, _job: &Arc<Job>) -> bool {
-        false
-    }
-
-    fn note_operator_stop(&self, _account: &str) {}
-
-    fn remember_line(&self, _line: &str) {}
-
-    fn is_collected_brain_line(&self, _line: &str) -> bool {
-        false
-    }
-
-    fn observe_no_route(&self, _account: &str, _origin: Option<(i64, i64, i64)>, _dest: Option<(i64, i64, i64)>, _message: &str) {}
-}
+impl Autopilot for NoAutopilot {}
 
 static AUTOPILOT: OnceLock<Arc<dyn Autopilot>> = OnceLock::new();
 static NONE: NoAutopilot = NoAutopilot;

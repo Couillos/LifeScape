@@ -22,6 +22,3 @@ pub mod status_poll;
 pub mod bounded_call;
 pub mod errors_ingest;
 pub mod retention;
-pub mod rares_cmd;
-pub mod funding_cmd;
-pub mod funding_plan;

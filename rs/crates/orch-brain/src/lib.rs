@@ -78,6 +78,9 @@ pub mod market_maker;
 pub mod market_maker_report;
 pub mod market_seller;
 pub mod method_health;
+pub mod funding_cmd;
+pub mod funding_plan;
+pub mod rares_cmd;
 #[cfg(test)]
 mod brain_bids_seat_tests;
 #[cfg(test)]

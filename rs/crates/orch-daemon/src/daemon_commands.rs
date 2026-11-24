@@ -120,12 +120,12 @@ impl Orchestrator {
             }
             OperatorCommand::Call { method, args } => self.call_job(account, &method, &args),
             OperatorCommand::Methods => self.methods_job(account),
-            OperatorCommand::Ambition { kind } => match crate::brain_operator::request(account, &kind) {
+            OperatorCommand::Ambition { kind } => match crate::autopilot::current().request(account, &kind) {
                 Ok(()) => object(vec![("ok", Value::Bool(true)), ("pending", str_value(&kind))]),
                 Err(error) => error_reply(&error),
             },
             OperatorCommand::Rares => self.rares_reply(),
-            OperatorCommand::FundMakers { dry_run, force } => crate::funding_cmd::fund_makers(self, dry_run, force),
+            OperatorCommand::FundMakers { dry_run, force } => crate::autopilot::current().fund_makers(self, dry_run, force),
             OperatorCommand::BidWhy { item } => match crate::brain_bids::explain_for(account, &item, &lifescape_orch_brain::brain_deps::BrainDeps::live()) {
                 Ok(lines) => ok_lines(&lines),
                 Err(error) => error_reply(&error),
@@ -173,7 +173,7 @@ impl Orchestrator {
 
     fn rares_reply(&self) -> Value {
         let accounts: Vec<String> = self.jobs.lock().unwrap().keys().cloned().collect();
-        match crate::rares_cmd::rares_lines(&accounts) {
+        match crate::autopilot::current().rares_lines(&accounts) {
             Ok(lines) => ok_lines(&lines),
             Err(error) => error_reply(&error),
         }
