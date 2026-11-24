@@ -9,7 +9,7 @@
 //     `engine/data/pack/client/config`, textures from `.../textures`,
 //     models from `engine/data/pack/main_file_cache` (index 1). Same
 //     pixels as the in-game backpack (32x32, black outline + shadow,
-//     colour table at brightness 0.8 like the client default).
+//     colour table at brightness 0.6, the client's brightest setting).
 //   - skills: the client's stat-tab sprites `staticons` / `staticons2`
 //     of the media archive (`.../client/media`), 25x25.
 // No icon is drawn by hand: an item the renderer cannot draw (no model,
@@ -181,10 +181,11 @@ const media = new JagFile(new Uint8Array(fs.readFileSync(path.join(packDir, 'cli
 
 Pix3D.unpackTextures(textures);
 // The client jitters the brightness by ±0.015 at random on every start:
-// pinned to the middle (exactly 0.8) so the sheet is reproducible.
+// pinned to the middle (exactly 0.6, the brightest of the 4 settings:
+// 0.9 / 0.8 default / 0.7 / 0.6) so the sheet is reproducible.
 const random = Math.random;
 Math.random = () => 0.5;
-Pix3D.initColourTable(0.8);
+Pix3D.initColourTable(0.6);
 Math.random = random;
 Pix3D.initPool(20);
 ObjType.init(config, true);

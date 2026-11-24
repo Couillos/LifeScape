@@ -34,8 +34,8 @@ check('rules: one image per sheet, one position per drawn id, none for id 0/2 (c
   + '.ic-i3.ic-n2{background-position:-64px -32px}'
   + '.ic-i3.ic-n25{background-position:-32px -64px}'
   + '.ic-skill{background-image:url("/icons/skills.png?v=def")}'
-  + '.ic-s-attack{background-color:#3e3529;border-radius:3px;background-position:-25px 0}'
-  + '.ic-s-runecraft{background-color:#3e3529;border-radius:3px;background-position:-25px -25px}');
+  + '.ic-s-attack{background-position:-25px 0}'
+  + '.ic-s-runecraft{background-position:-25px -25px}');
 check('rules without index', LifeIcons.rules(null), '');
 check('rules without a sheet', LifeIcons.rules({ items: { file: 'items.png' } }), '');
 check('base css sizes the slots before the index arrives', /\.ic-item\{width:32px;height:32px\}/.test(LifeIcons.BASE_CSS) && /\.ic-skill\{width:25px;height:25px\}/.test(LifeIcons.BASE_CSS), true);

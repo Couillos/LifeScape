@@ -367,7 +367,7 @@ farming n'existent pas en 274 : case vide), `index.json`
 (`{items|skills: {file, hash, cell, cols, slot, count}}`, case 0 = vide).
 Générées par `bun gamedata/tools/icons.mts` (Client-TS et lostcity à côté
 du dépôt, ~3 s, octets reproductibles : le tirage aléatoire de luminosité
-du client est fixé à 0.8) ; non committées (~1 Mo, `.gitignore`), à
+du client est fixé à 0.6, le réglage le plus lumineux) ; non committées (~1 Mo, `.gitignore`), à
 régénérer après un changement de cache. Servies par le démon : `/icons.js`
 (ligne de page) et `/icons/<nom>.png|index.json` (`web_routes::icon_asset`,
 planches en cache long `immutable` car demandées en `?v=<hash>`, index
@@ -379,8 +379,8 @@ requête par icône, aucun saut de mise en page, un id sans icône garde la
 case vide (jamais l'icône d'un autre objet). Une pile change d'icône avec
 son nombre comme en jeu (`countco` : pièces en tas, flèches en botte ;
 seuils 2, 3, 4, 5, 25, 100, 250, 1000, 10000, vérifiés par le
-générateur). Icônes de compétence posées sur la pierre de l'onglet
-statistiques (`#3e3529`) : agilité et vol sont des silhouettes noires.
+générateur). Icônes de compétence seules, sans fond (choix utilisateur 2026-11-24 :
+agilité et vol, silhouettes noires, se voient peu sur fond noir).
 19 objets nommés sans icône (modèles invisibles : `invis_*`, grinder,
 caveorb4dot, viking_dummy_lid, wearable_stool_white) : case vide. Sans
 `icons.js` (démon pas encore redéployé) ou sans index, les pages

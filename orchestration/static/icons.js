@@ -75,15 +75,10 @@ var LifeIcons = (function () {
     return span;
   }
 
-  // Skill icons sit on the stat tab's stone colour, as in game: agility
-  // and thieving are black silhouettes, invisible on the black page. Only
-  // a drawn skill gets the tile; an empty slot stays empty.
-  var TILE = { skill: 'background-color:#3e3529;border-radius:3px;' };
-
-  function position(sheet, slot, extra) {
+  function position(sheet, slot) {
     var x = (slot % sheet.cols) * sheet.cell;
     var y = Math.floor(slot / sheet.cols) * sheet.cell;
-    return '{' + (extra || '') + 'background-position:' + (x ? -x + 'px' : '0') + ' ' + (y ? -y + 'px' : '0') + '}';
+    return '{background-position:' + (x ? -x + 'px' : '0') + ' ' + (y ? -y + 'px' : '0') + '}';
   }
 
   // CSS of one sheet: its image once, then one position per slot (and
@@ -95,7 +90,7 @@ var LifeIcons = (function () {
     for (var i = 0; i < keys.length; i++) {
       var slot = sheet.slot[keys[i]];
       if (!slot) continue;
-      css += '.' + prefix + keys[i] + position(sheet, slot, TILE[kind]);
+      css += '.' + prefix + keys[i] + position(sheet, slot);
       var steps = (sheet.count && sheet.count[keys[i]]) || {};
       for (var s = 0; s < COUNT_STEPS.length; s++) {
         var stepSlot = steps[COUNT_STEPS[s]];
