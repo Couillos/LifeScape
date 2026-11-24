@@ -134,6 +134,10 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str, trail: &[(
             ])
         })
         .collect();
+    let quest_points = lifescape_gamedata::varps::id_by_name("qp")
+        .and_then(|id| u16::try_from(id).ok())
+        .and_then(|id| bot.world.varps.get(&id))
+        .map_or(Value::Null, |points| Value::Int(i64::from(*points)));
     let bank_com = (LIVETABLES.com_id)("bank_main:inv");
     let worn_com = (LIVETABLES.com_id)("wornitems:wear");
     let pack_com = (LIVETABLES.com_id)("inventory:inv");
@@ -150,10 +154,14 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str, trail: &[(
                 let name = (LIVETABLES.obj_name)(*held).unwrap_or_default();
                 (
                     *slot,
+                    // `slot`: the container slot (backpack 0..27, worn =
+                    // server wearpos): the dashboard draws each item where
+                    // the game client does, gaps included.
                     object(vec![
                         ("id", Value::Int(i64::from(*held))),
                         ("name", str_value(&name)),
                         ("count", Value::Int(i64::from(*count))),
+                        ("slot", Value::Int(i64::from(*slot))),
                     ]),
                 )
             })
@@ -228,6 +236,8 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str, trail: &[(
             ),
         ),
         ("skills", Value::Arr(skills)),
+        // Quest points (varp `qp`): the stats tab's "QP:" line.
+        ("quest_points", quest_points),
         ("npcs", Value::Arr(npcs)),
         ("locs", Value::Arr(locs)),
         ("objs", Value::Arr(objs)),
@@ -289,6 +299,28 @@ mod tests {
         assert_eq!(skills[0].get("level").as_i64(), Some(4));
         assert_eq!(skills[0].get("base").as_i64(), Some(10));
         assert_eq!(skills[0].get("xp").as_i64(), Some(1_154));
+    }
+
+    /// Each pack and worn entry carries its slot (gaps kept), so the
+    /// dashboard draws the backpack and the worn tab like the client; the
+    /// quest points ride along for the stats tab.
+    #[test]
+    fn heartbeat_entries_carry_their_slot_and_quest_points() {
+        let pack_com = (lifescape_scripts::tables_live::LIVETABLES.com_id)("inventory:inv").expect("pack com");
+        let worn_com = (lifescape_scripts::tables_live::LIVETABLES.com_id)("wornitems:wear").expect("worn com");
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.inv.insert(pack_com, [(5u8, (995u16, 12u32)), (0u8, (1351u16, 1u32))].into_iter().collect());
+        bot.world.inv.insert(worn_com, [(13u8, (882u16, 40u32)), (3u8, (1321u16, 1u32))].into_iter().collect());
+        let value = heartbeat_value(&bot, "t01", "testing", &[]);
+        let slots = |key: &str| -> Vec<(i64, i64)> {
+            value.get(key).as_arr().expect("array").iter().map(|row| (row.get("slot").as_i64().expect("slot"), row.get("id").as_i64().expect("id"))).collect()
+        };
+        assert_eq!(slots("inv"), vec![(0, 1351), (5, 995)], "pack: slot order, gap kept");
+        assert_eq!(slots("worn"), vec![(3, 1321), (13, 882)], "worn: the wearpos");
+        assert_eq!(value.get("quest_points"), &Value::Null, "varp never received");
+        let qp = lifescape_gamedata::varps::id_by_name("qp").expect("qp varp") as u16;
+        bot.world.varps.insert(qp, 7);
+        assert_eq!(heartbeat_value(&bot, "t01", "testing", &[]).get("quest_points").as_i64(), Some(7));
     }
 
     /// Live 2026-11-12: every bot banks its coins and the server stops

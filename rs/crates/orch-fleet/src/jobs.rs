@@ -398,6 +398,8 @@ impl Job {
             ("route_target", bot.get("route_target").clone()),
             ("trail", arr_or_empty(bot.get("trail"))),
             ("skills", arr_or_empty(bot.get("skills"))),
+            // Stats tab "QP:" line of the spectator (null: older worker).
+            ("quest_points", bot.get("quest_points").clone()),
             ("worn", arr_or_empty(bot.get("worn"))),
             ("npcs", arr_or_empty(bot.get("npcs"))),
             ("locs", arr_or_empty(bot.get("locs"))),
@@ -667,7 +669,7 @@ mod tests {
             "account", "script", "script_args", "args", "phase", "paused", "held", "status", "session_pid",
             "started", "intention", "position", "zone", "hitpoints", "ticks", "updated", "combat",
             "energy", "modal", "hint", "hint_type", "flash", "route", "route_target", "skills",
-            "worn", "npcs", "npcs_at", "locs", "flora", "objs", "players", "players_at", "inv", "bank", "chat", "messages",
+            "quest_points", "worn", "npcs", "npcs_at", "locs", "flora", "objs", "players", "players_at", "inv", "bank", "chat", "messages",
             "message_ticks", "texts", "log", "last_event", "requirements", "last_error",
             "last_code", "trail",
         ] {
