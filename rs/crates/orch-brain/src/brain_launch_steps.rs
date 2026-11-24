@@ -33,7 +33,8 @@ pub(crate) fn open<'a>(orch: &'a Arc<dyn Fleet>, job: &'a Arc<Job>) -> Option<La
         Err(_) => return None,
     };
     let live = live?;
-    let inputs = crate::brain_launch_inputs::gather(job, &live);
+    let deps = crate::brain_deps::BrainDeps::live();
+    let inputs = crate::brain_launch_inputs::gather(job, &live, &deps);
     // A bot no route leaves (P2-1a): no launch while it stands there,
     // its orders retired once; the operator decides (rule 7, D5).
     if let Some((tile, first)) = crate::brain_stranded::gate(&job.account, inputs.position) {
@@ -46,7 +47,7 @@ pub(crate) fn open<'a>(orch: &'a Arc<dyn Fleet>, job: &'a Arc<Job>) -> Option<La
         }
         return None;
     }
-    Some(LaunchPass { orch, job, life, live, inputs, dirty: false, quoting: false, waiting: Vec::new() })
+    Some(LaunchPass { orch, job, life, live, inputs, deps, dirty: false, quoting: false, waiting: Vec::new() })
 }
 
 /// Life upkeep, first half: the operator's switch and the market maker

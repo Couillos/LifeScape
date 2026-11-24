@@ -106,6 +106,29 @@ impl Drop for TestMarket {
     }
 }
 
+/// The fleet's crowd as a double: the other bots of a scenario and the
+/// site and method each works (the production table is a process-wide
+/// registry the benches never write).
+pub(crate) struct TestCrowd(pub Vec<((i64, i64, i64), String)>);
+
+impl crate::brain_deps::Crowd for TestCrowd {
+    fn others(&self, _account: &str) -> Vec<((i64, i64, i64), u32)> {
+        let mut counts: std::collections::BTreeMap<(i64, i64, i64), u32> = std::collections::BTreeMap::new();
+        for (site, _) in &self.0 {
+            *counts.entry(*site).or_insert(0) += 1;
+        }
+        counts.into_iter().collect()
+    }
+
+    fn seats(&self, _account: &str) -> Vec<((i64, i64, i64), String, u32)> {
+        let mut counts: std::collections::BTreeMap<((i64, i64, i64), String), u32> = std::collections::BTreeMap::new();
+        for (site, method) in &self.0 {
+            *counts.entry((*site, method.clone())).or_insert(0) += 1;
+        }
+        counts.into_iter().map(|((site, method), count)| (site, method, count)).collect()
+    }
+}
+
 /// What the world holds, as the bench draws it.
 #[derive(Default)]
 pub(crate) struct Seed {
@@ -174,9 +197,6 @@ impl<'a> RawWorld<'a> {
 
     /// Fills the market (ledger and orders) and the fleet's crowd table.
     pub(crate) fn seed(&self, seed: &Seed) {
-        for (index, (site, method)) in seed.crowd.iter().enumerate() {
-            crate::site_crowd::note(&format!("{}_crowd{index}", self.job.account), Some(*site), method);
-        }
         let Some(market) = self.market else { return };
         let service = &market.service;
         let (account, seller) = (self.job.account.clone(), self.seller());
@@ -204,10 +224,7 @@ impl<'a> RawWorld<'a> {
 
     /// Takes the world's orders and crowd back out (the service is shared
     /// by the scenarios of one life).
-    pub(crate) fn clear(&self, seed: &Seed) {
-        for index in 0..seed.crowd.len() {
-            crate::site_crowd::note(&format!("{}_crowd{index}", self.job.account), None, "");
-        }
+    pub(crate) fn clear(&self, _seed: &Seed) {
         if let Some(market) = self.market {
             for account in [self.job.account.clone(), self.seller()] {
                 let _ = market.service.retire_account(&account, "bench");
@@ -228,14 +245,21 @@ impl<'a> RawWorld<'a> {
         }
     }
 
+    /// The handles a pass of this world reads through: its test market (none
+    /// when down), the live rates and guides, its crowd double, the wall clock.
+    pub(crate) fn deps(&self, seed: &Seed) -> crate::brain_deps::BrainDeps {
+        crate::brain_deps::BrainDeps::with_market(self.market.map(|market| market.service.clone())).with_crowd(std::sync::Arc::new(TestCrowd(seed.crowd.clone())))
+    }
+
     /// The launch pass's reads up to the resolve context, through the
     /// production functions: `gather` at the start, `build_ctx` (which runs
     /// `ready_ctx`, `gather_market` and the publishers) at its point.
-    pub(crate) fn launch_read(&self, life: &Life, position: usize) -> (LaunchInputs, ReadyCtx, i64) {
+    pub(crate) fn launch_read(&self, life: &Life, position: usize, seed: &Seed) -> (LaunchInputs, ReadyCtx, i64) {
         self.run(|| {
-            let inputs = crate::brain_launch_inputs::gather(&self.job, &self.live);
+            let deps = self.deps(seed);
+            let inputs = crate::brain_launch_inputs::gather(&self.job, &self.live, &deps);
             let quests_done = crate::brain_rescue::quests_done(life);
-            let mut pass = LaunchPass { orch: &self.orch, job: &self.job, life: life.clone(), live: self.live.clone(), inputs, dirty: false, quoting: false, waiting: Vec::new() };
+            let mut pass = LaunchPass { orch: &self.orch, job: &self.job, life: life.clone(), live: self.live.clone(), inputs, deps, dirty: false, quoting: false, waiting: Vec::new() };
             let picked = crate::brain_launch_node::build_ctx(&mut pass, position, quests_done);
             self.assert_account_views_fresh();
             (pass.inputs, picked.ctx, picked.committed)

@@ -72,12 +72,14 @@ pub(crate) struct LiveFx<'a> {
     pub orch: &'a Arc<dyn Fleet>,
     pub job: &'a Arc<Job>,
     pub live: &'a Value,
+    /// The pass's handles (market, clock, crowd).
+    pub deps: crate::brain_deps::BrainDeps,
     plan: LivePlan<'a>,
 }
 
 impl<'a> LiveFx<'a> {
-    pub(crate) fn new(orch: &'a Arc<dyn Fleet>, job: &'a Arc<Job>, live: &'a Value) -> Self {
-        LiveFx { orch, job, live, plan: LivePlan { live } }
+    pub(crate) fn new(orch: &'a Arc<dyn Fleet>, job: &'a Arc<Job>, live: &'a Value, deps: crate::brain_deps::BrainDeps) -> Self {
+        LiveFx { orch, job, live, deps, plan: LivePlan { live } }
     }
 }
 
@@ -104,11 +106,11 @@ impl Fx for LiveFx<'_> {
     }
 
     fn refresh_market(&mut self, inputs: &mut LaunchInputs) {
-        crate::brain_launch_inputs::gather_market(self.job, inputs);
+        crate::brain_launch_inputs::gather_market(self.job, inputs, &self.deps);
     }
 
     fn refresh_clock(&mut self, inputs: &mut LaunchInputs) {
-        crate::brain_launch_inputs::refresh_clock(inputs);
+        crate::brain_launch_inputs::refresh_clock(inputs, &self.deps);
     }
 
     fn release_listings(&mut self, items: &[String]) -> usize {

@@ -42,6 +42,9 @@ pub(crate) struct LaunchPass<'a> {
     pub life: Life,
     pub live: std::sync::Arc<Value>,
     pub inputs: LaunchInputs,
+    /// The handles the pass reads the world through (market, rates, guides,
+    /// crowd, clock), taken once when the pass opened (lot 3.5).
+    pub deps: crate::brain_deps::BrainDeps,
     /// The pass changed the life (saved by the stopping step as asked).
     pub dirty: bool,
     /// The life is a quoting market maker (no ambition, gear, tool or

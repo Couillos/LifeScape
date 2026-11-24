@@ -94,7 +94,7 @@ pub(crate) fn maybe_launch(orch: &Arc<dyn Fleet>, job: &Arc<Job>) {
         }
     }
     let Some(mut picked) = pick_node(&mut pass) else { return };
-    let mut fx = crate::brain_launch_fx::LiveFx::new(orch, job, &pass.live);
+    let mut fx = crate::brain_launch_fx::LiveFx::new(orch, job, &pass.live, pass.deps.clone());
     let work = drive::Drive { life: &mut pass.life, inputs: &mut pass.inputs, ctx: &mut picked.ctx, position: picked.position, committed: picked.committed };
     let save = drive::drive(&mut fx, work);
     pass.finish(save);

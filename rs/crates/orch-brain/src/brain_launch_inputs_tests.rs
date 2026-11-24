@@ -15,6 +15,7 @@ use lifescape_planner::launch_apply::settle_market_buy;
 use lifescape_planner::{LaunchInputs, Life, NodeKind, NodeStatus};
 
 use crate::brain_launch_fx::{Fx, LiveFx};
+use crate::brain_deps::BrainDeps;
 use crate::brain_raw_world_tests::{wall_now as now_wall, xp_of_level, IdleFleet, RawWorld, Seed, TestMarket};
 use crate::fleet::Fleet;
 use crate::jobs::Job;
@@ -64,7 +65,7 @@ fn assert_plain_fields(inputs: &LaunchInputs, live: &Value) {
 fn gather_fills_every_plain_data_field() {
     let job = probe_job("gather");
     let live = live_snapshot();
-    let inputs = crate::brain_launch_inputs::gather(&job, &live);
+    let inputs = crate::brain_launch_inputs::gather(&job, &live, &BrainDeps::live());
     assert_plain_fields(&inputs, &live);
     assert!(inputs.inv_streamed && inputs.bank_streamed);
     assert!(inputs.position.is_some());
@@ -74,10 +75,11 @@ fn gather_fills_every_plain_data_field() {
 fn the_market_read_keeps_the_fields_and_reads_the_clock_again() {
     let job = probe_job("market");
     let live = live_snapshot();
-    let mut inputs = crate::brain_launch_inputs::gather(&job, &live);
+    let deps = BrainDeps::live();
+    let mut inputs = crate::brain_launch_inputs::gather(&job, &live, &deps);
     inputs.now = 1;
     inputs.tick_ms = 0;
-    crate::brain_launch_inputs::gather_market(&job, &mut inputs);
+    crate::brain_launch_inputs::gather_market(&job, &mut inputs, &deps);
     assert_plain_fields(&inputs, &live);
 }
 
@@ -86,7 +88,7 @@ fn live_fx_refreshes_the_clock_before_each_decision() {
     let job = probe_job("fx");
     let live = live_snapshot();
     let orch: Arc<dyn Fleet> = IdleFleet::shared();
-    let mut fx = LiveFx::new(&orch, &job, &live);
+    let mut fx = LiveFx::new(&orch, &job, &live, BrainDeps::live());
     let mut inputs = LaunchInputs::blank_for_tests();
     assert_eq!(inputs.now, 0);
     fx.refresh_clock(&mut inputs);
@@ -111,8 +113,9 @@ fn a_placed_market_buy_is_stamped_now_and_not_expired() {
     let job = probe_job("buy");
     let live = live_snapshot();
     let orch: Arc<dyn Fleet> = IdleFleet::shared();
-    let mut fx = LiveFx::new(&orch, &job, &live);
-    let mut inputs = crate::brain_launch_inputs::gather(&job, &live);
+    let deps = BrainDeps::live();
+    let mut fx = LiveFx::new(&orch, &job, &live, deps.clone());
+    let mut inputs = crate::brain_launch_inputs::gather(&job, &live, &deps);
     fx.refresh_clock(&mut inputs);
     // What `launch_drive::finish` does with a placed buy.
     settle_market_buy(&mut life, position, 0, Ok(()), inputs.now);
@@ -178,10 +181,12 @@ fn every_field_of_the_launch_inputs_is_read_from_the_raw_world() {
     crate::brain_inflight::queued(&account);
     world.job.inner.lock().expect("job").report_pending = true;
     let wall = now_wall();
-    let mut inputs = world.run(|| crate::brain_launch_inputs::gather(&world.job, &world.live));
+    // The pass's handles are doubles: this world's market, a crowd of two bots at `site`.
+    let deps = world.deps(&seed);
+    let mut inputs = crate::brain_launch_inputs::gather(&world.job, &world.live, &deps);
     // The start-of-pass read leaves the market state for `gather_market`.
     assert!(inputs.locks.is_empty() && inputs.listed.is_empty() && inputs.commit_rows.is_empty() && inputs.commit_flat == 0 && inputs.crowd.is_empty() && inputs.seats.is_empty());
-    world.run(|| crate::brain_launch_inputs::gather_market(&world.job, &mut inputs));
+    crate::brain_launch_inputs::gather_market(&world.job, &mut inputs, &deps);
     let deal_price = market.service.lock_store().open_deals_for_account(&account).expect("deals").first().map(|deal| deal.price).expect("a matched buy deal");
     let LaunchInputs { position, ctx_position, inv_streamed, bank_streamed, combat, bank_types, stacks, worn, inv, bank, wearing, locks, listed, commit_rows, commit_flat, crowd, seats, recent_launch, report_in_flight, report_pending, now, tick_ms, levels, market_up, filler_ticks } = inputs;
     assert_eq!(position, Some((3222, 3218, 0)), "position");
@@ -244,7 +249,7 @@ fn the_resolve_context_is_built_from_the_raw_world() {
     let world = RawWorld::new(&account, live, Some(&market));
     let seed = Seed { coins: 900, holdings: vec![(logs, 2)], asks: vec![(logs, 50, 7)], ..Seed::default() };
     world.seed(&seed);
-    let (inputs, ctx, committed) = world.launch_read(&life, position);
+    let (inputs, ctx, committed) = world.launch_read(&life, position, &seed);
     world.clear(&seed);
     assert_eq!(ctx.coins, 900, "wallet");
     assert_eq!(ctx.held, 2, "held logs");
@@ -261,4 +266,28 @@ fn the_resolve_context_is_built_from_the_raw_world() {
     assert_eq!(ctx.seats, inputs.seats);
     assert_eq!(ctx.ironman, life.profile.ironman);
     assert_eq!(ctx.draw_seed, lifescape_planner::guide_pick::seed_for(life.profile.seed, "n9200", life.memory.draws));
+}
+
+/// A clock double decides the pass's time, and `gather_market` reads it
+/// again from the same handle: nothing of the pass names the wall clock.
+#[test]
+fn a_clock_double_decides_the_time_of_the_pass() {
+    struct Fixed(std::sync::atomic::AtomicI64);
+    impl crate::brain_deps::Clock for Fixed {
+        fn now_secs(&self) -> i64 {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn tick_ms(&self) -> u64 {
+            77
+        }
+    }
+    let job = probe_job("clock_double");
+    let live = live_snapshot();
+    let clock = Arc::new(Fixed(std::sync::atomic::AtomicI64::new(1_234)));
+    let deps = BrainDeps::with_market(None).with_clock(clock.clone());
+    let mut inputs = crate::brain_launch_inputs::gather(&job, &live, &deps);
+    assert_eq!((inputs.now, inputs.tick_ms, inputs.market_up), (1_234, 77, false));
+    clock.0.store(5_678, std::sync::atomic::Ordering::SeqCst);
+    crate::brain_launch_inputs::gather_market(&job, &mut inputs, &deps);
+    assert_eq!((inputs.now, inputs.tick_ms), (5_678, 77), "the market read takes the time again from the handle");
 }

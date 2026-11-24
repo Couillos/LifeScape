@@ -77,7 +77,7 @@ pub(crate) fn build_ctx(pass: &mut LaunchPass, position: usize, quests_done: Vec
     // lot 3: the side market passes above listed, bid and withdrew: the
     // locks, listings, committed coins, the pack and the fleet's sites
     // are read here, where the wallet and the holdings are decided.
-    crate::brain_launch_inputs::gather_market(job, &mut pass.inputs);
+    crate::brain_launch_inputs::gather_market(job, &mut pass.inputs, &pass.deps);
     let (life, live, inputs) = (&pass.life, &pass.live, &pass.inputs);
     // Own wallet gates the market leg, a purchase bids on the free wallet,
     // the whole family counts (`launch_inputs::node_counts`). Carried tools

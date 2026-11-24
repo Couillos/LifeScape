@@ -15,12 +15,13 @@ use std::collections::BTreeMap;
 use lifescape_json::Value;
 use lifescape_planner::{read_stacks, LaunchInputs};
 
+use crate::brain_deps::BrainDeps;
 use crate::brain_plan::{bank_types_of, live_combat, names_of, stacks_of};
 use crate::jobs::Job;
 
 /// The start-of-pass read from the pass's live snapshot (no lock, no
 /// store, no market).
-pub(crate) fn gather(job: &Job, live: &Value) -> LaunchInputs {
+pub(crate) fn gather(job: &Job, live: &Value, deps: &BrainDeps) -> LaunchInputs {
     LaunchInputs {
         position: crate::errors_model::position_of(live.get("position")),
         ctx_position: live.get("position").as_arr().and_then(|cells| {
@@ -40,10 +41,10 @@ pub(crate) fn gather(job: &Job, live: &Value) -> LaunchInputs {
         // at its point of use; the production gather MUST set them (a
         // default `now: 0` stamped every history entry 0 and expired every
         // market fill wait on the spot, 2026-11-23).
-        now: now_unix(),
-        tick_ms: crate::market_eta::live_tick_ms(),
+        now: deps.clock.now_secs(),
+        tick_ms: deps.clock.tick_ms(),
         levels: live_skill_levels(live),
-        market_up: crate::market_service::shared().is_some(),
+        market_up: deps.market.is_some(),
         filler_ticks: crate::brain_filler::FILLER_TICKS,
         // Memory-only marks of the account.
         recent_launch: crate::brain_launch::recent_launch(&job.account),
@@ -67,15 +68,10 @@ fn report_pending_of(job: &Job) -> bool {
     job.inner.try_lock().map(|inner| inner.report_pending).unwrap_or(true)
 }
 
-/// Unix seconds now (the old `brain_launch::now_unix`).
-pub(crate) fn now_unix() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0)
-}
-
-/// Reads the clock again: the old pass read `now_unix()` at each point of
+/// Reads the clock again: the old pass read the wall clock at each point of
 /// use, a pass that waits on the market must not decide on its start time.
-pub(crate) fn refresh_clock(inputs: &mut LaunchInputs) {
-    inputs.now = now_unix();
+pub(crate) fn refresh_clock(inputs: &mut LaunchInputs, deps: &BrainDeps) {
+    inputs.now = deps.clock.now_secs();
 }
 
 /// `brain_succession::live_level` of every skill the snapshot lists.
@@ -107,16 +103,16 @@ pub(crate) fn refresh_report_flags(job: &Job, inputs: &mut LaunchInputs) {
 /// stands (a contended lock reads empty, as `holdings_count` did), the
 /// locks and listings of the bot's resting sells, the coins its resting
 /// buys commit, the fleet's sites.
-pub(crate) fn gather_market(job: &Job, inputs: &mut LaunchInputs) {
+pub(crate) fn gather_market(job: &Job, inputs: &mut LaunchInputs, deps: &BrainDeps) {
     let live = job.inner.try_lock().map(|inner| inner.live_or_null()).unwrap_or_else(|_| crate::jobs::null_live());
     inputs.inv = read_stacks(&live, "inv");
     inputs.bank = read_stacks(&live, "bank");
     inputs.wearing = read_stacks(&live, "worn");
-    inputs.locks = crate::brain_locks::locked_items(&job.account);
+    inputs.locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), &job.account);
     inputs.listed.clear();
     inputs.commit_rows.clear();
     inputs.commit_flat = 0;
-    if let Some(service) = crate::market_service::shared() {
+    if let Some(service) = deps.market.as_deref() {
         let (rows, deals) = {
             let store = service.lock_store();
             (store.account_orders(&job.account).unwrap_or_default(), store.open_deals_for_account(&job.account).unwrap_or_default())
@@ -134,9 +130,9 @@ pub(crate) fn gather_market(job: &Job, inputs: &mut LaunchInputs) {
     }
     // The market actions took time (a fill wait is read against `now`), the
     // service may have come up, the tick length is measured live.
-    refresh_clock(inputs);
-    inputs.tick_ms = crate::market_eta::live_tick_ms();
-    inputs.market_up = crate::market_service::shared().is_some();
-    inputs.crowd = crate::site_crowd::others(&job.account);
-    inputs.seats = crate::site_crowd::seats(&job.account);
+    refresh_clock(inputs, deps);
+    inputs.tick_ms = deps.clock.tick_ms();
+    inputs.market_up = deps.market.is_some();
+    inputs.crowd = deps.crowd.others(&job.account);
+    inputs.seats = deps.crowd.seats(&job.account);
 }

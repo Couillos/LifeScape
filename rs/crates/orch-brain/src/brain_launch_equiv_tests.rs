@@ -195,7 +195,7 @@ fn build(base: &Life, position: usize, variant: u64, market: &TestMarket, rng: &
     let account = format!("{}eq_{}_{position}_{variant}", crate::brain_commerce::PROBE_PREFIX, life.account);
     let world = RawWorld::new(&account, live, market_up.then_some(market));
     world.seed(&seed);
-    let (inputs, ctx, committed) = world.launch_read(&life, position);
+    let (inputs, ctx, committed) = world.launch_read(&life, position, &seed);
     world.clear(&seed);
     let knobs = Knobs { stubborn: rng.chance(40), refuse_buy: rng.chance(30), retarget_food: rng.chance(50), shop: rng.below(4) as u8, rate_tenths: *rng.pick(&[1i64, 5, 30]) };
     Scenario { committed, life, position, inputs, ctx, knobs }

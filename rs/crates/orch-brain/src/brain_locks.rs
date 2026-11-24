@@ -13,8 +13,13 @@ use std::collections::BTreeMap;
 /// Base object id → units locked by this account's resting sells and
 /// seller deals (empty while the market service is down: nothing rests).
 pub fn locked_items(account: &str) -> BTreeMap<i64, i64> {
+    locked_items_in(crate::market_service::shared().as_deref(), account)
+}
+
+/// `locked_items` on the market handle the caller holds (`BrainDeps`).
+pub(crate) fn locked_items_in(market: Option<&crate::market_service::MarketService>, account: &str) -> BTreeMap<i64, i64> {
     crate::cpu_profile::tally("locked_items");
-    let Some(service) = crate::market_service::shared() else { return BTreeMap::new() };
+    let Some(service) = market else { return BTreeMap::new() };
     service.locks_for(&[account.to_string()]).remove(account).map(|(_, items)| items).unwrap_or_default()
 }
 
