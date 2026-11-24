@@ -70,7 +70,12 @@ fn dispatch_open(orch: &Arc<Orchestrator>, request: &Value) -> Value {
 }
 
 fn daemon_main() -> i32 {
-    let orch = Arc::new(Orchestrator::new());
+    // The configuration, read once: printed, then handed down to what it
+    // configures (lot 5.10).
+    let config = lifescape_orchestrator::config::Config::from_env();
+    lifescape_orchestrator::rates_service::install_snapshot_path(config.rates_path.clone());
+    lifescape_orch_brain::brain_redraw_gate::install(config.redraw_gate);
+    let orch = Arc::new(Orchestrator::with_config(config.clone()));
     if paths::socket_path().exists() {
         match UnixStream::connect(paths::socket_path()) {
             Ok(_) => {
@@ -93,16 +98,16 @@ fn daemon_main() -> i32 {
         eprintln!("pid write failed");
         return 1;
     }
+    for line in lifescape_orchestrator::startup_config::lines(&config) {
+        lifescape_orchestrator::logln!("{line}");
+    }
     // Downtime clock before any brain pass: the stop is not a wait.
     lifescape_orchestrator::brain_downtime::start();
     let dispatch: web::Dispatch = {
         let inner = orch.clone();
         Arc::new(move |request: Value| dispatch_open(&inner, &request))
     };
-    let port: u16 = std::env::var("LIFESCAPE_WEB_PORT")
-        .ok()
-        .and_then(|raw| raw.parse().ok())
-        .unwrap_or(8765);
+    let port = config.web_port;
     // Precomputed spectator map (SKIP when the pack hash is unchanged):
     // failures never block the daemon, the client shows fallback text.
     match lifescape_orchestrator::mapbuild::ensure_static_map(&lifescape_orchestrator::paths::static_dir()) {

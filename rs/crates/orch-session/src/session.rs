@@ -83,14 +83,6 @@ fn append_log(log_path: &std::path::Path, line: &str) {
 
 pub(crate) use crate::paths::engine_dir;
 
-fn server_host() -> String {
-    std::env::var("LIFESCAPE_SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string())
-}
-
-fn server_port() -> u16 {
-    std::env::var("LIFESCAPE_SERVER_PORT").ok().and_then(|raw| raw.parse().ok()).unwrap_or(43594)
-}
-
 /// One queued write: the idle pump thread fills `outcome` and sets `done`.
 pub(crate) struct QueuedCall {
     pub(crate) method: String,
@@ -746,8 +738,11 @@ pub fn run_session(account: &str) -> i32 {
         }
     };
     let no_login = std::env::var("LIFESCAPE_NO_LOGIN").as_deref() == Ok("1");
+    // The worker reads its configuration once, here (`Config::from_env`);
+    // the daemon hands it the game server address through the environment.
+    let config = crate::config::Config::from_env();
     let engine = engine_dir();
-    let mut bot = Bot::new(&server_host(), server_port(), &format!("{engine}/data/pack"), &format!("{engine}/data/config/private.pem"));
+    let mut bot = Bot::new(&config.server_host, config.server_port, &format!("{engine}/data/pack"), &format!("{engine}/data/config/private.pem"));
     lifescape_scripts::tables_live::attach_live_tables(&mut bot);
     crate::session_locks::install(bot.locks.clone());
     let shared = Arc::new(Shared {

@@ -15,11 +15,11 @@ use crate::jobs::Job;
 /// Frozen-session watchdog: heartbeats older than this (wall clock) mean
 /// the worker pumps nothing anymore (wedged thread, dead socket never
 /// noticed) no matter what the game ticks say.
-const WATCHDOG_STALE_SECS: f64 = 45.0;
+pub const WATCHDOG_STALE_SECS: f64 = 45.0;
 /// Poison window: this many watchdog restarts inside it parks the job
 /// for the operator instead of respawning forever.
-const WATCHDOG_WINDOW_SECS: f64 = 300.0;
-const WATCHDOG_MAX_RESTARTS: usize = 3;
+pub const WATCHDOG_WINDOW_SECS: f64 = 300.0;
+pub const WATCHDOG_MAX_RESTARTS: usize = 3;
 
 /// Frozen-session watchdog state, kept in the supervisor thread (no
 /// struct churn): last heartbeat wall time, recent restart times.

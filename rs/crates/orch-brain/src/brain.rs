@@ -474,7 +474,7 @@ const INBOX_CAPACITY: usize = 128;
 /// `maybe_launch` every 500 ms pass burnt 30 to 85 % of a core doing
 /// nothing new). Events (a report, a phase turning idle, an order filled)
 /// do not wait for it: they are messages in the account's mailbox.
-pub(crate) const SAFETY_TICK_SECS: f64 = 10.0;
+pub const SAFETY_TICK_SECS: f64 = 10.0;
 
 /// How often the brain clock looks at the accounts (and the longest a
 /// post waits when the clock is busy; posts themselves wake it at once).

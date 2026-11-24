@@ -27,7 +27,7 @@ pub use crate::client::WORKER_TIMEOUT;
 pub(crate) use crate::daemon_watch::Watchdog;
 
 const STOP_GRACE: f64 = 8.0;
-const OPEN_TIMEOUT: f64 = 150.0;
+pub const OPEN_TIMEOUT: f64 = 150.0;
 // Process-side bounds in wall-clock seconds: spawning a worker and waiting
 // for its socket RPCs happen outside any game connection, so no game-tick
 // bound can apply here.
@@ -92,6 +92,8 @@ pub struct Orchestrator {
     /// One open/close/redeploy/respawn per account (`worker_owner`).
     pub(crate) lifecycle: crate::worker_owner::LifecycleLocks,
     pub running: AtomicBool,
+    /// The configuration `main` read once (lot 5.10).
+    pub config: crate::config::Config,
 }
 
 
@@ -127,12 +129,17 @@ impl crate::fleet::Fleet for Orchestrator {
 
 impl Orchestrator {
     pub fn new() -> Self {
+        Orchestrator::with_config(crate::config::Config::default())
+    }
+
+    pub fn with_config(config: crate::config::Config) -> Self {
         paths::ensure_dirs();
         Orchestrator {
             jobs: Mutex::new(HashMap::new()),
             procs: Mutex::new(HashMap::new()),
             lifecycle: crate::worker_owner::LifecycleLocks::default(),
             running: AtomicBool::new(true),
+            config,
         }
     }
 
@@ -194,6 +201,8 @@ impl Orchestrator {
             .current_dir(paths::root())
             .env("LIFESCAPE_USER", &job.account)
             .env("LIFESCAPE_STATE", &partial)
+            .env("LIFESCAPE_SERVER_HOST", &self.config.server_host)
+            .env("LIFESCAPE_SERVER_PORT", self.config.server_port.to_string())
             .stdin(std::process::Stdio::null())
             .stdout(log.try_clone().map_err(|error| error.to_string())?)
             .stderr(log);

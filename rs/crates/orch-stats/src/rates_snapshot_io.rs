@@ -31,12 +31,21 @@ const REBUILD_PAGE: i64 = 2000;
 /// Snapshot file beside the staging log: rewritten by `rates_flush`,
 /// reloaded when the daemon restarts.
 pub fn snapshot_path() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("LIFESCAPE_RATES_PATH") {
-        if !dir.is_empty() {
-            return std::path::PathBuf::from(dir);
-        }
+    match installed_path().get() {
+        Some(Some(path)) => path.clone(),
+        _ => crate::paths::run_dir().join("rates-snapshot.json"),
     }
-    crate::paths::run_dir().join("rates-snapshot.json")
+}
+
+fn installed_path() -> &'static OnceLock<Option<std::path::PathBuf>> {
+    static PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    &PATH
+}
+
+/// Sets the snapshot file (`main`, from `Config::rates_path`, i.e.
+/// `LIFESCAPE_RATES_PATH`) before the first read; the first call wins.
+pub fn install_snapshot_path(path: Option<std::path::PathBuf>) {
+    let _ = installed_path().set(path);
 }
 
 pub(super) fn global_snapshot() -> &'static Mutex<Arc<Snapshot>> {

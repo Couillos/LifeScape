@@ -48,14 +48,22 @@ pub(crate) enum Mode {
     On,
 }
 
-impl Mode {
-    /// `on` / `off`, anything else (and unset) is `shadow`.
-    pub(crate) fn parse(text: &str) -> Mode {
-        match text.trim().to_lowercase().as_str() {
-            "on" | "1" | "true" => Mode::On,
-            "off" | "0" | "false" => Mode::Off,
-            _ => Mode::Shadow,
+impl From<crate::config::RedrawGate> for Mode {
+    fn from(gate: crate::config::RedrawGate) -> Mode {
+        match gate {
+            crate::config::RedrawGate::Off => Mode::Off,
+            crate::config::RedrawGate::Shadow => Mode::Shadow,
+            crate::config::RedrawGate::On => Mode::On,
         }
+    }
+}
+
+impl Mode {
+    /// `on` / `off`, anything else (and unset) is `shadow`
+    /// (`config::RedrawGate::parse`).
+    #[cfg(test)]
+    pub(crate) fn parse(text: &str) -> Mode {
+        Mode::from(crate::config::RedrawGate::parse(text))
     }
 
     fn label(self) -> &'static str {
@@ -67,10 +75,17 @@ impl Mode {
     }
 }
 
-/// The mode of this process (`LIFESCAPE_REDRAW_GATE`, default `shadow`).
+static MODE: OnceLock<Mode> = OnceLock::new();
+
+/// Sets the mode of this process (`main`, from `Config::redraw_gate`,
+/// `LIFESCAPE_REDRAW_GATE`); the first call wins.
+pub fn install(gate: crate::config::RedrawGate) {
+    let _ = MODE.set(Mode::from(gate));
+}
+
+/// The mode of this process: what `install` set, `shadow` before.
 pub(crate) fn mode() -> Mode {
-    static MODE: OnceLock<Mode> = OnceLock::new();
-    *MODE.get_or_init(|| Mode::parse(&std::env::var("LIFESCAPE_REDRAW_GATE").unwrap_or_default()))
+    *MODE.get_or_init(|| Mode::Shadow)
 }
 
 /// What a redraw reads, one hash per family.

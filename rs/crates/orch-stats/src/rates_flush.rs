@@ -123,6 +123,7 @@ mod tests {
     #[ignore]
     fn rates_flush_disk_bytes_per_minute() {
         let Ok(path) = std::env::var("LIFESCAPE_RATES_PATH") else { return };
+        crate::rates_service::install_snapshot_path(Some(std::path::PathBuf::from(&path)));
         assert!(!path.contains("/LifeScape/run/"), "a copy only, never the live file");
         let written = || -> u64 {
             let io = std::fs::read_to_string("/proc/self/io").unwrap_or_default();

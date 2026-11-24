@@ -20,6 +20,7 @@ pub fn daemon_clock() -> String {
     format!("{:02}:{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)
 }
 
+pub mod config;
 pub mod paths;
 pub mod clock;
 pub mod downtime;

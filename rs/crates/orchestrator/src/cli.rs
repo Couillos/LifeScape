@@ -640,9 +640,8 @@ fn run_direct(args: &[String]) -> i32 {
             "../lostcity/engine".to_string()
         }
     });
-    let host = std::env::var("LIFESCAPE_SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port: u16 = std::env::var("LIFESCAPE_SERVER_PORT").ok().and_then(|raw| raw.parse().ok()).unwrap_or(43594);
-    let mut bot = lifescape_sdk::Bot::new(&host, port, &format!("{engine}/data/pack"), &format!("{engine}/data/config/private.pem"));
+    let config = crate::config::Config::from_env();
+    let mut bot = lifescape_sdk::Bot::new(&config.server_host, config.server_port, &format!("{engine}/data/pack"), &format!("{engine}/data/config/private.pem"));
     lifescape_scripts::tables_live::attach_live_tables(&mut bot);
     match crate::staticmap::build_pack(&engine) {
         Ok(pack) => bot.maps = Some(pack),
