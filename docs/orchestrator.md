@@ -668,7 +668,7 @@ Preuve (`brain_market_view_tests`) : 400 étapes aléatoires (ordres de six comp
 - `on` : une relance sautable rend `(None, false)` sans tirer.
 - `off` : ni empreinte ni porte (le code d'avant).
 
-Bascule : lancer le démon sans la variable (shadow), attendre une heure en vrai, lire `would_skip_drew` et `would_skip_changed` dans les résumés (`grep 'redraw-gate:' run/daemon.log`) ; à **zéro** divergence, relancer avec `LIFESCAPE_REDRAW_GATE=on`. Gain attendu : `would_skip_agreed` sur `retried + would_skip_agreed` est la part des tirages qu'`on` économise.
+Bascule : lancer le démon sans la variable (shadow), attendre une heure en vrai, lire `would_skip_drew` et `would_skip_changed` dans les résumés (`grep 'redraw-gate:' run/orchestrator.log`) ; à **zéro** divergence, relancer avec `LIFESCAPE_REDRAW_GATE=on`. Gain attendu : `would_skip_agreed` sur `retried + would_skip_agreed` est la part des tirages qu'`on` économise.
 
 Preuve hors ligne (`brain_redraw_gate_tests`) : l'empreinte bouge avec chaque famille et seulement avec elles (vie, niveau, ordre du marché, site d'un autre bot, échéance d'une interdiction) ; les trois modes ; et, par le chemin de production (`brain_succession::redraw` sur des mondes bruts qui changent entre deux passes : enchère, niveau, interdiction levée ou posée, ambition donnée ou retirée), la porte en mode shadow ne permet jamais un saut que l'ancien tirage dément.
 
