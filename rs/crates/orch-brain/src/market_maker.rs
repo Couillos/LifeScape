@@ -360,7 +360,7 @@ pub(crate) fn quote_pass(job: &Job, life: &Life, deps: &crate::brain_deps::Brain
     let lookback = ticks_as_secs(lifescape_market::maker::DEMAND_LOOKBACK_TICKS) as i64;
     let now_clock = crate::market_service::MarketService::now_clock();
     let (deals, bought, rows) = {
-        let store = service.lock_store();
+        let store = service.read_store();
         (
             store.own_deals_since(account, role.switched_at).unwrap_or_default(),
             store.units_bought_since(now_clock - lookback, account).unwrap_or_default(),
@@ -520,7 +520,7 @@ fn apply(service: &crate::market_service::MarketService, account: &str, item: i6
     if side == "buy" {
         let (_, free) = service.free_coverage(account, lifescape_store::OrderSide::Buy, item);
         let resting = match planned {
-            Move::Amend(order, _) => service.lock_store().get_order(order).ok().flatten().map(|row| (row.remaining, row.price)),
+            Move::Amend(order, _) => service.read_store().get_order(order).ok().flatten().map(|row| (row.remaining, row.price)),
             _ => None,
         };
         if !move_covered(item, true, &planned, free, resting) {

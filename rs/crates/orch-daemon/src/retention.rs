@@ -69,13 +69,33 @@ pub fn purge_dossiers(dir: &Path, cutoff: i64, check: bool) -> Result<(usize, u6
 
 /// One retention pass at `now` (unix seconds). `check`: counts only.
 pub fn run_once(store: &Store, failures_dir: &Path, now: i64, check: bool) -> Result<Report, String> {
+    run_once_with(
+        &|cutoff| store.count_expired_orders(cutoff).map_err(|error| error.to_string()),
+        &|cutoff, limit| store.purge_expired_orders(cutoff, limit).map_err(|error| error.to_string()),
+        failures_dir,
+        now,
+        check,
+    )
+}
+
+/// `run_once` over the two store operations it needs, so the daemon's
+/// pass can send each batch through the single writer (one short group
+/// per batch, the writer free during the pause) instead of holding a
+/// connection through the pauses.
+pub fn run_once_with(
+    count: &dyn Fn(i64) -> Result<ExpiredOrders, String>,
+    purge: &dyn Fn(i64, i64) -> Result<ExpiredOrders, String>,
+    failures_dir: &Path,
+    now: i64,
+    check: bool,
+) -> Result<Report, String> {
     let orders_cutoff = now - CANCELLED_KEEP_SECS;
     let mut report = Report::default();
     if check {
-        report.orders = store.count_expired_orders(orders_cutoff).map_err(|error| error.to_string())?;
+        report.orders = count(orders_cutoff)?;
     } else {
         loop {
-            let batch = store.purge_expired_orders(orders_cutoff, BATCH_ORDERS).map_err(|error| error.to_string())?;
+            let batch = purge(orders_cutoff, BATCH_ORDERS)?;
             if batch.orders == 0 {
                 break;
             }
@@ -97,19 +117,25 @@ pub fn start() {
         // Gauge period, not a game wait.
         std::thread::sleep(FIRST_AFTER);
         loop {
-            match Store::open(&crate::paths::store_db()) {
-                Ok(store) => match run_once(&store, &crate::paths::run_dir().join("failures"), crate::jobs::now_secs() as i64, false) {
-                    Ok(report) if report.orders.orders > 0 || report.dossiers > 0 => crate::logln!(
-                        "retention: purged {} cancelled orders (+{} amends) and {} failure dossiers ({:.1} MB)",
-                        report.orders.orders,
-                        report.orders.amends,
-                        report.dossiers,
-                        report.dossier_bytes as f64 / 1_048_576.0
-                    ),
-                    Ok(_) => {}
-                    Err(error) => crate::logln!("retention: pass failed: {error}"),
-                },
-                Err(error) => crate::logln!("retention: store open failed: {error}"),
+            let path = crate::paths::store_db();
+            let through = |batch: Result<Result<ExpiredOrders, lifescape_store::Error>, lifescape_store::Error>| batch.and_then(|inner| inner).map_err(|error| error.to_string());
+            let result = run_once_with(
+                &|cutoff| through(crate::store_writer::write_to(&path, |store| store.count_expired_orders(cutoff))),
+                &|cutoff, limit| through(crate::store_writer::write_to(&path, |store| store.purge_expired_orders(cutoff, limit))),
+                &crate::paths::run_dir().join("failures"),
+                crate::jobs::now_secs() as i64,
+                false,
+            );
+            match result {
+                Ok(report) if report.orders.orders > 0 || report.dossiers > 0 => crate::logln!(
+                    "retention: purged {} cancelled orders (+{} amends) and {} failure dossiers ({:.1} MB)",
+                    report.orders.orders,
+                    report.orders.amends,
+                    report.dossiers,
+                    report.dossier_bytes as f64 / 1_048_576.0
+                ),
+                Ok(_) => {}
+                Err(error) => crate::logln!("retention: pass failed: {error}"),
             }
             std::thread::sleep(EVERY);
         }

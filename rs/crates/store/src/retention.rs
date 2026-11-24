@@ -61,7 +61,7 @@ impl Store {
     /// short transaction (the daemon calls it in a loop, the carnet stays
     /// writable between batches). Returns what this batch removed.
     pub fn purge_expired_orders(&self, cutoff: i64, limit: i64) -> Result<ExpiredOrders, Error> {
-        self.connection.execute_batch("BEGIN IMMEDIATE")?;
+        let scope = self.open_scope()?;
         let done = (|| -> Result<ExpiredOrders, rusqlite::Error> {
             let ids: Vec<i64> = {
                 let mut select = self.connection.prepare(&format!("SELECT o.order_id FROM orders o WHERE {} ORDER BY o.order_id LIMIT ?2", expired("o")))?;
@@ -79,11 +79,11 @@ impl Store {
         })();
         match done {
             Ok(removed) => {
-                self.connection.execute_batch("COMMIT")?;
+                self.close_scope(scope, true)?;
                 Ok(removed)
             }
             Err(source) => {
-                let _ignored = self.connection.execute_batch("ROLLBACK");
+                self.close_scope(scope, false)?;
                 Err(Error::Sql(format!("purge expired orders: {source}")))
             }
         }

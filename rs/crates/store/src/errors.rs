@@ -149,10 +149,24 @@ impl Store {
     /// Inserts rows in one transaction; a row whose `source_ref` already
     /// exists is skipped. Returns the number of rows inserted.
     pub fn record_errors(&self, rows: &[ErrorRecord]) -> Result<usize, Error> {
-        let transaction = self.connection.unchecked_transaction()?;
+        let scope = self.open_scope()?;
+        let inserted = match self.record_errors_in(rows) {
+            Ok(inserted) => {
+                self.close_scope(scope, true)?;
+                inserted
+            }
+            Err(error) => {
+                self.close_scope(scope, false)?;
+                return Err(error);
+            }
+        };
+        Ok(inserted)
+    }
+
+    fn record_errors_in(&self, rows: &[ErrorRecord]) -> Result<usize, Error> {
         let mut inserted = 0;
         {
-            let mut statement = transaction.prepare(
+            let mut statement = self.connection.prepare_cached(
                 "INSERT OR IGNORE INTO error_events(clock, source, kind, account, peer, script, args, \
                  node_id, method, stop, signature, message, has_pos, pos_x, pos_z, level, zone, detail, \
                  dossier, source_ref) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, \
@@ -187,7 +201,6 @@ impl Store {
                 ])?;
             }
         }
-        transaction.commit()?;
         Ok(inserted)
     }
 

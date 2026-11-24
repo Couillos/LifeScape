@@ -54,7 +54,7 @@ impl MarketService {
         if price < 1 {
             return Self::err(format!("bad amended price {price}"));
         }
-        let stored = self.lock_store().get_order(order_id).unwrap_or(None);
+        let stored = self.read_store().get_order(order_id).unwrap_or(None);
         let Some(row) = stored else {
             return Self::err(format!("unknown order {order_id}"));
         };
@@ -161,7 +161,7 @@ impl MarketService {
         if pressed {
             let served = self.pressed_auction(item, &row.motive, true);
             if !served.is_empty() {
-                let mine = self.lock_store().open_deals_for_account(&account).unwrap_or_default();
+                let mine = self.read_store().open_deals_for_account(&account).unwrap_or_default();
                 deal_ids.extend(mine.iter().filter(|deal| served.contains(&deal.deal_id)).map(|deal| Value::Int(deal.deal_id)));
             }
         }
@@ -182,7 +182,7 @@ impl MarketService {
         if reason == lifescape_store::AMENDED_REASON {
             return Self::err(format!("cancel reason '{reason}' is reserved to amend"));
         }
-        let stored = self.lock_store().get_order(order_id).unwrap_or(None);
+        let stored = self.read_store().get_order(order_id).unwrap_or(None);
         let Some(row) = stored else {
             return Self::err(format!("unknown order {order_id}"));
         };
@@ -215,7 +215,7 @@ impl MarketService {
     /// Resting carnet rows of `account` on `item` and `side`: open ones
     /// and the resting remainder of partly filled (`matched`) ones.
     pub fn resting_rows(&self, account: &str, item: i64, side: OrderSide) -> Vec<lifescape_store::Order> {
-        self.lock_store()
+        self.read_store()
             .account_orders(account)
             .unwrap_or_default()
             .into_iter()

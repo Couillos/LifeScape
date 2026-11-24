@@ -191,7 +191,7 @@ pub fn current() -> Option<Arc<TimeValues>> {
     let service = crate::market_service::shared()?;
     let started = Instant::now();
     let built = {
-        let store = service.lock_store();
+        let store = service.read_store();
         measure_in(&store, crate::market_service::MarketService::now_clock())
     };
     let values = match built {

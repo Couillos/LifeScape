@@ -199,7 +199,7 @@ const DAY: i64 = 86_400;
 /// `Store::volume_between(item_id, clock - 86400, clock + 1)`, summed from
 /// the copy of the day's executions.
 pub(crate) fn volume_24h_of(service: &MarketService, item_id: i64, clock: i64) -> i64 {
-    let store = service.lock_store();
+    let store = service.read_store();
     let Ok(stamp) = store.executions_stamp() else { return store.volume_between(item_id, clock - DAY, clock + 1).unwrap_or(0) };
     let window = clock - DAY;
     let mut cache = fills_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());

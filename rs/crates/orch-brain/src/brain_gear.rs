@@ -171,7 +171,7 @@ pub(crate) fn deal_coins_from(account: &str, deals: &[lifescape_store::Deal]) ->
 pub fn committed_coins(account: &str, except: Option<i64>, deps: &crate::brain_deps::BrainDeps) -> i64 {
     let Some(service) = deps.market.clone() else { return 0 };
     let (rows, deals) = {
-        let store = service.lock_store();
+        let store = service.read_store();
         (store.account_orders(account).unwrap_or_default(), store.open_deals_for_account(account).unwrap_or_default())
     };
     // The coins a donor owes the makers (`fund-makers`) are spent too.
@@ -192,7 +192,7 @@ pub(crate) fn free_coins(job: &Job, except: Option<i64>, deps: &crate::brain_dep
 fn gear_free_coins(job: &Job, deps: &crate::brain_deps::BrainDeps) -> i64 {
     let coins = crate::brain_plan::holdings_count(job, "coins", deps);
     let Some(service) = deps.market.clone() else { return coins.max(0) };
-    let store = service.lock_store();
+    let store = service.read_store();
     let rows = store.account_orders(&job.account).unwrap_or_default();
     let deals = store.open_deals_for_account(&job.account).unwrap_or_default();
     drop(store);
@@ -253,7 +253,7 @@ pub fn next_gear_cost(job: &Job, life: &Life, live: &Value, deps: &crate::brain_
 /// A resting gear bid of the account on `item` whose piece is no longer
 /// worth a coin to it: withdrawn (B1, review lot 3).
 fn withdraw_unworthy_bid(service: &crate::market_service::MarketService, account: &str, item: i64) {
-    let rows = service.lock_store().account_orders(account).unwrap_or_default();
+    let rows = service.read_store().account_orders(account).unwrap_or_default();
     for row in rows.iter().filter(|row| row.item_id == item && cancellable(row) && row.motive == crate::market_lineage::GEAR) {
         cancel_order(service, account, row.order_id);
     }
@@ -278,7 +278,7 @@ fn cancel_order(service: &crate::market_service::MarketService, account: &str, o
 fn cancel_stale_bids(job: &Job, life: &Life, wanted: &[String], deps: &crate::brain_deps::BrainDeps) {
     let Some(service) = deps.market.clone() else { return };
     let spared = crate::brain_wishlist::wanted_names(life);
-    let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
+    let rows = service.read_store().account_orders(&job.account).unwrap_or_default();
     let candidates: Vec<crate::brain_gear_stale::Candidate> = rows
         .iter()
         .filter(|row| cancellable(row) && row.motive == crate::market_lineage::GEAR)

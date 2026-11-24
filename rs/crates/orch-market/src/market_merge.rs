@@ -85,7 +85,7 @@ impl MarketService {
     /// merged away.
     pub(crate) fn consolidate_round(&self) -> usize {
         let resting: Vec<lifescape_store::Order> = self
-            .lock_store()
+            .read_store()
             .resting_orders()
             .unwrap_or_default()
             .into_iter()

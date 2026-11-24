@@ -80,7 +80,7 @@ pub fn release_plan(listings: &[(i64, i64)], free: i64, need: i64) -> Vec<(i64, 
 pub(crate) fn release_listings(service: &MarketService, account: &str, item: &str, free: i64, need: i64) -> Vec<String> {
     let Some(base) = base_id(item) else { return Vec::new() };
     let rows: Vec<lifescape_store::Order> = service
-        .lock_store()
+        .read_store()
         .account_orders(account)
         .unwrap_or_default()
         .into_iter()

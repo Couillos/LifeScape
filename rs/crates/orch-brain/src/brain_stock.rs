@@ -164,7 +164,7 @@ pub fn stock_pass(job: &Job, life: &Life, live: &Value, deps: &crate::brain_deps
     let consumption = slice_consumption(snapshot.book(), &slices, &owned, Some(&food), &level_of, crate::rates_service::now_secs());
     let mut needs = stock_target::slice_needs(&consumption);
     let (rows, deals) = {
-        let store = service.lock_store();
+        let store = service.read_store();
         (store.account_orders(&job.account).unwrap_or_default(), store.open_deals_for_account(&job.account).unwrap_or_default())
     };
     let name_of = crate::brain_gear::name_of;

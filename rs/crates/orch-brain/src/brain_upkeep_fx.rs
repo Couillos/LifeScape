@@ -199,7 +199,7 @@ impl UpkeepFx for LiveUpkeepFx<'_> {
 
     fn orders(&self) -> Option<Vec<OrderFact>> {
         let (job, service) = (self.job?, self.deps.market.as_deref()?);
-        let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
+        let rows = service.read_store().account_orders(&job.account).unwrap_or_default();
         Some(
             rows.iter()
                 .map(|row| OrderFact {

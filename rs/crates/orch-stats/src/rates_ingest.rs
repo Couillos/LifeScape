@@ -113,9 +113,12 @@ fn ingest_report_rows(
 pub fn ingest_report_persisted(report: &Value) -> Result<(), String> {
     let mut last_error = "rates store: no attempt".to_string();
     for _attempt in 0..20 {
-        match crate::store_pool::open(&rates_db_path()) {
-            Ok(store) => {
-                let parsed = ingest_report_into(&store, report)?;
+        // Through the process's single writer when the daemon registered
+        // one (grouped commit, acknowledged after it), else a pooled
+        // connection that commits by itself.
+        match crate::store_writer::write_to(&rates_db_path(), |store| ingest_report_into(store, report)) {
+            Ok(parsed) => {
+                let parsed = parsed?;
                 // Contract 2 feeds the estimator (parsed and validated
                 // above, before any write); contract 1 never does.
                 let contract = crate::report_contract::parse_contract(report)?;

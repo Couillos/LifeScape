@@ -275,7 +275,7 @@ impl MarketService {
         self.lock_store()
             .set_deal_status(deal_id, lifescape_store::DealStatus::Matched, "", clock)
             .map_err(|error| error.to_string())?;
-        let seller_limit = self.lock_store().get_order(fill.sell_id as i64).ok().flatten().and_then(|row| row.ask_limit);
+        let seller_limit = self.read_store().get_order(fill.sell_id as i64).ok().flatten().and_then(|row| row.ask_limit);
         let mut engine = self.lock_engine();
         if let Ok(deal) = Deal::fresh(
             deal_id as u64,
@@ -328,7 +328,7 @@ impl MarketService {
 
     pub(crate) fn op_my_deals(&self, request: &Value) -> Value {
         let account = request.get("account").as_str().unwrap_or("");
-        let rows = self.lock_store().open_deals_for_account(account).unwrap_or_default();
+        let rows = self.read_store().open_deals_for_account(account).unwrap_or_default();
         let mut values: Vec<Value> = rows
             .iter()
             .map(|row| {
@@ -365,7 +365,7 @@ impl MarketService {
     pub(crate) fn op_recent(&self, request: &Value) -> Value {
         let wanted = request.get("item").as_i64().unwrap_or(-1);
         let limit = request.get("limit").as_i64().unwrap_or(20).clamp(1, 100);
-        let store = self.lock_store();
+        let store = self.read_store();
         // Failed handovers never happened: the feed lists settled and
         // pending deals only (user rule 2026-11-13).
         let mut rows = store.recent_deals(100).unwrap_or_default();

@@ -495,7 +495,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life, deps: &crate::brain_deps::Brai
     let reserved = lifescape_planner::reserved_quest_objects(life);
     crate::brain_quest_gate::release_for_quests(&service, &job.account, &stacks, &reserved, deps);
     let mut selling: Vec<lifescape_store::Order> = service
-        .lock_store()
+        .read_store()
         .account_orders(&job.account)
         .unwrap_or_default()
         .into_iter()
@@ -543,7 +543,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life, deps: &crate::brain_deps::Brai
     // The bot's time value (D1, the brain's one rate), read BEFORE the
     // store is locked: its refresh locks the store itself.
     let rate = crate::brain_d17::coin_rate(&job.account);
-    let costs = crate::cpu_profile::timed("sales.own_costs", || crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account, rate));
+    let costs = crate::cpu_profile::timed("sales.own_costs", || crate::brain_reserve::OwnCosts::load(&service.read_store(), &job.account, rate));
     // The `bid_response` make cost caps every reserve (one book and rates
     // read for the pass): what a bid quota was priced at always sells.
     let mut priced: Vec<(String, i64)> = free.clone();

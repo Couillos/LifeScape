@@ -114,7 +114,7 @@ pub(crate) fn gather_market(job: &Job, inputs: &mut LaunchInputs, deps: &BrainDe
     inputs.commit_flat = 0;
     if let Some(service) = deps.market.as_deref() {
         let (rows, deals) = {
-            let store = service.lock_store();
+            let store = service.read_store();
             (store.account_orders(&job.account).unwrap_or_default(), store.open_deals_for_account(&job.account).unwrap_or_default())
         };
         for row in &rows {

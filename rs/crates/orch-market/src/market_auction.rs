@@ -95,7 +95,7 @@ pub fn period_secs(tick_ms: f64) -> f64 {
 pub fn anchor_of(service: &MarketService, item: i64, account: &str, tick_ms: f64) -> Option<i64> {
     let window_secs = (auction::ANCHOR_WINDOW_TICKS as f64 * tick_ms.max(1.0) / 1000.0) as i64;
     let since = MarketService::now_clock() - window_secs;
-    let fills = service.lock_store().settled_fills_since(item, since, account, auction::ANCHOR_MAX_FILLS);
+    let fills = service.read_store().settled_fills_since(item, since, account, auction::ANCHOR_MAX_FILLS);
     match fills {
         Ok(fills) => auction::anchor_price(&fills.iter().map(|fill| (fill.price, fill.quantity)).collect::<Vec<_>>()),
         Err(error) => {
@@ -113,7 +113,7 @@ pub fn in_auction(service: &MarketService, item: i64) -> bool {
 /// Mode of `item` from its executions alone (a continuous object, a
 /// first order): `None` and a log when the store cannot be read.
 fn measured_mode(service: &MarketService, item: i64, was_auction: bool, tick_ms: f64) -> Option<bool> {
-    let clocks = match service.lock_store().fill_clocks(item, GAP_SAMPLE_FILLS) {
+    let clocks = match service.read_store().fill_clocks(item, GAP_SAMPLE_FILLS) {
         Ok(clocks) => clocks,
         Err(error) => {
             crate::logln!("market-auction: executions of object {item} unreadable, mode kept: {error}");

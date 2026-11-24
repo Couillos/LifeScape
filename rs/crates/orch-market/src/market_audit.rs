@@ -275,7 +275,7 @@ impl MarketService {
             }
         }
         let open: Vec<Order> = self
-            .lock_store()
+            .read_store()
             .resting_orders()
             .unwrap_or_default()
             .into_iter()
@@ -292,7 +292,7 @@ impl MarketService {
                 cancelled += self.cancel_rows(&account, &orders.iter().map(|order| order.order_id).collect::<Vec<_>>(), "no witness (account gone)");
                 continue;
             };
-            let deals = self.lock_store().open_deals_for_account(&account).unwrap_or_default();
+            let deals = self.read_store().open_deals_for_account(&account).unwrap_or_default();
             let mut promised_coins = 0i64;
             let mut promised: BTreeMap<i64, i64> = BTreeMap::new();
             for deal in &deals {
@@ -325,7 +325,7 @@ impl MarketService {
             // (not dormant), open and the resting remainder of partly
             // filled ones.
             let open: Vec<Order> = self
-                .lock_store()
+                .read_store()
                 .account_orders(account)
                 .unwrap_or_default()
                 .into_iter()
@@ -340,7 +340,7 @@ impl MarketService {
                     *items.entry(base_of(order.item_id)).or_insert(0) += order.remaining.max(0);
                 }
             }
-            for deal in self.lock_store().open_deals_for_account(account).unwrap_or_default() {
+            for deal in self.read_store().open_deals_for_account(account).unwrap_or_default() {
                 if &deal.buyer == account {
                     coins += crate::market_units::deal_coins(deal.item_id, deal.quantity, deal.price);
                 } else {
@@ -433,7 +433,7 @@ impl MarketService {
     /// Mirrors one witnessed holding into the ledger, net of the
     /// account's in-flight deals.
     pub fn sync_holdings(&self, account: &str, coins: i64, stock: &[(i64, i64)]) {
-        let deals = self.lock_store().open_deals_for_account(account).unwrap_or_default();
+        let deals = self.read_store().open_deals_for_account(account).unwrap_or_default();
         let (coins, stock) = net_of_deals(account, coins, stock, &deals);
         self.lock_engine().ledger.sync_account(account, coins, &stock);
     }
@@ -442,7 +442,7 @@ impl MarketService {
     /// resting orders of the same side (`uncommitted`).
     pub fn free_coverage(&self, account: &str, side: OrderSide, item: i64) -> (i64, i64) {
         let resting: Vec<Order> = self
-            .lock_store()
+            .read_store()
             .account_orders(account)
             .unwrap_or_default()
             .into_iter()

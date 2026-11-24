@@ -167,7 +167,7 @@ pub(crate) fn fingerprint(life: &Life, live: &Value, deps: &crate::brain_deps::B
         Some(service) => {
             hasher.write_u64(service.instance_id());
             hasher.write_u64(crate::brain_market_view::books_generation(&service));
-            hasher.write_i64(service.lock_store().executions_stamp().unwrap_or(-1));
+            hasher.write_i64(service.read_store().executions_stamp().unwrap_or(-1));
         }
         None => hasher.write_u8(0),
     });
@@ -183,7 +183,7 @@ pub(crate) fn fingerprint(life: &Life, live: &Value, deps: &crate::brain_deps::B
         let best: Vec<i64> = (0u8..23).map(|stat| crate::brain_gear_fleet::best_now(lifescape_sdk::provenance::skill_name(stat))).collect();
         write_debug(hasher, &best);
         if let Some(service) = deps.market.clone() {
-            hasher.write_i64(service.lock_store().holdings_stamp().unwrap_or(-1));
+            hasher.write_i64(service.read_store().holdings_stamp().unwrap_or(-1));
         }
         write_debug(hasher, &deps.crowd.others(&life.account));
         write_debug(hasher, &deps.crowd.seats(&life.account));

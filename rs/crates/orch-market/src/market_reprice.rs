@@ -276,11 +276,13 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
     if due.is_empty() {
         return 0;
     }
-    let batch = service.lock_store().begin_batch().unwrap_or(false);
+    // One group for the whole pass (the pass's writes commit once, at its
+    // end; its reads go through the writer connection, `read_store`).
+    let batch = service.store_writer().batch();
     let (mut moved, mut parked, mut refused) = (0usize, 0usize, 0usize);
     let mut anchors: HashMap<(i64, String), Option<i64>> = HashMap::new();
     for (order, mut bounds) in due {
-        let row = service.lock_store().get_order(order).ok().flatten();
+        let row = service.read_store().get_order(order).ok().flatten();
         let Some(row) = row.filter(resting) else {
             service.lock_engine().quote_bounds.remove(&order);
             continue;
@@ -354,11 +356,7 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
             refused += 1;
         }
     }
-    if batch {
-        if let Err(error) = service.lock_store().commit_batch() {
-            crate::logln!("market-reprice: batch commit failed: {error}");
-        }
-    }
+    drop(batch);
     if moved + refused > 0 {
         crate::logln!("market-reprice: {moved} moved, {parked} held, {refused} refused");
     }
@@ -437,7 +435,7 @@ pub fn adopt_bids(service: &MarketService, wall: f64) -> usize {
     if wall - daemon_start() < ADOPT_GRACE_SECS {
         return 0;
     }
-    let rows = service.lock_store().resting_orders().unwrap_or_default();
+    let rows = service.read_store().resting_orders().unwrap_or_default();
     let mut adopted = 0;
     for (order, ceiling) in bid_adoptions(&rows, &|order| handled(service, order)) {
         let Some(row) = rows.iter().find(|row| row.order_id == order) else { continue };
@@ -518,7 +516,7 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
     // object is worth to it.
     let open_cap = if motive == crate::market_lineage::NEED { ceiling } else { lifescape_market::discovery::bid_under_ceiling(ceiling, account_margin(service, account)) };
     let rows: Vec<lifescape_store::Order> = service
-        .lock_store()
+        .read_store()
         .account_orders(account)
         .unwrap_or_default()
         .into_iter()
@@ -661,7 +659,7 @@ pub fn refresh_resting_bid(service: &MarketService, account: &str, item: i64, qu
     let open_at = lifescape_market::lots::lot_price(open_at, lot);
     let open_cap = if motive == crate::market_lineage::NEED { ceiling } else { lifescape_market::discovery::bid_under_ceiling(ceiling, account_margin(service, account)) };
     let row = service
-        .lock_store()
+        .read_store()
         .account_orders(account)
         .unwrap_or_default()
         .into_iter()
@@ -669,7 +667,7 @@ pub fn refresh_resting_bid(service: &MarketService, account: &str, item: i64, qu
     let Some(row) = row else { return Ok(None) };
     let old_ceiling = service.lock_engine().quote_bounds.get(&row.order_id).map(|bounds| bounds.ceiling);
     let (order, price) = amend_resting(service, account, &row, resting_target(row.price, open_at, open_cap, ceiling), Some(quantity), ceiling)?;
-    let remaining = service.lock_store().get_order(order).ok().flatten().map(|stored| stored.remaining).unwrap_or(row.remaining);
+    let remaining = service.read_store().get_order(order).ok().flatten().map(|stored| stored.remaining).unwrap_or(row.remaining);
     let unit = |price: i64| lifescape_market::lots::unit_price(price, lot);
     Ok(Some(RestingRefresh { order, price: unit(price), old_price: unit(row.price), ceiling: unit(ceiling), old_ceiling: old_ceiling.map(unit), remaining, old_remaining: row.remaining }))
 }

@@ -263,7 +263,7 @@ pub fn ensure_imported(items: &Path) {
     let mut failures = 0;
     for (taken_at, point) in samples {
         let pairs: Vec<(i64, i64)> = point.into_iter().collect();
-        if let Err(error) = store.record_holdings(taken_at, &pairs) {
+        if let Err(error) = crate::store_writer::write_to(&db_path, |store| store.record_holdings(taken_at, &pairs)).and_then(|inner| inner) {
             failures += 1;
             eprintln!("holdings: import drops point at {taken_at}: {error}");
         }
@@ -578,8 +578,11 @@ fn maybe_sample_lazy(describe: &dyn Fn() -> Vec<Value>, items: &Path, save_dir: 
     if pairs.is_empty() {
         return false;
     }
-    let Some(store) = store.unwrap_or_else(due_store) else { return false };
-    match store.record_holdings(now, &pairs) {
+    // The pooled connection only said a point is due; the write goes
+    // through the single writer.
+    let Some(due) = store.unwrap_or_else(due_store) else { return false };
+    drop(due);
+    match crate::store_writer::write_to(&store_path(items), |writer| writer.record_holdings(now, &pairs)).and_then(|inner| inner) {
         Ok(()) => {
             println!("holdings: {} item kinds across all accounts", pairs.len());
             true

@@ -159,7 +159,7 @@ impl MarketService {
         let window = cooldown_secs();
         let now = Self::now_clock();
         let since = now - window.ceil() as i64;
-        let failed = match self.lock_store().failed_deals_since(since) {
+        let failed = match self.read_store().failed_deals_since(since) {
             Ok(failed) => failed,
             Err(error) => {
                 crate::logln!("market reload: pair cooldowns not restored, store refused: {error}");

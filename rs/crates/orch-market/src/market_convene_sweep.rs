@@ -204,7 +204,7 @@ impl MarketService {
             );
             failed.push(deal_id as i64);
         }
-        let rows = self.lock_store().account_orders(account).unwrap_or_default();
+        let rows = self.read_store().account_orders(account).unwrap_or_default();
         let mut cancelled = 0;
         for row in rows.iter().filter(|row| {
             row.status == lifescape_store::OrderStatus::Open

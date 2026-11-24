@@ -76,7 +76,7 @@ fn last_pass() -> &'static Mutex<HashMap<String, f64>> {
 fn cancel_merchant_tool_bids(job: &Job, life: &Life, deps: &crate::brain_deps::BrainDeps) {
     let Some(service) = deps.market.clone() else { return };
     let spared = crate::brain_wishlist::wanted_names(life);
-    let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
+    let rows = service.read_store().account_orders(&job.account).unwrap_or_default();
     let mut names: Vec<String> = rows
         .iter()
         .filter(|row| crate::brain_gear::cancellable(row))

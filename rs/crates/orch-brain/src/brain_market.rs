@@ -109,7 +109,7 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn 
     }
     // A bid swept whole into deals leaves no resting row, its lots still
     // on their way: it stands until the handover.
-    let deals = service.lock_store().open_deals_for_account(&job.account).unwrap_or_default();
+    let deals = service.read_store().open_deals_for_account(&job.account).unwrap_or_default();
     if buying_in_flight(&job.account, id, &deals) {
         return;
     }
@@ -277,7 +277,7 @@ pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx, worth: Option<i6
     // (2026-11-21: "buyer holds 83092 coins, needs 83132", a mage's
     // second input refused three times, its training abandoned).
     let resting_bid = service
-        .lock_store()
+        .read_store()
         .account_orders(&job.account)
         .unwrap_or_default()
         .iter()
@@ -357,7 +357,7 @@ pub fn release_stale_unowned(job: &Job, life: &lifescape_planner::Life, deps: &c
         return 0;
     }
     let Some(service) = deps.market.clone() else { return 0 };
-    let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
+    let rows = service.read_store().account_orders(&job.account).unwrap_or_default();
     let wanted = crate::brain_wishlist::wanted_names(life);
     let mut closed = 0;
     for order in stale_unowned(&rows, &wanted, &crate::brain_gear::name_of) {
@@ -386,7 +386,7 @@ pub fn release_orphan_needs(job: &Job, life: &lifescape_planner::Life, deps: &cr
         table.insert(job.account.clone(), now);
     }
     let Some(service) = deps.market.clone() else { return 0 };
-    let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
+    let rows = service.read_store().account_orders(&job.account).unwrap_or_default();
     let wanted = crate::brain_wishlist::wanted_names(life);
     let mut closed = 0;
     for order in orphan_needs(&rows, &wanted, &crate::brain_gear::name_of) {
@@ -406,7 +406,7 @@ pub fn release_orphan_needs(job: &Job, life: &lifescape_planner::Life, deps: &cr
 /// holdings above the launch baseline, a partial buy landed.
 pub fn buy_closed(account: &str, item: &str, deps: &crate::brain_deps::BrainDeps) -> bool {
     let (Some(service), Some(id)) = (deps.market.clone(), obj_id(item)) else { return false };
-    let store = service.lock_store();
+    let store = service.read_store();
     let order_live = store.account_orders(account).unwrap_or_default().iter().any(|row| {
         row.item_id == id
             && row.side == lifescape_store::OrderSide::Buy

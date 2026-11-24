@@ -301,30 +301,19 @@ impl Store {
         item_id: i64,
         resolution: YieldCandleResolution,
     ) -> Result<Vec<Candle>, Error> {
-        let transaction = self
-            .connection
-            .transaction()
-            .map_err(|source| Error::Sql(source.to_string()))?;
-        let rebuilt = write_candles(&transaction, item_id, resolution)?;
-        transaction
-            .commit()
-            .map_err(|source| Error::Sql(source.to_string()))?;
-        Ok(rebuilt)
+        let scope = self.open_scope()?;
+        let rebuilt = write_candles(&self.connection, item_id, resolution);
+        self.close_scope(scope, rebuilt.is_ok())?;
+        rebuilt
     }
 
     /// Repaints every resolution (`YieldCandleResolution::ALL`) of one
     /// item from executions in one transaction (a settled fill, a resync).
     pub fn rebuild_all_candles(&mut self, item_id: i64) -> Result<(), Error> {
-        let transaction = self
-            .connection
-            .transaction()
-            .map_err(|source| Error::Sql(source.to_string()))?;
-        for resolution in YieldCandleResolution::ALL {
-            write_candles(&transaction, item_id, resolution)?;
-        }
-        transaction
-            .commit()
-            .map_err(|source| Error::Sql(source.to_string()))
+        let scope = self.open_scope()?;
+        let written = YieldCandleResolution::ALL.into_iter().try_for_each(|resolution| write_candles(&self.connection, item_id, resolution).map(|_| ()));
+        self.close_scope(scope, written.is_ok())?;
+        written
     }
 }
 

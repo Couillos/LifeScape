@@ -22,7 +22,7 @@ impl MarketService {
     pub fn public_view(&self, account: &str, item: i64) -> BookView {
         let clock = Self::now_clock();
         // One indexed SUM, never the rows (CPU: hottest pool call).
-        let volume_24h: i64 = self.lock_store().volume_between(item, clock - 86_400, clock + 1).unwrap_or(0);
+        let volume_24h: i64 = self.read_store().volume_between(item, clock - 86_400, clock + 1).unwrap_or(0);
         let mut view = BookView { volume_24h, ..BookView::default() };
         if let Some(book) = self.lock_engine().books.get(&item) {
             // Per unit (plan prix lot D: the brain's unit).
@@ -62,7 +62,7 @@ impl MarketService {
         if let Some(fill) = self.lock_engine().own_sells.get(&(account.to_string(), item)).copied() {
             return Some(unit(fill));
         }
-        let stored = self.lock_store().last_own_fill(account, item, false).ok().flatten();
+        let stored = self.read_store().last_own_fill(account, item, false).ok().flatten();
         stored.map(|(price, _)| unit(OwnFill { price, rested_ticks: None }))
     }
 
@@ -74,14 +74,14 @@ impl MarketService {
 
     /// `own_buy_price` in the book's unit (per lot).
     pub fn own_buy_price_lot(&self, account: &str, item: i64) -> Option<i64> {
-        self.lock_store().last_own_fill(account, item, true).ok().flatten().map(|(price, _)| price)
+        self.read_store().last_own_fill(account, item, true).ok().flatten().map(|(price, _)| price)
     }
 
     /// Plan prix §1: the account's unsold horizons per object over the last
     /// day, net of its sales (one carnet read per selling pass).
     pub fn seller_learning(&self, account: &str) -> std::collections::HashMap<i64, i64> {
         let since = Self::now_clock() - LEARNING_WINDOW_SECS;
-        let rows = self.lock_store().seller_learning(account, since).unwrap_or_default();
+        let rows = self.read_store().seller_learning(account, since).unwrap_or_default();
         rows.into_iter().map(|(item, (withdrawn, sold))| (item, lifescape_market::discovery::unsold_horizons(withdrawn, sold))).collect()
     }
 

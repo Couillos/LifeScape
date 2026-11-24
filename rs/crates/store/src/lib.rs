@@ -115,6 +115,11 @@ fn is_busy(source: &rusqlite::Error) -> bool {
     )
 }
 
+/// An atomic scope opened by `Store::open_scope`.
+pub(crate) struct Scope {
+    nested: bool,
+}
+
 /// SQLite backing store. Open once per process (the daemon).
 pub struct Store {
     connection: rusqlite::Connection,
@@ -196,6 +201,23 @@ impl Store {
         Ok(true)
     }
 
+    /// Opens the write group of the single writer (`BEGIN IMMEDIATE`: the
+    /// write lock is taken now, waiting out another connection's commit
+    /// instead of failing at the first statement). False when one is open.
+    pub fn begin_group(&self) -> Result<bool, Error> {
+        if !self.connection.is_autocommit() {
+            return Ok(false);
+        }
+        self.connection.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(true)
+    }
+
+    /// Rows this connection has changed since it opened (SQLite's
+    /// `total_changes`): moves with every INSERT/UPDATE/DELETE.
+    pub fn changes_made(&self) -> u64 {
+        self.connection.total_changes()
+    }
+
     /// Commits the batch `begin_batch` opened.
     pub fn commit_batch(&self) -> Result<(), Error> {
         if self.connection.is_autocommit() {
@@ -227,6 +249,34 @@ impl Store {
         }
     }
 
+    /// Opens an atomic scope: a transaction when none is open, else a
+    /// savepoint inside the open one (the single writer keeps a group of
+    /// writes open across calls, `orch-core::store_writer`).
+    pub(crate) fn open_scope(&self) -> Result<Scope, Error> {
+        if self.connection.is_autocommit() {
+            self.connection.execute_batch("BEGIN IMMEDIATE")?;
+            Ok(Scope { nested: false })
+        } else {
+            self.connection.execute_batch("SAVEPOINT scope")?;
+            Ok(Scope { nested: true })
+        }
+    }
+
+    /// Ends the scope: commit (or release) when `ok`, else roll it back.
+    pub(crate) fn close_scope(&self, scope: Scope, ok: bool) -> Result<(), Error> {
+        match (scope.nested, ok) {
+            (false, true) => self.connection.execute_batch("COMMIT")?,
+            (false, false) => {
+                let _ignored = self.connection.execute_batch("ROLLBACK");
+            }
+            (true, true) => self.connection.execute_batch("RELEASE scope")?,
+            (true, false) => {
+                let _ignored = self.connection.execute_batch("ROLLBACK TO scope; RELEASE scope");
+            }
+        }
+        Ok(())
+    }
+
     /// True when no transaction is open (a connection kept for reuse must
     /// be idle).
     pub fn is_idle(&self) -> bool {
@@ -237,15 +287,47 @@ impl Store {
     /// is already open): all its statements commit together, one journal
     /// sync instead of one per statement, and a failure leaves nothing.
     pub fn in_batch<T, E: From<Error>>(&self, write: impl FnOnce(&Store) -> Result<T, E>) -> Result<T, E> {
-        let owned = self.begin_batch()?;
+        // A transaction when none is open, else a savepoint inside the open
+        // one (a batch, or the single writer's group): either way a failure
+        // leaves none of this call's rows.
+        let scope = self.open_scope()?;
         let written = write(self);
-        if owned {
-            match &written {
-                Ok(_) => self.commit_batch()?,
-                Err(_) => self.rollback_batch(),
-            }
-        }
+        self.close_scope(scope, written.is_ok())?;
         written
+    }
+
+    /// Every row of every table as text, per table, rows sorted by column:
+    /// what the equivalence tests compare (same sequence of writes, same
+    /// rows, whatever the commit grouping). Not for production reads.
+    pub fn table_digest(&self) -> Result<std::collections::BTreeMap<String, Vec<String>>, Error> {
+        let names: Vec<String> = {
+            let mut statement = self.connection.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        let mut digest = std::collections::BTreeMap::new();
+        for name in names {
+            let columns = self.connection.prepare(&format!("SELECT * FROM \"{name}\""))?.column_count();
+            let order: Vec<String> = (1..=columns).map(|column| column.to_string()).collect();
+            let mut statement = self.connection.prepare(&format!("SELECT * FROM \"{name}\" ORDER BY {}", order.join(", ")))?;
+            let rows: Vec<String> = statement
+                .query_map([], |row| {
+                    let mut cells = Vec::with_capacity(columns);
+                    for column in 0..columns {
+                        cells.push(match row.get_ref(column)? {
+                            rusqlite::types::ValueRef::Null => "NULL".to_string(),
+                            rusqlite::types::ValueRef::Integer(value) => value.to_string(),
+                            rusqlite::types::ValueRef::Real(value) => value.to_string(),
+                            rusqlite::types::ValueRef::Text(value) => String::from_utf8_lossy(value).into_owned(),
+                            rusqlite::types::ValueRef::Blob(value) => format!("blob{}", value.len()),
+                        });
+                    }
+                    Ok(cells.join("|"))
+                })?
+                .collect::<Result<_, _>>()?;
+            digest.insert(name, rows);
+        }
+        Ok(digest)
     }
 
     /// Schema version of the open file (equals the latest migration).

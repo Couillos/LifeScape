@@ -28,12 +28,12 @@ impl Store {
         }
         let hour = (taken_at / HOUR_SECONDS) * HOUR_SECONDS;
         let day = (taken_at / DAY_SECONDS) * DAY_SECONDS;
-        self.connection.execute_batch("BEGIN IMMEDIATE")?;
+        let scope = self.open_scope()?;
         let recorded = self.record_inner(hour, day, taken_at, items);
         match recorded {
-            Ok(()) => self.connection.execute_batch("COMMIT")?,
+            Ok(()) => self.close_scope(scope, true)?,
             Err(error) => {
-                let _ignored = self.connection.execute_batch("ROLLBACK");
+                self.close_scope(scope, false)?;
                 return Err(error);
             }
         }

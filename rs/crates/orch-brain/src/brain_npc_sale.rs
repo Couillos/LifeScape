@@ -302,7 +302,7 @@ pub fn load_fleet_sales(service: &crate::market_service::MarketService) -> ShopS
         match cache.as_ref() {
             Some((read_at, cached_since, rows)) if now - read_at < SALES_CACHE_SECS && *cached_since <= since => rows.clone(),
             _ => {
-                let fresh = std::sync::Arc::new(crate::cpu_profile::timed("sales.npc_shop_rows", || service.lock_store().shop_sales_since(since).unwrap_or_default()));
+                let fresh = std::sync::Arc::new(crate::cpu_profile::timed("sales.npc_shop_rows", || service.read_store().shop_sales_since(since).unwrap_or_default()));
                 *cache = Some((now, since, fresh.clone()));
                 fresh
             }

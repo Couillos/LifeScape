@@ -11,4 +11,4 @@ pub mod daemon_pool;
 pub mod fleet;
 pub mod autopilot;
 pub mod wake_hub;
-pub use lifescape_orch_core::{paths, logln, cpu_profile, log_markers, clock, client, log_sink, error_stamp, log_rotate, disk_guard, res_stats, store_pool, names, api_shapes, nav_profile, economy_guard, daemon_clock};
+pub use lifescape_orch_core::{paths, logln, cpu_profile, log_markers, clock, client, log_sink, error_stamp, log_rotate, disk_guard, res_stats, store_pool, store_writer, names, api_shapes, nav_profile, economy_guard, daemon_clock};

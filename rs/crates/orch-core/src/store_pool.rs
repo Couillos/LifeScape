@@ -60,6 +60,16 @@ impl Drop for PooledStore {
     }
 }
 
+/// Records that this process already migrated `path` (the single writer
+/// opens it with `Store::open`): the pool's first open on a reader thread
+/// is then the cheap `open_migrated`, never a migration check that could
+/// queue behind the writer's open group.
+pub fn mark_migrated(path: &Path) {
+    if let Some(id) = identity(path) {
+        MIGRATED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get_or_insert_with(HashSet::new).insert(id);
+    }
+}
+
 /// The daemon's connection to `path` for this thread (see the module doc).
 pub fn open(path: &Path) -> Result<PooledStore, Error> {
     let id = identity(path);

@@ -343,14 +343,14 @@ impl Store {
         if reason.is_empty() {
             return Err(Error::Invalid("failed deal needs a reason".to_string()));
         }
-        self.connection.execute_batch("BEGIN IMMEDIATE")?;
+        let scope = self.open_scope()?;
         match self.fail_and_relist_inner(reason, clock) {
             Ok(failed) => {
-                self.connection.execute_batch("COMMIT")?;
+                self.close_scope(scope, true)?;
                 Ok(failed)
             }
             Err(error) => {
-                let _ignored = self.connection.execute_batch("ROLLBACK");
+                self.close_scope(scope, false)?;
                 Err(error)
             }
         }

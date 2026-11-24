@@ -54,7 +54,7 @@ impl MarketService {
     /// settled since (Bronze axe: 1) while `history` listed them all (8).
     pub(crate) fn reload_prints(&self) {
         // The settled deals (the executions' source) carry the parties.
-        let deals = match self.lock_store().settled_deals(None, RING_PRINTS) {
+        let deals = match self.read_store().settled_deals(None, RING_PRINTS) {
             Ok(deals) => deals,
             Err(error) => {
                 crate::logln!("market: print ring not reloaded ({error})");

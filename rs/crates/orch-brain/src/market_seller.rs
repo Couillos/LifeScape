@@ -167,7 +167,7 @@ impl SellerPolicy for MarketService {
     #[allow(clippy::too_many_arguments)]
     fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, unsold: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>, pressed: bool, own_alch: Option<i64>, deps: &crate::brain_deps::BrainDeps) -> (SaleDecision, Option<Reserve>) {
         let reserve = {
-            let store = self.lock_store();
+            let store = self.read_store();
             costs.reserve(&store, name, item, life, make_cost)
         };
         let reference = self.reference(item);
@@ -202,7 +202,7 @@ pub fn seller_quote(service: &MarketService, request: &Value, deps: &crate::brai
     };
     // The time value first (D1): its refresh locks the store.
     let rate = crate::brain_d17::coin_rate(&account);
-    let costs = OwnCosts::load(&service.lock_store(), &account, rate);
+    let costs = OwnCosts::load(&service.read_store(), &account, rate);
     let life = crate::brain::load_life(&account);
     let make_cost = make_cost_of(life.as_ref(), &account, name, qty, deps);
     let pressed = request.get("urgent").as_bool() == Some(true);

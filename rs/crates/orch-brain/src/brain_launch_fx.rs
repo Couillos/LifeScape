@@ -174,7 +174,7 @@ impl Fx for LiveFx<'_> {
         // Goods sold and not handed over yet: never relisted nor dropped
         // (user 2026-11-19, point 2).
         if let Some(service) = self.deps.market.as_deref() {
-            let deals = service.lock_store().open_deals_for_account(&job.account).unwrap_or_default();
+            let deals = service.read_store().open_deals_for_account(&job.account).unwrap_or_default();
             keep.extend(crate::brain_locks::promised_names(&job.account, &deals));
         }
         let shop = if life.profile.ironman {

@@ -15,13 +15,14 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lifescape_json::{object, str_value, Value};
 use lifescape_market::{check_coverage, check_price, LastFill, Order, PRICE_FILLS};
 use crate::market_seed::CatalogueItem;
 use lifescape_market::{Book, Deal, Side};
+use lifescape_orch_core::store_writer::{StoreWriter, WriteGuard};
 use lifescape_store::{NewOrder, OrderSide, OrderStatus, Store, YieldCandleResolution};
 
 /// Socket the workers dial (beside `session-<account>.sock`).
@@ -245,9 +246,27 @@ impl Engine {
     }
 }
 
-/// The daemon market: store plus engine behind one lock each.
+/// A store handle for reads (`MarketService::read_store`).
+pub enum ReadStore<'a> {
+    Pooled(lifescape_orch_core::store_pool::PooledStore),
+    Writer(WriteGuard<'a>),
+}
+
+impl std::ops::Deref for ReadStore<'_> {
+    type Target = Store;
+    fn deref(&self) -> &Store {
+        match self {
+            ReadStore::Pooled(store) => store,
+            ReadStore::Writer(guard) => guard,
+        }
+    }
+}
+
+/// The daemon market: the single store writer plus the engine behind a lock.
 pub struct MarketService {
-    store: Mutex<Store>,
+    /// The single writer of the database (`store_writer`): writes group,
+    /// reads go through `read_store` on their own connections.
+    writer: Arc<StoreWriter>,
     engine: Mutex<Engine>,
     /// Items table by exact name (case-sensitive), the lowest id first:
     /// the in-memory twin of `Store::item_id_by_name` (`item_id_by_name`).
@@ -275,7 +294,8 @@ impl MarketService {
     }
 
     pub fn open(db: &std::path::Path, catalogue: Vec<CatalogueItem>) -> Result<Self, String> {
-        let store = Store::open(db).map_err(|error| error.to_string())?;
+        let writer = StoreWriter::open(db).map_err(|error| error.to_string())?;
+        let store = writer.write();
         for item in &catalogue {
             store
                 .upsert_item(&lifescape_store::Item {
@@ -330,7 +350,8 @@ impl MarketService {
         }
         static INSTANCES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let instance = INSTANCES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let service = MarketService { store: Mutex::new(store), engine: Mutex::new(Engine::new(catalogue)), names, instance };
+        drop(store);
+        let service = MarketService { writer, engine: Mutex::new(Engine::new(catalogue)), names, instance };
         // The public record is settled handovers only (match-time rows
         // from before 2026-11-13 are replaced by the settled deals).
         match service.lock_store().resync_executions_from_deals() {
@@ -349,7 +370,7 @@ impl MarketService {
     /// engine only, never the store lock.
     pub fn preload_fills(&self) -> Result<(), String> {
         let (rows, clocks) = {
-            let store = self.lock_store();
+            let store = self.read_store();
             (
                 store.last_fills_all(PRICE_FILLS as i64).map_err(|error| error.to_string())?,
                 store.newest_fill_clocks().map_err(|error| error.to_string())?,
@@ -388,7 +409,7 @@ impl MarketService {
             Err(error) => crate::logln!("market reload: stale deals left as they were, store refused: {error}"),
         }
         self.rebase_note_orders();
-        let rows = match self.lock_store().resting_orders() {
+        let rows = match self.read_store().resting_orders() {
             Ok(rows) => rows,
             Err(error) => {
                 crate::logln!("market reload: no book rebuild, store read failed: {error}");
@@ -472,8 +493,31 @@ impl MarketService {
         }
     }
 
-    pub fn lock_store(&self) -> std::sync::MutexGuard<'_, Store> {
-        self.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    /// The writer connection (writes group and commit when the guard
+    /// drops, `store_writer`). Read-only code uses `read_store`.
+    pub fn lock_store(&self) -> WriteGuard<'_> {
+        self.writer.write()
+    }
+
+    /// The writer, to register it as the process's (`store_writer::register`).
+    pub fn store_writer(&self) -> &Arc<StoreWriter> {
+        &self.writer
+    }
+
+    /// A connection for READS: the calling thread's pooled one, which
+    /// never waits for a write. Inside a `batch` of this thread (its own
+    /// uncommitted rows) or when the pool cannot open, the writer's.
+    pub fn read_store(&self) -> ReadStore<'_> {
+        if lifescape_orch_core::store_writer::in_batch() {
+            return ReadStore::Writer(self.writer.write());
+        }
+        match self.writer.read() {
+            Ok(store) => ReadStore::Pooled(store),
+            Err(error) => {
+                crate::logln!("market: read connection unavailable ({error}), reading through the writer");
+                ReadStore::Writer(self.writer.write())
+            }
+        }
     }
 
     pub fn lock_engine(&self) -> std::sync::MutexGuard<'_, Engine> {
@@ -645,13 +689,13 @@ impl MarketService {
         drop(engine);
         // `traded_only=1`: keep goods with >= 1 execution ever (not 24h volume).
         let traded: std::collections::HashSet<i64> = if traded_only || active {
-            self.lock_store().items_with_executions().unwrap_or_default().into_iter().collect()
+            self.read_store().items_with_executions().unwrap_or_default().into_iter().collect()
         } else { std::collections::HashSet::new() };
         // One row per named good: 24h volume summed over every form,
         // change (display only) from the merged fills, canonical id = the
         // form carrying the volume (base on ties). Sorted by descending
         // volume so the traded goods surface first.
-        let store = self.lock_store();
+        let store = self.read_store();
         let mut items = Vec::new();
         for (name, members) in &groups {
             if traded_only && !members.iter().any(|member| traded.contains(&member.0)) {
@@ -711,7 +755,7 @@ impl MarketService {
                 // Displayed like an exchange ticker (user 2026-11-18): the
                 // last trade, its change against the price 24 h ago.
                 let (last, day_ago) = {
-                    let store = self.lock_store();
+                    let store = self.read_store();
                     (store.last_price_before(priced, clock + 1).ok().flatten(), store.last_price_before(priced, clock - 86_400 + 1).ok().flatten())
                 };
                 let change = lifescape_market::ticker_change_thousandths(last, day_ago, window_open);
@@ -897,7 +941,7 @@ impl MarketService {
         if rests && pressed.0 {
             let served = self.pressed_auction(item, &pressed.1, true);
             if !served.is_empty() {
-                let mine = self.lock_store().open_deals_for_account(&account).unwrap_or_default();
+                let mine = self.read_store().open_deals_for_account(&account).unwrap_or_default();
                 deal_ids.extend(mine.iter().filter(|deal| served.contains(&deal.deal_id)).map(|deal| Value::Int(deal.deal_id)));
                 rests = self.lock_engine().books.get(&item).is_some_and(|book| book.remaining(order_key).is_some());
             }
@@ -929,7 +973,7 @@ impl MarketService {
 
     fn op_my_orders(&self, request: &Value) -> Value {
         let account = request.get("account").as_str().unwrap_or("");
-        let store = self.lock_store();
+        let store = self.read_store();
         let rows = store.account_orders(account).unwrap_or_default();
         let values: Vec<Value> = rows
             .iter()

@@ -157,15 +157,13 @@ fn failures_dir() -> PathBuf {
     crate::paths::run_dir().join("failures")
 }
 
-fn open_store(slot: &mut Option<Store>) -> Result<&Store, String> {
-    if slot.is_none() {
-        *slot = Some(Store::open(&db_path()).map_err(|error| format!("errors store open: {error}"))?);
-    }
-    slot.as_ref().ok_or_else(|| "errors store missing".to_string())
+/// Runs a store job on the process's single writer (grouped commit) when
+/// the daemon registered one, else on a pooled connection.
+fn through_writer<T>(job: impl FnOnce(&Store) -> Result<T, String>) -> Result<T, String> {
+    crate::store_writer::write_to(&db_path(), job).map_err(|error| format!("errors store open: {error}"))?
 }
 
 fn collect(receiver: Receiver<Intake>, orch: Weak<Orchestrator>) {
-    let mut slot: Option<Store> = None;
     let mut pending: Vec<Intake> = Vec::new();
     let mut last_flush = Instant::now();
     let mut last_scan: Option<Instant> = None;
@@ -189,12 +187,11 @@ fn collect(receiver: Receiver<Intake>, orch: Weak<Orchestrator>) {
         }
         if !pending.is_empty() && (pending.len() >= BATCH_ROWS || last_flush.elapsed() >= BATCH_AGE) {
             last_flush = Instant::now();
-            let result = open_store(&mut slot).and_then(|store| flush(store, &pending, &orch));
+            let result = through_writer(|store| flush(store, &pending, &orch));
             match result {
                 Ok(()) => pending.clear(),
                 Err(error) => {
                     crate::logln!("errors: flush of {} rows failed: {error}", pending.len());
-                    slot = None;
                     if pending.len() > PENDING_CAP {
                         let excess = pending.len() - PENDING_CAP;
                         pending.drain(..excess);
@@ -205,7 +202,7 @@ fn collect(receiver: Receiver<Intake>, orch: Weak<Orchestrator>) {
         }
         if last_scan.is_none_or(|at| at.elapsed() >= SCAN_EVERY) {
             last_scan = Some(Instant::now());
-            let result = open_store(&mut slot).and_then(|store| {
+            let result = through_writer(|store| {
                 let deals = sync_deals(store)?;
                 let dossiers = scan_dossiers(store, &failures_dir(), &mut dossier_cursor, &orch)?;
                 Ok((deals, dossiers))
@@ -217,18 +214,15 @@ fn collect(receiver: Receiver<Intake>, orch: Weak<Orchestrator>) {
                 Ok(_) => {}
                 Err(error) => {
                     crate::logln!("errors: pull failed: {error}");
-                    slot = None;
                 }
             }
         }
         if last_purge.is_none_or(|at| at.elapsed() >= PURGE_EVERY) {
             last_purge = Some(Instant::now());
-            if let Ok(store) = open_store(&mut slot) {
-                match store.purge_errors_before(now_clock() - RETENTION_SECS) {
-                    Ok(removed) if removed > 0 => crate::logln!("errors: purged {removed} rows past retention"),
-                    Ok(_) => {}
-                    Err(error) => crate::logln!("errors: purge failed: {error}"),
-                }
+            match through_writer(|store| store.purge_errors_before(now_clock() - RETENTION_SECS).map_err(|error| error.to_string())) {
+                Ok(removed) if removed > 0 => crate::logln!("errors: purged {removed} rows past retention"),
+                Ok(_) => {}
+                Err(error) => crate::logln!("errors: purge failed: {error}"),
             }
         }
     }

@@ -198,7 +198,7 @@ fn kind_demand_seen_by(account: Option<&str>, deps: &crate::brain_deps::BrainDep
 fn value_inputs(orders: &[Order], account: Option<&str>, surplus: &[(String, f64)], deps: &crate::brain_deps::BrainDeps) -> ValueInputs {
     let now = crate::market_service::MarketService::now_clock();
     let volumes = match deps.market.clone() {
-        Some(service) => service.lock_store().volumes_since(now - 86_400).unwrap_or_default(),
+        Some(service) => service.read_store().volumes_since(now - 86_400).unwrap_or_default(),
         None => Vec::new(),
     };
     let days = lifescape_planner::investment::INVESTMENT_HORIZON_TICKS * deps.clock.tick_ms() as f64 / 86_400_000.0;
@@ -357,7 +357,7 @@ fn fleet_holdings(deps: &crate::brain_deps::BrainDeps) -> Vec<(i64, i64)> {
             return rows.clone();
         }
     }
-    let read = service.lock_store().holdings_at_or_before(i64::MAX);
+    let read = service.read_store().holdings_at_or_before(i64::MAX);
     let rows = match read {
         Ok(Some((_, rows))) => rows,
         Ok(None) => {
@@ -420,7 +420,7 @@ pub(crate) fn name_of(item_id: i64) -> Option<String> {
 /// Resting orders of the daemon's market (empty while it is down).
 fn resting(deps: &crate::brain_deps::BrainDeps) -> Vec<Order> {
     let Some(service) = deps.market.clone() else { return Vec::new() };
-    let read = service.lock_store().resting_orders();
+    let read = service.read_store().resting_orders();
     match read {
         Ok(rows) => rows,
         Err(error) => {

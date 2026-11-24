@@ -225,7 +225,7 @@ pub(crate) fn arbitrage_pass(job: &Job, life: &Life, live: &Value, deps: &crate:
     let since = own.iter().map(|lot| lot.since).min().unwrap_or(clock);
     // A store error skips the pass: never a second bid beside one unseen.
     let read = {
-        let store = service.lock_store();
+        let store = service.read_store();
         store.account_orders(account).and_then(|rows| Ok((rows, store.own_deals_since(account, since)?)))
     };
     let (rows, deals) = match read {
@@ -325,7 +325,7 @@ pub(crate) fn arbitrage_pass(job: &Job, life: &Life, live: &Value, deps: &crate:
         resting: true,
     });
     // The asks it crossed are bought now: the lot counts them at once.
-    match service.lock_store().own_deals_since(account, clock) {
+    match service.read_store().own_deals_since(account, clock) {
         Ok(fresh) => crate::brain_npc_sale::settle_arbitrage(account, &lot.item, crate::brain_npc_sale::bought_since(&fresh, account, id, clock), true),
         Err(error) => crate::logln!("brain {account}: arbitrage deals of {} unread ({error}): counted at the next pass", lot.item),
     }

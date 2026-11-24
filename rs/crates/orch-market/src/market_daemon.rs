@@ -60,6 +60,9 @@ fn serve_one(service: Arc<MarketService>, stream: UnixStream) {
 pub fn start() -> Result<Arc<MarketService>, String> {
     let items = catalogue();
     let service = Arc::new(MarketService::open(&db_path(), items).map_err(|error| format!("market open: {error}"))?);
+    // The process's single writer of the database (grouped commits): the
+    // other writers (reports, holdings, errors, retention) go through it.
+    lifescape_orch_core::store_writer::register(service.store_writer());
     service.set_funding_journal(crate::funding_gifts::journal_path());
     // Handover ring around the fountain via the nav batch op (walkable,
     // no busts or stalls). Read-only nav use; a down service leaves the
