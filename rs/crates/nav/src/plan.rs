@@ -7,21 +7,18 @@
 //! transition edges start on `reach.rs` stands. One function, no
 //! network, no bot.
 
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::time::Duration;
 
-use crate::collision::leaf_step_extra;
-use crate::fallback::walled_off;
 use crate::collision::{tile_walkable, BLOCK_EAST, BLOCK_NORTH, BLOCK_SOUTH, BLOCK_WEST};
 use crate::reach;
-use crate::dense::{Dist, Parents};
 use crate::search::Search;
 use crate::static_world::StaticWorld;
 use crate::tables::{Tables, Transition, Verdict};
 
 pub use crate::no_route::{NoRoute, NoRouteReason};
+pub(crate) use crate::dijkstra::{dijkstra, Outcome};
 pub(crate) use crate::no_route::{DIAGNOSIS_BUDGET, MAX_VISITS, PLAN_BUDGET};
 
 /// Identity hash with a bit mixer: tile keys pack level/z/x, so the
@@ -668,328 +665,6 @@ fn transition_ref(row: &Transition, tables: &Tables) -> TransitionRef {
     }
 }
 
-pub(crate) enum Outcome {
-    Found(Vec<(Tile, PrevEdge)>, u32, Tile),
-    Closest(Tile),
-    /// Cut by `MAX_VISITS` or the wall deadline: the best tile so far.
-    OverBudget(Tile),
-    Aborted,
-}
-
-/// Search keepalive gate: the visit-count abort stays (operator stop
-/// must bite even on a fast search), plus a wall-clock yield so a slow
-/// search — live doors, toll detours — still proves the session alive
-/// server-side instead of going quiet past the 100-tick reap.
-fn yield_due(visits: usize, last_yield: std::time::Instant) -> bool {
-    visits % 16384 == 0 || (visits % 16 == 0 && last_yield.elapsed() >= std::time::Duration::from_secs(1))
-}
-
-pub(crate) fn dijkstra(
-    world: &StaticWorld,
-    tables: &Tables,
-    from: Tile,
-    dest: Tile,
-    options: &NavOptions,
-    ignore_requires: bool,
-    allow_paid: bool,
-    ignore_f2p: bool,
-    shared: &SharedEdges,
-    cost_cap: u32,
-    yield_: &mut dyn FnMut() -> bool,
-    deadline: std::time::Instant,
-) -> Outcome {
-    let mut search = Search::new(world, tables, options, ignore_requires, allow_paid, ignore_f2p);
-    let dest_walkable = tile_walkable(search.open(dest));
-    // Blocked destination: the best rank prefix any tile can reach.
-    let floor = if dest_walkable {
-        None
-    } else {
-        crate::fallback::rank_floor(&mut |tile| if search.in_bounds(tile) { Some(search.open(tile)) } else { None }, dest)
-    };
-    let danger = DangerMap::new(&options.danger);
-    let (rides, customs) = shared;
-    let mut dist = Dist::new();
-    let mut prev = Parents::new();
-    let mut heap: BinaryHeap<(Reverse<u32>, Reverse<u64>)> = BinaryHeap::new();
-    dist.set(from.key(), 0);
-    heap.push((Reverse(0), Reverse(from.key())));
-    let mut best = from;
-    let mut best_rank = from.fallback_rank(dest, 0, walled_off(&mut |tile| search.open(tile), from, dest));
-    let mut visits = 0usize;
-    // Wall-clock yield: a huge search (live doors, toll detours) can run
-    // seconds without hitting the visit-count yield below, and the live
-    // caller only emits its keepalive from the yield callback — a quiet
-    // search reads as a dead session server-side (reaped after 100
-    // ticks). Yield at most once a second, on top of the count check.
-    let mut last_yield = std::time::Instant::now();
-    let loop_start = std::time::Instant::now();
-    let mut heap_max = 0usize;
-    let dest_key = dest.key();
-    // Lowest cost first, lowest tile key breaking ties: the same world
-    // always yields the same plan.
-    while let Some((Reverse(cost), Reverse(key))) = heap.pop() {
-        if dist.get(key).is_some_and(|known| known != cost) {
-            continue;
-        }
-        visits += 1;
-        if yield_due(visits, last_yield) {
-            last_yield = std::time::Instant::now();
-            if !yield_() {
-                crate::nav_meter::add_visits(visits);
-                return Outcome::Aborted;
-            }
-        }
-        if heap.len() > heap_max {
-            heap_max = heap.len();
-        }
-        // Visit cap or wall deadline (`no_route`): the search stops at its
-        // current best instead of burning the worker, as OverBudget —
-        // never a Closest (Disconnected) nor a blocked-dest adjustment
-        // to wherever the cut fell. The operator stop still wins above.
-        if visits > MAX_VISITS || cost > cost_cap || (visits % 1024 == 0 && std::time::Instant::now() >= deadline) {
-            crate::nav_meter::add_visits(visits);
-            crate::nav_meter::note_unreached(visits, true);
-            return Outcome::OverBudget(best);
-        }
-        let here = unkey(key);
-        let fresh = key & FRESH != 0;
-        let walled = walled_off(&mut |tile| search.open(tile), here, dest);
-        let rank = here.fallback_rank(dest, cost, walled);
-        if rank < best_rank {
-            best_rank = rank;
-            best = here;
-        }
-        // Blocked destination (tree, booth, fishing spot): the best tile
-        // at the rank floor (`fallback::rank_floor`) is the best rank
-        // there is, and pops come in cost order, so nothing later can
-        // beat it. Same answer as the sweep below, without exploring 64
-        // tiles past it (CPU 2026-11-14: adjusted plans swept ~8-16k
-        // tiles each, a start already beside the target included).
-        if best == here && !fresh && floor == Some((best_rank.0, best_rank.1, best_rank.2)) {
-            crate::nav_meter::add_visits(visits);
-            return Outcome::Found(rebuild(&prev, from, best), cost, best);
-        }
-        if key == dest_key && dest_walkable {
-            if std::env::var("PLAN_DEBUG").is_ok() {
-                eprintln!(
-                    "plan found visits={visits} heap_max={heap_max} {:?}",
-                    loop_start.elapsed(),
-                );
-            }
-            crate::nav_meter::add_visits(visits);
-            return Outcome::Found(rebuild(&prev, from, dest), cost, dest);
-        }
-        // Walk and door neighbours, eight directions in fixed order.
-        for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
-            let next = Tile { x: here.x + dx, z: here.z + dz, level: here.level };
-            // Blocked destination with no floor in reach (`rank_floor`
-            // None): tiles far past the current best and the start are
-            // cut (`past_fallback`, `prune_reach`). With a floor the pop
-            // at its rank ends the search, so nothing is cut: a fence can
-            // make the only way to the floor walk 160 tiles off (live
-            // 2026-11-16, Al Kharid bank -> Lumbridge swamp adamantite
-            // round the north, admin "Disconnected" at the bank).
-            if !dest_walkable && floor.is_none() && crate::fallback::past_fallback(next, dest, crate::fallback::prune_reach(from, dest, best_rank.1)) {
-                continue;
-            }
-            if !search.in_bounds(next) {
-                continue;
-            }
-            let next_key = next.key();
-            // A step off a door tile, or anywhere no usable door stands,
-            // walks when the shut view allows it: the opening (if any)
-            // already rode the step onto the tile.
-            if search.usable_door(next).is_none() && search.step_closed(here, next) {
-                relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next) + leaf_step_extra(search.base(here), search.base(next), dx, dz), PrevEdge::Walk);
-                continue;
-            }
-            // Stop onto a usable door tile from a side the table lets
-            // through, walking only (Peksa inside: the server holds the
-            // tile walkable, the walk reaches far-side stands like the
-            // east one). The click edge rides along below when this side
-            // is a real stand: the search takes whichever wins, never a
-            // blind src==dest click. THROUGH still opens: walking off
-            // past the tile rides the door edge below.
-            if search.usable_door(here).is_none() {
-                if let Some((id, _, _)) = search.usable_door(next) {
-                    if search.tables.side_ok(id, next, here) && search.step_closed(here, next) {
-                        relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next) + leaf_step_extra(search.base(here), search.base(next), dx, dz), PrevEdge::Walk);
-                    }
-                }
-            }
-            if !search.step_open(here, next) {
-                continue;
-            }
-            let door_tile = [next, here].into_iter().find(|tile| search.usable_door(*tile).is_some());
-            let Some(door_tile) = door_tile else {
-                continue;
-            };
-            let (id, shape, angle) = match search.usable_door(door_tile) {
-                Some(found) => found,
-                None => continue,
-            };
-            if here != door_tile && !search.tables.side_ok(id, door_tile, here) {
-                continue;
-            }
-            // A click from the door tile itself: the engine reaches a
-            // wall loc from its own tile (`ReachStrategy.reached` src==dest
-            // arm) and `[oploc1,_door_closed]` checks no side (admin live
-            // 2026-11-18: sewer 1530 (3241,9910) and Peksa 1530 open from
-            // their tiles). A one-way door keeps its side rule for that
-            // stand; a fresh state only continues the opening its click
-            // already made from the previous stand.
-            if here == door_tile && !fresh && !search.tables.side_ok(id, door_tile, here) {
-                continue;
-            }
-            // Clickable stand only: the engine takes the op from an
-            // orthogonal neighbour passing its reach rule for the door's
-            // shape and angle (a diagonal or wrong-sided stand reads
-            // "I can't reach that!" live). Stepping off the door tile
-            // itself (stand == door) is the same opening's second half:
-            // the click already happened from the previous stand, which
-            // passed this check when stepping on. Flags are the closed
-            // view: every nearby door is still shut at click time.
-            if (here.x - door_tile.x).abs() + (here.z - door_tile.z).abs() > 1 {
-                continue;
-            }
-            let (width, height) =
-                search.world.loc_def(id as usize).map(|def| (def.length, def.width)).unwrap_or((1, 1));
-            if (here.x, here.z) != (door_tile.x, door_tile.z) {
-                let stand_flag = search.base(here);
-                if !reach::reached(
-                    &|_, _, _| stand_flag,
-                    here.level,
-                    here.x,
-                    here.z,
-                    door_tile.x,
-                    door_tile.z,
-                    width,
-                    height,
-                    i32::from(angle),
-                    i32::from(shape),
-                    0,
-                ) {
-                    continue;
-                }
-            }
-            let edge = EdgeId::Door { loc: id, x: door_tile.x, z: door_tile.z, level: door_tile.level };
-            if options.excluded_edges.contains(&edge) {
-                continue;
-            }
-            let door = DoorRef {
-                loc: id,
-                x: door_tile.x,
-                z: door_tile.z,
-                level: door_tile.level,
-                open_op: search.world.loc_def(id as usize).and_then(|def| def.open_op),
-                toll: search.world.is_toll(door_tile.x, door_tile.z, door_tile.level),
-            };
-            relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + DOOR_COST, PrevEdge::Door(door.clone()));
-            // A real click (stand beside the tile, stepping onto it)
-            // opens the door: the tile is now passable open, a separate
-            // search state from the cheap walked-onto shut tile (same
-            // tile bits, FRESH mark). Only the open state steps off (see
-            // above); the shut one keeps reaching far-side stands.
-            if here != door_tile && next == door_tile {
-                relax(&mut dist, &mut prev, &mut heap, key, next_key | FRESH, cost + DOOR_COST, PrevEdge::Door(door));
-            }
-        }
-        // Transition and custom rides from this stand. The shared L2 is
-        // the permissive superset (requires/tolls/F2P lifted), so a stand
-        // this search could not use, or a dest outside its bounds, is
-        // skipped here: each search sees exactly the edges its own
-        // prepare_edges would have built. Fresh (opened) tiles ride from
-        // the same stands: the FRESH mark is search state, not a tile.
-        let l2_key = key & !FRESH;
-        if let Some(edges) = rides.get(&l2_key) {
-            if search.in_bounds(here) && tile_walkable(search.open(here)) {
-                for edge in edges {
-                    if !search.in_bounds(edge.dest) {
-                        continue;
-                    }
-                    if options.excluded_edges.contains(&EdgeId::Ride(tables.transitions[edge.index].name.clone())) {
-                        continue;
-                    }
-                    let ride = PrevEdge::Ride { index: edge.index, dest: edge.dest, pre_open: edge.pre_open.clone() };
-                    relax(&mut dist, &mut prev, &mut heap, key, edge.dest.key(), cost + edge.cost, ride);
-                }
-            }
-        }
-        if let Some(edges) = customs.get(&l2_key) {
-            for edge in edges {
-                // A fare edge (the Karamja boat) is part of the map like any
-                // door (user 2026-11-16: "aller à Karamja de manière
-                // universelle"): its `requires` (the coins in the pack) gate
-                // it, never `allow_paid` (the toll alone). Its landing obeys
-                // the search bounds, like a ride's.
-                if !search.in_bounds(edge.dest) {
-                    continue;
-                }
-                if !search.ignore_requires
-                    && !search.tables.customs[edge.index].requires.iter().all(|tag| search.options.satisfied.contains(tag))
-                {
-                    continue;
-                }
-                if options.excluded_edges.contains(&EdgeId::Custom(tables.customs[edge.index].name.clone())) {
-                    continue;
-                }
-                let custom = PrevEdge::Custom { index: edge.index, dest: edge.dest };
-                relax(&mut dist, &mut prev, &mut heap, key, edge.dest.key(), cost + edge.cost, custom);
-            }
-        }
-    }
-    crate::nav_meter::add_visits(visits);
-    // Blocked destination (tree, counter): the closest tile is the plan.
-    if !dest_walkable && best.key() != dest_key && dist.get(best.key()).is_some() {
-        let cost = dist.get(best.key()).expect("best was reached");
-        if std::env::var("PLAN_DEBUG").is_ok() {
-            eprintln!("plan adjusted visits={visits} {:?}", loop_start.elapsed());
-        }
-        let found_best = best;
-        return Outcome::Found(rebuild(&prev, from, best), cost, found_best);
-    }
-    if std::env::var("PLAN_DEBUG").is_ok() {
-        eprintln!("plan closest visits={visits} {:?}", loop_start.elapsed());
-    }
-    crate::nav_meter::note_unreached(visits, false);
-    Outcome::Closest(best)
-}
-
-fn relax(
-    dist: &mut Dist,
-    prev: &mut Parents,
-    heap: &mut BinaryHeap<(Reverse<u32>, Reverse<u64>)>,
-    from_key: u64,
-    next_key: u64,
-    cost: u32,
-    edge: PrevEdge,
-) {
-    if dist.get(next_key).is_some_and(|known| known <= cost) {
-        return;
-    }
-    dist.set(next_key, cost);
-    prev.set(from_key, next_key, edge);
-    heap.push((Reverse(cost), Reverse(next_key)));
-}
-
-fn rebuild(prev: &Parents, from: Tile, dest: Tile) -> Vec<(Tile, PrevEdge)> {
-    // Full keys, FRESH mark included: an opened tile and its shut twin
-    // are different search states with different parents (the open one
-    // continues the click, the shut one the walk that reached the stand).
-    // Recomputing the key from the tile would resurrect the shut path.
-    let mut chain = Vec::new();
-    let mut at_key = dest.key();
-    while at_key != from.key() {
-        let Some((parent_key, edge)) = prev.get(at_key) else {
-            break;
-        };
-        chain.push((unkey(at_key), edge));
-        at_key = parent_key;
-    }
-    chain.reverse();
-    chain
-}
-
 /// LOT1 L2: the permissive superset of `prepare_edges` (requires, tolls
 /// and F2P bounds all lifted), computed once per `plan()` and shared by
 /// the A/B/C/D searches. Lifting can only add usable doors (hence open
@@ -1246,8 +921,6 @@ fn assemble(tables: &Tables, from: Tile, dest: Tile, chain: Vec<(Tile, PrevEdge)
 
 #[cfg(test)]
 mod tests {
-    use super::yield_due;
-    use std::time::{Duration, Instant};
 
     fn real_world() -> (std::sync::Arc<crate::static_world::StaticWorld>, crate::tables::Tables) {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
@@ -1294,19 +967,6 @@ mod tests {
             .expect("plan rides stairs_316");
         assert_eq!(ride.0, super::Tile { x: 2971, z: 3369, level: 0 }, "south stand, not the dead east one");
         assert_eq!(ride.1, super::Tile { x: 2971, z: 3373, level: 1 }, "probe landing");
-    }
-
-    /// The keepalive gate: count abort every 16384 visits, wall-clock
-    /// yield every 16 visits past one second, silence otherwise.
-    #[test]
-    fn yield_gate_count_and_clock() {
-        let fresh = Instant::now();
-        let old = Instant::now() - Duration::from_secs(2);
-        assert!(yield_due(16384, fresh), "count abort bites even on a fast search");
-        assert!(yield_due(2048, old), "slow search yields past one second");
-        assert!(!yield_due(2048, fresh), "no yield mid-second");
-        assert!(!yield_due(100, old), "no yield off the visit grid");
-        assert!(!yield_due(17, old), "no yield off the 16-visit grid");
     }
 
     /// Fallback rank: a same-level neighbour beats the tile straight

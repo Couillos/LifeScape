@@ -8,6 +8,7 @@ pub mod collision;
 pub mod costs;
 pub mod custom_edge;
 mod dense;
+mod dijkstra;
 pub mod danger;
 mod detour;
 pub mod f2p;
