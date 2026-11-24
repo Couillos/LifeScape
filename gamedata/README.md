@@ -13,6 +13,10 @@ Chaque entrée porte son flag members (F2P ou membres).
 cd ../../lostcity/engine && npx tsx tools/gamedata-dump.mts ../../LifeScape/gamedata/data/
 cd ../../lostcity/engine && npx tsx ../../LifeScape/gamedata/tools/dump_plan.mts ../../LifeScape
 
+# icônes du tableau de bord (orchestration/static/icons/, non committées) :
+# rendu du client (Client-TS à côté du dépôt), depuis la racine LifeScape
+bun gamedata/tools/icons.mts
+
 # boucle de vérification : tests Rust du workspace
 cargo test --manifest-path rs/Cargo.toml -p lifescape-gamedata
 ```

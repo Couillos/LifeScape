@@ -17,3 +17,6 @@ orchestration/static/map-current.json
 backup/poison-*/
 backup/pre-migration*/
 backup/*.tar.gz
+# Icon sheets of the dashboard (~1 MB): written by gamedata/tools/icons.mts
+# from the rev 274 cache, reproducible, never hand-edited.
+orchestration/static/icons/
