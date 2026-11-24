@@ -91,6 +91,9 @@ fn supervise_all() {
         std::thread::sleep(Duration::from_millis(500));
         // Liveness for the downtime clock: at most one atomic write a minute.
         crate::downtime::heartbeat(now_secs() as i64);
+        if let Some(line) = crate::frame_check::summary_if_due(now_secs()) {
+            crate::logln!("{line}");
+        }
         let pairs: Vec<(Arc<dyn Fleet>, Arc<Job>)> = {
             let mut guard = crate::jobs::supervised().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             // Never block the loop on a wedged job: a contended inner
@@ -266,6 +269,8 @@ impl Orchestrator {
             self.handle_worker_death(job);
             return;
         }
+        let frame_before = job.frame_view();
+        let call_started = now_secs();
         let session = self
             .send_worker(
                 &job.account,
@@ -281,6 +286,9 @@ impl Orchestrator {
                 }
             });
         if let Some(ref session) = session {
+            // Lot 4.2: the frames' phase/status against the reply, silent
+            // (counters and a summary line), before the reply is applied.
+            crate::frame_check::observe(&job.account, frame_before.as_ref(), job.frame_view().as_ref(), session, call_started, now_secs());
             // apply_session try_locks internally: a wedged job defers to
             // the next pass instead of parking the supervisor here.
             job.apply_session(session);
@@ -372,6 +380,7 @@ impl Orchestrator {
         };
         inner.supervise = false;
         inner.phase = "idle".to_string();
+        inner.phase_at = now_secs();
         inner.script = None;
         inner.status = "disconnected".to_string();
         inner.last_error = Some(object(vec![

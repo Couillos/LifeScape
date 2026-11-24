@@ -308,15 +308,18 @@ pub(crate) fn write_heartbeat(shared: &Arc<Shared>) {
     let tick = bot.world.ticks;
     let zone = if bot.zone_label.is_empty() { "?".to_string() } else { bot.zone_label.clone() };
     drop(bot);
-    let status_now = shared.inner.lock().unwrap().status.clone();
+    let (status_now, phase_now) = {
+        let inner = shared.inner.lock().unwrap();
+        (inner.status.clone(), inner.phase.clone())
+    };
     shared.inner.lock().unwrap().last_heartbeat_tick = tick;
     shared.inner.lock().unwrap().last_heartbeat_wall = now_secs();
     shared.inner.lock().unwrap().last_zone = zone;
     shared.inner.lock().unwrap().last_full_tick = tick;
     shared.inner.lock().unwrap().last_full_wall = now_secs();
     shared.inner.lock().unwrap().last_full_script = script;
-    shared.inner.lock().unwrap().last_full_status = status_now;
-    crate::session_push::push_snapshot(&shared.account, &state);
+    shared.inner.lock().unwrap().last_full_status = status_now.clone();
+    crate::session_push::push_snapshot(&shared.account, &state, &phase_now, &status_now);
     crate::session_log::flush_log(&shared.log_path);
 }
 

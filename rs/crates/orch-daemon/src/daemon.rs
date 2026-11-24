@@ -207,6 +207,7 @@ impl Orchestrator {
         {
             let mut inner = job.inner.lock().unwrap();
             inner.status = "starting".to_string();
+            inner.phase_at = now_secs();
             inner.started = now_secs();
             inner.session_pid = Some(pid);
         }
@@ -538,6 +539,11 @@ impl Orchestrator {
         self.ingest_push_with(&frame, bytes, snapshot)
     }
 
+    /// Lot 4.2: the phase and status a heartbeat frame carries.
+    fn note_frame_state(&self, job: &Arc<Job>, frame: &Value) {
+        let _effect = job.note_frame(frame, now_secs());
+    }
+
     /// The ingest: `taken` is the snapshot already moved out of `frame`.
     fn ingest_push_with(&self, frame: &Value, bytes: u64, taken: Option<Value>) -> Value {
         crate::res_stats::record_push(bytes);
@@ -559,6 +565,7 @@ impl Orchestrator {
                 if let Ok(mut inner) = job.inner.try_lock() {
                     inner.live = Some(Arc::new(taken.unwrap_or_else(|| frame.get("snapshot").clone())));
                 }
+                self.note_frame_state(&job, frame);
                 object(vec![("ok", Value::Bool(true))])
             }
             "snapshot_light" => {
@@ -573,6 +580,7 @@ impl Orchestrator {
                         None => inner.live = Some(Arc::new(frame.clone())),
                     }
                 }
+                self.note_frame_state(&job, frame);
                 object(vec![("ok", Value::Bool(true))])
             }
             "event" => {

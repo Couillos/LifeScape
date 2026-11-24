@@ -57,6 +57,36 @@ pub struct JobInner {
     /// supervisor drains it immediately (brain trigger hook, E8).
     pub report_pending: bool,
     pub state_written_at: f64,
+    /// What the last heartbeat frame said of the session (lot 4.2).
+    pub frame: Option<FrameView>,
+    /// When `phase`/`status` were last set by a `status` reply, a command
+    /// or a death (daemon clock): a frame SENT before it is older news.
+    pub phase_at: f64,
+    /// Frames counted since the job exists (`FrameView::seq`).
+    pub frame_seq: u64,
+}
+
+/// The session facts a heartbeat frame carries (lot 4.2): the worker puts
+/// `phase` and `status` on every full and light frame, with its send time.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameView {
+    pub phase: String,
+    pub status: String,
+    /// Worker send time (same host clock as the daemon).
+    pub sent: f64,
+    /// Daemon receive time.
+    pub received: f64,
+    /// Rank of the frame among the job's frames.
+    pub seq: u64,
+}
+
+/// What `Job::note_frame` changed on the job.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameEffect {
+    pub phase_changed: bool,
+    pub status_changed: bool,
+    /// The phase is now `idle` and was not.
+    pub became_idle: bool,
 }
 
 /// Columns of the dashboard's bot list, exactly what the spectator table
@@ -132,6 +162,9 @@ impl Job {
                 live: None,
                 report_pending: false,
                 state_written_at: 0.0,
+                frame: None,
+                phase_at: 0.0,
+                frame_seq: 0,
             }),
         }
     }
@@ -147,6 +180,7 @@ impl Job {
         if !session.get("phase").is_null() {
             if let Some(phase) = session.get("phase").as_str() {
                 inner.phase = phase.to_string();
+                inner.phase_at = now_secs();
             }
         }
         if !session.get("script").is_null() {
@@ -159,6 +193,7 @@ impl Job {
         inner.held = session.get("held").as_bool().unwrap_or(inner.held);
         if let Some(status) = session.get("status").as_str() {
             inner.status = status.to_string();
+            inner.phase_at = now_secs();
         }
         if !session.get("last_error").is_null() {
             let stamped = crate::error_stamp::adopt(inner.last_error.as_ref(), session.get("last_error"), now_secs(), 0);
@@ -174,6 +209,40 @@ impl Job {
         if !session.get("last_code").is_null() {
             inner.last_code = Some(session.get("last_code").clone());
         }
+    }
+
+    /// The frame view as last recorded (lot 4.2), `None` before the first
+    /// frame or when the job is wedged.
+    pub fn frame_view(&self) -> Option<FrameView> {
+        self.inner.try_lock().ok().and_then(|inner| inner.frame.clone())
+    }
+
+    /// Read a heartbeat frame's `phase` and `status` (lot 4.2): the view is
+    /// recorded and, on a supervised job, the phase and status are applied
+    /// unless a `status` reply or a command set them after the frame was
+    /// sent. An older worker's frame (no `phase`) is ignored. A wedged job
+    /// drops the frame (the next one comes within a second).
+    pub fn note_frame(&self, frame: &Value, now: f64) -> Option<FrameEffect> {
+        let phase = frame.get("phase").as_str()?.to_string();
+        let status = frame.get("status").as_str().unwrap_or("").to_string();
+        let sent = frame.get("sent").as_f64().or_else(|| frame.get("updated").as_f64()).unwrap_or(now);
+        let mut inner = self.inner.try_lock().ok()?;
+        inner.frame_seq += 1;
+        let seq = inner.frame_seq;
+        inner.frame = Some(FrameView { phase: phase.clone(), status: status.clone(), sent, received: now, seq });
+        let mut effect = FrameEffect::default();
+        if inner.supervise && sent > inner.phase_at {
+            if inner.phase != phase {
+                effect.became_idle = phase == "idle";
+                effect.phase_changed = true;
+                inner.phase = phase;
+            }
+            if !status.is_empty() && inner.status != status {
+                effect.status_changed = true;
+                inner.status = status;
+            }
+        }
+        Some(effect)
     }
 
     /// The dashboard's list row (`LIST_FIELDS`), the same values as
@@ -530,6 +599,44 @@ mod tests {
         let job = Job::new("b0");
         job.apply_session(&lifescape_json::object(vec![("held", Value::Bool(true))]));
         assert!(job.inner.lock().unwrap().held, "hold read back from the worker");
+    }
+
+    fn frame(phase: &str, status: &str, sent: f64) -> Value {
+        lifescape_json::object(vec![
+            ("type", str_value("snapshot_light")),
+            ("phase", str_value(phase)),
+            ("status", str_value(status)),
+            ("sent", Value::Float(sent)),
+        ])
+    }
+
+    /// Lot 4.2: a frame sets phase and status, records its view, and is
+    /// ignored for the apply when a `status` reply already set them later.
+    #[test]
+    fn a_frame_sets_phase_and_status_unless_older_than_the_last_reply() {
+        let job = Job::new("b1");
+        let effect = job.note_frame(&frame("running", "running", 100.0), 100.1).expect("read");
+        assert!(effect.phase_changed && effect.status_changed && !effect.became_idle);
+        assert_eq!(job.inner.lock().unwrap().phase, "running");
+        let effect = job.note_frame(&frame("idle", "idle", 101.0), 101.1).expect("read");
+        assert!(effect.became_idle);
+        assert_eq!(job.inner.lock().unwrap().status, "idle");
+        // A reply taken after the frame was sent wins over it.
+        job.inner.lock().unwrap().phase_at = 200.0;
+        job.apply_session(&lifescape_json::object(vec![("phase", str_value("running")), ("status", str_value("running"))]));
+        job.inner.lock().unwrap().phase_at = 1.0e12;
+        let effect = job.note_frame(&frame("idle", "idle", 150.0), 201.0).expect("read");
+        assert_eq!(effect, FrameEffect::default(), "an older frame changes nothing");
+        assert_eq!(job.inner.lock().unwrap().phase, "running");
+        let view = job.frame_view().expect("view kept");
+        assert_eq!((view.phase.as_str(), view.seq), ("idle", 3), "the view still records every frame");
+        // An unsupervised (closed, dead) job only records.
+        let closed = Job::new("b2");
+        closed.inner.lock().unwrap().supervise = false;
+        assert_eq!(closed.note_frame(&frame("running", "running", 10.0), 10.0), Some(FrameEffect::default()));
+        assert_eq!(closed.inner.lock().unwrap().phase, "idle");
+        // A frame without a phase (older worker) is not a frame view.
+        assert_eq!(job.note_frame(&lifescape_json::object(vec![("type", str_value("snapshot_light"))]), 300.0), None);
     }
 
     #[test]

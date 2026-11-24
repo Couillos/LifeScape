@@ -16,6 +16,7 @@ pub mod daemon_conn;
 pub mod daemon_watch;
 pub mod supervise;
 pub mod push_hub;
+pub mod frame_check;
 pub mod errors_ingest;
 pub mod retention;
 pub mod rares_cmd;

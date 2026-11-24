@@ -18,23 +18,40 @@ fn send_push(frame: &Value) {
 
 /// Full live state frame. The caller throttles (~10 ticks): the daemon
 /// serves the front from memory, the disk stays the last-breath fallback.
-pub(crate) fn snapshot_frame(account: &str, snapshot: &Value) -> Value {
+///
+/// Lot 4.2: the envelope (outside the snapshot tree, which stays
+/// untouched) carries the session's `phase` and `status` and the send
+/// time, so the daemon reads them from the frame instead of a `status`
+/// round trip.
+pub(crate) fn snapshot_frame(account: &str, snapshot: &Value, phase: &str, status: &str) -> Value {
     object(vec![
         ("type", str_value("snapshot")),
         ("account", str_value(account)),
+        ("phase", str_value(phase)),
+        ("status", str_value(status)),
+        ("sent", Value::Float(crate::session::now_secs())),
         ("snapshot", snapshot.clone()),
     ])
 }
 
 /// Push the full live state to the daemon (fire-and-forget).
-pub(crate) fn push_snapshot(account: &str, snapshot: &Value) {
-    send_push(&snapshot_frame(account, snapshot));
+pub(crate) fn push_snapshot(account: &str, snapshot: &Value, phase: &str, status: &str) {
+    send_push(&snapshot_frame(account, snapshot, phase, status));
+}
+
+/// A light frame with the session `phase` added (lot 4.2; `status`,
+/// `script` and `updated` already ride the light frame).
+pub(crate) fn light_with_phase(mut light: Value, phase: &str) -> Value {
+    if let Value::Obj(map) = &mut light {
+        map.insert("phase".to_string(), str_value(phase));
+    }
+    light
 }
 
 /// Push a light heartbeat to the daemon (E4 two-flow: position and
 /// status only, merged into the last full state daemon-side).
-pub(crate) fn push_light(light: &Value) {
-    send_push(light);
+pub(crate) fn push_light(light: Value, phase: &str) {
+    send_push(&light_with_phase(light, phase));
 }
 
 /// Push a finished task report to the daemon (fire-and-forget, like any
@@ -104,7 +121,7 @@ pub(crate) fn push_event(
 
 #[cfg(test)]
 mod tests {
-    use super::{event_frame, snapshot_frame};
+    use super::{event_frame, light_with_phase, snapshot_frame};
     use lifescape_json::{Value, object, str_value};
 
     #[test]
@@ -134,9 +151,22 @@ mod tests {
     #[test]
     fn snapshot_frame_wraps_state_untouched() {
         let state = object(vec![("ticks", Value::Int(7))]);
-        let frame = snapshot_frame("t01", &state);
+        let frame = snapshot_frame("t01", &state, "idle", "idle");
         assert_eq!(frame.get("type").as_str(), Some("snapshot"));
         assert_eq!(frame.get("snapshot").get("ticks").as_i64(), Some(7));
         assert_eq!(str_value("x").as_str(), Some("x"));
+        assert_eq!(frame.get("phase").as_str(), Some("idle"));
+        assert_eq!(frame.get("status").as_str(), Some("idle"));
+        assert!(frame.get("sent").as_f64().is_some_and(|at| at > 1.0e9));
+    }
+
+    /// Lot 4.2: the light frame keeps every key it had and gains `phase`.
+    #[test]
+    fn light_frame_gains_the_phase_only() {
+        let light = lifescape_json::object(vec![("type", str_value("snapshot_light")), ("status", str_value("running"))]);
+        let framed = light_with_phase(light.clone(), "running");
+        assert_eq!(framed.get("phase").as_str(), Some("running"));
+        assert_eq!(framed.get("status").as_str(), Some("running"));
+        assert_eq!(framed.get("type").as_str(), Some("snapshot_light"));
     }
 }

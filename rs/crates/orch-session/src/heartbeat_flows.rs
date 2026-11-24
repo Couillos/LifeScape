@@ -132,6 +132,7 @@ pub(crate) fn pump_heartbeat(shared: &Shared, bot: &lifescape_sdk::Bot, trail: &
     let inner_view = shared.inner.lock().unwrap();
     let script = inner_view.script.clone().unwrap_or_default();
     let status = inner_view.status.clone();
+    let phase = inner_view.phase.clone();
     let zone = inner_view.last_zone.clone();
     let full = full_due(
         inner_view.last_full_tick,
@@ -153,9 +154,9 @@ pub(crate) fn pump_heartbeat(shared: &Shared, bot: &lifescape_sdk::Bot, trail: &
         inner.last_full_tick = tick;
         inner.last_full_wall = now_secs();
         inner.last_full_script = script;
-        inner.last_full_status = status;
+        inner.last_full_status = status.clone();
         drop(inner);
-        crate::session_push::push_snapshot(&shared.account, &state);
+        crate::session_push::push_snapshot(&shared.account, &state, &phase, &status);
     } else {
         // Light flow: position, status and entity positions, merged
         // daemon-side (the spectator moves the whole scene at 1 Hz).
@@ -176,7 +177,7 @@ pub(crate) fn pump_heartbeat(shared: &Shared, bot: &lifescape_sdk::Bot, trail: &
         inner.last_heartbeat_tick = tick;
         inner.last_heartbeat_wall = now_secs();
         drop(inner);
-        crate::session_push::push_light(&light);
+        crate::session_push::push_light(light, &phase);
     }
 }
 
@@ -211,6 +212,7 @@ pub(crate) fn write_light(shared: &Arc<Shared>) {
     let inner = shared.inner.lock().unwrap();
     let script = inner.script.clone().unwrap_or_default();
     let status = inner.status.clone();
+    let phase = inner.phase.clone();
     let zone = inner.last_zone.clone();
     let tick = bot.world.ticks;
     let position = (bot.world.level, bot.world.x, bot.world.z);
@@ -224,7 +226,7 @@ pub(crate) fn write_light(shared: &Arc<Shared>) {
     inner.last_heartbeat_tick = tick;
     inner.last_heartbeat_wall = now;
     drop(inner);
-    crate::session_push::push_light(&light);
+    crate::session_push::push_light(light, &phase);
 }
 
 #[cfg(test)]
