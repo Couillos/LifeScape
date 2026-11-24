@@ -236,7 +236,7 @@ pub(crate) fn heartbeat_due(last_tick: u64, tick: u64, last_wall: f64, now: f64)
 fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {    let tick = bot.world.ticks;
     let zone = if bot.zone_label.is_empty() { "?".to_string() } else { bot.zone_label.clone() };
     // Game lines print after the lock drops: stamping takes the same lock.
-    let (pending, trail): (Vec<(String, u64)>, Vec<(i32, i32, u64)>) = {
+    let pending: Vec<(String, u64)> = {
         let mut inner = shared.inner.lock().unwrap();
         inner.last_zone = zone.clone();
         if bot.world.messages.len() < inner.last_msg_logged {
@@ -256,13 +256,15 @@ fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {    let tick
                 inner.trail.drain(..2000);
             }
         }
-        (pending, inner.trail.clone())
+        pending
     };
     for (text, at) in &pending {
         worker_out(shared, &format!("msg [t={at} {zone}] {text}"));
     }
-    let last = shared.inner.lock().unwrap().last_heartbeat_tick;
-    let last_wall = shared.inner.lock().unwrap().last_heartbeat_wall;
+    let (last, last_wall) = {
+        let inner = shared.inner.lock().unwrap();
+        (inner.last_heartbeat_tick, inner.last_heartbeat_wall)
+    };
     if let Some(live) = crate::session_report::refresh_bank_cache(bot, &mut shared.last_bank.lock().unwrap()) {
         // First bank-open of a run freezes the pre-stock baseline; every
         // later open only refreshes the end cache.
@@ -271,7 +273,7 @@ fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {    let tick
         }
     }
     if heartbeat_due(last, tick, last_wall, now_secs()) {
-        crate::heartbeat_flows::pump_heartbeat(shared, bot, &trail);
+        crate::heartbeat_flows::pump_heartbeat(shared, bot);
     }
     if shared.stop_requested.load(Ordering::SeqCst) {
         return false;
@@ -929,7 +931,7 @@ mod tests {
         assert!(inner.script_alive, "run guard sees busy, no double-start");
     }
 
-    fn budget_shared(budget_max: u64, start_tick: u64) -> Shared {
+    pub(crate) fn budget_shared(budget_max: u64, start_tick: u64) -> Shared {
         use std::collections::VecDeque;
         use std::sync::{atomic::AtomicBool, Mutex};
         let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
@@ -986,5 +988,26 @@ mod tests {
             assert!(!super::budget_due(&shared, &bot), "no task start, no hook");
         }
     }
-}
 
+    /// Micro-benchmark (`--ignored --nocapture`): cost of one pump hook
+    /// with a 3 000-position trail and no heartbeat due (lot 6.1).
+    #[test]
+    #[ignore]
+    fn bench_publish_tick_with_a_long_trail() {
+        let shared = budget_shared(6000, 1000);
+        {
+            let mut inner = shared.inner.lock().unwrap();
+            inner.trail = (0..3000).map(|at| (at, at, at as u64)).collect();
+            inner.last_heartbeat_tick = 1000;
+            inner.last_heartbeat_wall = f64::MAX;
+        }
+        let bot = shared.bot.lock().unwrap();
+        let pumps = 20_000;
+        let started = std::time::Instant::now();
+        for _ in 0..pumps {
+            assert!(super::publish_tick(&shared, &bot));
+        }
+        let per = started.elapsed().as_nanos() as f64 / pumps as f64;
+        eprintln!("BENCH publish_tick: {per:.0} ns/pump over {pumps} pumps");
+    }
+}

@@ -124,8 +124,9 @@ pub fn full_due(
 
 /// Script-thread heartbeat section (E4 two-flow): full snapshot on the
 /// slow cadence or state change, light frame otherwise. Called with the
-/// borrowed bot and the trail collected by the pump hook.
-pub(crate) fn pump_heartbeat(shared: &Shared, bot: &lifescape_sdk::Bot, trail: &[(i32, i32, u64)]) {
+/// borrowed bot. The movement trail (2 000-4 000 positions) is read from
+/// the session only here, on a full flow, never copied per pump (lot 6.1).
+pub(crate) fn pump_heartbeat(shared: &Shared, bot: &lifescape_sdk::Bot) {
     let tick = bot.world.ticks;
     let inner_view = shared.inner.lock().unwrap();
     let script = inner_view.script.clone().unwrap_or_default();
@@ -144,7 +145,8 @@ pub(crate) fn pump_heartbeat(shared: &Shared, bot: &lifescape_sdk::Bot, trail: &
     );
     drop(inner_view);
     if full {
-        let state = heartbeat_value(bot, &shared.account, &script, trail);
+        let trail = shared.inner.lock().unwrap().trail.clone();
+        let state = heartbeat_value(bot, &shared.account, &script, &trail);
         *shared.heartbeat.lock().unwrap() = Some(bot.snapshot());
         let mut inner = shared.inner.lock().unwrap();
         inner.last_heartbeat_tick = tick;
