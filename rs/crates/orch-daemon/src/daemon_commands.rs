@@ -126,7 +126,7 @@ impl Orchestrator {
             },
             OperatorCommand::Rares => self.rares_reply(),
             OperatorCommand::FundMakers { dry_run, force } => crate::autopilot::current().fund_makers(self, dry_run, force),
-            OperatorCommand::BidWhy { item } => match crate::brain_bids::explain_for(account, &item, &lifescape_orch_brain::brain_deps::BrainDeps::live()) {
+            OperatorCommand::BidWhy { item } => match crate::autopilot::current().explain_for(account, &item) {
                 Ok(lines) => ok_lines(&lines),
                 Err(error) => error_reply(&error),
             },

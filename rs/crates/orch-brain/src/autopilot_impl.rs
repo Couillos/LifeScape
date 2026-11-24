@@ -56,4 +56,8 @@ impl Autopilot for BrainAutopilot {
     fn rares_lines(&self, accounts: &[String]) -> Result<Vec<String>, String> {
         crate::rares_cmd::rares_lines(accounts)
     }
+
+    fn explain_for(&self, account: &str, item: &str) -> Result<Vec<String>, String> {
+        crate::brain_bids::explain_for(account, item, &crate::brain_deps::BrainDeps::live())
+    }
 }

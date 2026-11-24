@@ -54,6 +54,12 @@ pub trait Autopilot: Send + Sync {
         Err("no brain registered".to_string())
     }
 
+    /// `bid-why <item>`: the lines explaining the account's answer to the
+    /// item's bid (`brain_bids::explain_for`, on the live handles).
+    fn explain_for(&self, _account: &str, _item: &str) -> Result<Vec<String>, String> {
+        Err("no brain registered".to_string())
+    }
+
     /// `fund-makers`: the plan's lines, and the gifts unless `dry_run`
     /// (`funding_cmd::fund_makers`); the reply is the command's JSON.
     fn fund_makers(&self, _fleet: &dyn Fleet, _dry_run: bool, _force: bool) -> Value {
