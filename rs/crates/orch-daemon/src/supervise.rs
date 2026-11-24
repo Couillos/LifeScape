@@ -164,7 +164,7 @@ fn supervise_all() {
                         }
                         Err(_) => (false, None),
                     };
-                    crate::brain::on_supervise(orch, job, report);
+                    crate::autopilot::current().on_supervise(orch, job, report);
                     continue;
                 } else {
                     backed_off.remove(&job.account);
@@ -218,7 +218,7 @@ fn supervise_all() {
                     (false, None)
                 }
             };
-            crate::brain::on_supervise(orch, job, report);
+            crate::autopilot::current().on_supervise(orch, job, report);
         }
         crate::cpu_profile::supervise().finish(sweep, "sweep");
     }

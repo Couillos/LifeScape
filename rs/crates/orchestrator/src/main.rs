@@ -233,6 +233,10 @@ fn main() -> std::process::ExitCode {
     lifescape_orchestrator::log_sink::assert_registered();
     lifescape_orchestrator::market_maker::register_account_facts();
     assert!(lifescape_orchestrator::market_facts::is_registered(), "market facts not registered");
+    // The brain is what the daemon and the web server call through the
+    // `Autopilot` trait (layering step C): registered before any thread.
+    lifescape_orch_brain::autopilot_impl::install();
+    lifescape_orchestrator::autopilot::assert_registered();
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "daemon" {
         return std::process::ExitCode::from(daemon_main() as u8);

@@ -552,7 +552,7 @@ impl Orchestrator {
                 let job = self.jobs.lock().unwrap().get(&account).cloned();
                 if let Some(job) = job {
                     let fleet: Arc<dyn crate::fleet::Fleet> = self.clone();
-                    crate::brain::on_report_push(&fleet, &job);
+                    crate::autopilot::current().on_report_push(&fleet, &job);
                 }
             }
         }
