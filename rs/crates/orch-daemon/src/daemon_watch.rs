@@ -3,6 +3,7 @@
 //! staleness decision plus the supervisor-side tick that restarts wedged
 //! workers. The supervisor thread owns the states, keyed by account.
 
+use crate::job_state::Status;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -61,8 +62,8 @@ pub(crate) enum WatchVerdict {
 /// older than the window. The heartbeat read is the frames' `updated`
 /// (`JobInner::live`), independent of the `status` call the supervisor
 /// now makes only on silence.
-pub(crate) fn watchdog_verdict(paused: bool, held: bool, status: &str, updated: Option<f64>, state: &mut Watchdog, now: f64) -> WatchVerdict {
-    if paused || held || matches!(status, "reconnecting" | "disconnected" | "starting" | "busy") {
+pub(crate) fn watchdog_verdict(paused: bool, held: bool, status: &crate::job_state::Status, updated: Option<f64>, state: &mut Watchdog, now: f64) -> WatchVerdict {
+    if paused || held || matches!(status, Status::Reconnecting | Status::Disconnected | Status::Starting | Status::Busy) {
         return WatchVerdict::Skip;
     }
     let Some(at) = updated else { return WatchVerdict::Skip };
@@ -148,7 +149,7 @@ impl Orchestrator {
             crate::logln!("watchdog {}: respawned worker never answered", job.account);
             return;
         }
-        if phase == "running" {
+        if phase == crate::job_state::Phase::Running {
             if let Some(name) = script {
                 crate::logln!("watchdog {}: resuming {name} after restart", job.account);
                 self.run_job(&job.account, &name, &args);
@@ -160,6 +161,7 @@ impl Orchestrator {
 #[cfg(test)]
 mod tests {
     use super::{watchdog_due, watchdog_verdict, WatchVerdict, Watchdog};
+    use crate::job_state::Status;
 
     /// Lot 4.5, worker frozen: the heartbeat stops, nothing happens for 45 s
     /// of silence, then the watchdog fires; three restarts in 5 minutes
@@ -167,14 +169,14 @@ mod tests {
     #[test]
     fn a_frozen_worker_is_restarted_then_parked() {
         let mut state = Watchdog::new();
-        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 100.5), WatchVerdict::Beat);
-        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 130.0), WatchVerdict::Healthy, "30 s of silence");
-        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 146.0), WatchVerdict::Fire, "46 s of silence");
+        assert_eq!(watchdog_verdict(false, false, &Status::parse("running"), Some(100.0), &mut state, 100.5), WatchVerdict::Beat);
+        assert_eq!(watchdog_verdict(false, false, &Status::parse("running"), Some(100.0), &mut state, 130.0), WatchVerdict::Healthy, "30 s of silence");
+        assert_eq!(watchdog_verdict(false, false, &Status::parse("running"), Some(100.0), &mut state, 146.0), WatchVerdict::Fire, "46 s of silence");
         for at in [146.0, 200.0, 250.0] {
             state.restarts.push(at);
         }
-        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 260.0), WatchVerdict::Poisoned);
-        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 460.0), WatchVerdict::Fire, "the window forgot the old restarts");
+        assert_eq!(watchdog_verdict(false, false, &Status::parse("running"), Some(100.0), &mut state, 260.0), WatchVerdict::Poisoned);
+        assert_eq!(watchdog_verdict(false, false, &Status::parse("running"), Some(100.0), &mut state, 460.0), WatchVerdict::Fire, "the window forgot the old restarts");
     }
 
     /// Lot 4.5, worker reconnecting (or starting, held, paused): stale
@@ -183,14 +185,14 @@ mod tests {
     #[test]
     fn a_reconnecting_worker_is_left_alone() {
         let mut state = Watchdog::new();
-        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 100.0), WatchVerdict::Beat);
+        assert_eq!(watchdog_verdict(false, false, &Status::parse("running"), Some(100.0), &mut state, 100.0), WatchVerdict::Beat);
         for status in ["reconnecting", "starting", "disconnected", "busy"] {
-            assert_eq!(watchdog_verdict(false, false, status, Some(100.0), &mut state, 500.0), WatchVerdict::Skip, "{status}");
+            assert_eq!(watchdog_verdict(false, false, &Status::parse(status), Some(100.0), &mut state, 500.0), WatchVerdict::Skip, "{status}");
         }
-        assert_eq!(watchdog_verdict(true, false, "running", Some(100.0), &mut state, 500.0), WatchVerdict::Skip, "paused");
-        assert_eq!(watchdog_verdict(false, true, "running", Some(100.0), &mut state, 500.0), WatchVerdict::Skip, "held");
-        assert_eq!(watchdog_verdict(false, false, "idle", Some(499.0), &mut state, 500.0), WatchVerdict::Beat, "back and beating");
-        assert_eq!(watchdog_verdict(false, false, "idle", None, &mut state, 500.0), WatchVerdict::Skip, "no heartbeat yet is the login edge");
+        assert_eq!(watchdog_verdict(true, false, &Status::parse("running"), Some(100.0), &mut state, 500.0), WatchVerdict::Skip, "paused");
+        assert_eq!(watchdog_verdict(false, true, &Status::parse("running"), Some(100.0), &mut state, 500.0), WatchVerdict::Skip, "held");
+        assert_eq!(watchdog_verdict(false, false, &Status::parse("idle"), Some(499.0), &mut state, 500.0), WatchVerdict::Beat, "back and beating");
+        assert_eq!(watchdog_verdict(false, false, &Status::parse("idle"), None, &mut state, 500.0), WatchVerdict::Skip, "no heartbeat yet is the login edge");
     }
 
     #[test]

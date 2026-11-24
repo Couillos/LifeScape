@@ -2,6 +2,7 @@
 //! Supervision: one thread per account, event telemetry, live state.
 //! Methods on daemon::Orchestrator; session control stays in daemon.rs.
 
+use crate::job_state::{Phase, Status};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -305,8 +306,8 @@ impl Orchestrator {
                 job.account.clone(),
                 crate::status_poll::LastPoll {
                     at: now_secs(),
-                    phase: reply.as_ref().and_then(|session| session.get("phase").as_str().map(str::to_string)).or_else(|| previous.as_ref().map(|poll| poll.phase.clone())).unwrap_or_default(),
-                    status: reply.as_ref().and_then(|session| session.get("status").as_str().map(str::to_string)).or_else(|| previous.map(|poll| poll.status)).unwrap_or_default(),
+                    phase: reply.as_ref().and_then(|session| session.get("phase").as_str().map(Phase::parse)).or_else(|| previous.as_ref().map(|poll| poll.phase.clone())).unwrap_or_default(),
+                    status: reply.as_ref().and_then(|session| session.get("status").as_str().map(Status::parse)).or_else(|| previous.map(|poll| poll.status)).unwrap_or_default(),
                 },
             );
             if let Some(ref session) = reply {
@@ -382,7 +383,7 @@ impl Orchestrator {
             let Ok(inner) = job.inner.try_lock() else {
                 return;
             };
-            if inner.phase != "idle" || inner.status != "finished" {
+            if inner.phase != Phase::Idle || inner.status != Status::Finished {
                 return;
             }
         }
@@ -395,8 +396,8 @@ impl Orchestrator {
             if reply.get("ok").as_bool() == Some(true) {
                 job.apply_session(reply.get("session"));
                 if let Ok(mut inner) = job.inner.try_lock() {
-                    if inner.status == "finished" {
-                        inner.status = "idle".to_string();
+                    if inner.status == Status::Finished {
+                        inner.status = Status::Idle;
                     }
                 }
             }
@@ -409,10 +410,10 @@ impl Orchestrator {
             return;
         };
         inner.supervise = false;
-        inner.phase = "idle".to_string();
+        inner.phase = Phase::Idle;
         inner.phase_at = now_secs();
         inner.script = None;
-        inner.status = "disconnected".to_string();
+        inner.status = Status::Disconnected;
         inner.last_error = Some(object(vec![
             ("where", str_value("worker")),
             ("type", str_value("death")),

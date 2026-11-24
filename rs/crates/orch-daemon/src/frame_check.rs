@@ -50,8 +50,8 @@ pub fn judge(before: Option<&FrameView>, after: Option<&FrameView>, reply: &Valu
     if age > STALE_AFTER_SECS {
         return Verdict::Stale;
     }
-    let phase = reply.get("phase").as_str().is_some_and(|phase| phase != after.phase);
-    let status = reply.get("status").as_str().is_some_and(|status| status != after.status);
+    let phase = reply.get("phase").as_str().is_some_and(|phase| phase != after.phase.as_str());
+    let status = reply.get("status").as_str().is_some_and(|status| status != after.status.as_str());
     if phase || status {
         Verdict::Diverged { phase, status, age }
     } else {
@@ -150,10 +150,11 @@ pub fn summary_if_due(now: f64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::job_state::{Phase, Status};
     use lifescape_json::{object, str_value};
 
     fn view(seq: u64, phase: &str, status: &str, received: f64) -> FrameView {
-        FrameView { phase: phase.to_string(), status: status.to_string(), sent: received, received, seq }
+        FrameView { phase: Phase::parse(phase), status: Status::parse(status), sent: received, received, seq }
     }
 
     fn reply(phase: &str, status: &str) -> Value {

@@ -94,8 +94,8 @@ impl Orchestrator {
         if let Some(job) = &job {
             {
                 let mut inner = job.inner.lock().unwrap();
-                inner.status = "stopped".to_string();
-                inner.phase = "idle".to_string();
+                inner.status = crate::job_state::Status::Stopped;
+                inner.phase = crate::job_state::Phase::Idle;
                 inner.phase_at = crate::jobs::now_secs();
                 inner.script = None;
                 inner.paused = false;

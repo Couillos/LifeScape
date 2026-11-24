@@ -41,4 +41,4 @@ mod market_uncross_tests;
 mod market_taker_tests;
 pub use lifescape_orch_core::{paths, logln, cpu_profile, log_markers, clock, client, log_sink, error_stamp, log_rotate, disk_guard, res_stats, store_pool, names, api_shapes, nav_profile, economy_guard, daemon_clock};
 pub use lifescape_orch_world::{png, mapcache, mapbuild, minimap, staticmap, zones, plan_service};
-pub use lifescape_orch_fleet::{jobs, registry, site_crowd, worker_owner, daemon_pool, fleet};
+pub use lifescape_orch_fleet::{job_state, jobs, registry, site_crowd, worker_owner, daemon_pool, fleet};

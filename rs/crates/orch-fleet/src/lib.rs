@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+pub mod job_state;
 pub mod jobs;
 pub mod registry;
 pub mod site_crowd;

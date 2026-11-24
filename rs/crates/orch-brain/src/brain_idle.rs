@@ -67,9 +67,9 @@ impl IdleWatch {
 /// (the next sweep reads it).
 fn worker_state(job: &Job) -> Option<WorkerState> {
     let inner = job.inner.try_lock().ok()?;
-    Some(if inner.paused || inner.held || inner.status == "disconnected" {
+    Some(if inner.paused || inner.held || inner.status == crate::job_state::Status::Disconnected {
         WorkerState::Excused
-    } else if inner.phase == "idle" {
+    } else if inner.phase == crate::job_state::Phase::Idle {
         WorkerState::Idle
     } else {
         WorkerState::Working

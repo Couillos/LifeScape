@@ -732,3 +732,11 @@ Référence : fenêtre d'une heure avant le déploiement, lue dans `run/lifescap
 - `supervise status` : `calls` par minute attendu autour de 74 (garde) + transitions, au lieu de ~440 ; `silent` proche de 0 hors redémarrage.
 - `cpu-profile threads` : groupes `push-read` (74 fils, quasi nul), `brain-clock`, `brain-tick`, `worker-connect` (quelques fils) ; `total` du démon non supérieur à la référence.
 - `idle_bot` : pas d'augmentation attendue ; ticks de travail, rapports/h, XP/h, erreurs par type : au moins la référence. Une régression de ces mesures, avec les compteurs ci-dessus, désigne le lot à corriger.
+
+## Frontières typées (phase 5, 2026-11-24)
+
+Le JSON reste sur le fil ; en mémoire, chaque protocole a une énumération et un seul module de codage (analyse 2.2 d). Lots livrés ici : 5.1, 5.2, 5.3, 5.10 (voir `docs/decisions.md` pour les preuves).
+
+### Phase et statut d'un job (lot 5.1)
+
+`orch-fleet::job_state` : `Phase` (`Idle`, `Running`, `Failed`) et `Status` (`Starting`, `Idle`, `Running`, `Busy`, `Finished`, `Failed`, `Blocked`, `Stopped`, `Reconnecting`, `Disconnected`), chacune avec `Other(String)` pour un mot inconnu (un worker plus récent) : `parse` ne rate jamais et `as_str` redonne le texte reçu, donc le texte du fil, du tableau de bord et des fichiers d'état est inchangé. `JobInner.phase/status`, `FrameView`, `LastPoll`, `watchdog_verdict` et les lectures du cerveau (`brain_idle`, `job_idle`) comparent des énumérations, plus des chaînes. L'état de session du ouvrier (`orch-session`, son propre `Inner`) garde ses chaînes : c'est un autre processus, son changement attend un `redeploy`.

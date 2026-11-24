@@ -16,6 +16,7 @@ use lifescape_planner::Life;
 use crate::brain::{load_life, push_history, save_life};
 use crate::brain_launch_pass::{Flow, LaunchPass, Picked};
 use crate::fleet::Fleet;
+use crate::job_state::{Phase, Status};
 use crate::jobs::Job;
 use crate::{brain_launch_drive as drive, brain_launch_node as node, brain_launch_steps as steps};
 
@@ -40,7 +41,7 @@ pub(crate) fn job_idle(job: &Job) -> bool {
     // script thread is alive (the worker itself refuses double `run`
     // with busy). Light heartbeats keep carrying the last script name
     // long after it finished; waiting on None would stall the brain.
-    inner.phase == "idle" && !inner.held && !inner.paused && inner.status != "disconnected"
+    inner.phase == Phase::Idle && !inner.held && !inner.paused && inner.status != Status::Disconnected
 }
 
 /// Seconds the node has waited since its last `outcome` entry, the

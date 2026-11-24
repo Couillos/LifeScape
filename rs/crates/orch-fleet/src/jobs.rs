@@ -13,6 +13,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use lifescape_json::{Value, object, str_value};
+use crate::job_state::{Phase, Status};
 use crate::paths;
 
 pub use crate::clock::now_secs;
@@ -34,9 +35,9 @@ fn obj_or_empty(value: &Value) -> Value {
 pub struct JobInner {
     pub script: Option<String>,
     pub script_args: Vec<Value>,
-    pub phase: String,
+    pub phase: Phase,
     pub paused: bool,
-    pub status: String,
+    pub status: Status,
     pub session_pid: Option<u32>,
     pub started: f64,
     /// Manual hold: the daemon runs no rescue while set (see `hold`).
@@ -70,8 +71,8 @@ pub struct JobInner {
 /// `phase` and `status` on every full and light frame, with its send time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameView {
-    pub phase: String,
-    pub status: String,
+    pub phase: Phase,
+    pub status: Status,
     /// Worker send time (same host clock as the daemon).
     pub sent: f64,
     /// Daemon receive time.
@@ -146,9 +147,9 @@ impl Job {
             inner: Mutex::new(JobInner {
                 script: None,
                 script_args: Vec::new(),
-                phase: "idle".to_string(),
+                phase: Phase::Idle,
                 paused: false,
-                status: "starting".to_string(),
+                status: Status::Starting,
                 session_pid: None,
                 started: now_secs(),
                 held: false,
@@ -179,7 +180,7 @@ impl Job {
         };
         if !session.get("phase").is_null() {
             if let Some(phase) = session.get("phase").as_str() {
-                inner.phase = phase.to_string();
+                inner.phase = Phase::parse(phase);
                 inner.phase_at = now_secs();
             }
         }
@@ -192,7 +193,7 @@ impl Job {
         inner.paused = session.get("paused").as_bool().unwrap_or(inner.paused);
         inner.held = session.get("held").as_bool().unwrap_or(inner.held);
         if let Some(status) = session.get("status").as_str() {
-            inner.status = status.to_string();
+            inner.status = Status::parse(status);
             inner.phase_at = now_secs();
         }
         if !session.get("last_error").is_null() {
@@ -235,8 +236,9 @@ impl Job {
     /// sent. An older worker's frame (no `phase`) is ignored. A wedged job
     /// drops the frame (the next one comes within a second).
     pub fn note_frame(&self, frame: &Value, now: f64) -> Option<FrameEffect> {
-        let phase = frame.get("phase").as_str()?.to_string();
-        let status = frame.get("status").as_str().unwrap_or("").to_string();
+        let phase = Phase::parse(frame.get("phase").as_str()?);
+        let status_text = frame.get("status").as_str().unwrap_or("");
+        let status = Status::parse(status_text);
         let sent = frame.get("sent").as_f64().or_else(|| frame.get("updated").as_f64()).unwrap_or(now);
         let mut inner = self.inner.try_lock().ok()?;
         inner.frame_seq += 1;
@@ -245,11 +247,11 @@ impl Job {
         let mut effect = FrameEffect::default();
         if inner.supervise && sent > inner.phase_at {
             if inner.phase != phase {
-                effect.became_idle = phase == "idle";
+                effect.became_idle = phase == Phase::Idle;
                 effect.phase_changed = true;
                 inner.phase = phase;
             }
-            if !status.is_empty() && inner.status != status {
+            if !status_text.is_empty() && inner.status != status {
                 effect.status_changed = true;
                 inner.status = status;
             }
@@ -272,7 +274,7 @@ impl Job {
                     Some(name) => Value::Str(name.clone()),
                     None => Value::Null,
                 };
-                (str_value(&guard.status), Value::Bool(guard.paused), script, Some(from_live))
+                (str_value(guard.status.as_str()), Value::Bool(guard.paused), script, Some(from_live))
             }
             Err(_) => (str_value("contended"), Value::Null, Value::Null, None),
         };
@@ -350,7 +352,7 @@ impl Job {
         ) = inner;
         let bot = live.unwrap_or_else(|| Arc::new(paths::read_json(&partial).unwrap_or(Value::Null)));
         let mut intention = bot.get("intention").as_str().unwrap_or("").to_string();
-        if phase == "running"
+        if phase == Phase::Running
             && matches!(
                 script.as_deref(),
                 Some("rescue_maze" | "rescue_down" | "rescue_fallback")
@@ -372,10 +374,10 @@ impl Job {
             ("script", script.clone()),
             ("script_args", args.clone()),
             ("args", args),
-            ("phase", str_value(&phase)),
+            ("phase", str_value(phase.as_str())),
             ("paused", Value::Bool(paused)),
             ("held", Value::Bool(held)),
-            ("status", str_value(&status)),
+            ("status", str_value(status.as_str())),
             ("session_pid", pid),
             ("started", Value::Float(started)),
             ("intention", str_value(&intention)),
@@ -629,24 +631,24 @@ mod tests {
         let job = Job::new("b1");
         let effect = job.note_frame(&frame("running", "running", 100.0), 100.1).expect("read");
         assert!(effect.phase_changed && effect.status_changed && !effect.became_idle);
-        assert_eq!(job.inner.lock().unwrap().phase, "running");
+        assert_eq!(job.inner.lock().unwrap().phase, Phase::Running);
         let effect = job.note_frame(&frame("idle", "idle", 101.0), 101.1).expect("read");
         assert!(effect.became_idle);
-        assert_eq!(job.inner.lock().unwrap().status, "idle");
+        assert_eq!(job.inner.lock().unwrap().status, Status::Idle);
         // A reply taken after the frame was sent wins over it.
         job.inner.lock().unwrap().phase_at = 200.0;
         job.apply_session(&lifescape_json::object(vec![("phase", str_value("running")), ("status", str_value("running"))]));
         job.inner.lock().unwrap().phase_at = 1.0e12;
         let effect = job.note_frame(&frame("idle", "idle", 150.0), 201.0).expect("read");
         assert_eq!(effect, FrameEffect::default(), "an older frame changes nothing");
-        assert_eq!(job.inner.lock().unwrap().phase, "running");
+        assert_eq!(job.inner.lock().unwrap().phase, Phase::Running);
         let view = job.frame_view().expect("view kept");
         assert_eq!((view.phase.as_str(), view.seq), ("idle", 3), "the view still records every frame");
         // An unsupervised (closed, dead) job only records.
         let closed = Job::new("b2");
         closed.inner.lock().unwrap().supervise = false;
         assert_eq!(closed.note_frame(&frame("running", "running", 10.0), 10.0), Some(FrameEffect::default()));
-        assert_eq!(closed.inner.lock().unwrap().phase, "idle");
+        assert_eq!(closed.inner.lock().unwrap().phase, Phase::Idle);
         // A frame without a phase (older worker) is not a frame view.
         assert_eq!(job.note_frame(&lifescape_json::object(vec![("type", str_value("snapshot_light"))]), 300.0), None);
     }

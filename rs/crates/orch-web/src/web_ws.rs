@@ -648,7 +648,7 @@ mod tests {
             let job = Arc::new(crate::jobs::Job::new(account));
             {
                 let mut inner = job.inner.lock().unwrap();
-                inner.status = status.to_string();
+                inner.status = crate::job_state::Status::parse(status);
                 inner.paused = paused;
                 inner.script = script.map(str::to_string);
                 inner.live = live.map(Arc::new);

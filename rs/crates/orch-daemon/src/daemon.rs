@@ -206,7 +206,7 @@ impl Orchestrator {
             .insert(job.account.clone(), WorkerProc::Owned(child));
         {
             let mut inner = job.inner.lock().unwrap();
-            inner.status = "starting".to_string();
+            inner.status = crate::job_state::Status::Starting;
             inner.phase_at = now_secs();
             inner.started = now_secs();
             inner.session_pid = Some(pid);
@@ -733,11 +733,11 @@ impl Orchestrator {
             job.apply_session(&session);
             {
                 let mut inner = job.inner.lock().unwrap();
-                inner.phase = "idle".to_string();
+                inner.phase = crate::job_state::Phase::Idle;
                 inner.script = None;
                 inner.script_args = Vec::new();
-                if inner.status == "running" {
-                    inner.status = "idle".to_string();
+                if inner.status == crate::job_state::Status::Running {
+                    inner.status = crate::job_state::Status::Idle;
                 }
             }
             self.jobs.lock().unwrap().insert(account.clone(), job.clone());

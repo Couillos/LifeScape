@@ -18,6 +18,7 @@
 //! worker; the frozen-worker kill stays in `daemon_watch` (frames older
 //! than 45 s).
 
+use crate::job_state::{Phase, Status};
 use lifescape_orch_fleet::jobs::FrameView;
 
 /// A bot whose last frame is older than this is silent. The worker beats
@@ -37,8 +38,8 @@ pub const SILENT_GAP_SECS: f64 = 5.0;
 #[derive(Clone, Debug, PartialEq)]
 pub struct LastPoll {
     pub at: f64,
-    pub phase: String,
-    pub status: String,
+    pub phase: Phase,
+    pub status: Status,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,11 +134,11 @@ mod tests {
     use super::*;
 
     fn view(phase: &str, status: &str, received: f64) -> FrameView {
-        FrameView { phase: phase.to_string(), status: status.to_string(), sent: received, received, seq: 1 }
+        FrameView { phase: Phase::parse(phase), status: Status::parse(status), sent: received, received, seq: 1 }
     }
 
     fn poll(at: f64, phase: &str, status: &str) -> LastPoll {
-        LastPoll { at, phase: phase.to_string(), status: status.to_string() }
+        LastPoll { at, phase: Phase::parse(phase), status: Status::parse(status) }
     }
 
     /// Worker killed: the tracked process is dead, the death is handled
