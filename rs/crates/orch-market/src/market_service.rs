@@ -252,9 +252,17 @@ pub struct MarketService {
     /// Items table by exact name (case-sensitive), the lowest id first:
     /// the in-memory twin of `Store::item_id_by_name` (`item_id_by_name`).
     names: std::collections::HashMap<String, i64>,
+    /// Process-unique number of this service (views of its books and
+    /// volumes are cached under it, `brain_market_view`).
+    instance: u64,
 }
 
 impl MarketService {
+    /// Process-unique number of this service.
+    pub fn instance_id(&self) -> u64 {
+        self.instance
+    }
+
     /// Item id of an exact display name, the same answer as the store's
     /// `item_id_by_name` (lowest id of the name), without a read.
     pub fn item_id_by_name(&self, name: &str) -> Option<i64> {
@@ -320,7 +328,9 @@ impl MarketService {
         for item in store.list_items().map_err(|error| error.to_string())? {
             names.entry(item.name).or_insert(item.item_id);
         }
-        let service = MarketService { store: Mutex::new(store), engine: Mutex::new(Engine::new(catalogue)), names };
+        static INSTANCES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let instance = INSTANCES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let service = MarketService { store: Mutex::new(store), engine: Mutex::new(Engine::new(catalogue)), names, instance };
         // The public record is settled handovers only (match-time rows
         // from before 2026-11-13 are replaced by the settled deals).
         match service.lock_store().resync_executions_from_deals() {

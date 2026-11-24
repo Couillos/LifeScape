@@ -151,6 +151,27 @@ impl Store {
         )?;
         Ok(statement.query_row(rusqlite::params![item_id, from_clock, to_clock], |row| row.get::<_, i64>(0))?)
     }
+
+    /// Newest execution id (0 when none): the log only grows (a repair
+    /// rewrites it with higher ids), so a copy of its rows taken under this
+    /// number is current while the number is unchanged.
+    pub fn executions_stamp(&self) -> Result<i64, Error> {
+        let mut statement = self.connection.prepare_cached("SELECT COALESCE(MAX(exec_id), 0) FROM executions")?;
+        Ok(statement.query_row([], |row| row.get::<_, i64>(0))?)
+    }
+
+    /// `(clock, quantity)` of every execution of `item_id` at or after
+    /// `from_clock`, oldest first: the rows `volume_between` sums, kept to
+    /// sum again for a later window.
+    pub fn fills_since(&self, item_id: i64, from_clock: i64) -> Result<Vec<(i64, i64)>, Error> {
+        let mut statement = self.connection.prepare_cached("SELECT clock, quantity FROM executions WHERE item_id = ?1 AND clock >= ?2 ORDER BY clock, exec_id")?;
+        let mut rows = statement.query(rusqlite::params![item_id, from_clock])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?));
+        }
+        Ok(out)
+    }
 }
 
 /// One settled deal as the anchor reads it.

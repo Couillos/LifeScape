@@ -15,6 +15,7 @@ pub mod brain_arbitrage;
 pub mod brain_await;
 pub mod brain_bid_release;
 pub mod brain_bids;
+mod brain_market_view;
 pub mod brain_chain;
 pub mod brain_commerce;
 pub mod brain_cool;

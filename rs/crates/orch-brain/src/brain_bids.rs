@@ -36,18 +36,6 @@ use lifescape_planner::{GoalKind, Life};
 /// A market-wide choice is reused this long per account (wall seconds).
 pub const CHOICE_TTL_SECS: u64 = 60;
 
-/// Debug name of a market object (banknotes trade as their base).
-fn debug_name(item_id: i64) -> Option<String> {
-    let obj = lifescape_gamedata::obj_by_id(usize::try_from(item_id).ok()?)?;
-    let name = obj.name?;
-    Some(name.strip_prefix("cert_").unwrap_or(name).to_string())
-}
-
-/// Id of the base (non-banknote) object named `name`.
-fn base_id(name: &str) -> Option<i64> {
-    lifescape_gamedata::objs_by_name(name).into_iter().next().map(|obj| obj.obj_id as i64)
-}
-
 fn display_of(item: &str) -> String {
     lifescape_gamedata::objs_by_name(item).into_iter().next().and_then(|obj| obj.display.or(obj.name)).unwrap_or(item).to_string()
 }
@@ -77,39 +65,25 @@ pub fn views_from(orders: &[Resting], account: &str) -> HashMap<String, BookView
     out
 }
 
-/// The live book as `account` reads it (empty while the market is down:
-/// no data, no decision), with the market id of every object; 24 h
-/// volume and current prices are read on demand (`MarketReader::view`).
-fn live_views(account: &str) -> (HashMap<String, BookView>, HashMap<String, i64>) {
-    let Some(service) = crate::market_service::shared() else { return (HashMap::new(), HashMap::new()) };
-    let mut ids: HashMap<String, i64> = HashMap::new();
-    let rows: Vec<Resting> = {
-        let engine = service.lock_engine();
-        let mut rows = Vec::new();
-        for (item_id, book) in engine.books.iter() {
-            let Some(name) = debug_name(*item_id) else { continue };
-            // The base object's id, never its banknote's (both forms may
-            // hold a book; the map's order is arbitrary): the current
-            // price reads the base reference.
-            ids.entry(name.clone()).or_insert_with(|| base_id(&name).unwrap_or(*item_id));
-            for order in book.orders() {
-                rows.push((name.clone(), order.account.clone(), order.side == lifescape_market::Side::Buy, crate::market_units::to_unit(*item_id, order.price), order.remaining));
-            }
-        }
-        rows
-    };
-    (views_from(&rows, account), ids)
+/// The live book as `account` reads it: the shared copy of every book
+/// (`brain_market_view`, built once per change), the bot's own bids left
+/// out when a view is read. Empty while the market is down (no data, no
+/// decision). 24 h volume and current prices are read on demand
+/// (`MarketReader::view`).
+fn live_books() -> Option<std::sync::Arc<crate::brain_market_view::SharedBooks>> {
+    let service = crate::market_service::shared()?;
+    Some(crate::brain_market_view::shared_books(&service))
 }
 
-/// Units traded in the last 24 h for one object (every form).
+/// Units traded in the last 24 h for one object (every form), summed
+/// from the copy of the day's executions (`brain_market_view::volume_24h_of`).
 fn volume_24h(item: &str) -> i64 {
     let Some(service) = crate::market_service::shared() else { return 0 };
     let clock = crate::market_service::MarketService::now_clock();
-    let store = service.lock_store();
     lifescape_gamedata::objs_by_name(item)
         .into_iter()
         .chain(lifescape_gamedata::objs_by_name(&format!("cert_{item}")))
-        .filter_map(|obj| store.volume_between(obj.obj_id as i64, clock - 86_400, clock + 1).ok())
+        .map(|obj| crate::brain_market_view::volume_24h_of(&service, obj.obj_id as i64, clock))
         .sum()
 }
 
@@ -125,8 +99,12 @@ fn current_of(item_id: i64) -> Option<i64> {
 /// price read once per object on demand (the recursion asks the same
 /// inputs again), and the public claims of other producers.
 pub struct MarketReader {
+    /// The books of an offline reader (tests, sims), views as given.
     views: HashMap<String, BookView>,
-    ids: HashMap<String, i64>,
+    /// The live books and the asker (`live`): its views are read from the
+    /// shared copy, own bids left out, once per object.
+    books: Option<(std::sync::Arc<crate::brain_market_view::SharedBooks>, String)>,
+    own_views: RefCell<HashMap<String, Option<BookView>>>,
     volumes: RefCell<HashMap<String, i64>>,
     currents: RefCell<HashMap<String, Option<i64>>>,
     claims: HashMap<String, i64>,
@@ -140,7 +118,7 @@ impl MarketReader {
     /// Offline reader (tests, sims): views as given (volume, current
     /// price and claims included).
     pub fn fixed(views: HashMap<String, BookView>) -> Self {
-        MarketReader { views, ids: HashMap::new(), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims: HashMap::new(), purchases: HashMap::new(), live: false }
+        MarketReader { views, books: None, own_views: RefCell::new(HashMap::new()), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims: HashMap::new(), purchases: HashMap::new(), live: false }
     }
 
     /// The board other producers posted (sims): units claimed per object
@@ -152,9 +130,59 @@ impl MarketReader {
     }
 
     pub fn live(account: &str) -> Self {
-        let (views, ids) = live_views(account);
+        let books = live_books().map(|books| (books, account.to_string()));
         let claims = crate::market_claims::claimed_by_others(account);
-        MarketReader { views, ids, volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims, purchases: HashMap::new(), live: true }
+        MarketReader { views: HashMap::new(), books, own_views: RefCell::new(HashMap::new()), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims, purchases: HashMap::new(), live: true }
+    }
+
+    /// The reader as it was before the shared view: every view built for
+    /// this asker from the rows of every book (`views_from`), same claims,
+    /// same on-demand volume and price (tests compare it with `live`).
+    #[cfg(test)]
+    pub(crate) fn live_per_bot_reference(account: &str, answering: bool) -> Self {
+        let rows = crate::brain_market_view::rows_of(&crate::market_service::shared().expect("a market")).2;
+        let mut reader = MarketReader { views: views_from(&rows, account), books: None, own_views: RefCell::new(HashMap::new()), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims: crate::market_claims::claimed_by_others(account), purchases: HashMap::new(), live: true };
+        if answering {
+            reader.purchases = crate::market_claims::purchases_by_others(account);
+        }
+        reader
+    }
+
+    /// The book of `item` as the asker reads it (own bids left out): the
+    /// offline views, or the shared copy once per object.
+    fn base_view(&self, item: &str) -> Option<BookView> {
+        let Some((books, account)) = &self.books else { return self.views.get(item).cloned() };
+        if let Some(known) = self.own_views.borrow().get(item) {
+            return known.clone();
+        }
+        let view = books.item(item).map(|book| book.view_for(account));
+        self.own_views.borrow_mut().insert(item.to_string(), view.clone());
+        view
+    }
+
+    /// True when a bid of another account rests on `item`.
+    fn has_bids(&self, item: &str) -> bool {
+        match &self.books {
+            Some((books, account)) => books.item(item).is_some_and(|book| book.has_bid_besides(account)),
+            None => self.views.get(item).is_some_and(|view| !view.bids.is_empty()),
+        }
+    }
+
+    /// Every object a book or a market id is known for.
+    fn known_names(&self) -> Vec<String> {
+        match &self.books {
+            Some((books, _)) => {
+                let mut names: Vec<String> = books.names().chain(books.ids().keys()).cloned().collect();
+                names.sort();
+                names.dedup();
+                names
+            }
+            None => self.views.keys().cloned().collect(),
+        }
+    }
+
+    fn id_of(&self, item: &str) -> Option<i64> {
+        self.books.as_ref().and_then(|(books, _)| books.ids().get(item).copied())
     }
 
     /// `live` for a bid answer (the draw, `bid-why`): the asks other
@@ -173,7 +201,7 @@ impl MarketReader {
         if let Some(known) = self.currents.borrow().get(item) {
             return *known;
         }
-        let id = self.ids.get(item).copied().or_else(|| lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.obj_id as i64));
+        let id = self.id_of(item).or_else(|| lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.obj_id as i64));
         let price = id.and_then(current_of);
         self.currents.borrow_mut().insert(item.to_string(), price);
         price
@@ -181,7 +209,7 @@ impl MarketReader {
 
     /// The view of one object (`None`: nothing rests and nothing traded).
     pub fn view(&self, item: &str) -> Option<BookView> {
-        let mut view = self.views.get(item).cloned();
+        let mut view = self.base_view(item);
         if self.live {
             let volume = *self.volumes.borrow_mut().entry(item.to_string()).or_insert_with(|| volume_24h(item));
             if volume > 0 {
@@ -204,7 +232,7 @@ impl MarketReader {
 
     /// Objects some other account bids for, heaviest bid value first.
     pub fn bid_books(&self) -> Vec<(String, BookView)> {
-        let mut out: Vec<(String, BookView)> = self.views.iter().filter(|(_, view)| !view.bids.is_empty()).map(|(item, view)| (item.clone(), view.clone())).collect();
+        let mut out: Vec<(String, BookView)> = self.known_names().into_iter().filter(|item| self.has_bids(item)).filter_map(|item| self.base_view(&item).map(|view| (item, view))).collect();
         out.sort_by(|left, right| {
             let value = |view: &BookView| view.bids.iter().map(|(price, qty)| price * qty).sum::<i64>();
             value(&right.1).cmp(&value(&left.1)).then_with(|| left.0.cmp(&right.0))
@@ -218,7 +246,7 @@ impl MarketReader {
     /// name (deterministic). Objects no production leg makes are left
     /// out before any store read.
     pub fn value_books(&self, alch: &dyn Fn(&str) -> Option<f64>) -> Vec<(String, BookView)> {
-        let mut names: Vec<&String> = self.views.keys().chain(self.ids.keys()).collect();
+        let mut names: Vec<String> = self.known_names();
         names.sort();
         names.dedup();
         names
@@ -226,12 +254,12 @@ impl MarketReader {
             .filter(|item| !lifescape_planner::obtain_legs::production_legs(item).is_empty())
             .filter_map(|item| {
                 // Cheap reads first: the volume is a store read.
-                let bids = self.views.get(item).is_some_and(|view| !view.bids.is_empty());
-                if !bids && self.current(item).is_none() && alch(item).is_none() {
+                let bids = self.has_bids(&item);
+                if !bids && self.current(&item).is_none() && alch(&item).is_none() {
                     return None;
                 }
-                let view = self.view(item)?;
-                let valued = !view.bids.is_empty() || (view.current.is_some() && view.volume_24h > 0) || alch(item).is_some();
+                let view = self.view(&item)?;
+                let valued = !view.bids.is_empty() || (view.current.is_some() && view.volume_24h > 0) || alch(&item).is_some();
                 valued.then(|| (item.clone(), view))
             })
             .collect()

@@ -59,6 +59,10 @@ pub struct Book {
     /// Grouped-auction mode (`auction`): orders rest without matching,
     /// only `run_auction` trades, at one price.
     batch: bool,
+    /// Moves at every call that may change the resting orders (all the
+    /// `&mut self` entry points): a reader that keeps a copy of the book
+    /// is current while this number is the one it copied under.
+    version: u64,
 }
 
 /// Pair guard that keeps nobody apart (plain `place`).
@@ -78,12 +82,18 @@ impl Book {
     /// `run_auction` is the only match. Back to continuous, the next
     /// `uncross` heals what still crosses.
     pub fn set_batch(&mut self, batch: bool) {
+        self.version += 1;
         self.batch = batch;
     }
 
     /// True in grouped-auction mode.
     pub fn is_batch(&self) -> bool {
         self.batch
+    }
+
+    /// The change counter of the resting orders (see the field).
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// One grouped auction: every resting order trades at the single
@@ -94,6 +104,7 @@ impl Book {
     /// later arrival of a pair is its taker. Orders drained leave the
     /// book; the rest keeps its rank.
     pub fn run_auction(&mut self, kept_apart: &dyn Fn(&str, &str) -> bool) -> Vec<Fill> {
+        self.version += 1;
         let orders = |side: &[Order]| side.iter().map(|order| crate::auction::AuctionOrder { account: order.account.clone(), price: order.price, quantity: order.remaining }).collect::<Vec<_>>();
         let may_trade = |buyer: &str, seller: &str| buyer != seller && !kept_apart(buyer, seller);
         let Some((found, pairs)) = crate::auction::clear_pairs(&orders(&self.buys), &orders(&self.sells), &may_trade) else {
@@ -241,6 +252,7 @@ impl Book {
         price: i64,
         kept_apart: &dyn Fn(&str, &str) -> bool,
     ) -> Result<(Vec<Fill>, bool), Error> {
+        self.version += 1;
         if account.is_empty() {
             return Err(Error::Invalid("empty account".to_string()));
         }
@@ -369,6 +381,7 @@ impl Book {
     /// `relist_matching`, or the book stays crossed (live 2026-11-13,
     /// bronze axe: a relisted bid at 20 above asks at 16).
     pub fn relist(&mut self, order: Order) {
+        self.version += 1;
         self.next_seq = self.next_seq.max(order.seq.saturating_add(1));
         self.rest(order);
     }
@@ -378,6 +391,7 @@ impl Book {
     /// `kept_apart` refuses skipped), and its remainder rests at its
     /// original `seq` (queue rank among its own side kept).
     pub fn relist_matching(&mut self, order: Order, kept_apart: &dyn Fn(&str, &str) -> bool) -> Vec<Fill> {
+        self.version += 1;
         self.next_seq = self.next_seq.max(order.seq.saturating_add(1));
         let mut incoming = order;
         let fills = if self.batch { Vec::new() } else { self.take_as_taker(&mut incoming, kept_apart) };
@@ -396,6 +410,7 @@ impl Book {
     /// whatever `seq` rank it kept. After it, only own or kept-apart
     /// pairs rest crossed.
     pub fn uncross(&mut self, kept_apart: &dyn Fn(&str, &str) -> bool) -> Vec<Fill> {
+        self.version += 1;
         let mut fills = Vec::new();
         if self.batch {
             return fills;
@@ -451,12 +466,14 @@ impl Book {
 
     /// Cancels one resting order. Fills already taken stay valid.
     pub fn cancel(&mut self, id: u64) -> Result<Order, Error> {
+        self.version += 1;
         self.take(id).ok_or_else(|| Error::NotFound(format!("order {id}")))
     }
 
     /// Amends a price: cancel + replace, so the order loses its queue
     /// position. Returns the replacement order plus any immediate fills.
     pub fn amend(&mut self, id: u64, new_price: i64, new_id: u64) -> Result<(Order, Vec<Fill>), Error> {
+        self.version += 1;
         if new_price < 1 {
             return Err(Error::Invalid(format!("bad amended price {new_price}")));
         }
