@@ -231,6 +231,42 @@ impl PocketMemo {
         sealed_by(&found, from, dest)
     }
 
+    /// Every verdict as (destination key, members): `None` for an open
+    /// one, the sorted member keys for a sealed one. Sorted by key, so a
+    /// saved file is the same bytes for the same memo (lot N4).
+    pub(crate) fn export(&self) -> Vec<(u64, Option<Vec<u64>>)> {
+        let verdicts = self.verdicts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut rows: Vec<(u64, Option<Vec<u64>>)> = verdicts
+            .iter()
+            .map(|(dest, verdict)| match verdict.as_ref() {
+                PocketVerdict::Open => (*dest, None),
+                PocketVerdict::Closed { members } => {
+                    let mut keys: Vec<u64> = members.iter().copied().collect();
+                    keys.sort_unstable();
+                    (*dest, Some(keys))
+                }
+            })
+            .collect();
+        rows.sort_unstable_by_key(|(dest, _)| *dest);
+        rows
+    }
+
+    /// Put verdicts back (lot N4): same entries `verdict()` would have
+    /// computed, kept under the memo's bound.
+    pub(crate) fn import(&self, rows: Vec<(u64, Option<Vec<u64>>)>) {
+        let mut verdicts = self.verdicts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (dest, members) in rows {
+            if verdicts.len() >= MEMO_CAP {
+                break;
+            }
+            let verdict = match members {
+                None => PocketVerdict::Open,
+                Some(keys) => PocketVerdict::Closed { members: keys.into_iter().collect() },
+            };
+            verdicts.entry(dest).or_insert_with(|| Arc::new(verdict));
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.verdicts.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len()
     }

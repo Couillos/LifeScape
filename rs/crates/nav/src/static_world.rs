@@ -269,12 +269,16 @@ impl StaticWorld {
         list
     }
 
-    /// Paint the given pack squares now (N4: warm start). Squares absent
-    /// from the pack are skipped.
-    pub fn paint_squares(&self, list: &[(i32, i32)]) {
+    /// Paint the given pack squares and build their dense squares on
+    /// every level (N4: warm start), so the first searches read a ready
+    /// grid. Squares absent from the pack are skipped.
+    pub fn warm_squares(&self, list: &[(i32, i32)]) {
+        let grid = self.grid();
         for (square_x, square_z) in list {
             if self.has_square(*square_x, *square_z) {
-                let _ = self.paint_with_neighbours(*square_x, *square_z);
+                for level in 0..4 {
+                    let _ = grid.square(self, square_x << 6, square_z << 6, level);
+                }
             }
         }
     }

@@ -24,6 +24,9 @@ mod giants_exit_tests;
 pub mod loctypes;
 pub mod nav;
 pub mod nav_meter;
+pub mod nav_state;
+#[cfg(test)]
+mod nav_state_tests;
 pub mod no_route;
 pub mod plan;
 pub mod pocket;

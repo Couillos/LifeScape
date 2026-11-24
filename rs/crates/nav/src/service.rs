@@ -586,6 +586,28 @@ impl Service {
         (old, new)
     }
 
+    /// What `nav_state` saves: the snapshot, the route cache rows and
+    /// the pocket verdicts of its version (lot N4).
+    pub(crate) fn state_rows(&self) -> (Arc<Snapshot>, Vec<(u64, u64, Arc<PlanEntry>)>, Vec<(u64, Option<Vec<u64>>)>) {
+        let snapshot = self.snapshot();
+        let routes = self.routes.lock().unwrap().export();
+        let pockets = self.l2.lock().unwrap().0.get(&snapshot.version).map(|(_, memo)| memo.export()).unwrap_or_default();
+        (snapshot, routes, pockets)
+    }
+
+    /// What `nav_state` restores: route rows into the cache and verdicts
+    /// into the memo of the snapshot's version (the L2 edge set builds
+    /// first when it does not exist yet). A snapshot swapped meanwhile
+    /// drops the rows (`RouteCache` checks the version).
+    pub(crate) fn restore_rows(&self, snapshot: &Arc<Snapshot>, routes: Vec<(u64, PlanEntry)>, pockets: Vec<(u64, Option<Vec<u64>>)>) {
+        if !pockets.is_empty() {
+            if let Some((_, memo)) = self.shared_edges(snapshot) {
+                memo.import(pockets);
+            }
+        }
+        self.routes.lock().unwrap().restore(&snapshot.version, routes);
+    }
+
     /// Route cache counters and occupancy (`nav-stats`, cpu-profile nav).
     pub fn route_stats(&self) -> RouteStats {
         self.routes.lock().unwrap().snapshot_stats()

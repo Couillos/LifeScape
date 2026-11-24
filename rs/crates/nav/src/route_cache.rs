@@ -359,6 +359,40 @@ impl RouteCache {
         }
     }
 
+    /// Every positive entry as (id, LRU stamp, entry), oldest id first:
+    /// insertion order (the candidate lists are read newest first) and
+    /// recency, both needed to rebuild the cache as it was (lot N4).
+    pub fn export(&self) -> Vec<(u64, u64, Arc<PlanEntry>)> {
+        let mut rows: Vec<(u64, u64, Arc<PlanEntry>)> =
+            self.plans.iter().map(|(id, slot)| (*id, slot.stamp, Arc::clone(&slot.entry))).collect();
+        rows.sort_by_key(|(id, _, _)| *id);
+        rows
+    }
+
+    /// Rebuild from `export` rows (insertion order): entries go in one by
+    /// one so the indexes list them as they were, then the recency order
+    /// is put back. Counters are not moved: a restore is not traffic.
+    pub fn restore(&mut self, version: &str, rows: Vec<(u64, PlanEntry)>) {
+        if version != self.version {
+            return;
+        }
+        let (inserted, evictions) = (self.stats.inserted, self.stats.evictions);
+        let mut placed: Vec<(u64, u64)> = Vec::new();
+        for (saved_stamp, entry) in rows {
+            let id = self.next_id;
+            self.insert_plan(version, entry);
+            if self.plans.contains_key(&id) {
+                placed.push((saved_stamp, id));
+            }
+        }
+        placed.sort_unstable();
+        for (_, id) in placed {
+            self.touch(id);
+        }
+        self.stats.inserted = inserted;
+        self.stats.evictions = evictions;
+    }
+
     /// Stores one NoRoute verdict under its full key for `ttl`.
     pub fn insert_negative(&mut self, version: &str, key: PlanKey, body: Value, ttl: Duration) {
         if version != self.version {
