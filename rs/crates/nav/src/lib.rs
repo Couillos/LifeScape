@@ -26,8 +26,10 @@ pub mod pocket;
 #[cfg(test)]
 mod plan_budget_tests;
 pub mod reach;
+mod reader;
 pub mod region_lists;
 pub mod route;
+mod search;
 pub mod site_reach;
 pub mod site_banks;
 pub mod route_cache;

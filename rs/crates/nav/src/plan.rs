@@ -12,11 +12,11 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::time::Duration;
 
-use crate::bfs::can_step;
 use crate::collision::leaf_step_extra;
 use crate::fallback::walled_off;
-use crate::collision::{tile_walkable, CollisionMap, BLOCK_EAST, BLOCK_NORTH, BLOCK_SOUTH, BLOCK_WEST};
+use crate::collision::{tile_walkable, BLOCK_EAST, BLOCK_NORTH, BLOCK_SOUTH, BLOCK_WEST};
 use crate::reach;
+use crate::search::Search;
 use crate::static_world::StaticWorld;
 use crate::tables::{Tables, Transition, Verdict};
 
@@ -675,125 +675,6 @@ pub(crate) enum Outcome {
     Aborted,
 }
 
-struct Search<'a> {
-    world: &'a StaticWorld,
-    tables: &'a Tables,
-    options: &'a NavOptions,
-    ignore_requires: bool,
-    allow_paid: bool,
-    ignore_f2p: bool,
-    base_flags: U64Map<u32>,
-    open_flags: U64Map<u32>,
-    doors: U64Map<Option<(u16, u8, u8)>>,
-    /// F2P verdict per 8x8 zone (`in_f2p` takes the world lock: it ran
-    /// for every neighbour of every visit).
-    f2p_zones: U64Map<bool>,
-}
-
-impl Search<'_> {
-    fn in_bounds(&mut self, tile: Tile) -> bool {
-        if !self.options.f2p_only || self.ignore_f2p {
-            return true;
-        }
-        let zone = Tile { x: tile.x >> 3, z: tile.z >> 3, level: 0 }.key();
-        if let Some(inside) = self.f2p_zones.get(&zone) {
-            return *inside;
-        }
-        let inside = self.world.in_f2p(tile.x, tile.z);
-        self.f2p_zones.insert(zone, inside);
-        inside
-    }
-
-    fn base(&mut self, tile: Tile) -> u32 {
-        if let Some(flags) = self.base_flags.get(&tile.key()) {
-            return *flags;
-        }
-        let flags = self.world.get(tile.x, tile.z, tile.level);
-        self.base_flags.insert(tile.key(), flags);
-        flags
-    }
-
-    fn door_at(&mut self, tile: Tile) -> Option<(u16, u8, u8)> {
-        if let Some(found) = self.doors.get(&tile.key()) {
-            return *found;
-        }
-        let found = self.world.door_at(tile.x, tile.z, tile.level);
-        self.doors.insert(tile.key(), found);
-        found
-    }
-
-    /// A door this search may swing: openable, untolled (or paid), with
-    /// its requirement tags in hand, and not hand-blocked tile by tile.
-    fn usable_door(&mut self, tile: Tile) -> Option<(u16, u8, u8)> {
-        let (id, shape, angle) = self.door_at(tile)?;
-        if self.tables.is_blocked(id, tile) {
-            return None;
-        }
-        let def = self.world.loc_def(id as usize)?;
-        def.open_op?;
-        if self.world.is_toll(tile.x, tile.z, tile.level) && !self.allow_paid {
-            return None;
-        }
-        if !self.ignore_requires && !self.tables.missing(id, tile, &self.options.satisfied).is_empty() {
-            return None;
-        }
-        Some((id, shape, angle))
-    }
-
-    /// Collision with usable doors swung open: the exact wall removal
-    /// over the tiles it touches, never a blanket OPEN. Wall locs paint
-    /// shared edges onto their neighbours, so the scratch map carries
-    /// the 3x3 around the tile and every usable door inside unpaints
-    /// into it before the centre tile is read. 3x3 is exact: paint
-    /// reaches at most the neighbour tiles, so any door touching the
-    /// centre always shows one of its tiles inside the window.
-    fn open(&mut self, tile: Tile) -> u32 {
-        if let Some(flags) = self.open_flags.get(&tile.key()) {
-            return *flags;
-        }
-        let mut doors = Vec::new();
-        for dx in -1..=1 {
-            for dz in -1..=1 {
-                let near = Tile { x: tile.x + dx, z: tile.z + dz, level: tile.level };
-                if let Some(found) = self.usable_door(near) {
-                    doors.push((near, found));
-                }
-            }
-        }
-        let flags = if doors.is_empty() {
-            self.base(tile)
-        } else {
-            let mut scratch = CollisionMap::new();
-            for dx in -1..=1 {
-                for dz in -1..=1 {
-                    let near = Tile { x: tile.x + dx, z: tile.z + dz, level: tile.level };
-                    scratch.set(near.x, near.z, near.level, self.base(near));
-                }
-            }
-            for (near, (id, shape, angle)) in doors {
-                self.world.unpaint_into(&mut scratch, id, shape, angle, near.x, near.z, near.level);
-            }
-            scratch.get(tile.x, tile.z, tile.level)
-        };
-        self.open_flags.insert(tile.key(), flags);
-        flags
-    }
-
-    /// Walk step in the planning view (usable doors read open).
-    fn step_open(&mut self, from: Tile, to: Tile) -> bool {
-        let level = from.level;
-        let mut step = |x: i32, z: i32| self.open(Tile { x, z, level });
-        can_step(&mut step, from.x, from.z, to.x, to.z)
-    }
-
-    /// Walk step with every door shut.
-    fn step_closed(&mut self, from: Tile, to: Tile) -> bool {
-        let level = from.level;
-        let mut step = |x: i32, z: i32| self.base(Tile { x, z, level });
-        can_step(&mut step, from.x, from.z, to.x, to.z)
-    }
-}
-
 /// Search keepalive gate: the visit-count abort stays (operator stop
 /// must bite even on a fast search), plus a wall-clock yield so a slow
 /// search — live doors, toll detours — still proves the session alive
@@ -816,19 +697,7 @@ pub(crate) fn dijkstra(
     yield_: &mut dyn FnMut() -> bool,
     deadline: std::time::Instant,
 ) -> Outcome {
-    let mut search = Search {
-        world,
-        tables,
-        options,
-        ignore_requires,
-        allow_paid,
-        ignore_f2p,
-        base_flags: U64Map::default(),
-        open_flags: U64Map::default(),
-        doors: U64Map::default(),
-        f2p_zones: U64Map::default(),
-
-    };
+    let mut search = Search::new(world, tables, options, ignore_requires, allow_paid, ignore_f2p);
     let dest_walkable = tile_walkable(search.open(dest));
     // Blocked destination: the best rank prefix any tile can reach.
     let floor = if dest_walkable {
@@ -1144,18 +1013,7 @@ pub(crate) fn prepare_shared(
     options: &NavOptions,
     yield_: &mut dyn FnMut() -> bool,
 ) -> Option<(U64Map<Vec<RideEdge>>, U64Map<Vec<CustomPrepared>>)> {
-    let mut permissive = Search {
-        world,
-        tables,
-        options,
-        ignore_requires: true,
-        allow_paid: true,
-        ignore_f2p: true,
-        base_flags: U64Map::default(),
-        open_flags: U64Map::default(),
-        doors: U64Map::default(),
-        f2p_zones: U64Map::default(),
-    };
+    let mut permissive = Search::new(world, tables, options, true, true, true);
     prepare_edges(&mut permissive, yield_)
 }
 
@@ -1331,18 +1189,7 @@ fn stands(search: &mut Search, row: &Transition) -> Vec<Tile> {
 /// open and no requirement tags are held: geometric candidates, of which
 /// the planner may use a subset.
 pub fn ride_stands(world: &StaticWorld, tables: &Tables, options: &NavOptions, row: &Transition) -> Vec<Tile> {
-    let mut search = Search {
-        world,
-        tables,
-        options,
-        ignore_requires: false,
-        allow_paid: true,
-        ignore_f2p: false,
-        base_flags: U64Map::default(),
-        open_flags: U64Map::default(),
-        doors: U64Map::default(),
-        f2p_zones: U64Map::default(),
-    };
+    let mut search = Search::new(world, tables, options, false, true, false);
     stands(&mut search, row)
 }
 

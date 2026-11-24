@@ -44,6 +44,7 @@ use std::collections::BinaryHeap;
 
 use crate::bfs::can_step;
 use crate::collision::{leaf_step_extra, tile_walkable};
+use crate::reader::Reader;
 use crate::plan::{DangerMap, NavOptions, Plan, Segment, SharedEdges, Tile, TRANSITION_COST};
 use crate::static_world::StaticWorld;
 
@@ -75,7 +76,7 @@ pub enum Decline {
 
 /// Static reads of one window, each tile read once.
 struct Window<'a> {
-    world: &'a StaticWorld,
+    reader: Reader<'a>,
     min_x: i32,
     min_z: i32,
     level: i32,
@@ -95,7 +96,7 @@ impl Window<'_> {
     fn flags(&mut self, tile_x: i32, tile_z: i32) -> u32 {
         let slot = self.slot(tile_x, tile_z);
         if self.flags[slot] == UNKNOWN {
-            self.flags[slot] = self.world.get(tile_x, tile_z, self.level);
+            self.flags[slot] = self.reader.flags(Tile { x: tile_x, z: tile_z, level: self.level });
         }
         self.flags[slot]
     }
@@ -105,7 +106,7 @@ impl Window<'_> {
     fn door(&mut self, tile_x: i32, tile_z: i32) -> bool {
         let slot = self.slot(tile_x, tile_z);
         if self.doors[slot] == 0 {
-            self.doors[slot] = if self.world.door_at(tile_x, tile_z, self.level).is_some() { 2 } else { 1 };
+            self.doors[slot] = if self.reader.door_at(Tile { x: tile_x, z: tile_z, level: self.level }).is_some() { 2 } else { 1 };
         }
         self.doors[slot] == 2
     }
@@ -116,7 +117,8 @@ pub(crate) fn short_hop(world: &StaticWorld, shared: &SharedEdges, from: Tile, d
     if from.level != dest.level || from.chebyshev(dest) > FAST_RADIUS {
         return Err(Decline::NotShort);
     }
-    if !tile_walkable(world.get(dest.x, dest.z, dest.level)) {
+    let reader = Reader::new(world);
+    if !tile_walkable(reader.flags(dest)) {
         return Err(Decline::BlockedDest);
     }
     if from == dest {
@@ -126,7 +128,7 @@ pub(crate) fn short_hop(world: &StaticWorld, shared: &SharedEdges, from: Tile, d
     }
     let (min_x, min_z) = (from.x - WINDOW - MARGIN, from.z - WINDOW - MARGIN);
     let cells = (SIDE * SIDE) as usize;
-    let mut window = Window { world, min_x, min_z, level: from.level, flags: vec![UNKNOWN; cells], doors: vec![0; cells] };
+    let mut window = Window { reader, min_x, min_z, level: from.level, flags: vec![UNKNOWN; cells], doors: vec![0; cells] };
     let danger = DangerMap::clipped(&options.danger, from.x - WINDOW, from.z - WINDOW, from.x + WINDOW, from.z + WINDOW);
     let (rides, customs) = shared;
     let mut dist = vec![u32::MAX; cells];
@@ -167,7 +169,7 @@ pub(crate) fn short_hop(world: &StaticWorld, shared: &SharedEdges, from: Tile, d
         let here_flags = window.flags(here.x, here.z);
         for (step_x, step_z) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
             let next = Tile { x: here.x + step_x, z: here.z + step_z, level: here.level };
-            if options.f2p_only && !world.in_f2p(next.x, next.z) {
+            if options.f2p_only && !window.reader.in_f2p(next.x, next.z) {
                 continue;
             }
             if window.door(next.x, next.z) {
