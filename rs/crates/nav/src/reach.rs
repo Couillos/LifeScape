@@ -461,3 +461,6 @@ mod tests {
         assert!(reached(&north_wall, 0, 5, 6, 5, 5, 1, 1, ANGLE_SOUTH, 9, 0), "north wall does not face from above");
     }
 }
+
+#[cfg(test)]
+mod wall_table_tests;
