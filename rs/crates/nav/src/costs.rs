@@ -36,6 +36,7 @@ use std::collections::BinaryHeap;
 
 use crate::collision::{self, leaf_step_extra};
 use crate::plan::{EdgeId, NavOptions, SharedEdges, Tile, U64Map, DOOR_COST, TRANSITION_COST};
+use crate::dense::DenseMap;
 use crate::reach;
 use crate::search::Search;
 use crate::static_world::StaticWorld;
@@ -101,19 +102,23 @@ fn goal_bound(here: Tile, pending: &[(Tile, u32)]) -> u32 {
 }
 
 fn relax(
-    dist: &mut U64Map<u32>,
+    dist: &mut DenseMap<u32>,
     dist_open: &mut U64Map<u32>,
     heap: &mut BinaryHeap<(Reverse<u32>, Reverse<Key>, bool)>,
     next: Key,
     cost: u32,
     opened: bool,
 ) {
-    let map = if opened { dist_open } else { dist };
-    let slot = tile_of(next).key();
-    if map.get(&slot).is_some_and(|known| *known <= cost) {
+    let at = tile_of(next);
+    let known = if opened { dist_open.get(&at.key()).copied() } else { dist.cost(at) };
+    if known.is_some_and(|known| known <= cost) {
         return;
     }
-    map.insert(slot, cost);
+    if opened {
+        dist_open.insert(at.key(), cost);
+    } else {
+        dist.set(at, cost);
+    }
     heap.push((Reverse(cost), Reverse(next), opened));
 }
 
@@ -198,21 +203,21 @@ pub(crate) fn plan_costs_capped(
         }
     }
     let mut costs: Vec<Option<u32>> = vec![None; dests.len()];
-    let mut dist: U64Map<u32> = U64Map::default();
+    let mut dist: DenseMap<u32> = DenseMap::new(u32::MAX);
     // Tiles reached through a door click (door stands open), apart from
     // the cheap walked-onto shut tiles (same rule as `dijkstra`). No prev
     // map here: costs never rebuild a chain.
     let mut dist_open: U64Map<u32> = U64Map::default();
     let mut heap: BinaryHeap<(Reverse<u32>, Reverse<Key>, bool)> = BinaryHeap::new();
-    dist.insert(from.key(), 0);
+    dist.set(from, 0);
     heap.push((Reverse(0), Reverse(key_of(from)), false));
     let mut visits = 0usize;
     let horizon = horizon(from, dests).min(cap);
     let mut pending = goal_floors(shared, dests, &settle);
     let mut horizon_cut = false;
     while let Some((Reverse(cost), Reverse(found), opened)) = heap.pop() {
-        let known = if opened { &dist_open } else { &dist };
-        if known.get(&tile_of(found).key()).is_some_and(|known| *known != cost) {
+        let known = if opened { dist_open.get(&tile_of(found).key()).copied() } else { dist.cost(tile_of(found)) };
+        if known.is_some_and(|known| known != cost) {
             continue;
         }
         visits += 1;
@@ -392,7 +397,7 @@ pub(crate) fn plan_costs_capped(
     }
     crate::nav_meter::add_visits(visits);
     for target in &blocked {
-        let best = dist.get(&target.best.key()).copied();
+        let best = dist.cost(target.best);
         for index in &target.indices {
             costs[*index] = best;
         }

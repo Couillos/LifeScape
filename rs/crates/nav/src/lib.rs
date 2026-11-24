@@ -7,6 +7,7 @@ pub mod buffer;
 pub mod collision;
 pub mod costs;
 pub mod custom_edge;
+mod dense;
 pub mod danger;
 mod detour;
 pub mod f2p;

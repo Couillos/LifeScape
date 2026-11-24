@@ -16,6 +16,7 @@ use crate::collision::leaf_step_extra;
 use crate::fallback::walled_off;
 use crate::collision::{tile_walkable, BLOCK_EAST, BLOCK_NORTH, BLOCK_SOUTH, BLOCK_WEST};
 use crate::reach;
+use crate::dense::{Dist, Parents};
 use crate::search::Search;
 use crate::static_world::StaticWorld;
 use crate::tables::{Tables, Transition, Verdict};
@@ -64,7 +65,7 @@ pub const DOOR_COST: u32 = 10;
 /// same tile and only `rebuild` must carry the full key. One extra state
 /// per door tile: a walked-onto tile is cheap but shut (its click would
 /// be a refused src==dest), the clicked tile costs more but steps off.
-const FRESH: u64 = 1 << 63;
+pub(crate) const FRESH: u64 = 1 << 63;
 /// One transition ride: 20 walk steps of climbing and waiting.
 pub const TRANSITION_COST: u32 = 20;
 /// Riding blind: the prober never saw this transition work.
@@ -707,10 +708,10 @@ pub(crate) fn dijkstra(
     };
     let danger = DangerMap::new(&options.danger);
     let (rides, customs) = shared;
-    let mut dist: U64Map<u32> = U64Map::default();
-    let mut prev: U64Map<(u64, PrevEdge)> = U64Map::default();
+    let mut dist = Dist::new();
+    let mut prev = Parents::new();
     let mut heap: BinaryHeap<(Reverse<u32>, Reverse<u64>)> = BinaryHeap::new();
-    dist.insert(from.key(), 0);
+    dist.set(from.key(), 0);
     heap.push((Reverse(0), Reverse(from.key())));
     let mut best = from;
     let mut best_rank = from.fallback_rank(dest, 0, walled_off(&mut |tile| search.open(tile), from, dest));
@@ -727,7 +728,7 @@ pub(crate) fn dijkstra(
     // Lowest cost first, lowest tile key breaking ties: the same world
     // always yields the same plan.
     while let Some((Reverse(cost), Reverse(key))) = heap.pop() {
-        if dist.get(&key).is_some_and(|known| *known != cost) {
+        if dist.get(key).is_some_and(|known| known != cost) {
             continue;
         }
         visits += 1;
@@ -939,8 +940,8 @@ pub(crate) fn dijkstra(
     }
     crate::nav_meter::add_visits(visits);
     // Blocked destination (tree, counter): the closest tile is the plan.
-    if !dest_walkable && best.key() != dest_key && dist.contains_key(&best.key()) {
-        let cost = dist[&best.key()];
+    if !dest_walkable && best.key() != dest_key && dist.get(best.key()).is_some() {
+        let cost = dist.get(best.key()).expect("best was reached");
         if std::env::var("PLAN_DEBUG").is_ok() {
             eprintln!("plan adjusted visits={visits} {:?}", loop_start.elapsed());
         }
@@ -955,23 +956,23 @@ pub(crate) fn dijkstra(
 }
 
 fn relax(
-    dist: &mut U64Map<u32>,
-    prev: &mut U64Map<(u64, PrevEdge)>,
+    dist: &mut Dist,
+    prev: &mut Parents,
     heap: &mut BinaryHeap<(Reverse<u32>, Reverse<u64>)>,
     from_key: u64,
     next_key: u64,
     cost: u32,
     edge: PrevEdge,
 ) {
-    if dist.get(&next_key).is_some_and(|known| *known <= cost) {
+    if dist.get(next_key).is_some_and(|known| known <= cost) {
         return;
     }
-    dist.insert(next_key, cost);
-    prev.insert(next_key, (from_key, edge));
+    dist.set(next_key, cost);
+    prev.set(from_key, next_key, edge);
     heap.push((Reverse(cost), Reverse(next_key)));
 }
 
-fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, dest: Tile) -> Vec<(Tile, PrevEdge)> {
+fn rebuild(prev: &Parents, from: Tile, dest: Tile) -> Vec<(Tile, PrevEdge)> {
     // Full keys, FRESH mark included: an opened tile and its shut twin
     // are different search states with different parents (the open one
     // continues the click, the shut one the walk that reached the stand).
@@ -979,20 +980,8 @@ fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, dest: Tile) -> Vec<(Tile,
     let mut chain = Vec::new();
     let mut at_key = dest.key();
     while at_key != from.key() {
-        let Some((parent, _)) = prev.get(&at_key) else {
+        let Some((parent_key, edge)) = prev.get(at_key) else {
             break;
-        };
-        let parent_key = *parent;
-        let Some((_, edge)) = prev.get(&at_key) else {
-            break;
-        };
-        let edge = match edge {
-            PrevEdge::Walk => PrevEdge::Walk,
-            PrevEdge::Door(door) => PrevEdge::Door(door.clone()),
-            PrevEdge::Ride { index, dest, pre_open } => {
-                PrevEdge::Ride { index: *index, dest: *dest, pre_open: pre_open.clone() }
-            }
-            PrevEdge::Custom { index, dest } => PrevEdge::Custom { index: *index, dest: *dest },
         };
         chain.push((unkey(at_key), edge));
         at_key = parent_key;
