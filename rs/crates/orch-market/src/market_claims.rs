@@ -34,7 +34,9 @@
 //! goal draw or expiry ends them.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
+#[cfg(not(any(test, feature = "test-support")))]
+use std::sync::OnceLock;
 
 /// Shortest claim (wall seconds).
 pub const MIN_CLAIM_SECS: i64 = 600;
@@ -57,9 +59,23 @@ struct Claim {
     buy: bool,
 }
 
+/// The daemon's one board. Test builds (this crate's tests, or a crate that
+/// enables `test-support`) get a board PER THREAD instead: the test harness
+/// runs one test per thread, so a test that claims `bronze_bar` can no
+/// longer change what another test reads (the flaky
+/// `trades_are_identical_on_the_real_lives…`, 130 vs 150).
+#[cfg(not(any(test, feature = "test-support")))]
 fn board() -> &'static Mutex<Vec<Claim>> {
     static BOARD: OnceLock<Mutex<Vec<Claim>>> = OnceLock::new();
     BOARD.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn board() -> &'static Mutex<Vec<Claim>> {
+    thread_local! {
+        static BOARD: &'static Mutex<Vec<Claim>> = Box::leak(Box::new(Mutex::new(Vec::new())));
+    }
+    BOARD.with(|board| *board)
 }
 
 fn now_secs() -> i64 {
