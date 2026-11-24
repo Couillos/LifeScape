@@ -32,7 +32,6 @@ pub mod log_rotate;
 pub mod disk_guard;
 pub mod res_stats;
 pub mod store_pool;
-pub mod store_queue;
 pub mod names;
 pub mod api_shapes;
 pub mod nav_profile;

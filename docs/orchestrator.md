@@ -246,6 +246,14 @@ glisse) ; il attend lui-même le serveur qui garde encore le joueur (`already lo
 relogin retenté 2 s jusqu'à 120 ticks, `TIMEOUT_NO_RESPONSE` = 100).
 Code ≠ 0 → lire l'erreur, ne pas boucler.
 
+Notes de déploiement du plan d'architecture (à jouer à la mise en production
+de la branche `plan-architecture`, une fois le démon arrêté proprement) :
+- `run/lifescape-staging.jsonl` (661 Mo, jamais lu) n'est plus écrit depuis le
+  lot 1.4 (module `store_queue` supprimé, aucun lecteur dans le dépôt :
+  recherche exhaustive des noms et de `LIFESCAPE_STAGING_DIR`). **À supprimer à la
+  main** après l'arrêt du démon : `rm run/lifescape-staging.jsonl`. Les rapports
+  de tâche restent en base (`rates_ingest`, tables `task_reports`…).
+
 Propriété des workers (2026-11-13, `worker_owner.rs`, `daemon_close.rs`) :
 un seul worker vivant par compte, jamais deux. Bug corrigé : un `open`
 opérateur et un `open` market-absent simultanés (ryan_park, 20:17) ont
@@ -541,7 +549,7 @@ La crate `lifescape-orchestrator` est découpée en couches, d'abord à l'intér
 
 | couche | contenu |
 |---|---|
-| `core` | `logln!` + `log_sink`, `paths`, `clock`, `client`, `log_markers`, `cpu_profile`, `res_stats`, `store_pool`, `store_queue`, `names`, `api_shapes`, `economy_guard`, journaux |
+| `core` | `logln!` + `log_sink`, `paths`, `clock`, `client`, `log_markers`, `cpu_profile`, `res_stats`, `store_pool`, `names`, `api_shapes`, `economy_guard`, journaux |
 | `world` | cartes (`png`, `mapcache`, `minimap`, `zones`...), `plan_service` |
 | `fleet` | `jobs` (tables de jobs, registre de supervision, `live_of`, `merge_light`), trait `Fleet`, `registry`, `site_crowd`, `worker_owner`, `daemon_pool` |
 | `market` | moteur du marché (`market_service`, `_orders`, `_reprice`, `_convene`, `_daemon`...), `funding_gifts`, `market_host` (trait `MarketHost`), `market_facts` (trait `AccountFacts`) |
@@ -559,7 +567,7 @@ Les neuf couches sont des crates de `rs/crates/`, une par couche, chacune ne dé
 
 | crate (paquet) | contenu | dépend de |
 |---|---|---|
-| `orch-core` (`lifescape-orch-core`) | `logln!`, `daemon_clock`, `log_sink`, `paths`, `clock`, `client`, `log_markers`, `cpu_profile`, `error_stamp`, `log_rotate`, `disk_guard`, `res_stats`, `store_pool`, `store_queue`, `names`, `api_shapes`, `nav_profile`, `economy_guard` | json, store, nav |
+| `orch-core` (`lifescape-orch-core`) | `logln!`, `daemon_clock`, `log_sink`, `paths`, `clock`, `client`, `log_markers`, `cpu_profile`, `error_stamp`, `log_rotate`, `disk_guard`, `res_stats`, `store_pool`, `names`, `api_shapes`, `nav_profile`, `economy_guard` | json, store, nav |
 | `orch-world` | `png`, `mapcache`, `mapbuild`, `minimap`, `staticmap`, `zones`, `plan_service` | core |
 | `orch-fleet` | `jobs`, `fleet` (trait `Fleet`), `registry`, `site_crowd`, `worker_owner`, `daemon_pool` | core |
 | `orch-market` | moteur du marché, `funding_gifts`, `market_host`, `market_facts`, `market_own` (mémoire du vendeur sur le moteur), `market_test_support` | core, world, fleet |

@@ -603,11 +603,9 @@ impl Orchestrator {
                     report.get("ticks").as_i64().unwrap_or(-1),
                 );
                 crate::cpu_profile::note_report_received(&account);
-                // E8: stage grouped for the future store import, flag the
-                // single supervisor (brain trigger) immediately.
-                if let Err(error) = crate::store_queue::stage_report(&report) {
-                    crate::logln!("job {account}: staging failed: {error}");
-                }
+                // Flag the single supervisor (brain trigger) immediately. The
+                // report reaches the store through the brain (`rates_ingest`);
+                // the `lifescape-staging.jsonl` log nobody read is gone (lot 1.4).
                 crate::errors_ingest::observe_report(&account, &report, &job);
                 let Ok(mut inner) = job.inner.try_lock() else {
                     return object(vec![("ok", Value::Bool(false)), ("error", str_value("contended"))]);
