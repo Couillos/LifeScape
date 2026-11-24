@@ -865,6 +865,7 @@ pub(crate) fn dijkstra(
         if yield_due(visits, last_yield) {
             last_yield = std::time::Instant::now();
             if !yield_() {
+                crate::nav_meter::add_visits(visits);
                 return Outcome::Aborted;
             }
         }
@@ -876,6 +877,8 @@ pub(crate) fn dijkstra(
         // never a Closest (Disconnected) nor a blocked-dest adjustment
         // to wherever the cut fell. The operator stop still wins above.
         if visits > MAX_VISITS || cost > cost_cap || (visits % 1024 == 0 && std::time::Instant::now() >= deadline) {
+            crate::nav_meter::add_visits(visits);
+            crate::nav_meter::note_unreached(visits, true);
             return Outcome::OverBudget(best);
         }
         let here = unkey(key);
@@ -893,6 +896,7 @@ pub(crate) fn dijkstra(
         // tiles past it (CPU 2026-11-14: adjusted plans swept ~8-16k
         // tiles each, a start already beside the target included).
         if best == here && !fresh && floor == Some((best_rank.0, best_rank.1, best_rank.2)) {
+            crate::nav_meter::add_visits(visits);
             return Outcome::Found(rebuild(&prev, from, best), cost, best);
         }
         if key == dest_key && dest_walkable {
@@ -902,6 +906,7 @@ pub(crate) fn dijkstra(
                     loop_start.elapsed(),
                 );
             }
+            crate::nav_meter::add_visits(visits);
             return Outcome::Found(rebuild(&prev, from, dest), cost, dest);
         }
         // Walk and door neighbours, eight directions in fixed order.
@@ -1063,6 +1068,7 @@ pub(crate) fn dijkstra(
             }
         }
     }
+    crate::nav_meter::add_visits(visits);
     // Blocked destination (tree, counter): the closest tile is the plan.
     if !dest_walkable && best.key() != dest_key && dist.contains_key(&best.key()) {
         let cost = dist[&best.key()];
@@ -1075,6 +1081,7 @@ pub(crate) fn dijkstra(
     if std::env::var("PLAN_DEBUG").is_ok() {
         eprintln!("plan closest visits={visits} {:?}", loop_start.elapsed());
     }
+    crate::nav_meter::note_unreached(visits, false);
     Outcome::Closest(best)
 }
 

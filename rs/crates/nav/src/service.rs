@@ -289,6 +289,8 @@ pub struct CacheStats {
     pub fast_hits: u64,
     pub fast_zero: u64,
     pub fast_declined: u64,
+    /// Per-kind request meter (lot N0): `nav_meter::KINDS` order.
+    pub ops: crate::nav_meter::OpStats,
 }
 
 /// Resident set size of this process in bytes (see `Service::rss_bytes`).
@@ -375,6 +377,8 @@ pub struct Service {
     /// `walk_costs` batches served from the costs cache (no search).
     walk_costs_hits: AtomicU64,
     fast: crate::service_fast::FastCounters,
+    /// Per-kind request meter (lot N0): count, thread CPU, tiles visited.
+    meter: crate::nav_meter::Meter,
     /// Connections served by the `plan-query` pool (never the acceptor).
     pooled: AtomicU64,
     detour_sum: AtomicU64,
@@ -450,6 +454,7 @@ impl Service {
             walk_costs_served: AtomicU64::new(0),
             walk_costs_hits: AtomicU64::new(0),
             fast: crate::service_fast::FastCounters::default(),
+            meter: crate::nav_meter::Meter::default(),
             pooled: AtomicU64::new(0),
             detour_sum: AtomicU64::new(0),
             detour_max: AtomicU32::new(0),
@@ -527,6 +532,7 @@ impl Service {
             fast_hits,
             fast_zero,
             fast_declined,
+            ops: self.meter.read(),
         }
     }
 
@@ -694,13 +700,16 @@ impl Service {
         }
         let snapshot = self.snapshot.lock().unwrap().clone();
         let (shared, _) = self.shared_edges(&snapshot)?;
+        let probe = crate::nav_meter::Probe::start();
         match crate::fast_hop::short_hop(&snapshot.world, &shared, from, dest, options) {
             Ok(plan) => {
+                self.meter.record(crate::nav_meter::Kind::FastServed, probe);
                 self.fast.answered(&plan);
                 Some((plan, snapshot.version.clone()))
             }
             Err(crate::fast_hop::Decline::NotShort) => None,
             Err(_) => {
+                self.meter.record(crate::nav_meter::Kind::FastDeclined, probe);
                 self.fast.declined.fetch_add(1, Ordering::Relaxed);
                 None
             }
@@ -816,6 +825,22 @@ impl Service {
     }
 
     fn dispatch(&self, request: &Value) -> Value {
+        let op = request.get("op").as_str().unwrap_or("");
+        let kind = match op {
+            "walk_costs" => crate::nav_meter::Kind::WalkCosts,
+            "debug" => crate::nav_meter::Kind::Debug,
+            "toll_fence" => crate::nav_meter::Kind::TollFence,
+            "door_defs" | "tiles_flags" | "static_locs_near" | "in_f2p" | "wants" | "diff" | "transitions_list"
+            | "probe_targets" | "doors_near" => crate::nav_meter::Kind::Grouped,
+            _ => crate::nav_meter::Kind::Other,
+        };
+        let probe = crate::nav_meter::Probe::start();
+        let reply = self.dispatch_op(request);
+        self.meter.record(kind, probe);
+        reply
+    }
+
+    fn dispatch_op(&self, request: &Value) -> Value {
         match request.get("op").as_str().unwrap_or("") {
             "submit" => self.op_submit(request),
             "poll" => self.op_poll(request),
@@ -1724,6 +1749,7 @@ impl Service {
             let snapshot = self.snapshot.lock().unwrap().clone();
             let shared = self.shared_edges(&snapshot);
             let cancel = Arc::clone(&job.cancel);
+            let probe = crate::nav_meter::Probe::start();
             let outcome = match shared {
                 Some((shared, pockets)) => plan::plan_memo(
                     &snapshot.world,
@@ -1737,6 +1763,7 @@ impl Service {
                 ),
                 None => Err(plan::aborted_no_route(job.from)),
             };
+            self.meter.record(crate::nav_meter::Kind::PlanComputed, probe);
             // N8 detour, best-served baseline: the planner is deterministic,
             // so a repeated pair must cost exactly its cheapest served
             // cost. `detour` is the excess over that baseline (0 on

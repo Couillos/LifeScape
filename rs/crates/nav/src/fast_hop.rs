@@ -144,14 +144,17 @@ pub(crate) fn short_hop(world: &StaticWorld, shared: &SharedEdges, from: Tile, d
             continue;
         }
         if cost > bound {
+            crate::nav_meter::add_visits(pops);
             return Err(Decline::Unproven);
         }
         pops += 1;
         if pops > MAX_POPS {
+            crate::nav_meter::add_visits(pops);
             return Err(Decline::Unproven);
         }
         let here = window.tile(slot);
         if here == dest {
+            crate::nav_meter::add_visits(pops);
             return walk_plan(&mut window, &parent, from, dest, cost).ok_or(Decline::Unproven);
         }
         if rides.contains_key(&here.key()) || customs.contains_key(&here.key()) {
@@ -186,6 +189,7 @@ pub(crate) fn short_hop(world: &StaticWorld, shared: &SharedEdges, from: Tile, d
             heap.push((Reverse(price), Reverse(next.key()), next_slot as u32));
         }
     }
+    crate::nav_meter::add_visits(pops);
     Err(Decline::NotFound)
 }
 

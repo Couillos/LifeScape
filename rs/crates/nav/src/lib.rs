@@ -19,6 +19,7 @@ mod fallback;
 mod giants_exit_tests;
 pub mod loctypes;
 pub mod nav;
+pub mod nav_meter;
 pub mod no_route;
 pub mod plan;
 pub mod pocket;

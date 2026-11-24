@@ -323,6 +323,7 @@ pub(crate) fn plan_costs_capped(
     let mut visits = 0usize;
     let horizon = horizon(from, dests).min(cap);
     let mut pending = goal_floors(shared, dests, &settle);
+    let mut horizon_cut = false;
     while let Some((Reverse(cost), Reverse(found), opened)) = heap.pop() {
         let known = if opened { &dist_open } else { &dist };
         if known.get(&tile_of(found).key()).is_some_and(|known| *known != cost) {
@@ -330,6 +331,7 @@ pub(crate) fn plan_costs_capped(
         }
         visits += 1;
         if visits > MAX_VISITS || cost > horizon {
+            horizon_cut = true;
             break;
         }
         if let Some(indices) = settle.remove(&tile_of(found).key()) {
@@ -337,6 +339,7 @@ pub(crate) fn plan_costs_capped(
                 costs[index] = Some(cost);
             }
             if settle.is_empty() && blocked.is_empty() {
+                crate::nav_meter::add_visits(visits);
                 return costs;
             }
             pending.retain(|(target, _)| key_of(*target) != found);
@@ -375,6 +378,7 @@ pub(crate) fn plan_costs_capped(
         if finalized {
             blocked.retain(|target| !target.indices.is_empty());
             if settle.is_empty() && blocked.is_empty() {
+                crate::nav_meter::add_visits(visits);
                 return costs;
             }
         }
@@ -500,11 +504,15 @@ pub(crate) fn plan_costs_capped(
             }
         }
     }
+    crate::nav_meter::add_visits(visits);
     for target in &blocked {
         let best = dist.get(&target.best.key()).copied();
         for index in &target.indices {
             costs[*index] = best;
         }
+    }
+    if costs.iter().any(Option::is_none) {
+        crate::nav_meter::note_unreached(visits, horizon_cut);
     }
     costs
 }
