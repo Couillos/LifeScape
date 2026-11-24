@@ -21,11 +21,35 @@ pub fn ingest_report_into(
     store: &lifescape_store::Store,
     report: &Value,
 ) -> Result<crate::rates_service::ParsedReport, String> {
+    let (parsed, contract) = parse_for_ingest(report)?;
+    ingest_parsed_into(store, &parsed, contract)?;
+    Ok(parsed)
+}
+
+/// The pure half of an ingest: the report and its contract, parsed and
+/// validated before any write (and, in the daemon, before the writer's
+/// lock is taken).
+fn parse_for_ingest(
+    report: &Value,
+) -> Result<(crate::rates_service::ParsedReport, Option<crate::report_contract::ParsedContract>), String> {
+    let parsed = crate::rates_service::parse_report(report)?;
+    // Contract 2 (plan rendements R1): parsed before any write, so an
+    // unknown cause or contract never leaves half a report behind.
+    let contract = crate::report_contract::parse_contract(report)?;
+    Ok((parsed, contract))
+}
+
+/// The DB half: the rows of an already parsed report, in one transaction.
+fn ingest_parsed_into(
+    store: &lifescape_store::Store,
+    parsed: &crate::rates_service::ParsedReport,
+    contract: Option<crate::report_contract::ParsedContract>,
+) -> Result<(), String> {
     // One transaction for the report, its lines and its measure: one
     // journal sync instead of one per statement, and a failure midway
     // leaves no half report.
     let owned = store.begin_batch().map_err(|error| format!("rates store batch: {error}"))?;
-    let written = ingest_report_rows(store, report);
+    let written = ingest_report_rows(store, parsed, contract);
     if owned {
         match &written {
             Ok(_) => store.commit_batch().map_err(|error| format!("rates store commit: {error}"))?,
@@ -37,12 +61,9 @@ pub fn ingest_report_into(
 
 fn ingest_report_rows(
     store: &lifescape_store::Store,
-    report: &Value,
-) -> Result<crate::rates_service::ParsedReport, String> {
-    let parsed = crate::rates_service::parse_report(report)?;
-    // Contract 2 (plan rendements R1): parsed before any write, so an
-    // unknown cause or contract never leaves half a report behind.
-    let contract = crate::report_contract::parse_contract(report)?;
+    parsed: &crate::rates_service::ParsedReport,
+    contract: Option<crate::report_contract::ParsedContract>,
+) -> Result<(), String> {
     let report_id = store
         .record_task_report(&lifescape_store::NewTaskReport {
             account: parsed.account.clone(),
@@ -103,7 +124,7 @@ fn ingest_report_rows(
         "rates: stored report {report_id} {} {} ({} lines)",
         parsed.account, parsed.method, lines
     );
-    Ok(parsed)
+    Ok(())
 }
 
 /// File-backed ingest for the supervisor thread: opens the daemon store
@@ -111,17 +132,19 @@ fn ingest_report_rows(
 /// stores the raw rows, then folds the report into the persisted rates
 /// snapshot. Loud error, never a silent drop.
 pub fn ingest_report_persisted(report: &Value) -> Result<(), String> {
+    // Parsed and validated once, before the writer's lock (a bad report
+    // never reaches the store, and parsing never holds the market up).
+    let (parsed, contract) = parse_for_ingest(report)?;
     let mut last_error = "rates store: no attempt".to_string();
     for _attempt in 0..20 {
         // Through the process's single writer when the daemon registered
         // one (grouped commit, acknowledged after it), else a pooled
         // connection that commits by itself.
-        match crate::store_writer::write_to(&rates_db_path(), |store| ingest_report_into(store, report)) {
-            Ok(parsed) => {
-                let parsed = parsed?;
+        match crate::store_writer::write_to(&rates_db_path(), |store| ingest_parsed_into(store, &parsed, contract.clone())) {
+            Ok(written) => {
+                written?;
                 // Contract 2 feeds the estimator (parsed and validated
                 // above, before any write); contract 1 never does.
-                let contract = crate::report_contract::parse_contract(report)?;
                 crate::rates_service::record_snapshot(&parsed, contract.as_ref(), crate::rates_service::now_secs())?;
                 return Ok(());
             }

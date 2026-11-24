@@ -187,7 +187,9 @@ fn collect(receiver: Receiver<Intake>, orch: Weak<Orchestrator>) {
         }
         if !pending.is_empty() && (pending.len() >= BATCH_ROWS || last_flush.elapsed() >= BATCH_AGE) {
             last_flush = Instant::now();
-            let result = through_writer(|store| flush(store, &pending, &orch));
+            // Rows built first, the writer held for the inserts only.
+            let steps = prepare(&pending, &orch);
+            let result = through_writer(|store| apply(store, steps));
             match result {
                 Ok(()) => pending.clear(),
                 Err(error) => {
@@ -202,9 +204,10 @@ fn collect(receiver: Receiver<Intake>, orch: Weak<Orchestrator>) {
         }
         if last_scan.is_none_or(|at| at.elapsed() >= SCAN_EVERY) {
             last_scan = Some(Instant::now());
-            let result = through_writer(|store| {
-                let deals = sync_deals(store)?;
-                let dossiers = scan_dossiers(store, &failures_dir(), &mut dossier_cursor, &orch)?;
+            // Files are scanned and parsed with NO store lock held; the
+            // writer is taken only for the DB steps (see `StoreAccess`).
+            let result = through_writer(sync_deals).and_then(|deals| {
+                let dossiers = scan_dossiers(&WriterAccess, &failures_dir(), &mut dossier_cursor, &orch)?;
                 Ok((deals, dossiers))
             });
             match result {
@@ -246,16 +249,23 @@ fn live_context(orch: &Weak<Orchestrator>, account: &str) -> (Option<(i64, i64, 
     (position, script, args.join(" "))
 }
 
-/// Writes one batch in arrival order: events and brain rows insert,
-/// reports fold onto their event row or insert their own.
-fn flush(store: &Store, intakes: &[Intake], orch: &Weak<Orchestrator>) -> Result<(), String> {
+/// One store step of a batch, decided without the store.
+enum Step {
+    Row(ErrorRecord),
+    /// A report: folds onto its event row, else inserts `row`.
+    Report(TaskOutcome, ErrorRecord),
+}
+
+/// Turns a batch into its store steps in arrival order (pure: models, the
+/// job's live context; no store, no writer lock).
+fn prepare(intakes: &[Intake], orch: &Weak<Orchestrator>) -> Vec<Step> {
     let zone_of = &errors_model::map_zone;
-    let mut batch: Vec<ErrorRecord> = Vec::new();
+    let mut steps: Vec<Step> = Vec::new();
     for intake in intakes {
         match intake {
             Intake::Event { account, frame, clock } => {
                 if let Some(row) = errors_model::from_event(account, frame, *clock, zone_of) {
-                    batch.push(row);
+                    steps.push(Step::Row(row));
                 }
             }
             Intake::Brain { line, clock } => {
@@ -267,18 +277,32 @@ fn flush(store: &Store, intakes: &[Intake], orch: &Weak<Orchestrator>) -> Result
                     }
                     row.position = position;
                     row.zone = position.map(|(pos_x, pos_z, _)| zone_of(pos_x, pos_z)).unwrap_or_default();
-                    batch.push(row);
+                    steps.push(Step::Row(row));
                 }
             }
             Intake::Idle { account, report, position, clock } => {
                 if let Some(row) = errors_model::from_idle_report(account, report, *position, *clock, zone_of) {
-                    batch.push(row);
+                    steps.push(Step::Row(row));
                 }
             }
             Intake::Report { account, report, position, clock } => {
-                let Some((outcome, row)) = errors_model::from_report(account, report, *position, *clock, zone_of) else {
-                    continue;
-                };
+                if let Some((outcome, row)) = errors_model::from_report(account, report, *position, *clock, zone_of) {
+                    steps.push(Step::Report(outcome, row));
+                }
+            }
+        }
+    }
+    steps
+}
+
+/// Writes the steps in order: rows insert in runs, a report folds onto
+/// its event row or inserts its own. Only DB work.
+fn apply(store: &Store, steps: Vec<Step>) -> Result<(), String> {
+    let mut batch: Vec<ErrorRecord> = Vec::new();
+    for step in steps {
+        match step {
+            Step::Row(row) => batch.push(row),
+            Step::Report(outcome, row) => {
                 store.record_errors(&batch).map_err(|error| error.to_string())?;
                 batch.clear();
                 if !fold(store, &outcome)? {
@@ -289,6 +313,13 @@ fn flush(store: &Store, intakes: &[Intake], orch: &Weak<Orchestrator>) -> Result
     }
     store.record_errors(&batch).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Writes one batch in arrival order: events and brain rows insert,
+/// reports fold onto their event row or insert their own.
+#[cfg(test)]
+fn flush(store: &Store, intakes: &[Intake], orch: &Weak<Orchestrator>) -> Result<(), String> {
+    apply(store, prepare(intakes, orch))
 }
 
 fn fold(store: &Store, outcome: &TaskOutcome) -> Result<bool, String> {
@@ -332,11 +363,43 @@ pub(crate) struct DossierCursor {
     examined: usize,
 }
 
+/// The two store steps of a dossier pass, each a short hold of the writer:
+/// everything between them (directory scan, stat, read, parse, the
+/// autopilot hook) runs with no store lock, so the market keeps writing.
+pub(crate) trait StoreAccess {
+    fn latest_nav_clock(&self) -> Result<Option<i64>, String>;
+    /// Inserts every chunk in one hold, oldest first; rows inserted.
+    fn record_chunks(&self, chunks: &[Vec<ErrorRecord>]) -> Result<usize, String>;
+}
+
+/// Production access: the process's single writer (`through_writer`).
+struct WriterAccess;
+
+impl StoreAccess for WriterAccess {
+    fn latest_nav_clock(&self) -> Result<Option<i64>, String> {
+        through_writer(|store| store.latest_error_clock("nav").map_err(|error| error.to_string()))
+    }
+    fn record_chunks(&self, chunks: &[Vec<ErrorRecord>]) -> Result<usize, String> {
+        if chunks.is_empty() {
+            return Ok(0);
+        }
+        through_writer(|store| record_chunks(store, chunks))
+    }
+}
+
+fn record_chunks(store: &Store, chunks: &[Vec<ErrorRecord>]) -> Result<usize, String> {
+    let mut inserted = 0;
+    for rows in chunks {
+        inserted += store.record_errors(rows).map_err(|error| error.to_string())?;
+    }
+    Ok(inserted)
+}
+
 /// Dossiers written at or after the cursor (first pass: the newest nav
 /// row, else the retention start), oldest first, in batches of 500.
 /// Between hourly full passes only never-seen names are stat'ed.
 pub(crate) fn scan_dossiers(
-    store: &Store,
+    access: &impl StoreAccess,
     dir: &Path,
     cursor: &mut DossierCursor,
     orch: &Weak<Orchestrator>,
@@ -344,10 +407,7 @@ pub(crate) fn scan_dossiers(
     let full = cursor.clock.is_none() || cursor.last_full.is_none_or(|at| at.elapsed() >= FULL_SCAN_EVERY);
     let start = match cursor.clock {
         Some(clock) => clock,
-        None => store
-            .latest_error_clock("nav")
-            .map_err(|error| error.to_string())?
-            .unwrap_or_else(|| now_clock() - RETENTION_SECS),
+        None => access.latest_nav_clock()?.unwrap_or_else(|| now_clock() - RETENTION_SECS),
     };
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -384,7 +444,7 @@ pub(crate) fn scan_dossiers(
         cursor.last_full = Some(Instant::now());
     }
     fresh.sort();
-    let mut inserted = 0;
+    let mut chunks: Vec<Vec<ErrorRecord>> = Vec::new();
     let mut newest = start;
     for chunk in fresh.chunks(500) {
         let mut rows = Vec::with_capacity(chunk.len());
@@ -413,8 +473,9 @@ pub(crate) fn scan_dossiers(
             }
             rows.push(row);
         }
-        inserted += store.record_errors(&rows).map_err(|error| error.to_string())?;
+        chunks.push(rows);
     }
+    let inserted = access.record_chunks(&chunks)?;
     cursor.clock = Some(newest);
     Ok(inserted)
 }
@@ -462,16 +523,96 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let orch: Weak<Orchestrator> = Weak::new();
         let mut cursor = DossierCursor::default();
-        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 1);
+        assert_eq!(scan_dossiers(&Direct(&store), &dir, &mut cursor, &orch).unwrap(), 1);
         assert!(cursor.clock.is_some());
-        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 0, "rescan adds nothing");
+        assert_eq!(scan_dossiers(&Direct(&store), &dir, &mut cursor, &orch).unwrap(), 0, "rescan adds nothing");
         let mut fresh_cursor = DossierCursor::default();
-        assert_eq!(scan_dossiers(&store, &dir, &mut fresh_cursor, &orch).unwrap(), 0, "restart adds nothing");
+        assert_eq!(scan_dossiers(&Direct(&store), &dir, &mut fresh_cursor, &orch).unwrap(), 0, "restart adds nothing");
         let rows = store.errors_matching(&lifescape_store::ErrorFilter::default()).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].dossier, "t01-5.json");
         let missing = dir.join("absent");
-        assert_eq!(scan_dossiers(&store, &missing, &mut DossierCursor::default(), &orch).unwrap(), 0);
+        assert_eq!(scan_dossiers(&Direct(&store), &missing, &mut DossierCursor::default(), &orch).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Test access: one store handed directly.
+    struct Direct<'a>(&'a Store);
+
+    impl StoreAccess for Direct<'_> {
+        fn latest_nav_clock(&self) -> Result<Option<i64>, String> {
+            self.0.latest_error_clock("nav").map_err(|error| error.to_string())
+        }
+        fn record_chunks(&self, chunks: &[Vec<ErrorRecord>]) -> Result<usize, String> {
+            record_chunks(self.0, chunks)
+        }
+    }
+
+    /// Access through a single writer, as the daemon does.
+    struct Through(Arc<crate::store_writer::StoreWriter>);
+
+    impl StoreAccess for Through {
+        fn latest_nav_clock(&self) -> Result<Option<i64>, String> {
+            let store = self.0.write();
+            store.latest_error_clock("nav").map_err(|error| error.to_string())
+        }
+        fn record_chunks(&self, chunks: &[Vec<ErrorRecord>]) -> Result<usize, String> {
+            let store = self.0.write();
+            record_chunks(&store, chunks)
+        }
+    }
+
+    /// Lot 5.8 correction: a dossier scan in progress holds no store
+    /// lock, so a market write goes through at once. The scan is held
+    /// deterministically inside a read: one "dossier" is a named pipe
+    /// whose read blocks until the test opens it.
+    #[test]
+    fn a_write_proceeds_while_a_dossier_scan_is_in_progress() {
+        let dir = std::env::temp_dir().join(format!("lifescape-errors-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dossier = r#"{"account":"t01","from":{"level":0,"x":10,"z":20},"error":{"kind":"NoRoute","observed":"travel: no route"}}"#;
+        for tick in 0..300 {
+            std::fs::write(dir.join(format!("t01-{tick}.json")), dossier).unwrap();
+        }
+        let fifo = dir.join("zz-blocked.json");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        if !made.is_ok_and(|status| status.success()) {
+            eprintln!("mkfifo unavailable: test skipped");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let db = dir.join("store.db");
+        let writer = crate::store_writer::StoreWriter::open(&db).unwrap();
+        let scanner = {
+            let writer = Arc::clone(&writer);
+            let dir = dir.clone();
+            std::thread::spawn(move || {
+                let mut cursor = DossierCursor::default();
+                scan_dossiers(&Through(writer), &dir, &mut cursor, &Weak::new())
+            })
+        };
+        // Wait (bounded) until the scan is parked on the pipe: it asks the
+        // store for its start clock first, then reads files.
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(!scanner.is_finished(), "the scan is parked inside a read");
+        let (done, ack) = std::sync::mpsc::channel();
+        let market = {
+            let writer = Arc::clone(&writer);
+            std::thread::spawn(move || {
+                let store = writer.write();
+                store.record_errors(&[]).unwrap();
+                drop(store);
+                let _ = done.send(());
+            })
+        };
+        assert!(ack.recv_timeout(Duration::from_secs(5)).is_ok(), "a market write waited for the scan: the writer lock is held during the scan");
+        market.join().unwrap();
+        assert!(!scanner.is_finished(), "the scan was still in progress when the write went through");
+        // Release the scan: opening and closing the pipe ends the read.
+        drop(std::fs::OpenOptions::new().write(true).open(&fifo).unwrap());
+        let inserted = scanner.join().unwrap().unwrap();
+        assert_eq!(inserted, 300, "all dossiers land once released");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -497,22 +638,22 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let orch: Weak<Orchestrator> = Weak::new();
         let mut cursor = DossierCursor::default();
-        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 50);
+        assert_eq!(scan_dossiers(&Direct(&store), &dir, &mut cursor, &orch).unwrap(), 50);
         assert_eq!(cursor.examined, 50, "first pass is full");
-        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 0);
+        assert_eq!(scan_dossiers(&Direct(&store), &dir, &mut cursor, &orch).unwrap(), 0);
         assert_eq!(cursor.examined, 0, "settled directory: no stat at all");
         let path = dir.join("t02-7.json");
         std::fs::write(&path, dossier.replace("t01", "t02")).unwrap();
-        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 1, "new dossier lands");
+        assert_eq!(scan_dossiers(&Direct(&store), &dir, &mut cursor, &orch).unwrap(), 1, "new dossier lands");
         assert_eq!(cursor.examined, 1, "only the new name is stat'ed");
-        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 0, "fresh file re-read, deduped");
+        assert_eq!(scan_dossiers(&Direct(&store), &dir, &mut cursor, &orch).unwrap(), 0, "fresh file re-read, deduped");
         assert_eq!(cursor.examined, 1, "a still-fresh file is re-examined until it settles");
         age(&path, 10);
-        scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap();
-        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 0);
+        scan_dossiers(&Direct(&store), &dir, &mut cursor, &orch).unwrap();
+        assert_eq!(scan_dossiers(&Direct(&store), &dir, &mut cursor, &orch).unwrap(), 0);
         assert_eq!(cursor.examined, 0, "settled again");
         cursor.last_full = None;
-        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 0, "full pass adds nothing new");
+        assert_eq!(scan_dossiers(&Direct(&store), &dir, &mut cursor, &orch).unwrap(), 0, "full pass adds nothing new");
         assert_eq!(cursor.examined, 51, "full pass stats everything");
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -580,13 +580,18 @@ impl MarketService {
             YieldCandleResolution::Day1 => to - 183 * 86400,
         };
         let from = request.get("from").as_i64().unwrap_or(default_from);
-        let mut store = self.lock_store();
         // No gap (user rule 2026-11-13): candles open at the previous
         // close and trade-less windows are flat at the last close, up to
         // the live window (`to` capped at now: the web bridge ceils it).
         let live_edge = to.min(Self::now_clock() + 1);
-        let (candles, previous_close) =
-            store.continuous_candles(item, resolution, from, live_edge).unwrap_or_default();
+        // The writer only for the candles (a missing cache is rebuilt, a
+        // write); the plain reads and the JSON go on a pooled connection
+        // with no writer lock (lot 5.8 correction).
+        let (candles, previous_close) = {
+            let mut store = self.lock_store();
+            store.continuous_candles(item, resolution, from, live_edge).unwrap_or_default()
+        };
+        let store = self.read_store();
         let executions = store.executions_for_item(item, from, to).unwrap_or_default();
         // Execution count per candle window (tooltip §6.2, `n`): the
         // candles table carries OHLCV only, so count the window's fills.
