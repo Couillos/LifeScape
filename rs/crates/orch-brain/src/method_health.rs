@@ -234,7 +234,7 @@ pub fn registry_path() -> std::path::PathBuf {
 /// A `setup` verdict (the harness failed before judging the method,
 /// tour 2 P2-10) is no check: the re-test is still due.
 pub fn live_checks() -> Vec<(String, bool, i64)> {
-    checks()
+    checks().as_ref().clone()
 }
 
 /// Verdict of the latest live check of `method` (`ok`, `setup`, ...).
@@ -247,13 +247,36 @@ pub fn last_verdict(method: &str) -> Option<String> {
         .map(|row| row.get("verdict").as_str().unwrap_or("").to_string())
 }
 
-fn checks() -> Vec<(String, bool, i64)> {
+/// The live-check rows `(method, worked, at)` read from the registry file
+/// (every call re-reads and re-parses it: the reference of the memo).
+pub(crate) fn checks_uncached() -> Vec<(String, bool, i64)> {
     let text = std::fs::read_to_string(registry_path()).unwrap_or_default();
     text.lines()
         .filter_map(|line| json::parse(line).ok())
         .filter(|row| row.get("verdict").as_str() != Some(SETUP_VERDICT))
         .map(|row| (row.get("method").as_str().unwrap_or("").to_string(), row.get("worked").as_bool().unwrap_or(false), row.get("at").as_i64().unwrap_or(0)))
         .collect()
+}
+
+type Stamp = Option<(Option<std::time::SystemTime>, u64)>;
+type Memo = Option<(std::path::PathBuf, Stamp, std::sync::Arc<Vec<(String, bool, i64)>>)>;
+
+/// The same rows, parsed again only when the registry file changed (its
+/// size or modification time; a missing file reads empty). `quarantined()`
+/// runs on every launch pass and read the file each time (lot 3.4).
+fn checks() -> std::sync::Arc<Vec<(String, bool, i64)>> {
+    static MEMO: Mutex<Memo> = Mutex::new(None);
+    let path = registry_path();
+    let stamp: Stamp = std::fs::metadata(&path).ok().map(|meta| (meta.modified().ok(), meta.len()));
+    let mut memo = MEMO.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((known_path, known_stamp, rows)) = memo.as_ref() {
+        if *known_path == path && *known_stamp == stamp {
+            return rows.clone();
+        }
+    }
+    let rows = std::sync::Arc::new(checks_uncached());
+    *memo = Some((path, stamp, rows.clone()));
+    rows
 }
 
 /// Verdict of a check whose harness failed (no judgement of the method).
@@ -291,6 +314,38 @@ pub fn quarantined() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{apply, lift_proven, requalify, Health, Outcome, MIN_ACCOUNTS, MIN_LAUNCHES};
+
+    /// The memo of the check rows (`checks`) equals a fresh read (`checks_uncached`)
+    /// at every step: no file, rows appended, a rewrite of the same size, a
+    /// setup verdict, a deletion.
+    #[test]
+    fn the_memoised_checks_equal_a_fresh_read_after_every_change() {
+        let path = super::registry_path();
+        std::fs::create_dir_all(path.parent().expect("run dir")).expect("run dir");
+        let same = |label: &str| assert_eq!(*super::checks(), super::checks_uncached(), "{label}");
+        let row = |method: &str, worked: bool, at: i64, verdict: &str| format!("{{\"method\":\"{method}\",\"worked\":{worked},\"at\":{at},\"verdict\":\"{verdict}\"}}\n");
+        let _ = std::fs::remove_file(&path);
+        same("no file");
+        std::fs::write(&path, row("tan:cow_hide", true, 100, "ok")).expect("write");
+        same("one row");
+        assert_eq!(super::checks().len(), 1);
+        let mut text = std::fs::read_to_string(&path).expect("read");
+        text.push_str(&row("milk:cow", false, 200, "fail"));
+        std::fs::write(&path, &text).expect("append");
+        same("appended");
+        assert_eq!(super::checks().len(), 2);
+        text.push_str(&row("smelt:iron_bar", false, 300, super::SETUP_VERDICT));
+        std::fs::write(&path, &text).expect("setup row");
+        same("a setup verdict is no check");
+        assert_eq!(super::checks().len(), 2);
+        // Same size, other content: the modification time tells (ten ms apart).
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&path, text.replace("milk:cow", "milk:cew")).expect("rewrite");
+        same("rewritten, same size");
+        std::fs::remove_file(&path).expect("remove");
+        same("deleted");
+        assert!(super::checks().is_empty());
+    }
 
     /// Tour 2 P2-10c red test: the pre-P4 chickens row (20 failures, no
     /// known account) is lifted into probation at load; a row three

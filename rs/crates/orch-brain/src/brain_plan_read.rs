@@ -97,6 +97,17 @@ pub(crate) fn with_plan_read<T>(bot: &BotView, live: &Value, body: impl FnOnce(&
 /// rule applied to the persisted state). Returns true when a node changed.
 pub(crate) fn resize_session_inputs(life: &mut Life, live: &Value) -> bool {
     let _phase = crate::cpu_profile::phase("resize_session_inputs");
+    // Fast exit (lot 3.4): no open climb with an open input obtain, nothing
+    // to resize: the readers below are not built (the same `false`).
+    if !lifescape_planner::session_resize::has_open_climb_inputs(life) {
+        return false;
+    }
+    resize_session_inputs_full(life, live)
+}
+
+/// The resize with its readers built, whatever the graph holds (the
+/// reference of the fast exit).
+pub(crate) fn resize_session_inputs_full(life: &mut Life, live: &Value) -> bool {
     let view = BotView::of(life);
     let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
     let lines = with_plan_read(&view, live, |read| lifescape_planner::session_resize::resize_climb_inputs(life, &level_of, read.rate));
@@ -108,7 +119,54 @@ pub(crate) fn resize_session_inputs(life: &mut Life, live: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::measured_rate;
+    use super::{measured_rate, resize_session_inputs, resize_session_inputs_full};
+
+    /// The fast exit equals the full resize: same answer, same life, on every
+    /// fixture life with its graph put in states that do and do not hold an
+    /// open climb input (statuses, methods, dependencies).
+    #[test]
+    fn the_fast_exit_equals_the_full_resize() {
+        use lifescape_planner::{NodeKind, NodeStatus};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lives");
+        let lives = crate::brain_launch_equiv_tests::load_dir(&dir);
+        let live = lifescape_json::object(vec![("skills", lifescape_json::Value::Arr((0u8..23).map(|stat| lifescape_json::object(vec![("id", lifescape_json::Value::Int(i64::from(stat))), ("xp", lifescape_json::Value::Int(0)), ("level", lifescape_json::Value::Int(30))])).collect()))]);
+        let (mut fast_exits, mut resized, mut compared) = (0, 0, 0);
+        for base in &lives {
+            for variant in 0..64u32 {
+                let mut life = base.clone();
+                // A smith's climb with the open bar obtain it feeds (a third of the graphs).
+                if variant % 3 == 0 {
+                    let mut climb = lifescape_planner::Node::new("n9000", NodeKind::ReachLevel { skill: "smithing".to_string(), level: 70 }, vec!["n9001".to_string()], 70);
+                    climb.method = Some("smith:steel_med_helm".to_string());
+                    life.nodes.push(climb);
+                    life.nodes.push(lifescape_planner::Node::new("n9001", NodeKind::ObtainItems { item: "steel_bar".to_string(), count: 12_000 }, Vec::new(), 12_000));
+                }
+                // Put the climbs and their input obtains in states the exit tells apart.
+                for (index, node) in life.nodes.iter_mut().enumerate() {
+                    let bit = (variant >> (index % 6)) & 1;
+                    match &node.kind {
+                        NodeKind::ReachLevel { .. } if bit == 1 => node.status = NodeStatus::Abandoned,
+                        NodeKind::ObtainItems { .. } if (variant >> 3) & 1 == 1 => node.status = NodeStatus::Done,
+                        NodeKind::ReachLevel { .. } if variant % 5 == 0 => node.method = None,
+                        _ => {}
+                    }
+                }
+                let exits = !lifescape_planner::session_resize::has_open_climb_inputs(&life);
+                let (mut fast, mut full) = (life.clone(), life.clone());
+                let (fast_answer, full_answer) = (resize_session_inputs(&mut fast, &live), resize_session_inputs_full(&mut full, &live));
+                assert_eq!(fast_answer, full_answer, "{} variant {variant}", base.account);
+                assert_eq!(fast, full, "{} variant {variant}: life", base.account);
+                if exits {
+                    assert!(!full_answer && full == life, "{} variant {variant}: the exit left something to resize", base.account);
+                    fast_exits += 1;
+                }
+                resized += usize::from(full_answer);
+                compared += 1;
+            }
+        }
+        eprintln!("fast exit: {compared} graphs compared identical, {fast_exits} fast exits, {resized} resized");
+        assert!(fast_exits > 0 && resized > 0, "the proof misses a side: {fast_exits} exits, {resized} resizes");
+    }
 
     /// No run measured: the read is the game prior itself (the planner's
     /// numbers unchanged until three runs of a key exist).

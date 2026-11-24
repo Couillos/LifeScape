@@ -85,7 +85,79 @@ fn holds_stock(row: &MoneyRow, stock: &[(String, f64)]) -> bool {
 
 /// The rows of the set a bot reads (module doc), activity order of each
 /// view; a level of the bot reads its band's view, gated activities out.
+/// With no stock the rows are a pure function of (the set, the bot's level
+/// in each skill): the choice of rows is memoised under that key (lot 3.4,
+/// `bot_rows_uncached` is the reference), the rows are the set's own.
 pub fn bot_rows<'a>(set: &'a GuideSet, level_of: &dyn Fn(&str) -> u8, stock: &[(String, f64)]) -> BotRows<'a> {
+    if !stock.is_empty() {
+        return bot_rows_uncached(set, level_of, stock);
+    }
+    let key: Vec<u8> = (0u8..23).map(|stat| level_of(lifescape_sdk::provenance::skill_name(stat)).clamp(1, 99)).collect();
+    let picks = picks_memo(set, &key, || row_picks(set, level_of));
+    BotRows { rows: picks.iter().map(|(level, index)| &set.money_view(Some(*level)).rows[*index]).collect(), on_stock: Vec::new(), errors: Vec::new() }
+}
+
+/// `(band level of the view, row index)` of every row a bot keeps with no stock.
+type Picks = std::sync::Arc<Vec<(u8, usize)>>;
+
+type PicksMemo = Option<((usize, std::time::Instant), std::collections::HashMap<Vec<u8>, Picks>)>;
+
+/// The memo of the row choice, one table per published set (a new set
+/// empties it).
+fn picks_memo(set: &GuideSet, key: &[u8], build: impl FnOnce() -> Vec<(u8, usize)>) -> Picks {
+    static MEMO: std::sync::Mutex<PicksMemo> = std::sync::Mutex::new(None);
+    let set_key = (set as *const GuideSet as usize, set.built);
+    let mut memo = MEMO.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    match memo.as_mut() {
+        Some((known, table)) if *known == set_key => {
+            if let Some(found) = table.get(key) {
+                return found.clone();
+            }
+            if table.len() >= 4096 {
+                table.clear();
+            }
+        }
+        _ => *memo = Some((set_key, std::collections::HashMap::new())),
+    }
+    drop(memo);
+    let picks: Picks = std::sync::Arc::new(build());
+    let mut memo = MEMO.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((known, table)) = memo.as_mut() {
+        if *known == set_key {
+            table.insert(key.to_vec(), picks.clone());
+        }
+    }
+    picks
+}
+
+/// The rows a bot with no stock keeps, as `(view level, index)`.
+fn row_picks(set: &GuideSet, level_of: &dyn Fn(&str) -> u8) -> Vec<(u8, usize)> {
+    let mut levels: Vec<u8> = lifescape_planner::guide_methods::SKILLS.iter().map(|skill| level_of(skill).clamp(1, 99)).collect();
+    levels.sort_unstable();
+    levels.dedup();
+    let mut out = Vec::new();
+    let mut unbanded_taken = false;
+    for level in levels {
+        let view = set.money_view(Some(level));
+        let keeps = |row: &MoneyRow| {
+            if lifescape_planner::guide_methods::gate_level(&row.method) > level {
+                return false;
+            }
+            match lifescape_planner::activity::band_skill(&row.method, &row.style) {
+                Some(skill) => level_of(&skill).clamp(1, 99) == level,
+                None => !unbanded_taken,
+            }
+        };
+        for (index, _) in view.rows.iter().enumerate().filter(|(_, row)| keeps(row)) {
+            out.push((level, index));
+        }
+        unbanded_taken = true;
+    }
+    out
+}
+
+/// `bot_rows` with nothing memoised (any stock, any call).
+pub fn bot_rows_uncached<'a>(set: &'a GuideSet, level_of: &dyn Fn(&str) -> u8, stock: &[(String, f64)]) -> BotRows<'a> {
     let mut levels: Vec<u8> = lifescape_planner::guide_methods::SKILLS.iter().map(|skill| level_of(skill).clamp(1, 99)).collect();
     levels.sort_unstable();
     levels.dedup();

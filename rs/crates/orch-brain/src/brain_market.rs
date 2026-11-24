@@ -55,10 +55,12 @@ pub fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, live: &Value) {
 /// purchase (`coins_per_tick`) is the bot's measured time value
 /// (`brain_plan::ready_ctx`, D1), never its D17: left as found.
 pub fn guide_coins(ctx: &mut ReadyCtx, node: &Node, set: &crate::guides_store::GuideSet) {
-    let levels = ctx.levels.clone();
-    let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
-    let read = crate::brain_money::bot_rows(set, &level_of, &[]);
+    // Only a money node reads the rows (lot 3.4: the choice of rows is a
+    // pure function of the set and the levels, memoised in `bot_rows`).
     if matches!(node.kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) {
+        let levels = ctx.levels.clone();
+        let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
+        let read = crate::brain_money::bot_rows(set, &level_of, &[]);
         for method in lifescape_planner::resolve_obtain::money_methods(ctx) {
             if let Some(profit) = crate::brain_d17::method_profit_in(&read.rows, &method) {
                 ctx.method_profit.push((method, profit));

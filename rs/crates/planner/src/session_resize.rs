@@ -9,6 +9,23 @@
 
 use crate::model::{Life, NodeKind, NodeStatus};
 
+/// True when `resize_climb_inputs` has something to look at: an open
+/// level climb with a method whose dependencies include an open input
+/// obtain (the walk's own conditions, without the yield reads). False means
+/// the resize returns no line and changes nothing: the callers skip the
+/// readers they would build for it.
+pub fn has_open_climb_inputs(life: &Life) -> bool {
+    life.nodes.iter().any(|climb| {
+        if !matches!(climb.kind, NodeKind::ReachLevel { .. }) || matches!(climb.status, NodeStatus::Done | NodeStatus::Abandoned) {
+            return false;
+        }
+        if climb.method.is_none() && climb.alternatives.is_empty() {
+            return false;
+        }
+        climb.deps.iter().any(|dep| life.nodes.iter().any(|node| node.id == *dep && matches!(node.kind, NodeKind::ObtainItems { .. }) && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)))
+    })
+}
+
 /// Brings every open input obtain of an open level climb down to one
 /// session, reading yields from `rate` and the skill levels from
 /// `level_of`. Returns one line per resized node. Idempotent.

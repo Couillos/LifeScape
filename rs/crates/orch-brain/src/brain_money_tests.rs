@@ -10,7 +10,7 @@ use lifescape_planner::guide_model::{Confidence, Family, MoneyRow, Prereqs};
 use lifescape_planner::guide_read::{MoneyView, TrainingView};
 use lifescape_planner::trade_craft::TradeOffer;
 
-use super::{bot_rows, lines_for};
+use super::{bot_rows, bot_rows_uncached, lines_for};
 use crate::guides_store::GuideSet;
 
 fn row(family: Family, method: &str, profit: f64) -> MoneyRow {
@@ -337,4 +337,45 @@ fn a_crowded_ground_spawn_line_is_shared() {
     let crowded = judge(&none, |bot| lines_for(&rows, &ctx, bot, &[], 0.5, &|_| None, &guide_profit));
     let profit = crowded.first().map(|line| line.profit_6000).expect("still a line");
     assert!((profit - 2400.0 / 11.0).abs() < 1e-6, "10 bots on every tile: a eleventh, got {profit}");
+}
+
+/// Lot 3.4: the memoised choice of rows equals the uncached one for any
+/// levels, whatever set is current: cold, warm, after the set changed, after
+/// it came back.
+#[test]
+fn the_memoised_rows_equal_the_uncached_rows() {
+    let methods = ["gather:woodcut/yew_logs", "gather:sheep/wool", "fight:melee/cows", "fight:ranged/cows", "smelt:bronze_bar", "cook/raw_shrimp", "gather:mining/coal", "gather:fishing/raw_shrimp", "market:buy", "alch:iron_platebody", "fight:melee/chickens"];
+    let mut state = 0x1234_5678_9ABC_DEF0u64;
+    let mut next = |bound: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % bound
+    };
+    let make_set = |next: &mut dyn FnMut(u64) -> u64| {
+        let bands: Vec<(u8, Vec<MoneyRow>)> = [10u8, 30, 60, 99]
+            .iter()
+            .map(|end| {
+                let rows = (0..8).map(|_| row(Family::Farm, methods[next(methods.len() as u64) as usize], next(5_000) as f64)).collect();
+                (*end, rows)
+            })
+            .collect();
+        set_with(bands)
+    };
+    let sets = [make_set(&mut next), make_set(&mut next), make_set(&mut next)];
+    let mut compared = 0;
+    for round in 0..600 {
+        let set = &sets[(round / 7) % 3];
+        let levels: Vec<u8> = (0..23).map(|_| [1u8, 9, 10, 29, 30, 45, 60, 98, 99][next(9) as usize]).collect();
+        let level_of = |skill: &str| (0u8..23).find(|stat| lifescape_sdk::provenance::skill_name(*stat) == skill).map_or(1, |stat| levels[stat as usize]);
+        // Twice: the second read is the memoised one.
+        for _ in 0..2 {
+            let (memo, fresh) = (bot_rows(set, &level_of, &[]), bot_rows_uncached(set, &level_of, &[]));
+            assert_eq!(memo.rows.len(), fresh.rows.len(), "round {round}");
+            assert!(memo.rows.iter().zip(&fresh.rows).all(|(left, right)| std::ptr::eq(*left, *right)), "round {round}: other rows");
+            assert!(memo.on_stock.is_empty() && memo.errors.is_empty());
+            compared += 1;
+        }
+    }
+    assert!(compared >= 1_200);
 }
