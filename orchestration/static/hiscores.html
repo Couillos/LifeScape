@@ -20,14 +20,15 @@
   #status { margin: 0 0 6px; }
   #errors { display: none; color: #ff1744; margin: 0 0 6px; }
   #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
-  #side { flex: 0 0 190px; }
+  /* Wide enough for two columns of icon + name (Woodcutting, Firemaking). */
+  #side { flex: 0 0 236px; }
   #board { flex: 1 1 520px; min-width: 300px; }
   /* Categories: one table, one row per ranking, the current one in yellow. */
   #cats { border-collapse: collapse; font-size: 12px; width: 100%; }
   #cats td, #cats th { border: 1px solid #333; padding: 2px 8px; text-align: left; }
   #cats th { color: #888; font-weight: normal; }
   #cats td:hover { background: #1a1a1a; }
-  a.cat { display: block; color: #04A800; text-decoration: none; }
+  a.cat { display: block; color: #04A800; text-decoration: none; white-space: nowrap; }
   #cats td.cur { font-weight: bold; }
   #cats td.cur a.cat { color: #ff0; }
   #side form { display: flex; gap: 4px; margin-bottom: 6px; }
@@ -70,6 +71,7 @@
   </div>
   <div id="board"></div>
 </div>
+<script src="/icons.js"></script>
 <script src="/hiscores.js"></script>
 </body>
 </html>

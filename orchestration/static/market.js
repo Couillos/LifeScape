@@ -9,6 +9,11 @@
 // history is already chained, `LifeChart.carryFlat` keeps the live tail
 // chained). The newest candle stretches live with every WS tick (the
 // `market` field of the 1 Hz frame).
+// Item icons (icons.js); absent (daemon without the icon route): none.
+const Icons = typeof LifeIcons !== 'undefined' ? LifeIcons : { item: () => '', skill: () => '' };
+const escText = (text) => String(text === undefined || text === null ? '' : text)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
 const PAGE_SIZE = 25;
 let items = [];
 let selected = null;
@@ -98,7 +103,7 @@ function changeText(promille) {
 // only changes the display. Default order = the API order (most traded
 // first); a header click sorts the whole filtered list, then pages.
 const ITEM_COLUMNS = [
-  { key: 'name', label: 'Item', kind: 'str' },
+  { key: 'name', label: 'Item', kind: 'str', fmt: (value, row) => Icons.item(row.id) + escText(value) },
   { key: 'price', label: 'Prix', kind: 'num', fmt: (value, row) => value + lotSuffix(row && row.lot) },
   { key: 'change', label: '24 h', kind: 'num', fmt: (value) => {
     const cls = value > 0 ? 'up' : (value < 0 ? 'down' : '');
@@ -257,12 +262,12 @@ function itemLot(id) {
 }
 
 function renderRecent() {
-  const rows = ['<tr><th>item</th><th>qty</th><th>price</th><th>buyer</th><th>seller</th><th>status</th><th>time</th></tr>'];
+  const rows = ['<tr><th class="item-col">item</th><th>qty</th><th>price</th><th>buyer</th><th>seller</th><th>status</th><th>time</th></tr>'];
   for (const trade of recent.slice(0, 15)) {
     const date = new Date(trade.t * 1000);
     const label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
     // The item opens its market (chart, book, last trades) on click.
-    rows.push('<tr><td class="item-link" data-id="' + Number(trade.item) + '" title="open this item">' + itemName(trade.item) + '</td><td>' + trade.q + '</td><td>' + trade.p + lotSuffix(itemLot(trade.item)) + '</td><td>' + partyHtml(trade.buyer, trade.buyerMaker) + '</td><td>' + partyHtml(trade.seller, trade.sellerMaker) + '</td><td>' + statusLabel(trade.status) + '</td><td>' + label + '</td></tr>');
+    rows.push('<tr><td class="item-link" data-id="' + Number(trade.item) + '" title="open this item"><span class="iclabel">' + Icons.item(trade.item, trade.q) + '<span>' + escText(itemName(trade.item)) + '</span></span></td><td>' + trade.q + '</td><td>' + trade.p + lotSuffix(itemLot(trade.item)) + '</td><td>' + partyHtml(trade.buyer, trade.buyerMaker) + '</td><td>' + partyHtml(trade.seller, trade.sellerMaker) + '</td><td>' + statusLabel(trade.status) + '</td><td>' + label + '</td></tr>');
   }
   document.getElementById('recent').innerHTML = rows.join('');
 }
@@ -346,7 +351,10 @@ function chartRows(slots, width, history, prints, previousClose, loadedTo) {
 function draw() {
   const canvas = document.getElementById('chart');
   const item = items.find(entry => entry.item === selected);
-  document.getElementById('title').textContent = item ? item.name : (selected === null ? 'Pick an item' : itemName(selected));
+  // Title: the picked item's icon before its name.
+  const heading = document.getElementById('title');
+  const headingHtml = selected === null ? 'Pick an item' : Icons.item(selected) + escText(item ? item.name : itemName(selected));
+  if (heading._html !== headingHtml) { heading._html = headingHtml; heading.innerHTML = headingHtml; }
   document.getElementById('ticker').innerHTML = tickerHtml(item);
 
   const { slots, width } = currentSlots();

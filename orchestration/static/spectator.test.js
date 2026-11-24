@@ -30,6 +30,11 @@ check('error age seconds', SpectatorPanels.errorAge({ at_unix: 1000 }, 1045), 'i
 check('error age without time', SpectatorPanels.errorAge({ type: 'Blocked' }, 1045), '');
 check('error line carries its age', SpectatorPanels.errorLine('last error', { at_unix: 1000, type: 'X' }, 1300), 'last error: {"at_unix":1000,"type":"X"} (il y a 5 min)');
 check('no error, no line', SpectatorPanels.errorLine('last error', null, 5), null);
+check('inventory lines carry the item id for the icon', SpectatorPanels.inventoryLines(
+  [{ id: 444, count: 1, name: 'Gold ore' }, { id: 995, count: 250, name: 'Coins' }], [{ id: 1161, count: 1, name: 'Adamant full helm' }]),
+  [{ text: 'Backpack:' }, { id: 444, count: 1, text: 'Gold ore' }, { id: 995, count: 250, text: '250x Coins' }, { text: '' }, { text: 'Worn:' }, { id: 1161, count: 1, text: 'Adamant full helm' }]);
+check('inventory lines when empty', SpectatorPanels.inventoryLines([], null),
+  [{ text: 'Backpack:' }, { text: '(empty)' }, { text: '' }, { text: 'Worn:' }, { text: '(nothing)' }]);
 
 if (failures) {
   console.log(failures + ' failure(s)');

@@ -183,6 +183,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Hiscores;
 if (typeof document !== 'undefined') {
   const page = Hiscores;
   const esc = page.esc;
+  // Item and skill icons (icons.js); absent (daemon without the icon
+  // route): none. `overall` has no stat icon: an empty slot keeps the
+  // names aligned.
+  const Icons = typeof LifeIcons !== 'undefined' ? LifeIcons : { item: () => '', skill: () => '' };
+  const skillIcon = (entry) => entry.group === 'skills' ? Icons.skill(entry.key) : '';
   let snapshot = null;
   let loadError = '';
   let state = page.parseHash(location.hash);
@@ -197,9 +202,12 @@ if (typeof document !== 'undefined') {
   // Categories as a grid table: several rankings per row (a phone shows
   // a compact block, never one long column).
   let columnsShown = 0;
+  // A column holds a skill icon + its name (~110 px): 4 per row from
+  // 470 px, 3 below (a 360 px phone).
   function categoryColumns() {
     const width = window.innerWidth || 1024;
-    return width <= 720 ? 4 : 2;
+    if (width > 720) return 2;
+    return width >= 470 ? 4 : 3;
   }
 
   function renderCategories() {
@@ -225,7 +233,7 @@ if (typeof document !== 'undefined') {
           }
           const current = !state.player && state.cat === entry.key;
           html += '<td' + (current ? ' class="cur"' : '') + '><a class="cat" href="' + page.formatHash({ cat: entry.key })
-            + '"' + (entry.hint ? ' title="' + esc(entry.hint) + '"' : '') + '>' + esc(entry.label) + '</a></td>';
+            + '"' + (entry.hint ? ' title="' + esc(entry.hint) + '"' : '') + '>' + skillIcon(entry) + esc(entry.label) + '</a></td>';
         }
         html += '</tr>';
       }
@@ -249,7 +257,7 @@ if (typeof document !== 'undefined') {
     const rows = page.rankingRows(snapshot, category.key);
     const paged = page.paginate(rows, state.rank ? page.pageOfRank(state.rank) : state.page);
     state.page = paged.page;
-    let html = '<h2 class="scroll-title">' + esc(category.label) + ' Hiscores</h2>';
+    let html = '<h2 class="scroll-title">' + skillIcon(category) + esc(category.label) + ' Hiscores</h2>';
     if (wealth) html += '<p class="note">' + esc(category.hint) + '</p>';
     if (wealth && category.key === 'value' && snapshot && snapshot.market === false) {
       html += '<p class="note warn">Market down at the last snapshot: total value not ranked.</p>';
@@ -284,7 +292,7 @@ if (typeof document !== 'undefined') {
     for (const entry of page.categories(snapshot).filter((item) => item.group === 'skills')) {
       const cell = page.cellOf(player, entry.key, snapshot) || {};
       const href = page.formatHash({ cat: entry.key, rank: cell.rank });
-      html += '<tr><td class="left"><a href="' + href + '">' + esc(entry.label) + '</a></td><td>' + page.formatNumber(cell.rank)
+      html += '<tr><td class="left"><a href="' + href + '">' + skillIcon(entry) + esc(entry.label) + '</a></td><td>' + page.formatNumber(cell.rank)
         + '</td><td>' + page.formatNumber(cell.level) + '</td><td>' + page.formatNumber(cell.xp) + '</td></tr>';
     }
     html += '</tbody></table>';
@@ -301,7 +309,7 @@ if (typeof document !== 'undefined') {
     if (top.length) {
       html += '<table class="ranks"><thead><tr><th class="left">Item</th><th>Count</th><th>Unit price</th><th>Value</th></tr></thead><tbody>';
       for (const item of top) {
-        html += '<tr><td class="left">' + esc(item.name) + '</td><td>' + page.formatNumber(item.count) + '</td><td>'
+        html += '<tr><td class="left">' + Icons.item(item.id, item.count) + esc(item.name) + '</td><td>' + page.formatNumber(item.count) + '</td><td>'
           + page.formatNumber(item.price) + '</td><td>' + page.formatNumber(item.value) + '</td></tr>';
       }
       html += '</tbody></table>';

@@ -121,6 +121,9 @@ const ItemIndices = (() => {
   return { tableHtml, historyUrl, find, keep };
 })();
 
+// Item icons (icons.js); absent (daemon without the icon route): none.
+const Icons = typeof LifeIcons !== 'undefined' ? LifeIcons : { item: () => '', skill: () => '' };
+
 const PAGE_SIZE = 25;
 let list = null;
 let selected = null;
@@ -224,7 +227,7 @@ function liveCount() {
 // changes the display. `change` is the 24 h change of the held count in
 // thousandths (now vs the hourly point 24 h ago); null = no baseline.
 const ITEM_COLUMNS = [
-  { key: 'name', label: 'Item', kind: 'str' },
+  { key: 'name', label: 'Item', kind: 'str', fmt: (value, row) => Icons.item(row.id, row.count) + ItemFlows.esc(value) },
   { key: 'count', label: 'Qty', kind: 'num' },
   { key: 'change', label: '24 h', kind: 'num', fmt: (value) => changeCell(value) },
 ];
@@ -313,9 +316,16 @@ function setPeriod(next) {
   loadFlows();
 }
 
+// Title over the curve: the picked item's icon before its name.
+function titleHtml() {
+  return (selected === null ? '' : Icons.item(selected, liveCount())) + ItemFlows.esc(title());
+}
+
 function draw() {
   const canvas = document.getElementById('chart');
-  document.getElementById('title').textContent = title();
+  const heading = document.getElementById('title');
+  const headingHtml = titleHtml();
+  if (heading._html !== headingHtml) { heading._html = headingHtml; heading.innerHTML = headingHtml; }
   const live = liveCount();
   const { res, count } = PERIODS[period];
   const width = res === '1h' ? 3600 : 86400;

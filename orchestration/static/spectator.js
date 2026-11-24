@@ -30,7 +30,15 @@ var SpectatorPanels = (function () {
     const age = errorAge(error, nowSeconds);
     return label + ': ' + JSON.stringify(error) + (age ? ' (' + age + ')' : '');
   }
-  return { SKILLS: SKILLS, skillRows: skillRows, skillTotals: skillTotals, errorAge: errorAge, errorLine: errorLine };
+  // Inventory panel lines: headers as text, one line per item (its id
+  // for the icon, "<count>x <name>" when stacked).
+  function inventoryLines(inv, worn) {
+    const items = (list, empty) => (list && list.length)
+      ? list.map(i => ({ id: i.id, count: i.count, text: (i.count > 1 ? i.count + 'x ' : '') + (i.name || 'object') }))
+      : [{ text: empty }];
+    return [{ text: 'Backpack:' }].concat(items(inv, '(empty)'), [{ text: '' }, { text: 'Worn:' }], items(worn, '(nothing)'));
+  }
+  return { SKILLS: SKILLS, skillRows: skillRows, skillTotals: skillTotals, errorAge: errorAge, errorLine: errorLine, inventoryLines: inventoryLines };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = SpectatorPanels;
 
@@ -165,10 +173,13 @@ if (localStorage.getItem("list-hidden") === "0") toggleList(false);
 // HTML-escaped text for the bot table (esc above only stringifies: it
 // also feeds canvas labels, which must stay raw).
 const escHtml = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+// Item and skill icons (icons.js); absent (daemon without the icon
+// route): none.
+const Icons = typeof LifeIcons !== "undefined" ? LifeIcons : null;
 const dash = (value) => (value === null || value === undefined || value === "") ? "-" : value;
 // Skills table (shared TableSort): raw values sort, xp shows separators.
 const SKILL_COLUMNS = [
-  { key: "skill", label: "Skill", kind: "str" },
+  { key: "skill", label: "Skill", kind: "str", fmt: (value) => (Icons ? Icons.skill(value) : "") + escHtml(dash(value)) },
   { key: "level", label: "Level", kind: "num" },
   { key: "xp", label: "XP", kind: "num", fmt: (value) => escHtml(typeof value === "number" ? value.toLocaleString("en-US") : dash(value)) },
 ];
@@ -392,6 +403,33 @@ function syncStatePre(pre, lines, emptyText) {
     }
     for (let line = 0; line < wanted.length; line++) {
       if (nodes[line].nodeValue !== wanted[line]) nodes[line].nodeValue = wanted[line];
+    }
+  });
+}
+
+// Inventory panel: one <div> per line, an item line = icon + text. Line
+// nodes are kept and only rewritten when their item or text changed (a
+// selection survives the 1x/s frames, like syncStatePre).
+function syncItemLines(box, lines) {
+  let nodes = box._lines;
+  if (!nodes) { box.textContent = ""; nodes = box._lines = []; }
+  stickyWrite(box, () => {
+    while (nodes.length < lines.length) {
+      const div = box.appendChild(document.createElement("div"));
+      nodes.push({ div, key: null });
+    }
+    while (nodes.length > lines.length) box.removeChild(nodes.pop().div);
+    for (let at = 0; at < lines.length; at++) {
+      const line = lines[at];
+      const hasItem = line.id !== undefined && line.id !== null;
+      const key = (hasItem ? line.id + "x" + line.count : "") + "|" + line.text;
+      if (nodes[at].key === key) continue;
+      nodes[at].key = key;
+      const div = nodes[at].div;
+      div.className = hasItem ? "itemline" : "textline";
+      div.textContent = "";
+      if (hasItem && Icons) div.appendChild(Icons.itemNode(line.id, line.count));
+      div.appendChild(document.createTextNode(line.text));
     }
   });
 }
@@ -651,16 +689,11 @@ function updatePanels() {
 
   syncStatePre(document.getElementById('chat'), last.chat || [], '(no messages)');
 
-  const fmt = (items, empty) => (items && items.length)
-    ? items.map(i => (i.count > 1 ? i.count + 'x ' : '') + (i.name || 'object'))
-    : [empty];
   // One `inv` entry per backpack slot (session_heartbeat slot_items):
   // occupied slots, not the sum of the stacks.
   const occupied = (last.inv || []).filter(i => (i.count || 0) > 0).length;
   setText(document.getElementById('invtitle'), `Inventory (${occupied}/28)`);
-  syncStatePre(document.getElementById('inv'),
-    ['Backpack:'].concat(fmt(last.inv, '(empty)'), ['', 'Worn:'], fmt(last.worn, '(nothing)')),
-    '(empty)');
+  syncItemLines(document.getElementById('inv'), SpectatorPanels.inventoryLines(last.inv, last.worn));
   // Rebuilt only when a value changed: a selection or a header click
   // inside the table survives the other frames.
   const skillRows = SpectatorPanels.skillRows(last.skills);

@@ -309,7 +309,7 @@ Comptes exclus : `economy_guard::excluded_accounts()` (admin, admin2, bite).
 Hiscores (2026-11-14) : page `/hiscores` (`orchestration/static/hiscores.html`,
 `hiscores.js`, lien « Hiscores » dans la barre de chaque page), style des
 hiscores de 2004 en CSS original (cadre de pierre, titres dorés serif,
-parchemin ; aucune image du jeu) : colonne de catégories (Overall + 19
+parchemin ; seules images du jeu : les icônes d'objets et de compétences, voir « Icônes ») : colonne de catégories (Overall + 19
 compétences rev 274 dans l'ordre des stats 0..17 puis 20 ; Wealth : Coins,
 Total value), tableau Rang / Nom / Niveau / XP par 25 avec pagination,
 recherche par nom (compte ou nom affiché, préfixe accepté) et par rang,
@@ -352,6 +352,40 @@ value:[rang, valeur]|null, top:[{id, name, count, price, value}]}]}`,
 joueurs dans l'ordre overall. Le front relit l'API toutes les 5 min.
 Tests : `hiscores_tests.rs` (dont la route web servie depuis un snapshot
 fixture), `node orchestration/static/hiscores.test.js`.
+Icônes (2026-11-24) : l'icône de chaque objet et de chaque compétence à
+côté de son nom (Spectate : inventaire et compétences ; Item holdings :
+liste et titre ; Market : liste, titre, dernières transactions ; Hiscores :
+catégories, titre du classement, scores personnels, « Most valuable
+holdings »). Deux planches de sprites et un index dans
+`orchestration/static/icons/` : `items.png` (cases 32×32, le rendu même du
+sac en jeu : `ObjType.getSprite` de Client-TS lancé hors navigateur sur le
+cache rev 274, configs `engine/data/pack/client/config`, textures, modèles
+de `main_file_cache` index 1 ; 3 875 ids dessinés, 3 003 cases distinctes,
+une case par image identique), `skills.png` (cases 25×25, sprites
+`staticons`/`staticons2` de l'archive `media`, 19 compétences ; slayer et
+farming n'existent pas en 274 : case vide), `index.json`
+(`{items|skills: {file, hash, cell, cols, slot, count}}`, case 0 = vide).
+Générées par `bun gamedata/tools/icons.mts` (Client-TS et lostcity à côté
+du dépôt, ~3 s, octets reproductibles : le tirage aléatoire de luminosité
+du client est fixé à 0.8) ; non committées (~1 Mo, `.gitignore`), à
+régénérer après un changement de cache. Servies par le démon : `/icons.js`
+(ligne de page) et `/icons/<nom>.png|index.json` (`web_routes::icon_asset`,
+planches en cache long `immutable` car demandées en `?v=<hash>`, index
+jamais en cache, 404 si absentes). Front `icons.js` (`LifeIcons`) : la
+page écrit tout de suite une case vide à la taille finale
+(`LifeIcons.item(id, count)`, `.skill(nom)`), les règles CSS
+`background-position` arrivent avec l'index (une par id) : aucune
+requête par icône, aucun saut de mise en page, un id sans icône garde la
+case vide (jamais l'icône d'un autre objet). Une pile change d'icône avec
+son nombre comme en jeu (`countco` : pièces en tas, flèches en botte ;
+seuils 2, 3, 4, 5, 25, 100, 250, 1000, 10000, vérifiés par le
+générateur). Icônes de compétence posées sur la pierre de l'onglet
+statistiques (`#3e3529`) : agilité et vol sont des silhouettes noires.
+19 objets nommés sans icône (modèles invisibles : `invis_*`, grinder,
+caveorb4dot, viking_dummy_lid, wearable_stool_white) : case vide. Sans
+`icons.js` (démon pas encore redéployé) ou sans index, les pages
+s'affichent sans icône. Tests : `node orchestration/static/icons.test.js`,
+`web_routes` (`icon_asset`, digest, fichiers servis).
 Guides (2026-11-17) : thread `guides` (`src/guides_store.rs`), premier
 jeu 20 s après le démarrage puis un toutes les 300 s (`REFRESH_PERIOD` :
 prix = médiane des 5 derniers fills, rendement = 3 runs d'une clé, un
