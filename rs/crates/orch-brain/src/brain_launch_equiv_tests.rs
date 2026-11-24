@@ -15,13 +15,12 @@ use std::path::{Path, PathBuf};
 
 use lifescape_json::{object, str_value, Value};
 use lifescape_planner::expand::ReadyCtx;
-use lifescape_planner::{read_stacks, LaunchInputs, Life, NodeKind, NodeStatus};
+use lifescape_planner::{LaunchInputs, Life, NodeKind, NodeStatus};
 
 use crate::brain_launch_drive::{drive, Drive};
 use crate::brain_launch_pass::Save;
 use crate::brain_launch_reference::{reference_pass, Ev, Knobs, RecFx};
-
-const NOW: i64 = 1_800_000_000;
+use crate::brain_raw_world_tests::{wall_now, xp_of_level, RawWorld, Seed, TestMarket};
 
 struct Rng(u64);
 
@@ -79,7 +78,7 @@ fn related_names(life: &Life, position: usize) -> Vec<String> {
     names
 }
 
-fn build(base: &Life, position: usize, rng: &mut Rng) -> Scenario {
+fn build(base: &Life, position: usize, variant: u64, market: &TestMarket, rng: &mut Rng) -> Scenario {
     let mut life = base.clone();
     // The pass picked this node: ready, nothing locked yet half the time.
     life.nodes[position].status = NodeStatus::Ready;
@@ -100,7 +99,7 @@ fn build(base: &Life, position: usize, rng: &mut Rng) -> Scenario {
     if rng.chance(30) {
         for skill in ["mining", "fishing", "woodcutting", "smithing", "cooking", "fletching"] {
             if rng.chance(60) {
-                life.history.push(lifescape_planner::HistoryEntry { node: "goal".to_string(), started: NOW - 10, ended: NOW - 10, outcome: format!("{}{skill}@400000:test", lifescape_planner::goals::STUCK_TAG) });
+                life.history.push(lifescape_planner::HistoryEntry { node: "goal".to_string(), started: wall_now() - 10, ended: wall_now() - 10, outcome: format!("{}{skill}@400000:test", lifescape_planner::goals::STUCK_TAG) });
             }
         }
     }
@@ -108,8 +107,7 @@ fn build(base: &Life, position: usize, rng: &mut Rng) -> Scenario {
     let mut inv = Vec::new();
     let mut bank = Vec::new();
     let mut worn = Vec::new();
-    let mut locks = BTreeMap::new();
-    let mut listed = BTreeMap::new();
+    let mut seed = Seed::default();
     let mode = rng.below(8);
     let wanted = match &life.nodes[position].kind {
         NodeKind::ObtainItems { count, .. } => *count,
@@ -130,25 +128,22 @@ fn build(base: &Life, position: usize, rng: &mut Rng) -> Scenario {
                     2 if units == 1 => worn.push(entry),
                     _ => inv.push(entry),
                 }
+                if let Some(id) = obj_id(name) {
+                    seed.holdings.push((id, units));
+                }
             }
         }
-        // Listings lock units (the held-but-locked and listed-input cases).
-        if matches!(mode, 3 | 5) && units > 0 {
+        // Listings lock units (the held-but-locked and listed-input cases):
+        // the bot's own resting sells in the market, read back by
+        // `locked_items` and `gather_market` like in production.
+        if matches!(mode, 3 | 5 | 7) && units > 0 {
             if let Some(id) = obj_id(name) {
-                listed.insert(id, units);
-                locks.insert(lifescape_planner::base_of(id), units);
-            }
-        }
-        // Listed units a lock no longer covers: held, but not free.
-        if mode == 7 && units > 0 {
-            if let Some(id) = obj_id(name) {
-                listed.insert(id, units);
+                seed.sells.push((id, units, 4_000));
             }
         }
         if mode == 6 && rng.chance(30) {
             if let Some(id) = obj_id(name) {
-                listed.insert(id, 3);
-                locks.insert(lifescape_planner::base_of(id), 3);
+                seed.sells.push((id, 3, 4_000));
             }
         }
     }
@@ -158,66 +153,52 @@ fn build(base: &Life, position: usize, rng: &mut Rng) -> Scenario {
             inv.push(entry);
         }
     }
-    let live = object(vec![("inv", Value::Arr(inv)), ("bank", Value::Arr(bank)), ("worn", Value::Arr(worn))]);
-    let skill_level = *rng.pick(&[1u8, 15, 40, 99]);
-    let hitpoints = *rng.pick(&[10u8, 30, 70]);
-    let mut levels: Vec<(String, u8)> = (0u8..23).map(|stat| (lifescape_sdk::provenance::skill_name(stat).to_string(), skill_level)).collect();
-    if let Some(slot) = levels.iter_mut().find(|(name, _)| name == "hitpoints") {
-        slot.1 = hitpoints;
+    seed.coins = coins;
+    // A resting bid (committed coins) and, now and then, asks of other
+    // sellers on the node's item (the best ask the context reads).
+    if rng.chance(30) {
+        seed.buys.push((obj_id("coal").unwrap_or(1), 5, 1));
     }
-    let site = life.nodes[position].site;
-    let crowded = rng.chance(30);
-    let mut inputs = LaunchInputs {
-        inv: read_stacks(&live, "inv"),
-        bank: read_stacks(&live, "bank"),
-        wearing: read_stacks(&live, "worn"),
-        worn: Vec::new(),
-        locks,
-        listed,
-        commit_rows: if rng.chance(30) { vec![(obj_id("coal").unwrap_or(1), 1_000)] } else { Vec::new() },
-        commit_flat: if rng.chance(20) { 250 } else { 0 },
-        crowd: if crowded { site.into_iter().map(|cell| (cell, 4)).collect() } else { Vec::new() },
-        seats: if crowded { site.into_iter().map(|cell| (cell, "someone".to_string(), 1)).collect() } else { Vec::new() },
-        // These five are set by hand here; `brain_launch_inputs_tests` asserts
-        // the production `gather` / `gather_market` fill every one of them
-        // (2026-11-23: a harness-only field shipped as a default).
-        now: NOW,
-        tick_ms: 600,
-        levels,
-        market_up: rng.chance(75),
-        filler_ticks: 3000,
-        combat: *rng.pick(&[3u8, 30, 90, 126]),
-        bank_streamed: rng.chance(85),
-        inv_streamed: true,
-        ..LaunchInputs::default()
-    };
-    inputs.worn = inputs.wearing.iter().filter_map(|stack| match stack {
-        lifescape_planner::LiveStack::Obj { id_name, name, .. } => id_name.clone().or(name.clone()),
-        lifescape_planner::LiveStack::Name(name) => Some(name.clone()),
-    }).collect();
-    let counts = lifescape_planner::launch_inputs::node_counts(&life, position, &inputs);
-    let mut ctx = ReadyCtx::blind(0.5);
-    ctx.coins = counts.coins;
-    if let Some(held) = counts.held {
-        ctx.held = held;
-    }
-    ctx.tools = inputs.carried_tools();
-    ctx.bank_known = inputs.bank_streamed;
-    ctx.combat = inputs.combat;
-    ctx.ironman = life.profile.ironman;
-    ctx.levels = inputs.levels.clone();
-    ctx.crowd = inputs.crowd.clone();
-    ctx.seats = inputs.seats.clone();
-    ctx.best_ask = if rng.chance(50) { None } else { Some(*rng.pick(&[5i64, 80, 4_000])) };
-    ctx.price = *rng.pick(&[1i64, 40, 900, 30_000]);
-    ctx.coins_per_tick = *rng.pick(&[0.05f64, 0.5, 3.0]);
-    if rng.chance(20) {
-        if let Some(method) = life.nodes[position].alternatives.first().map(|alt| alt.method.clone()) {
-            ctx.cooled.push(method);
+    if rng.chance(50) {
+        if let Some(id) = names.first().and_then(|name| obj_id(name)) {
+            seed.asks.push((id, 50, *rng.pick(&[5i64, 80, 4_000])));
         }
     }
+    let skill_level = *rng.pick(&[1u8, 15, 40, 99]);
+    let hitpoints = *rng.pick(&[10u8, 30, 70]);
+    let skills: Vec<Value> = (0u8..23)
+        .map(|stat| {
+            let level = if stat == 3 { hitpoints } else { skill_level };
+            // The context reads the base level from the experience: both agree.
+            let xp = xp_of_level(level);
+            object(vec![("id", Value::Int(i64::from(stat))), ("xp", Value::Int(xp)), ("level", Value::Int(i64::from(level)))])
+        })
+        .collect();
+    let site = life.nodes[position].site;
+    if rng.chance(30) {
+        for (index, cell) in site.into_iter().enumerate() {
+            let method = if index == 0 { "someone".to_string() } else { "someone_else".to_string() };
+            seed.crowd.extend(std::iter::repeat_n((cell, method), 4));
+        }
+    }
+    let live = object(vec![
+        ("skills", Value::Arr(skills)),
+        ("inv", Value::Arr(inv)),
+        ("bank", Value::Arr(bank)),
+        ("worn", Value::Arr(worn)),
+        ("combat", Value::Int(i64::from(*rng.pick(&[3u8, 30, 90, 126])))),
+        ("position", Value::Arr(vec![Value::Int(0), Value::Int(3222), Value::Int(3218)])),
+        ("inv_streamed", Value::Bool(true)),
+        ("bank_streamed", Value::Bool(rng.chance(85))),
+    ]);
+    let market_up = rng.chance(75);
+    let account = format!("{}eq_{}_{position}_{variant}", crate::brain_commerce::PROBE_PREFIX, life.account);
+    let world = RawWorld::new(&account, live, market_up.then_some(market));
+    world.seed(&seed);
+    let (inputs, ctx, committed) = world.launch_read(&life, position);
+    world.clear(&seed);
     let knobs = Knobs { stubborn: rng.chance(40), refuse_buy: rng.chance(30), retarget_food: rng.chance(50), shop: rng.below(4) as u8, rate_tenths: *rng.pick(&[1i64, 5, 30]) };
-    Scenario { committed: counts.committed, life, position, inputs, ctx, knobs }
+    Scenario { committed, life, position, inputs, ctx, knobs }
 }
 
 /// What one run leaves, for the comparison.
@@ -287,6 +268,13 @@ struct Tally {
     asked_loot: usize,
     asked_cleanup: usize,
     standing_bids: usize,
+    /// Raw-world coverage: scenarios whose production reads returned a lock,
+    /// a committed bid, a crowd, a best ask, a market that is up.
+    locked: usize,
+    committed: usize,
+    crowded: usize,
+    asked: usize,
+    market_up: usize,
 }
 
 impl Tally {
@@ -301,6 +289,11 @@ impl Tally {
         self.asked_loot += other.asked_loot;
         self.asked_cleanup += other.asked_cleanup;
         self.standing_bids += other.standing_bids;
+        self.locked += other.locked;
+        self.committed += other.committed;
+        self.crowded += other.crowded;
+        self.asked += other.asked;
+        self.market_up += other.market_up;
     }
 }
 
@@ -318,12 +311,13 @@ fn same(label: &str, s: &Scenario, reference: &Outcome, new: &Outcome) {
 }
 
 fn run_life(life: &Life, variants: usize, seed: u64, tally: &mut Tally) {
+    let market = TestMarket::open(&life.account);
     for position in 0..life.nodes.len() {
         for variant in 0..variants {
             let mut rng = Rng(seed ^ ((position as u64 + 1) << 32) ^ (variant as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
             // Warm the generator.
             rng.next();
-            let scenario = build(life, position, &mut rng);
+            let scenario = build(life, position, variant as u64, &market, &mut rng);
             if std::env::var_os("LIFESCAPE_EQUIV_TRACE").is_some() {
                 eprintln!("scenario {} node {} variant {variant}", life.account, life.nodes[position].id);
             }
@@ -332,6 +326,11 @@ fn run_life(life: &Life, variants: usize, seed: u64, tally: &mut Tally) {
             let label = format!("{} node {} variant {variant}", life.account, life.nodes[position].id);
             same(&label, &scenario, &reference, &new);
             tally.scenarios += 1;
+            tally.locked += usize::from(!scenario.inputs.locks.is_empty());
+            tally.committed += usize::from(!scenario.inputs.commit_rows.is_empty() || scenario.inputs.commit_flat > 0);
+            tally.crowded += usize::from(!scenario.inputs.crowd.is_empty());
+            tally.asked += usize::from(scenario.ctx.best_ask.is_some());
+            tally.market_up += usize::from(scenario.inputs.market_up);
             *tally.kinds.entry(kind_of(&new)).or_insert(0) += 1;
             for event in &new.trace {
                 match event {
@@ -370,7 +369,7 @@ pub(crate) fn load_dir(dir: &Path) -> Vec<Life> {
 }
 
 fn report(name: &str, lives: usize, tally: &Tally) {
-    eprintln!("equivalence {name}: {lives} lives, {} scenarios identical; kinds {:?}; held-listing withdrawals {}, input-listing withdrawals {}, food asks {}, loot asks {}, cleanup asks {}, standing bids {}", tally.scenarios, tally.kinds, tally.withdrawn_held, tally.withdrawn_inputs, tally.asked_food, tally.asked_loot, tally.asked_cleanup, tally.standing_bids);
+    eprintln!("equivalence {name}: {lives} lives, {} scenarios identical; kinds {:?}; held-listing withdrawals {}, input-listing withdrawals {}, food asks {}, loot asks {}, cleanup asks {}, standing bids {}; raw world: locked {}, committed {}, crowded {}, best ask {}, market up {}", tally.scenarios, tally.kinds, tally.withdrawn_held, tally.withdrawn_inputs, tally.asked_food, tally.asked_loot, tally.asked_cleanup, tally.standing_bids, tally.locked, tally.committed, tally.crowded, tally.asked, tally.market_up);
 }
 
 /// The committed fixtures: nine real lives, trimmed.
@@ -412,13 +411,17 @@ fn the_rare_outcomes_equal_the_reference_too() {
     money.status = NodeStatus::Ready;
     life.nodes.push(money);
     let steer = life.nodes.len() - 1;
+    let market = TestMarket::open("rare");
     for position in [cycle, steer] {
         for variant in 0..200u64 {
             let mut rng = Rng(0xABCD ^ (position as u64) << 20 ^ variant.wrapping_mul(0x9E37_79B9_7F4A_7C15));
             rng.next();
-            let mut scenario = build(&life, position, &mut rng);
-            // The wallet decides the coin-target branch: keep it short of the target.
-            scenario.ctx.coins = 10;
+            let scenario = build(&life, position, variant, &market, &mut rng);
+            // The wallet decides the coin-target branch: only the draws that
+            // leave the bot short of the target count (read, never set).
+            if scenario.ctx.coins >= 100_000 {
+                continue;
+            }
             let (reference, new) = (run_reference(&scenario), run_new(&scenario));
             same(&format!("rare node {} variant {variant}", life.nodes[position].id), &scenario, &reference, &new);
             tally.scenarios += 1;

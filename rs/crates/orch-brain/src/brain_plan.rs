@@ -89,16 +89,18 @@ pub(crate) fn farm_yield(snapshot: &crate::rates_service::Snapshot, method: &str
 /// fallback), the published yield of its production legs for this bot
 /// (live level and tool), trend score.
 pub fn ready_ctx(life: &Life, node: &Node, live: &Value) -> ReadyCtx {
-    let mut ctx = ReadyCtx::blind(life.profile.market_affinity);
-    ctx.ironman = life.profile.ironman;
-    ctx.trip_ticks = TRIP_TICKS;
-    ctx.quarantined = crate::method_health::quarantined();
-    ctx.cooled = crate::brain_cool::active(life);
+    // Every field of the context is named below (no `ReadyCtx::blind` base):
+    // a field added to the planner's struct is a compile error here until
+    // this reader decides its value. The ones the launch pass fills later
+    // (`brain_launch_node::build_ctx`: wallet, tools, site, fleet, guides)
+    // are written out with the neutral value the pass overwrites.
+    let quarantined = crate::method_health::quarantined();
+    let cooled = crate::brain_cool::active(life);
     // A market maker's post (plan Q6): its slice's tile by the fountain.
-    ctx.maker_post = lifescape_planner::maker_role(life).map(|role| lifescape_planner::maker_post(&role));
+    let maker_post = lifescape_planner::maker_role(life).map(|role| lifescape_planner::maker_post(&role));
     // The grind of a purchase: what one tick of this bot's work really
     // earns (D1, `brain_d17::coin_rate`), never its best guide line.
-    ctx.coins_per_tick = crate::brain_d17::coin_rate(&life.account);
+    let coins_per_tick = crate::brain_d17::coin_rate(&life.account);
     let item_debug = match &node.kind {
         NodeKind::ObtainItems { item, .. } => item.clone(),
         _ => String::new(),
@@ -107,17 +109,53 @@ pub fn ready_ctx(life: &Life, node: &Node, live: &Value) -> ReadyCtx {
     // The prices come from the market's memory (no store read per pass);
     // `price_of` falls back to this thread's pooled connection only when
     // no market service runs.
+    let (mut price, mut shop_price, mut shop_window, mut yield_per_6000, mut leg_costs_out) = (10, 10, None, 200.0, Vec::new());
     if !item_debug.is_empty() {
         let display = display_of(&item_debug);
-        if let Some((price, _)) = crate::rates_price::price_of(&display) {
-            ctx.price = price.max(1.0) as i64;
-            ctx.shop_price = shop_floor(&item_debug);
-            ctx.shop_window_units = shop_window_units(&item_debug);
-            ctx.yield_per_6000 = obtain_yield(&snapshot, node, &item_debug, &display, live);
-            ctx.leg_costs = leg_costs(&snapshot, node, &item_debug, &display, live, ctx.coins_per_tick);
+        if let Some((found, _)) = crate::rates_price::price_of(&display) {
+            price = found.max(1.0) as i64;
+            shop_price = shop_floor(&item_debug);
+            shop_window = shop_window_units(&item_debug);
+            yield_per_6000 = obtain_yield(&snapshot, node, &item_debug, &display, live);
+            leg_costs_out = leg_costs(&snapshot, node, &item_debug, &display, live, coins_per_tick);
         }
     }
-    ctx
+    ReadyCtx {
+        market_affinity: life.profile.market_affinity,
+        ironman: life.profile.ironman,
+        coins_per_tick,
+        trip_ticks: TRIP_TICKS,
+        price,
+        shop_price,
+        shop_window_units: shop_window,
+        yield_per_6000,
+        leg_costs: leg_costs_out,
+        xp_per_6000: 4000.0,
+        // Set by `build_ctx` from the pass inputs.
+        coins: 0,
+        tools: Vec::new(),
+        allow_shop: true,
+        bank_known: true,
+        combat: 126,
+        position: None,
+        best_ask: None,
+        levels: Vec::new(),
+        method_profit: Vec::new(),
+        held: 0,
+        coin_share_pct: None,
+        quests_done: Vec::new(),
+        training: None,
+        crowd: Vec::new(),
+        seats: Vec::new(),
+        quarantined,
+        cooled,
+        maker_post,
+        trades: Vec::new(),
+        trade_wallet: 0,
+        money_guide: Vec::new(),
+        draw_seed: 0,
+        drawn: std::cell::RefCell::new(None),
+    }
 }
 
 /// Each production leg of an obtain node with its OWN estimate: the

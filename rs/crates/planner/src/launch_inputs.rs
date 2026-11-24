@@ -171,8 +171,11 @@ pub fn base_of(id: i64) -> i64 {
     }
 }
 
-/// The live facts of one launch pass.
-#[derive(Debug, Clone, Default)]
+/// The live facts of one launch pass. No `Default`: the production reader
+/// (`brain_launch_inputs::gather`) writes every field by name, so a field
+/// added here is a compile error there until it is read (2026-11-23: a
+/// defaulted `now: 0` shipped to production).
+#[derive(Debug, Clone)]
 pub struct LaunchInputs {
     /// `(x, z, level)` when the snapshot's position has exactly 3 parts.
     pub position: Option<Site>,
@@ -230,6 +233,40 @@ pub struct LaunchInputs {
 }
 
 impl LaunchInputs {
+    /// An empty pass for tests that set only the fields they exercise
+    /// (everything off, clock and tick at fixed values). Production never
+    /// builds one: `gather` names every field.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn blank_for_tests() -> Self {
+        LaunchInputs {
+            position: None,
+            ctx_position: None,
+            inv_streamed: false,
+            bank_streamed: false,
+            combat: 0,
+            bank_types: 0,
+            stacks: Vec::new(),
+            worn: Vec::new(),
+            inv: Vec::new(),
+            bank: Vec::new(),
+            wearing: Vec::new(),
+            locks: BTreeMap::new(),
+            listed: BTreeMap::new(),
+            commit_rows: Vec::new(),
+            commit_flat: 0,
+            crowd: Vec::new(),
+            seats: Vec::new(),
+            recent_launch: false,
+            report_in_flight: false,
+            report_pending: false,
+            now: 0,
+            tick_ms: 0,
+            levels: Vec::new(),
+            market_up: false,
+            filler_ticks: 0,
+        }
+    }
+
     /// Live level of `skill` (1 for a skill the snapshot does not list),
     /// as `brain_succession::live_level` reads it.
     pub fn level_of(&self, skill: &str) -> u8 {

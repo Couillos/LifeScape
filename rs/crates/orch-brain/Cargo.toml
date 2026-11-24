@@ -29,6 +29,7 @@ lifescape-sdk = { path = "../sdk", features = ["test-isolation"] }
 lifescape-store = { path = "../store", features = ["test-isolation"] }
 lifescape-orch-market = { path = "../orch-market", features = ["test-support"] }
 lifescape-orch-stats = { path = "../orch-stats", features = ["test-support"] }
+lifescape-planner = { path = "../planner", features = ["test-support"] }
 
 [lints]
 workspace = true

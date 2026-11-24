@@ -7,6 +7,10 @@ edition = "2021"
 name = "lifescape_planner"
 path = "src/lib.rs"
 
+[features]
+# `LaunchInputs::blank_for_tests` (benches of other crates); never built into production.
+test-support = []
+
 [dependencies]
 lifescape-json = { path = "../json" }
 lifescape-gamedata = { path = "../gamedata" }

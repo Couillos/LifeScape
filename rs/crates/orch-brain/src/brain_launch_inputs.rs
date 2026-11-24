@@ -10,6 +10,8 @@
 //! fleet's sites, the pack as the job holds it now): it runs again at
 //! every point marked `// lot 3:`, never once for the whole pass.
 
+use std::collections::BTreeMap;
+
 use lifescape_json::Value;
 use lifescape_planner::{read_stacks, LaunchInputs};
 
@@ -19,7 +21,7 @@ use crate::jobs::Job;
 /// The start-of-pass read from the pass's live snapshot (no lock, no
 /// store, no market).
 pub(crate) fn gather(job: &Job, live: &Value) -> LaunchInputs {
-    let mut inputs = LaunchInputs {
+    LaunchInputs {
         position: crate::errors_model::position_of(live.get("position")),
         ctx_position: live.get("position").as_arr().and_then(|cells| {
             let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
@@ -43,11 +45,26 @@ pub(crate) fn gather(job: &Job, live: &Value) -> LaunchInputs {
         levels: live_skill_levels(live),
         market_up: crate::market_service::shared().is_some(),
         filler_ticks: crate::brain_filler::FILLER_TICKS,
-        ..LaunchInputs::default()
-    };
-    refresh_launch_mark(job, &mut inputs);
-    refresh_report_flags(job, &mut inputs);
-    inputs
+        // Memory-only marks of the account.
+        recent_launch: crate::brain_launch::recent_launch(&job.account),
+        report_in_flight: crate::brain_inflight::in_flight(&job.account),
+        report_pending: report_pending_of(job),
+        // The market state (`gather_market`, read at the `// lot 3:`
+        // points, never at the start of the pass): empty until then. Every
+        // field is named, so a new `LaunchInputs` field cannot be forgotten.
+        locks: BTreeMap::new(),
+        listed: BTreeMap::new(),
+        commit_rows: Vec::new(),
+        commit_flat: 0,
+        crowd: Vec::new(),
+        seats: Vec::new(),
+    }
+}
+
+/// The report-pending flag as the idle detector reads it (a contended
+/// job lock reads as pending).
+fn report_pending_of(job: &Job) -> bool {
+    job.inner.try_lock().map(|inner| inner.report_pending).unwrap_or(true)
 }
 
 /// Unix seconds now (the old `brain_launch::now_unix`).
@@ -83,7 +100,7 @@ pub(crate) fn refresh_launch_mark(job: &Job, inputs: &mut LaunchInputs) {
 /// the detector always did).
 pub(crate) fn refresh_report_flags(job: &Job, inputs: &mut LaunchInputs) {
     inputs.report_in_flight = crate::brain_inflight::in_flight(&job.account);
-    inputs.report_pending = job.inner.try_lock().map(|inner| inner.report_pending).unwrap_or(true);
+    inputs.report_pending = report_pending_of(job);
 }
 
 /// What the pass's own actions change, read now: the job's pack as it

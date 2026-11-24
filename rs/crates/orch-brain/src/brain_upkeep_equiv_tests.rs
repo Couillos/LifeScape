@@ -24,17 +24,19 @@ use std::path::{Path, PathBuf};
 
 use lifescape_planner::ambition::{Ambition, Milestone, MilestoneStatus, Revision, Target};
 use lifescape_planner::serve_value::ServeVerdict;
-use lifescape_planner::upkeep::{Clock, ServeFacts};
+use lifescape_planner::upkeep::ServeFacts;
 use lifescape_planner::upkeep_graph::RouteFacts;
-use lifescape_planner::upkeep_role::OrderFact;
-use lifescape_planner::{Archetype, GoalKind, HistoryEntry, Life, MakerRole, Node, NodeKind, NodeStatus, Stamp};
+use lifescape_planner::{Archetype, GoalKind, HistoryEntry, Life, MakerRole, Node, NodeKind, NodeStatus};
+
+use lifescape_json::{object, Value};
 
 use crate::brain_launch_pass::Flow;
+use crate::brain_raw_world_tests::{object_id, stack_value, wall_now, xp_of_level, RawWorld, Seed, TestMarket};
+use crate::brain_upkeep_fx::{LiveUpkeepFx, UpkeepFx};
+use lifescape_planner::upkeep_graph::RescueReader;
 use crate::brain_upkeep_drive as drive;
 use crate::brain_upkeep_reference as reference;
 use crate::brain_upkeep_reference::{Ev, RecUpkeep, World};
-
-const NOW: i64 = 1_800_000_000;
 
 struct Rng(u64);
 
@@ -82,9 +84,19 @@ struct Scenario {
 
 const ITEMS: [&str; 6] = ["mithril_ore", "iron_ore", "uncut_sapphire", "diamond", "logs", "bronze_bar"];
 
-fn build_world(life: &Life, template: &Ambition, rng: &mut Rng) -> World {
+/// The world of one scenario, read the way the daemon reads it: a `Job` with
+/// a live JSON state and a test market service (resting orders, other
+/// bots' asks), then `LiveUpkeepFx`'s own readers fill what the fake
+/// answers from the raw world: the clock (`clock`), the levels
+/// (`level_of`), the wallet (`coins`), the holdings (`holdings_count`), the
+/// resting orders (`orders`), a maker's slice (`slice_items`), the draw
+/// stamp (`stamp`) and each node's market facts (`facts`: `ready_ctx` +
+/// `fill_ctx`). What no single raw world holds stays scripted: the filed
+/// operator switch, the draws and ambition givings, the fleet's piles, the
+/// time-value service's facts and verdicts.
+fn build_world(life: &Life, template: &Ambition, rng: &mut Rng, market: &TestMarket, account: &str) -> World {
     let skill_level = *rng.pick(&[1u8, 15, 40, 99]);
-    let levels: Vec<(String, u8)> = (0u8..23).map(|stat| (lifescape_sdk::provenance::skill_name(stat).to_string(), skill_level)).collect();
+    let skills: Vec<Value> = (0u8..23).map(|stat| object(vec![("id", Value::Int(i64::from(stat))), ("xp", Value::Int(xp_of_level(skill_level))), ("level", Value::Int(i64::from(skill_level)))])).collect();
     let mut verdicts = Vec::new();
     for item in ITEMS {
         verdicts.push((
@@ -96,30 +108,67 @@ fn build_world(life: &Life, template: &Ambition, rng: &mut Rng) -> World {
             },
         ));
     }
-    let slice = vec![rng.below(5) as i64 + 1];
-    let orders = rng.chance(75).then(|| {
-        (0..rng.below(6))
-            .map(|index| OrderFact { order_id: 100 + index as i64, buy: rng.chance(50), book_item: rng.below(3) as i64 + 1, market_make: rng.chance(50), live: rng.chance(80) })
-            .collect()
+    let slice = rng.below(5) as u32 + 1;
+    let market_up = rng.chance(75);
+    let coins = *rng.pick(&[0i64, 50, 2_000, 500_000, 5_000_000]);
+    let (mut inv, mut bank, mut seed) = (Vec::new(), Vec::new(), Seed::default());
+    if let Some(entry) = stack_value("coins", coins).filter(|_| coins > 0) {
+        inv.push(entry);
+    }
+    seed.coins = coins;
+    for item in ITEMS {
+        let units = *rng.pick(&[0i64, 3, 400]);
+        if let (true, Some(entry), Some(id)) = (units > 0, stack_value(item, units), object_id(item)) {
+            if rng.chance(50) { inv.push(entry) } else { bank.push(entry) }
+            seed.holdings.push((id, units));
+        }
+    }
+    // The bot's resting orders (a maker's quotes among them), some dead.
+    for index in 0..rng.below(6) {
+        let id = object_id(ITEMS[rng.below(3) as usize]).unwrap_or(1);
+        let buy = rng.chance(50);
+        seed.orders.push((buy, id, 1 + index as i64, if buy { 1 } else { 4_000 }, rng.chance(50), rng.chance(80)));
+    }
+    // Other sellers' asks on the nodes' items (the best ask a route reads).
+    for node in &life.nodes {
+        if let (NodeKind::ObtainItems { item, .. }, true) = (&node.kind, rng.chance(50)) {
+            if let Some(id) = object_id(item) {
+                seed.asks.push((id, 50, *rng.pick(&[5i64, 80, 4_000])));
+            }
+        }
+    }
+    let live = object(vec![
+        ("skills", Value::Arr(skills)),
+        ("inv", Value::Arr(inv)),
+        ("bank", Value::Arr(bank)),
+        ("worn", Value::Arr(Vec::new())),
+        ("position", Value::Arr(vec![Value::Int(0), Value::Int(3222), Value::Int(3218)])),
+        ("inv_streamed", Value::Bool(true)),
+        ("bank_streamed", Value::Bool(true)),
+    ]);
+    let raw = RawWorld::new(account, live, market_up.then_some(market));
+    raw.seed(&seed);
+    let (clock, levels, wallet, held, orders, slice_items, stamp, routes) = raw.run(|| {
+        let fx = LiveUpkeepFx::new(&raw.orch, &raw.job, &raw.live);
+        let levels: Vec<(String, u8)> = (0u8..23).map(|stat| lifescape_sdk::provenance::skill_name(stat).to_string()).map(|name| { let level = fx.level_of(&name); (name, level) }).collect();
+        let held: Vec<(String, i64)> = ITEMS.iter().map(|item| (item.to_string(), crate::brain_plan::holdings_count(&raw.job, item))).collect();
+        let routes: Vec<(String, RouteFacts)> = life.nodes.iter().map(|node| (node.id.clone(), fx.facts(life, node))).collect();
+        (fx.clock(), levels, fx.coins(), held, fx.orders(), fx.slice_items(slice), fx.stamp(), routes)
     });
-    let routes = life
-        .nodes
-        .iter()
-        .map(|node| (node.id.clone(), RouteFacts { best_ask: rng.chance(50).then(|| *rng.pick(&[5i64, 80, 4_000])), price: *rng.pick(&[1i64, 40, 900]), held: *rng.pick(&[0i64, 2, 50]), committed: *rng.pick(&[0i64, 100, 100_000]) }))
-        .collect();
+    raw.clear(&seed);
     World {
-        clock: Clock { now: NOW, tick_ms: *rng.pick(&[60u64, 600]), down: lifescape_planner::upkeep::no_downtime },
+        clock,
         levels,
-        coins: *rng.pick(&[0i64, 50, 2_000, 500_000, 5_000_000]),
-        held: ITEMS.iter().map(|item| (item.to_string(), *rng.pick(&[0i64, 3, 400]))).collect(),
+        coins: wallet,
+        held,
         pending: rng.chance(25).then(|| rng.pick(&["alcher", "natural", "cook", "fisher", "crafter", "pirate", "market_maker", "firemaker", "smith"]).to_string()),
-        stamp: Stamp { tick: 5, secs: NOW },
+        stamp,
         assign_ok: rng.chance(70),
         draw_ok: rng.chance(60),
         redraw_changed: rng.chance(30),
         orders,
         cancel_ok: rng.chance(80),
-        slice,
+        slice: slice_items,
         // Every ambition a draw gives carries its mark (`mark_rule`): the fake's
         // draw too, or the old loop's D3 would mark what no real draw leaves bare.
         ambition: rng.chance(85).then(|| Ambition { draw_rule: if template.draw_rule.is_empty() { "need".to_string() } else { template.draw_rule.clone() }, ..template.clone() }),
@@ -143,25 +192,25 @@ fn set_goal_shape(life: &mut Life, rng: &mut Rng) {
             // A bid answer, its node waiting on a cooled method for a while.
             life.goal = GoalKind::Produce { item: item.clone(), count: 5 };
             life.goal_origin = Some(format!("bid:{item}"));
-            life.history.push(entry("goal", &format!("next:produce {item} 5 (bid:{item})"), NOW - 9_000));
+            life.history.push(entry("goal", &format!("next:produce {item} 5 (bid:{item})"), wall_now() - 9_000));
             if rng.chance(25) {
-                life.history.push(entry("goal", lifescape_planner::bid_reach::PLANNED_RULE_TAG, NOW - 8_999));
+                life.history.push(entry("goal", lifescape_planner::bid_reach::PLANNED_RULE_TAG, wall_now() - 8_999));
             }
             if rng.chance(15) {
-                life.history.push(entry("goal", &format!("{}{item}", lifescape_planner::bid_trade::WAIT_ANSWER_TAG), NOW - 8_998));
+                life.history.push(entry("goal", &format!("{}{item}", lifescape_planner::bid_trade::WAIT_ANSWER_TAG), wall_now() - 8_998));
             }
             if !node_ids.is_empty() {
                 let node = rng.pick(&node_ids).clone();
                 let age = *rng.pick(&[200i64, 2_000, 5_000, 8_000]);
-                life.history.push(entry(&node, "launched", NOW - age - 10));
-                life.history.push(entry(&node, "cool_wait:gather:mining/mithril_ore", NOW - age));
-                life.history.push(entry("cool", "cool:gather:mining/mithril_ore|6000|full", NOW - 100));
+                life.history.push(entry(&node, "launched", wall_now() - age - 10));
+                life.history.push(entry(&node, "cool_wait:gather:mining/mithril_ore", wall_now() - age));
+                life.history.push(entry("cool", "cool:gather:mining/mithril_ore|6000|full", wall_now() - 100));
             }
         }
         2 => {
             life.goal = GoalKind::Produce { item: item.clone(), count: 50 };
             life.goal_origin = Some(format!("side:demand:{item}"));
-            life.history.push(entry("goal", &format!("next:produce {item} 50 (side:demand:{item})"), NOW - 5_000));
+            life.history.push(entry("goal", &format!("next:produce {item} 50 (side:demand:{item})"), wall_now() - 5_000));
         }
         3 => {
             // A demand milestone of the ambition runs as the goal.
@@ -172,15 +221,15 @@ fn set_goal_shape(life: &mut Life, rng: &mut Rng) {
                 }
                 life.goal = GoalKind::Produce { item: item.clone(), count: 100 };
                 life.goal_origin = Some("m9001".to_string());
-                life.history.push(entry("goal", &format!("next:produce {item} 100"), NOW - 3_000));
+                life.history.push(entry("goal", &format!("next:produce {item} 100"), wall_now() - 3_000));
             }
         }
         4 => {
             // A goal drawn before the ambition last changed.
             life.goal_origin = None;
-            life.history.push(entry("goal", "next:mining 40", NOW - 500_000));
+            life.history.push(entry("goal", "next:mining 40", wall_now() - 500_000));
             if let Some(ambition) = life.ambition.as_mut() {
-                ambition.revisions.push(Revision { tick: 1, at_secs: NOW - 1_000, from: "x".to_string(), to: ambition.kind.clone(), why: "test".to_string() });
+                ambition.revisions.push(Revision { tick: 1, at_secs: wall_now() - 1_000, from: "x".to_string(), to: ambition.kind.clone(), why: "test".to_string() });
             }
         }
         _ => {}
@@ -210,9 +259,9 @@ fn set_graph_shape(life: &mut Life, rng: &mut Rng) {
             obtain.failures = 3;
             obtain.alternatives.clear();
             life.nodes.push(obtain);
-            life.history.push(entry("n9101", "abandoned", NOW - 20));
+            life.history.push(entry("n9101", "abandoned", wall_now() - 20));
             if rng.chance(20) {
-                life.history.push(entry("n9101", lifescape_planner::MARKET_RESCUE_TAG, NOW - 10));
+                life.history.push(entry("n9101", lifescape_planner::MARKET_RESCUE_TAG, wall_now() - 10));
             }
             if rng.chance(30) {
                 // A skill goal the live levels may meet: Finished, not stuck.
@@ -237,22 +286,22 @@ fn set_graph_shape(life: &mut Life, rng: &mut Rng) {
     }
     // The spell as the history keeps it.
     match rng.below(7) {
-        0 => life.history.push(entry("graph", "stuck", NOW - 100)),
-        1 => life.history.push(entry("graph", "stuck", NOW - 4_000)),
-        2 => life.history.push(entry("graph", "stuck", NOW - 100_000)),
-        3 => life.history.push(entry("graph", "final", NOW - 50)),
-        4 => life.history.push(entry("graph", "revived", NOW - 50)),
+        0 => life.history.push(entry("graph", "stuck", wall_now() - 100)),
+        1 => life.history.push(entry("graph", "stuck", wall_now() - 4_000)),
+        2 => life.history.push(entry("graph", "stuck", wall_now() - 100_000)),
+        3 => life.history.push(entry("graph", "final", wall_now() - 50)),
+        4 => life.history.push(entry("graph", "revived", wall_now() - 50)),
         _ => {}
     }
     match rng.below(6) {
-        0 => life.history.push(entry("goal", "done:mining", NOW - 60)),
-        1 => life.history.push(entry("goal", &format!("{}mining@6000:contract error (node n1, x)", lifescape_planner::goals::STUCK_TAG), NOW - 60)),
-        2 => life.history.push(entry("goal", "next:produce logs 5", NOW - 60)),
+        0 => life.history.push(entry("goal", "done:mining", wall_now() - 60)),
+        1 => life.history.push(entry("goal", &format!("{}mining@6000:contract error (node n1, x)", lifescape_planner::goals::STUCK_TAG), wall_now() - 60)),
+        2 => life.history.push(entry("goal", "next:produce logs 5", wall_now() - 60)),
         _ => {}
     }
 }
 
-fn build(base: &Life, template: &Ambition, rng: &mut Rng, graph: bool) -> Scenario {
+fn build(base: &Life, template: &Ambition, rng: &mut Rng, graph: bool, market: &TestMarket, account: &str) -> Scenario {
     let mut life = base.clone();
     if rng.chance(10) {
         life.ambition = None;
@@ -295,7 +344,7 @@ fn build(base: &Life, template: &Ambition, rng: &mut Rng, graph: bool) -> Scenar
     }
     // A role-switch ban: lifted at once.
     if rng.chance(12) {
-        life.history.push(entry("goal", &format!("{}smithing@6000:contract error (node n1, {})", lifescape_planner::goals::STUCK_TAG, lifescape_planner::OPERATOR_ROLE_CAUSE), NOW - 30));
+        life.history.push(entry("goal", &format!("{}smithing@6000:contract error (node n1, {})", lifescape_planner::goals::STUCK_TAG, lifescape_planner::OPERATOR_ROLE_CAUSE), wall_now() - 30));
     }
     if rng.chance(70) {
         set_goal_shape(&mut life, rng);
@@ -307,7 +356,7 @@ fn build(base: &Life, template: &Ambition, rng: &mut Rng, graph: bool) -> Scenar
             life.active = Some(node.id.clone());
         }
     }
-    let world = build_world(&life, template, rng);
+    let world = build_world(&life, template, rng, market, account);
     Scenario { life, world, dirty: rng.chance(30) }
 }
 
@@ -546,11 +595,13 @@ fn template_of(lives: &[Life]) -> Ambition {
 }
 
 fn run_life(life: &Life, template: &Ambition, variants: usize, seed: u64, tally_out: &mut Tally) {
+    let market = TestMarket::open(&format!("up_{}", life.account));
     for variant in 0..variants {
         for graph in [false, true] {
             let mut rng = Rng(seed ^ (variant as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (u64::from(graph) << 40) ^ (life.seed.rotate_left(7)));
             rng.next();
-            let scenario = build(life, template, &mut rng, graph);
+            let account = format!("{}up_{}_{variant}_{graph}", crate::brain_commerce::PROBE_PREFIX, life.account);
+            let scenario = build(life, template, &mut rng, graph, &market, &account);
             let label = format!("{} variant {variant} graph={graph}", life.account);
             if !graph && variant % 4 == 0 {
                 let mut switch_scenario = scenario.clone();

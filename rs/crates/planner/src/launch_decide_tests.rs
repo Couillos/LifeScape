@@ -40,7 +40,7 @@ fn life_of(node: Node, goal: GoalKind) -> Life {
 
 fn inputs_with(stacks: Vec<Value>) -> LaunchInputs {
     let live = object(vec![("inv", Value::Arr(stacks))]);
-    LaunchInputs { inv: read_stacks(&live, "inv"), now: 1_000, tick_ms: 600, ..LaunchInputs::default() }
+    LaunchInputs { inv: read_stacks(&live, "inv"), now: 1_000, tick_ms: 600, ..LaunchInputs::blank_for_tests() }
 }
 
 fn stack(name: &str, count: i64) -> Value {

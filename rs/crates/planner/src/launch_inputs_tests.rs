@@ -60,7 +60,7 @@ fn inputs_of(live: &Value, locks: &[(&str, i64)], listed: &[(&str, i64)]) -> Lau
         wearing: read_stacks(live, "worn"),
         locks: locks.iter().map(|(name, units)| (base_of(id(name)), *units)).collect(),
         listed: listed.iter().map(|(name, units)| (id(name), *units)).collect(),
-        ..LaunchInputs::default()
+        ..LaunchInputs::blank_for_tests()
     }
 }
 
@@ -163,7 +163,7 @@ fn carried_tools_equal_the_old_listing() {
 /// flat deal and gift part.
 #[test]
 fn committed_skips_the_exception_only() {
-    let inputs = LaunchInputs { commit_rows: vec![(10, 300), (11, 50), (10, 7)], commit_flat: 1000, ..LaunchInputs::default() };
+    let inputs = LaunchInputs { commit_rows: vec![(10, 300), (11, 50), (10, 7)], commit_flat: 1000, ..LaunchInputs::blank_for_tests() };
     assert_eq!(inputs.committed(None), 1357);
     assert_eq!(inputs.committed(Some(10)), 1050);
     assert_eq!(inputs.committed(Some(99)), 1357);
