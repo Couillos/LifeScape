@@ -941,35 +941,6 @@ mod tests {
         assert_eq!(store.daily_points(Some(995)).unwrap().len(), 1, "same day: last measure wins");
     }
 
-    /// Lot 1.3: the bots are described only when a point is due; the
-    /// points written are those of the eager path.
-    #[test]
-    fn the_sampler_describes_the_bots_only_when_a_point_is_due() {
-        let dir = temp_dir("sampling_lazy");
-        let items = dir.join("items");
-        std::fs::create_dir_all(&items).unwrap();
-        let saves = dir.join("saves");
-        std::fs::create_dir_all(&saves).unwrap();
-        let save_arg = saves.to_string_lossy().to_string();
-        let now = 1_762_675_200;
-        let live = vec![described("t01", jobs::now_secs(), vec![(995, 7)], vec![])];
-        let described_calls = std::cell::Cell::new(0);
-        let describe = || {
-            described_calls.set(described_calls.get() + 1);
-            live.clone()
-        };
-        assert!(maybe_sample_lazy(&describe, &items, &save_arg, now), "no point yet: described, written");
-        assert_eq!(described_calls.get(), 1);
-        for minutes in 1..60 {
-            assert!(!maybe_sample_lazy(&describe, &items, &save_arg, now + minutes * 60), "minute {minutes}: no point due");
-        }
-        assert_eq!(described_calls.get(), 1, "59 quiet wake-ups described nobody");
-        assert!(maybe_sample_lazy(&describe, &items, &save_arg, now + INTERVAL_SECONDS));
-        assert_eq!(described_calls.get(), 2);
-        let store = lifescape_store::Store::open(&store_path(&items)).unwrap();
-        assert_eq!(store.hourly_points(Some(995)).unwrap().len(), 2);
-    }
-
     #[test]
     fn frozen_json_imports_once_then_steps_aside() {
         let dir = temp_dir("import");
@@ -1017,3 +988,6 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+#[path = "holdings_lazy_tests.rs"]
+mod lazy_tests;
