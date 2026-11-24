@@ -78,6 +78,8 @@ pub fn backoff_active(until: f64, now: f64) -> bool {
 fn supervise_all() {
     let mut watchdogs: HashMap<String, Watchdog> = HashMap::new();
     let mut written: HashMap<String, (f64, String)> = HashMap::new();
+    // Last `status` reply per account (lot 4.5: when the next call is due).
+    let mut polls: HashMap<String, crate::status_poll::LastPoll> = HashMap::new();
     // Consecutive contentions per account plus the failing op and the
     // first-failure time: the holder trace that isolates the verrou
     // fantome to one site instead of "holder unknown". Resets on the
@@ -92,6 +94,9 @@ fn supervise_all() {
         // Liveness for the downtime clock: at most one atomic write a minute.
         crate::downtime::heartbeat(now_secs() as i64);
         if let Some(line) = crate::frame_check::summary_if_due(now_secs()) {
+            crate::logln!("{line}");
+        }
+        if let Some(line) = crate::status_poll::summary_if_due(now_secs()) {
             crate::logln!("{line}");
         }
         let pairs: Vec<(Arc<dyn Fleet>, Arc<Job>)> = {
@@ -135,6 +140,7 @@ fn supervise_all() {
         if pairs.is_empty() {
             watchdogs.clear();
             written.clear();
+            polls.clear();
             continue;
         }
         let sweep = crate::cpu_profile::Probe::start();
@@ -166,7 +172,7 @@ fn supervise_all() {
             let Some(daemon) = orch.as_any().downcast_ref::<Orchestrator>() else { continue };
             let pass_start = crate::jobs::now_secs();
             let once = crate::cpu_profile::Probe::start();
-            daemon.supervise_once(job, &mut written);
+            daemon.supervise_once(job, &mut written, &mut polls);
             crate::cpu_profile::supervise().finish(once, "once");
             let after_once = crate::jobs::now_secs();
             let elapsed = after_once - pass_start;
@@ -261,34 +267,58 @@ pub(crate) fn event_is_gone(state: &Value, now: f64) -> bool {
 impl Orchestrator {
     /// E8 single supervisor entry: registered above, polled by the one
     /// `supervise-all` thread. Telemetry still arrives as worker pushes.
-    fn supervise_once(&self, job: &Arc<Job>, written: &mut HashMap<String, (f64, String)>) {
+    fn supervise_once(&self, job: &Arc<Job>, written: &mut HashMap<String, (f64, String)>, polls: &mut HashMap<String, crate::status_poll::LastPoll>) {
         // Never park the single supervisor on a wedged job: every lock
         // below is a try_lock, contention defers to the next 500 ms pass.
         // A wedged job stalls its own telemetry, never the daemon.
-        if self.procs.lock().unwrap().contains_key(&job.account) && !self.proc_alive(&job.account) {
+        let tracked = self.procs.lock().unwrap().contains_key(&job.account);
+        let alive = !tracked || self.proc_alive(&job.account);
+        // Lot 4.5: the `status` round trip only for a silent bot, a
+        // transition the frames show, or the minute backstop; the frames
+        // carry the phase and status the rest of the time.
+        let plan = crate::status_poll::plan(tracked, alive, job.frame_view().as_ref(), polls.get(&job.account), now_secs());
+        crate::status_poll::count(plan);
+        if plan == crate::status_poll::Plan::Death {
+            polls.remove(&job.account);
             self.handle_worker_death(job);
             return;
         }
-        let frame_before = job.frame_view();
-        let call_started = now_secs();
-        let session = self
-            .send_worker(
-                &job.account,
-                &object(vec![("cmd", str_value("status"))]),
-                Duration::from_secs(5),
-            )
-            .ok()
-            .and_then(|reply| {
-                if reply.get("session").is_null() {
-                    None
-                } else {
-                    Some(reply.get("session").clone())
-                }
-            });
+        let session = if matches!(plan, crate::status_poll::Plan::Status(_)) {
+            let frame_before = job.frame_view();
+            let call_started = now_secs();
+            let reply = self
+                .send_worker(
+                    &job.account,
+                    &object(vec![("cmd", str_value("status"))]),
+                    Duration::from_secs(5),
+                )
+                .ok()
+                .and_then(|reply| {
+                    if reply.get("session").is_null() {
+                        None
+                    } else {
+                        Some(reply.get("session").clone())
+                    }
+                });
+            let previous = polls.get(&job.account).cloned();
+            polls.insert(
+                job.account.clone(),
+                crate::status_poll::LastPoll {
+                    at: now_secs(),
+                    phase: reply.as_ref().and_then(|session| session.get("phase").as_str().map(str::to_string)).or_else(|| previous.as_ref().map(|poll| poll.phase.clone())).unwrap_or_default(),
+                    status: reply.as_ref().and_then(|session| session.get("status").as_str().map(str::to_string)).or_else(|| previous.map(|poll| poll.status)).unwrap_or_default(),
+                },
+            );
+            if let Some(ref session) = reply {
+                // Lot 4.2: the frames' phase/status against the reply,
+                // silent (counters, summary line), before it is applied.
+                crate::frame_check::observe(&job.account, frame_before.as_ref(), job.frame_view().as_ref(), session, call_started, now_secs());
+            }
+            reply
+        } else {
+            None
+        };
         if let Some(ref session) = session {
-            // Lot 4.2: the frames' phase/status against the reply, silent
-            // (counters and a summary line), before the reply is applied.
-            crate::frame_check::observe(&job.account, frame_before.as_ref(), job.frame_view().as_ref(), session, call_started, now_secs());
             // apply_session try_locks internally: a wedged job defers to
             // the next pass instead of parking the supervisor here.
             job.apply_session(session);

@@ -17,6 +17,8 @@ pub mod daemon_watch;
 pub mod supervise;
 pub mod push_hub;
 pub mod frame_check;
+pub mod status_poll;
+pub mod bounded_call;
 pub mod errors_ingest;
 pub mod retention;
 pub mod rares_cmd;

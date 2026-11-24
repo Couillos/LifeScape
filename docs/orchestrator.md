@@ -696,3 +696,36 @@ Modules convertis (un commit par groupe) :
 - Statiques `OnceLock` / `Mutex` : 136 (126 avant : +10 pour les copies numérotées et mémos de ce plan). Ce ne sont pas des poignées mais l'ÉTAT du démon (tableau des créances, foule, table de santé des méthodes, caches de choix, journaux) : ils restent, `BrainDeps` ne vise que les lectures de marché, taux, guides, foule et horloge.
 
 Les bancs n'écrivent plus la table de foule globale ni ne fixent d'horloge à la main ; ils gardent le marché de test posé en surcharge de fil (`market_daemon::test_service`) tant que `brain_alch`, `brain_gear` (portefeuille libre), `rates_price::price_of` (orch-stats) et les verrous de `Holdings::of` lisent `shared()` eux-mêmes ; chaque module converti plus tard retire autant de ce besoin.
+
+## Réactivité : battements, réveils du cerveau, `status` sur silence (phase 4, 2026-11-24)
+
+La phase 4 enlève au balayage du superviseur (8 à 11 s sur 74 bots) le rôle de messager : le rapport de tâche arrivait au démon en moins de 20 ms mais n'était pris en compte que 8,5 s plus tard en moyenne (4,6 % du temps de la flotte à attendre d'être remarqué). Cinq lots, un commit chacun ; 4.3 et 4.4 ne sont pas neutres (les décisions arrivent plus tôt) et se jugent sur la mesure d'une heure.
+
+### Le canal des battements (lots 4.1 et 4.2)
+
+- Chaque ouvrier garde UNE connexion `push.sock` pour sa vie. Côté démon, `push_hub` a un fil `push-accept` et **un fil `push-read` par ouvrier, bloqué dans `read`** (pile de 512 Kio, std seul) : il ne se réveille que sur des octets, découpe les lignes, parse et appelle `dispatch` ; il s'arrête à l'EOF. Une reconnexion du même compte remplace le flux (l'ancien est arrêté, l'ancien lecteur ne retire pas son successeur). L'ancien balayage de 20 ms (un fil, lectures non bloquantes) a disparu ; l'objection de E8 contre les fils de sondage par compte ne vise pas ces lecteurs, qui ne sondent rien. Les trames d'un compte restent traitées dans l'ordre (un seul lecteur par compte) ; les comptes entre eux sont concurrents.
+- Les trames portent la session : l'enveloppe de la trame pleine (`type: snapshot`) a `phase`, `status`, `sent` (hors de l'arbre `snapshot`), la trame légère a `phase` en plus de `status`. `Job::note_frame` garde la vue (`JobInner.frame`) et applique phase et statut si le job est supervisé et si la trame a été envoyée après la dernière réponse `status`, commande ou mort (`phase_at`).
+- Comparaison muette trame / `status` (`frame_check`) avant d'appliquer la réponse : ligne toutes les 60 s `supervise frames (60s): compared= same= diverged= (young= old= phase= status=) raced= stale= no_frame=` et trace des 20 premières divergences (`supervise <compte>: frame/status divergence`). `young` : trame de moins de 1,5 s (transition plausible entre la trame et la réponse) ; `old` : vrai écart ; `raced` : une trame est arrivée pendant l'appel ; `stale` : dernière trame de plus de 5 s ; `no_frame` : jamais de trame (ouvrier ancien).
+
+### Le rapport et les événements réveillent le cerveau (lots 4.3 et 4.4)
+
+- La boîte du cerveau est typée (`brain::Mail` : `Tick`, `Report`, `Wake`) ; les 4 fragments `brain-tick-N` traitent les messages d'un compte dans l'ordre (hachage stable du compte).
+- Rapport : `Orchestrator::ingest_push_and_wake` (appelé par le fil `push-read`) range le rapport puis `brain::on_report_push` prend l'indicateur `report_pending` (`Job::take_report`, indicateur et rapport sous le même verrou) et poste `Mail::Report`. Le drainage du superviseur reste en secours ; **le premier à prendre l'indicateur gagne**, jamais deux fois. `inbox full` remet l'indicateur à vrai (comme avant).
+- `brain-clock` (un fil) : bloque sur `wake_hub` (couche flotte : `post(compte, Idle|Fill)`, dédoublonné, condvar) et poste aussitôt `Mail::Wake` ; une fois par seconde il poste `Mail::Tick` pour chaque compte supervisé dont la dernière passe (tick, rapport ou réveil) a `SAFETY_TICK_SECS` = 10 s. Le superviseur ne porte plus de tick (`on_supervise` : surveillance d'inactivité + rapport drainé). Événements : phase passée à `idle` (lue dans une trame ; rattrape le rapport qui précède d'une trame le passage à `idle`) et ordre apparié (`market_convene::record_fill`, acheteur et vendeur). Un seul passage en attente par compte ; la décision garde la sémantique d'une décision par passe, `brain_chain` et la porte de retirage (`LIFESCAPE_REDRAW_GATE`, défaut shadow) sont inchangés.
+
+### `status` seulement sur silence, plus de fil par appel (lot 4.5)
+
+`status_poll::plan` décide à chaque tour pour chaque bot : processus suivi mort -> mort traitée sans appel ; bot silencieux (dernière trame de plus de `SILENCE_SECS` = 5 s, ou jamais de trame) -> appel, au plus un par 5 s ; trame à l'écart de la dernière réponse (transition) -> un appel, au plus un par 2 s ; sinon un appel de garde toutes les 60 s ; sinon rien. N = 5 s : l'ouvrier bat au moins une fois par seconde (`HEARTBEAT_WALL_SECS`, boucle de repos de 1 s), soit 5 battements de marge, très en dessous des 45 s du chien de garde. Le tour du superviseur devient court (aucun appel bloquant en régime normal) : les tâches par bot (garde de repos, chien de garde, état écrit) tournent à chaque tour de 500 ms, toutes à coût négligeable. Ligne toutes les 60 s : `supervise status (60s): calls= silent= transition= backstop= skipped=`.
+
+Le chien de garde (`daemon_watch`) lit les `updated` des trames, pas `status` : inchangé, 45 s sans battement redémarre l'ouvrier (3 redémarrages en 5 minutes parquent le job) ; la décision est maintenant une fonction pure testée (ouvrier gelé, en reconnexion, tué : `status_poll::plan` rend `Death`).
+
+`worker-connect` : les appels bornés (`connect` unix sans délai en std) passent par `bounded_call` : fils auxiliaires **réutilisés** (jusqu'à 8 en attente), un appel qui n'en trouve aucun en lance un, un fil bloqué dans un `connect` coincé n'est pas « libre » et ne retarde aucun autre compte. Le gabarit E14 (`worker-connect` dans `cpu-profile threads`) montre maintenant la taille du groupe (quelques fils) et non un fil par appel.
+
+### À regarder pendant l'heure en vrai
+
+Référence : fenêtre d'une heure avant le déploiement, lue dans `run/lifescape.db`. Lignes de `run/orchestrator.log` :
+- `cpu-profile fold` : délai rapport -> prise en compte, attendu **sous 1 s** (8,5 s avant) ; `cpu-profile supervise` : `sweep` (attendu en millisecondes, plus de 8 à 11 s), `once`, compteurs `wake_report`, `wake_idle`, `wake_event`.
+- `supervise frames`, divergences : attendu `old=0` (tout le reste est de la course) ; plus de quelques `old` par heure, c'est que la trame ne dit pas la vérité et que 4.5 ne doit pas rester.
+- `supervise status` : `calls` par minute attendu autour de 74 (garde) + transitions, au lieu de ~440 ; `silent` proche de 0 hors redémarrage.
+- `cpu-profile threads` : groupes `push-read` (74 fils, quasi nul), `brain-clock`, `brain-tick`, `worker-connect` (quelques fils) ; `total` du démon non supérieur à la référence.
+- `idle_bot` : pas d'augmentation attendue ; ticks de travail, rapports/h, XP/h, erreurs par type : au moins la référence. Une régression de ces mesures, avec les compteurs ci-dessus, désigne le lot à corriger.

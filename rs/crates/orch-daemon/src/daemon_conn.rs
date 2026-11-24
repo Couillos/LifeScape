@@ -10,8 +10,8 @@ use lifescape_json::{self as json, Value, object};
 use crate::daemon::Orchestrator;
 use crate::paths;
 
-/// Bounded unix connect: the blocking `connect` runs on a helper
-/// thread and the caller waits at most `timeout`. A wedged listener
+/// Bounded unix connect: the blocking `connect` runs on a reused helper
+/// thread (lot 4.5) and the caller waits at most `timeout`. A wedged listener
 /// (backlog full, nobody accepting) can no longer park the caller
 /// forever; the helper thread is reaped when the worker dies (the
 /// caller kills it on timeout, which unblocks the connect).
@@ -26,21 +26,11 @@ fn connect_worker(
         return Err(format!("session unreachable (no socket at {})", sock_path.display()));
     }
     let path = sock_path.to_path_buf();
-    let (sender, receiver) = std::sync::mpsc::channel::<Result<UnixStream, String>>();
-    if std::thread::Builder::new()
-        .name("worker-connect".to_string())
-        .spawn(move || {
-            let _ = sender.send(
-                UnixStream::connect(&path).map_err(|error| format!("session unreachable: {error}")),
-            );
-        })
-        .is_err()
-    {
-        return Err("connect spawn failed".to_string());
-    }
-    receiver
-        .recv_timeout(timeout)
-        .map_err(|_| "connect timed out (wedged session)".to_string())?
+    // Lot 4.5: reused helper threads (`bounded_call`), no thread per call.
+    crate::bounded_call::run_bounded(timeout, move || {
+        UnixStream::connect(&path).map_err(|error| format!("session unreachable: {error}"))
+    })
+    .unwrap_or_else(|| Err("connect timed out (wedged session)".to_string()))
 }
 
 impl Orchestrator {
@@ -171,22 +161,6 @@ mod tests {
         assert!(!is_pktlog_line("say C>S hello"));
     }
 
-    /// Live `worker-connect` threads, by comm name (E14 gauge).
-    fn worker_connect_threads() -> usize {
-        let mut count = 0;
-        let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
-            return 0;
-        };
-        for task in tasks.flatten() {
-            if std::fs::read_to_string(task.path().join("comm"))
-                .is_ok_and(|comm| comm.trim() == "worker-connect")
-            {
-                count += 1;
-            }
-        }
-        count
-    }
-
     /// E14: a missing socket fails without spawning the helper thread
     /// (a dead worker needs no connexion attempt). Fast and typed,
     /// never a 30 s connect wait.
@@ -194,11 +168,11 @@ mod tests {
     fn missing_socket_spawns_no_thread() {
         let missing = std::env::temp_dir().join(format!("lifescape-no-such-sock-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&missing);
-        let before = worker_connect_threads();
+        let before = crate::bounded_call::spawned();
         let start = std::time::Instant::now();
         let error = connect_worker(&missing, Duration::from_secs(30)).expect_err("missing socket refuses");
         assert!(error.contains("session unreachable"), "typed, got {error}");
         assert!(start.elapsed() < Duration::from_secs(5), "no thread, no connect wait");
-        assert_eq!(worker_connect_threads(), before, "no helper thread for a doomed connect");
+        assert_eq!(crate::bounded_call::spawned(), before, "no helper thread for a doomed connect");
     }
 }

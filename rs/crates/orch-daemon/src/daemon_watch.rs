@@ -41,6 +41,45 @@ pub(crate) fn watchdog_due(last_hb: Option<f64>, now: f64) -> bool {
     }
 }
 
+/// What the watchdog concludes for one bot at one tick.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum WatchVerdict {
+    /// Paused, held, reconnecting, starting...: heartbeats prove nothing.
+    Skip,
+    /// A newer heartbeat than the last seen: recorded, healthy.
+    Beat,
+    /// Same heartbeat as before, but not stale yet.
+    Healthy,
+    /// Stale and restarts left: kill and respawn.
+    Fire,
+    /// Stale and `WATCHDOG_MAX_RESTARTS` restarts in the window: parked.
+    Poisoned,
+}
+
+/// Pure watchdog decision (lot 4.5 tests it for a frozen, reconnecting or
+/// healthy worker). Records the heartbeat in `state` and drops restarts
+/// older than the window. The heartbeat read is the frames' `updated`
+/// (`JobInner::live`), independent of the `status` call the supervisor
+/// now makes only on silence.
+pub(crate) fn watchdog_verdict(paused: bool, held: bool, status: &str, updated: Option<f64>, state: &mut Watchdog, now: f64) -> WatchVerdict {
+    if paused || held || matches!(status, "reconnecting" | "disconnected" | "starting" | "busy") {
+        return WatchVerdict::Skip;
+    }
+    let Some(at) = updated else { return WatchVerdict::Skip };
+    if at > state.last_hb.unwrap_or(0.0) {
+        state.last_hb = Some(at);
+        return WatchVerdict::Beat;
+    }
+    if !watchdog_due(state.last_hb, now) {
+        return WatchVerdict::Healthy;
+    }
+    state.restarts.retain(|seen| now - seen < WATCHDOG_WINDOW_SECS);
+    if state.restarts.len() >= WATCHDOG_MAX_RESTARTS {
+        return WatchVerdict::Poisoned;
+    }
+    WatchVerdict::Fire
+}
+
 impl Orchestrator {
     /// Frozen-session watchdog, called from the supervisor thread: when
     /// heartbeats stop arriving although the session should be live, the
@@ -65,34 +104,22 @@ impl Orchestrator {
                 updated,
             )
         };
-        if paused || held {
-            return;
-        }
-        if matches!(status.as_str(), "reconnecting" | "disconnected" | "starting" | "busy") {
-            return;
-        }
-        let Some(at) = updated else {
-            return;
-        };
         let now = crate::jobs::now_secs();
-        if at > state.last_hb.unwrap_or(0.0) {
-            state.last_hb = Some(at);
-            return;
-        }
-        if !watchdog_due(state.last_hb, now) {
-            return;
-        }
-        state.restarts.retain(|seen| now - seen < WATCHDOG_WINDOW_SECS);
-        if state.restarts.len() >= WATCHDOG_MAX_RESTARTS {
-            if let Ok(mut inner) = job.inner.try_lock() {
-                inner.last_error = Some(object(vec![
-                    ("where", str_value("watchdog")),
-                    ("type", str_value("watchdog")),
-                    ("message", str_value("session wedged repeatedly, parked for operator")),
-                    ("at", Value::Arr(vec![])),
-                ]));
+        let Some(at) = updated else { return };
+        match watchdog_verdict(paused, held, &status, Some(at), state, now) {
+            WatchVerdict::Fire => {}
+            WatchVerdict::Poisoned => {
+                if let Ok(mut inner) = job.inner.try_lock() {
+                    inner.last_error = Some(object(vec![
+                        ("where", str_value("watchdog")),
+                        ("type", str_value("watchdog")),
+                        ("message", str_value("session wedged repeatedly, parked for operator")),
+                        ("at", Value::Arr(vec![])),
+                    ]));
+                }
+                return;
             }
-            return;
+            WatchVerdict::Skip | WatchVerdict::Beat | WatchVerdict::Healthy => return,
         }
         // Never race an operator open/close/redeploy of the same account.
         let Some(_claim) = self.lifecycle.try_claim(&job.account) else {
@@ -132,7 +159,39 @@ impl Orchestrator {
 
 #[cfg(test)]
 mod tests {
-    use super::watchdog_due;
+    use super::{watchdog_due, watchdog_verdict, WatchVerdict, Watchdog};
+
+    /// Lot 4.5, worker frozen: the heartbeat stops, nothing happens for 45 s
+    /// of silence, then the watchdog fires; three restarts in 5 minutes
+    /// park the job instead.
+    #[test]
+    fn a_frozen_worker_is_restarted_then_parked() {
+        let mut state = Watchdog::new();
+        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 100.5), WatchVerdict::Beat);
+        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 130.0), WatchVerdict::Healthy, "30 s of silence");
+        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 146.0), WatchVerdict::Fire, "46 s of silence");
+        for at in [146.0, 200.0, 250.0] {
+            state.restarts.push(at);
+        }
+        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 260.0), WatchVerdict::Poisoned);
+        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 460.0), WatchVerdict::Fire, "the window forgot the old restarts");
+    }
+
+    /// Lot 4.5, worker reconnecting (or starting, held, paused): stale
+    /// heartbeats never fire, whatever the silence; a fresh beat afterwards
+    /// is recorded again.
+    #[test]
+    fn a_reconnecting_worker_is_left_alone() {
+        let mut state = Watchdog::new();
+        assert_eq!(watchdog_verdict(false, false, "running", Some(100.0), &mut state, 100.0), WatchVerdict::Beat);
+        for status in ["reconnecting", "starting", "disconnected", "busy"] {
+            assert_eq!(watchdog_verdict(false, false, status, Some(100.0), &mut state, 500.0), WatchVerdict::Skip, "{status}");
+        }
+        assert_eq!(watchdog_verdict(true, false, "running", Some(100.0), &mut state, 500.0), WatchVerdict::Skip, "paused");
+        assert_eq!(watchdog_verdict(false, true, "running", Some(100.0), &mut state, 500.0), WatchVerdict::Skip, "held");
+        assert_eq!(watchdog_verdict(false, false, "idle", Some(499.0), &mut state, 500.0), WatchVerdict::Beat, "back and beating");
+        assert_eq!(watchdog_verdict(false, false, "idle", None, &mut state, 500.0), WatchVerdict::Skip, "no heartbeat yet is the login edge");
+    }
 
     #[test]
     fn watchdog_fires_only_on_stale_heartbeat() {
