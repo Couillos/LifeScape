@@ -143,6 +143,8 @@ pub(crate) struct Shared {
     /// Last seen bank contents (bank streams only while open): the end
     /// snapshot reuses it, so internal trips land in the diff.
     pub(crate) last_bank: Mutex<HashMap<u16, u32>>,
+    /// `World::inv_rev` the bank cache was last built at (`refresh_bank_cache_on_change`).
+    pub(crate) last_bank_rev: Mutex<Option<u64>>,
     /// Bank contents at first bank-open of the current run: pre-stock
     /// cancels against it instead of popping as phantom gains.
     pub(crate) bank_baseline: Mutex<Option<HashMap<u16, u32>>>,
@@ -265,7 +267,14 @@ fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {    let tick
         let inner = shared.inner.lock().unwrap();
         (inner.last_heartbeat_tick, inner.last_heartbeat_wall)
     };
-    if let Some(live) = crate::session_report::refresh_bank_cache(bot, &mut shared.last_bank.lock().unwrap()) {
+    let baseline_pending = shared.task_start.lock().unwrap().is_some() && shared.bank_baseline.lock().unwrap().is_none();
+    let refreshed = crate::session_report::refresh_bank_cache_on_change(
+        bot,
+        &mut shared.last_bank.lock().unwrap(),
+        &mut shared.last_bank_rev.lock().unwrap(),
+        baseline_pending,
+    );
+    if let Some(live) = refreshed {
         // First bank-open of a run freezes the pre-stock baseline; every
         // later open only refreshes the end cache.
         if shared.task_start.lock().unwrap().is_some() && shared.bank_baseline.lock().unwrap().is_none() {
@@ -800,6 +809,7 @@ pub fn run_session(account: &str) -> i32 {
         budget_stop: AtomicBool::new(false),
         task_start: Mutex::new(None),
         last_bank: Mutex::new(HashMap::new()),
+        last_bank_rev: Mutex::new(None),
         bank_baseline: Mutex::new(None),
         market_pause_ticks: Mutex::new(0),
         pending_market: Mutex::new(None),
@@ -957,6 +967,7 @@ mod tests {
                 meta: crate::report_meta::RunMeta::default(),
             })),
             last_bank: Mutex::new(std::collections::HashMap::new()),
+            last_bank_rev: Mutex::new(None),
             bank_baseline: Mutex::new(None),
             market_pause_ticks: Mutex::new(0),
             pending_market: Mutex::new(None),

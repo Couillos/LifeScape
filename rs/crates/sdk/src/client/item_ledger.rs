@@ -128,21 +128,42 @@ impl ItemLedger {
             .fold(0u32, |mask, (stat, _)| if *stat < 32 { mask | (1 << stat) } else { mask })
     }
 
-    /// One observation: records a flow per object whose count moved.
-    pub fn observe(&mut self, seen: Seen<'_>) {
-        for (stat, xp) in &seen.xp {
+    /// Whether a pack was observed already (`observe_same_pack` needs it).
+    pub fn has_pack(&self) -> bool {
+        self.last_pack.is_some()
+    }
+
+    /// An observation whose pack is known to equal the last one (the
+    /// caller saw no inventory change): everything `observe` does for
+    /// such a pack, without building or comparing it.
+    pub fn observe_same_pack(&mut self, tick: u64, bank_open: bool, xp: &[(u8, i32)], dead: bool) {
+        self.note_state(tick, bank_open, xp, dead);
+    }
+
+    /// The per-observation bookkeeping that does not depend on the pack.
+    fn note_state(&mut self, tick: u64, bank_open: bool, xp: &[(u8, i32)], dead: bool) {
+        for (stat, xp) in xp {
             if self.last_xp.get(stat).is_some_and(|last| xp > last) {
-                self.xp_ticks.insert(*stat, seen.tick);
+                self.xp_ticks.insert(*stat, tick);
             }
             self.last_xp.insert(*stat, *xp);
         }
-        if seen.bank_open {
-            self.bank_seen = Some(seen.tick);
+        if bank_open {
+            self.bank_seen = Some(tick);
         }
-        if seen.dead {
-            self.death_seen = Some(seen.tick);
+        if dead {
+            self.death_seen = Some(tick);
         }
-        self.actions.retain(|action| seen.tick <= action.until);
+        self.actions.retain(|action| tick <= action.until);
+    }
+
+    /// One observation: records a flow per object whose count moved.
+    pub fn observe(&mut self, seen: Seen<'_>) {
+        self.note_state(seen.tick, seen.bank_open, &seen.xp, seen.dead);
+        // An unchanged pack has no flow to record: no copy, no diff.
+        if self.last_pack.as_ref() == Some(&seen.pack) {
+            return;
+        }
         let Some(last) = self.last_pack.replace(seen.pack.clone()) else { return };
         if seen.bank_open {
             return;

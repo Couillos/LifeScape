@@ -175,6 +175,7 @@ impl Bot {
         for com in screens {
             self.world.inv.remove(&com);
         }
+        self.world.touch_inv();
     }
 
     /// Physical exchange with a double-screen check: offer our give lots

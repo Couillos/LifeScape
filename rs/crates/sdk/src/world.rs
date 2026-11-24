@@ -192,6 +192,12 @@ pub struct World {
     /// banked coins and stock stay visible between bank visits (only a
     /// bank visit can change them). A fresh `UPDATE_INV_FULL` replaces it.
     pub inv_closed: HashMap<u16, HashMap<u8, (u16, u32)>>,
+    /// Revision of `inv`/`inv_closed`/`inv_cap`: a process-unique number
+    /// taken at every change (`touch_inv`), so a consumer that derived
+    /// something from them (bank cache, ledger inputs) rebuilds it only
+    /// when this moved. Code that edits those maps directly calls
+    /// `touch_inv`.
+    pub inv_rev: u64,
     pub inv_cap: HashMap<u16, u8>,
     /// NPC damage masks since the bot last drained them (`run_events`).
     pub npc_hits: Vec<crate::client::run_events::NpcHit>,
@@ -216,9 +222,21 @@ pub struct World {
     pub self_slot: Option<u16>,
 }
 
+/// Process-unique revision numbers: a fresh `World` never repeats the
+/// number a consumer cached for the one before it.
+fn next_inv_rev() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl World {
     pub fn new() -> World {
-        World { energy: 100, ..World::default() }
+        World { energy: 100, inv_rev: next_inv_rev(), ..World::default() }
+    }
+
+    /// Marks the inventories changed (see `inv_rev`).
+    pub fn touch_inv(&mut self) {
+        self.inv_rev = next_inv_rev();
     }
 
     pub fn position(&self) -> Tile {
@@ -308,6 +326,7 @@ impl World {
                 let com = zone.u16()?;
                 if let Some(items) = self.inv.remove(&com) {
                     self.inv_closed.insert(com, items);
+                    self.touch_inv();
                 }
             }
             "UPDATE_STAT" => {
@@ -533,6 +552,7 @@ impl World {
         self.inv_cap.insert(com, slots);
         self.inv_closed.remove(&com);
         self.inv.insert(com, items);
+        self.touch_inv();
         Ok(())
     }
 
@@ -555,6 +575,7 @@ impl World {
         let items: HashMap<u8, (u16, u32)> =
             objs.into_iter().enumerate().filter_map(|(slot, (obj, count))| u8::try_from(slot).ok().map(|slot| (slot, (*obj, *count)))).collect();
         self.inv_closed.insert(com, items);
+        self.touch_inv();
     }
 
     fn inv_partial(&mut self, body: &[u8]) -> Result<()> {
@@ -575,6 +596,7 @@ impl World {
             }
         }
         self.inv.insert(com, items);
+        self.touch_inv();
         Ok(())
     }
 

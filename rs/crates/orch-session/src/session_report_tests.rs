@@ -361,3 +361,70 @@ fn closed_bank_cache_takes_the_stop_transmit_state() {
     let report = build_report(&bot, &before, &baseline, &after, &cache, &ctx("melee", "budget_exhausted"));
     assert!(report.alerts.is_empty(), "{:?}", report.alerts);
 }
+
+/// Lot 6.2: the on-change refresh leaves the cache and the live-bank
+/// answer exactly as the full refresh at every step of an open, close,
+/// empty, relog sequence; unchanged steps rebuild nothing.
+#[test]
+fn bank_cache_on_change_matches_the_full_refresh() {
+    use super::{refresh_bank_cache, refresh_bank_cache_on_change};
+    let mut bot = live_bot();
+    let logs = id(&bot, "logs");
+    let bank_com = (bot.tables.com_id)("bank_main:inv").expect("bank_main in dumps");
+    let (mut fast, mut full, mut seen) = (HashMap::new(), HashMap::new(), None);
+    for step in 0..12 {
+        match step {
+            1 => {
+                bot.world.inv.insert(bank_com, [(0u8, (logs, 100u32))].into_iter().collect());
+                bot.world.touch_inv();
+            }
+            4 => {
+                bot.world.inv.insert(bank_com, [(0u8, (logs, 90u32)), (1u8, (logs, 5u32))].into_iter().collect());
+                bot.world.touch_inv();
+            }
+            6 => {
+                let items = bot.world.inv.remove(&bank_com).unwrap();
+                bot.world.inv_closed.insert(bank_com, items);
+                bot.world.touch_inv();
+            }
+            9 => {
+                bot.world.inv_closed.clear();
+                bot.world.inv.insert(bank_com, HashMap::new());
+                bot.world.touch_inv();
+            }
+            _ => {}
+        }
+        let want = refresh_bank_cache(&bot, &mut full);
+        let got = refresh_bank_cache_on_change(&bot, &mut fast, &mut seen, true);
+        assert_eq!(got, want, "live bank answer at step {step} (baseline pending)");
+        assert_eq!(fast, full, "cache at step {step}");
+        let quiet = refresh_bank_cache_on_change(&bot, &mut fast, &mut seen, false);
+        assert!(quiet.is_none(), "unchanged revision rebuilds nothing at step {step}");
+        assert_eq!(fast, full, "cache still equal at step {step}");
+    }
+}
+
+/// Micro-benchmark (`--ignored --nocapture`): one pump's bank refresh,
+/// bank closed with 600 distinct objects, full rebuild vs on change.
+#[test]
+#[ignore]
+fn bench_bank_refresh_closed_bank() {
+    use super::{refresh_bank_cache, refresh_bank_cache_on_change};
+    let mut bot = live_bot();
+    let bank_com = (bot.tables.com_id)("bank_main:inv").expect("bank_main in dumps");
+    bot.world.inv_closed.insert(bank_com, (0..600u16).map(|slot| (slot as u8, (slot + 1, 7u32))).collect());
+    bot.world.touch_inv();
+    let (mut cache, mut seen) = (HashMap::new(), None);
+    let pumps = 20_000;
+    let started = std::time::Instant::now();
+    for _ in 0..pumps {
+        refresh_bank_cache(&bot, &mut cache);
+    }
+    let full = started.elapsed().as_nanos() as f64 / pumps as f64;
+    let started = std::time::Instant::now();
+    for _ in 0..pumps {
+        refresh_bank_cache_on_change(&bot, &mut cache, &mut seen, false);
+    }
+    let changed = started.elapsed().as_nanos() as f64 / pumps as f64;
+    eprintln!("BENCH bank refresh: {full:.0} ns/pump rebuilt every pump, {changed:.0} ns/pump on change ({} objects)", cache.len());
+}

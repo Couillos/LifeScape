@@ -558,6 +558,7 @@ mod tests {
             budget_stop: AtomicBool::new(false),
             task_start: Mutex::new(None),
             last_bank: Mutex::new(HashMap::new()),
+            last_bank_rev: Mutex::new(None),
             bank_baseline: Mutex::new(None),
             market_pause_ticks: Mutex::new(0),
             pending_market: Mutex::new(None),

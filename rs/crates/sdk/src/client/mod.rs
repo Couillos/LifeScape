@@ -207,6 +207,10 @@ pub struct Bot {
     /// Every carried object's flows, attributed the same way plus the
     /// skill and death causes (`item_ledger`).
     pub item_ledger: item_ledger::ItemLedger,
+    /// `(world.inv_rev, coins carried)` of the last full `observe_ledgers`
+    /// pass: while the inventories keep that revision the carried coins
+    /// and the pack are not rebuilt.
+    ledger_seen: Option<(u64, u32)>,
     /// Casts, kills and damage of the session (`run_events`).
     pub run_events: run_events::RunEvents,
     /// Inline-pause gate, installed by the session worker (default: none).
@@ -296,6 +300,7 @@ impl Bot {
             on_pump: None,
             coin_ledger: coin_ledger::CoinLedger::default(),
             item_ledger: item_ledger::ItemLedger::default(),
+            ledger_seen: None,
             run_events: run_events::RunEvents::default(),
             pause_gate: None,
             pause_held: false,
@@ -366,6 +371,7 @@ impl Bot {
                     self.world = World::new();
                     self.world.static_locs = static_locs;
                     self.world.inv_closed = closed;
+                    self.world.touch_inv();
                     self.seed_bank_from_save();
                     self.last_send_tick = 0;
                     self.last_keepalive = None;
@@ -583,14 +589,29 @@ impl Bot {
     /// boundary (`feed`); a task report calls it once at its start and
     /// end snapshots so the ledger and the snapshot see the same state.
     pub fn observe_ledgers(&mut self) {
+        let bank_open = (self.tables.com_id)("bank_main:inv").is_some_and(|bank| self.world.inv.contains_key(&bank));
+        let tick = self.world.ticks;
+        let xp: Vec<(u8, i32)> = self.world.stats.iter().map(|(stat, (_, xp))| (*stat, *xp)).collect();
+        let dead = self.world.stats.get(&3).is_some_and(|(level, _)| *level == 0);
+        // Same inventories as the last full pass: the carried coins and
+        // the pack are what they were, so neither is rebuilt (the item
+        // ledger keeps its last pack; only the tick-dependent bookkeeping
+        // runs).
+        if let Some((rev, carried)) = self.ledger_seen {
+            if rev == self.world.inv_rev && self.item_ledger.has_pack() {
+                self.coin_ledger.observe(carried, bank_open, tick);
+                let hits = std::mem::take(&mut self.world.npc_hits);
+                self.run_events.observe(tick, run_events::magic_xp(&xp), &hits);
+                self.item_ledger.observe_same_pack(tick, bank_open, &xp, dead);
+                return;
+            }
+        }
         let (com, slots) = self.backpack();
         if com.is_none() {
             return;
         }
         let coins = (self.tables.find_obj_by_name)("coins").unwrap_or(995);
         let carried: u32 = slots.iter().filter(|(_, (held, _))| *held == coins).map(|(_, (_, count))| *count).sum();
-        let bank_open = (self.tables.com_id)("bank_main:inv").is_some_and(|bank| self.world.inv.contains_key(&bank));
-        let tick = self.world.ticks;
         self.coin_ledger.observe(carried, bank_open, tick);
         let mut pack: std::collections::HashMap<u16, u32> = std::collections::HashMap::new();
         for (_, (held, count)) in &slots {
@@ -601,12 +622,11 @@ impl Bot {
                 *pack.entry(*held).or_insert(0) += *count;
             }
         }
-        let xp: Vec<(u8, i32)> = self.world.stats.iter().map(|(stat, (_, xp))| (*stat, *xp)).collect();
-        let dead = self.world.stats.get(&3).is_some_and(|(level, _)| *level == 0);
         let context = self.coin_ledger.context();
         let hits = std::mem::take(&mut self.world.npc_hits);
         self.run_events.observe(tick, run_events::magic_xp(&xp), &hits);
         self.item_ledger.observe(item_ledger::Seen { pack, bank_open, tick, xp, dead, context });
+        self.ledger_seen = Some((self.world.inv_rev, carried));
     }
 
     pub fn pump(&mut self, count: u32) -> Result<Vec<Frame>> {
@@ -784,6 +804,97 @@ pub fn aggregate(inv: &HashMap<u16, HashMap<u8, (u16, u32)>>) -> HashMap<u16, u3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Micro-benchmark (`--ignored --nocapture`): `observe_ledgers` per
+    /// player-info frame with a 28-slot pack, 12 worn, 25 stats and no
+    /// change; `ledger_seen` cleared each time is the former behaviour.
+    #[test]
+    #[ignore]
+    fn bench_observe_ledgers_unchanged() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.tables.com_id = |name| match name {
+            "inventory:inv" => Some(3214),
+            "bank_main:inv" => Some(5382),
+            "wornitems:wear" => Some(3213),
+            _ => None,
+        };
+        bot.tables.find_obj_by_name = |name| if name == "coins" { Some(995) } else { None };
+        bot.world.inv.insert(3214, (0..28u8).map(|slot| (slot, (995 + u16::from(slot), 3u32))).collect());
+        bot.world.inv.insert(3213, (0..12u8).map(|slot| (slot, (2000 + u16::from(slot), 1u32))).collect());
+        for stat in 0..25u8 {
+            bot.world.stats.insert(stat, (50, 100_000));
+        }
+        bot.world.touch_inv();
+        let frames = 50_000;
+        let started = std::time::Instant::now();
+        for _ in 0..frames {
+            bot.ledger_seen = None;
+            bot.observe_ledgers();
+        }
+        let before = started.elapsed().as_nanos() as f64 / frames as f64;
+        let started = std::time::Instant::now();
+        for _ in 0..frames {
+            bot.observe_ledgers();
+        }
+        let after = started.elapsed().as_nanos() as f64 / frames as f64;
+        eprintln!("BENCH observe_ledgers: {before:.0} ns/frame full pass, {after:.0} ns/frame unchanged shortcut");
+    }
+
+    /// Lot 6.2: `observe_ledgers` skipping the pack rebuild while the
+    /// inventories keep their revision leaves the ledgers exactly as a
+    /// full pass each time (`ledger_seen` cleared before every call is the
+    /// former behaviour).
+    #[test]
+    fn ledgers_are_identical_with_and_without_the_unchanged_shortcut() {
+        fn bot() -> Bot {
+            let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+            bot.tables.com_id = |name| match name {
+                "inventory:inv" => Some(3214),
+                "bank_main:inv" => Some(5382),
+                "wornitems:wear" => Some(3213),
+                _ => None,
+            };
+            bot.tables.find_obj_by_name = |name| if name == "coins" { Some(995) } else { None };
+            bot
+        }
+        let (mut fast, mut full) = (bot(), bot());
+        let pack = |items: &[(u8, u16, u32)]| -> HashMap<u8, (u16, u32)> { items.iter().map(|(slot, obj, n)| (*slot, (*obj, *n))).collect() };
+        for step in 0..40u64 {
+            for bot in [&mut fast, &mut full] {
+                bot.world.ticks = 100 + step;
+                match step {
+                    3 => bot.world.inv.insert(3214, pack(&[(0, 995, 10), (1, 1511, 4)])).map(|_| ()).unwrap_or(()),
+                    7 => bot.world.inv.insert(3214, pack(&[(0, 995, 25), (1, 1511, 4)])).map(|_| ()).unwrap_or(()),
+                    12 => bot.world.inv.insert(5382, pack(&[(0, 995, 1000)])).map(|_| ()).unwrap_or(()),
+                    14 => bot.world.inv.insert(3214, pack(&[(0, 995, 5)])).map(|_| ()).unwrap_or(()),
+                    16 => bot.world.inv.insert(3213, pack(&[(3, 1205, 1)])).map(|_| ()).unwrap_or(()),
+                    18 => {
+                        bot.world.inv.remove(&5382);
+                    }
+                    25 => bot.world.inv.insert(3214, pack(&[])).map(|_| ()).unwrap_or(()),
+                    _ => {}
+                }
+                if matches!(step, 3 | 7 | 12 | 14 | 16 | 18 | 25) {
+                    bot.world.touch_inv();
+                }
+                if step == 9 || step == 30 {
+                    bot.world.stats.insert(0, (10, 1500 + step as i32));
+                }
+                if step == 11 {
+                    bot.coin_context(item_ledger::kind::DROPPED);
+                }
+            }
+            fast.observe_ledgers();
+            full.ledger_seen = None;
+            full.observe_ledgers();
+            assert_eq!(fast.coin_ledger.flows, full.coin_ledger.flows, "coin flows at step {step}");
+            assert_eq!(fast.item_ledger.flows, full.item_ledger.flows, "item flows at step {step}");
+            assert_eq!(fast.run_events, full.run_events, "run events at step {step}");
+            assert_eq!(fast.item_ledger.skills_at(100 + step), full.item_ledger.skills_at(100 + step), "skills at step {step}");
+        }
+        assert!(!fast.item_ledger.flows.is_empty(), "the scenario records flows");
+        assert!(fast.ledger_seen.is_some());
+    }
 
     /// The market pause in flight counts as pause from its first tick;
     /// `note_pause` closes it into the billed total.

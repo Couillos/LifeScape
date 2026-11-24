@@ -119,6 +119,26 @@ pub fn refresh_bank_cache(bot: &Bot, cache: &mut HashMap<u16, u32>) -> Option<Ha
     }
 }
 
+/// `refresh_bank_cache` rebuilt only when the inventories changed since
+/// the cache was last built (`World::inv_rev`, kept in `seen`): the bank
+/// contents are a function of them, so an unchanged revision leaves the
+/// cache exactly as a rebuild would. `need_live`: the caller wants the
+/// streaming bank back even when nothing changed (a run's baseline still
+/// to freeze); it is read from the cache then.
+pub fn refresh_bank_cache_on_change(
+    bot: &Bot,
+    cache: &mut HashMap<u16, u32>,
+    seen: &mut Option<u64>,
+    need_live: bool,
+) -> Option<HashMap<u16, u32>> {
+    if *seen == Some(bot.world.inv_rev) {
+        let streaming = (bot.tables.com_id)("bank_main:inv").is_some_and(|com| bot.world.inv.contains_key(&com));
+        return if streaming && need_live { Some(cache.clone()) } else { None };
+    }
+    *seen = Some(bot.world.inv_rev);
+    refresh_bank_cache(bot, cache)
+}
+
 /// Context the session owns: what ran, how it stopped, which graph node
 /// ordered it and the run context frozen at its start.
 pub struct ReportCtx {
