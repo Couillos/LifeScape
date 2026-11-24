@@ -6,7 +6,7 @@ pub use lifescape_orch_fleet::{frame_codec, job_state, worker_call, worker_comma
 pub use lifescape_orch_market::{market_service, market_orders, market_auction, market_uncross, market_merge, market_prints, market_claims, market_units, market_lineage, market_eta, market_reference, market_seed, market_audit, market_reprice, market_daemon, market_convene, market_convene_sweep, market_absent, funding_gifts, market_host, market_facts, market_own};
 #[cfg(test)]
 pub use lifescape_orch_market::market_test_support;
-pub use lifescape_orch_stats::{economy_outcomes, errors_aggregate, errors_model, flow_causes, guides_model, guides_store, hiscores, hiscores_service, holdings, holdings_indices, live_items, rates_estimator, rates_flush, rates_ingest, rates_measure, rates_names, rates_price, rates_read, rates_service, rates_view, report_contract, report_flows, report_meta, report_progress, time_value, trade_report, xp_rates, xp_service};
+pub use lifescape_orch_stats_model::{errors_aggregate, errors_model, flow_causes, rates_estimator, rates_parse, report_contract, report_flows, report_meta, report_progress};
 pub mod heartbeat_flows;
 pub mod push_conn;
 pub mod session;

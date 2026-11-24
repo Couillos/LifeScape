@@ -20,7 +20,7 @@ lifescape-orch-core = { path = "../orch-core" }
 lifescape-orch-world = { path = "../orch-world" }
 lifescape-orch-fleet = { path = "../orch-fleet" }
 lifescape-orch-market = { path = "../orch-market" }
-lifescape-orch-stats = { path = "../orch-stats" }
+lifescape-orch-stats-model = { path = "../orch-stats-model" }
 
 [dev-dependencies]
 # Test isolation (see orch-core `test-isolation`): run/ state resolves to a temp root.
@@ -28,7 +28,6 @@ lifescape-orch-core = { path = "../orch-core", features = ["test-isolation"] }
 lifescape-sdk = { path = "../sdk", features = ["test-isolation"] }
 lifescape-store = { path = "../store", features = ["test-isolation"] }
 lifescape-orch-market = { path = "../orch-market", features = ["test-support"] }
-lifescape-orch-stats = { path = "../orch-stats", features = ["test-support"] }
 
 [lints]
 workspace = true

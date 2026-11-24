@@ -130,7 +130,6 @@ dependencies = [
  "lifescape-json",
  "lifescape-market",
  "lifescape-nav",
- "lifescape-orch-brain",
  "lifescape-orch-core",
  "lifescape-orch-fleet",
  "lifescape-orch-market",
@@ -152,6 +151,7 @@ dependencies = [
  "lifescape-orch-core",
  "lifescape-planner",
  "lifescape-scripts",
+ "lifescape-store",
 ]
 
 [[package]]
@@ -182,7 +182,7 @@ dependencies = [
  "lifescape-orch-core",
  "lifescape-orch-fleet",
  "lifescape-orch-market",
- "lifescape-orch-stats",
+ "lifescape-orch-stats-model",
  "lifescape-orch-world",
  "lifescape-planner",
  "lifescape-scripts",
@@ -201,6 +201,21 @@ dependencies = [
  "lifescape-orch-core",
  "lifescape-orch-fleet",
  "lifescape-orch-market",
+ "lifescape-orch-stats-model",
+ "lifescape-orch-world",
+ "lifescape-planner",
+ "lifescape-scripts",
+ "lifescape-sdk",
+ "lifescape-store",
+]
+
+[[package]]
+name = "lifescape-orch-stats-model"
+version = "0.1.0"
+dependencies = [
+ "lifescape-gamedata",
+ "lifescape-json",
+ "lifescape-orch-core",
  "lifescape-orch-world",
  "lifescape-planner",
  "lifescape-scripts",
@@ -216,7 +231,6 @@ dependencies = [
  "lifescape-json",
  "lifescape-market",
  "lifescape-nav",
- "lifescape-orch-brain",
  "lifescape-orch-core",
  "lifescape-orch-fleet",
  "lifescape-orch-market",

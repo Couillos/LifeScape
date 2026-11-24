@@ -266,7 +266,7 @@ pub fn build_report(
     ctx: &ReportCtx,
 ) -> TaskReport {
     let coins = (bot.tables.find_obj_by_name)("coins");
-    let trading = crate::rates_service::is_trading_method(&ctx.activity);
+    let trading = crate::rates_parse::is_trading_method(&ctx.activity);
     let mut stat_ids: Vec<u8> = before.stats.keys().chain(after.stats.keys()).copied().collect();
     stat_ids.sort_unstable();
     stat_ids.dedup();

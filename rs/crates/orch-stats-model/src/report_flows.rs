@@ -42,7 +42,7 @@ pub struct ProductionFlows {
 
 /// Activités qui ne fabriquent rien : butin de combat, jambes de marché.
 fn production_activity(activity: &str) -> bool {
-    !activity.is_empty() && activity != "melee" && !crate::rates_service::is_trading_method(activity)
+    !activity.is_empty() && activity != "melee" && !crate::rates_parse::is_trading_method(activity)
 }
 
 /// Script lancé par une méthode du planificateur (sonde d'obtention).

@@ -4,7 +4,12 @@
 
 use lifescape_json::Value;
 
-use super::LEVEL_BAND;
+/// Ticks of one normalised engagement window (one in-game hour in prod).
+pub const NORMALIZE_TICKS: f64 = 6000.0;
+/// Width of a level band: bands are 1-5, 6-10, ...
+pub const LEVEL_BAND: i64 = 5;
+/// Runs from which a measure counts (page AND brain, one threshold).
+pub const MIN_MEASURED_REPORTS: usize = 3;
 
 /// Provenances that count as farm output. `picked` is retired (D45): the
 /// SDK no longer emits or parses it, so it never rates.

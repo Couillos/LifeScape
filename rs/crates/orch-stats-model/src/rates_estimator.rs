@@ -140,7 +140,7 @@ impl Bucket {
             *self.units.entry((kind.clone(), subject.clone())).or_insert(0.0) += weight * *qty as f64;
             carried += *qty as f64;
         }
-        let rate = carried * crate::rates_service::NORMALIZE_TICKS / sample.work_ticks as f64;
+        let rate = carried * crate::rates_parse::NORMALIZE_TICKS / sample.work_ticks as f64;
         self.rate_sum += weight * rate;
         self.rate_squares += weight * rate * rate;
         self.last_clock = self.last_clock.max(sample.clock);
@@ -158,7 +158,7 @@ impl Bucket {
         if self.work_ticks <= 0.0 {
             return Vec::new();
         }
-        let scale = crate::rates_service::NORMALIZE_TICKS / self.work_ticks;
+        let scale = crate::rates_parse::NORMALIZE_TICKS / self.work_ticks;
         self.flows.iter().map(|((item, cause), sum)| (item.clone(), cause.clone(), sum * scale)).collect()
     }
 
@@ -167,7 +167,7 @@ impl Bucket {
         if self.work_ticks <= 0.0 {
             return Vec::new();
         }
-        let scale = crate::rates_service::NORMALIZE_TICKS / self.work_ticks;
+        let scale = crate::rates_parse::NORMALIZE_TICKS / self.work_ticks;
         self.units.iter().map(|((kind, subject), sum)| (kind.clone(), subject.clone(), sum * scale)).collect()
     }
 
@@ -187,7 +187,7 @@ impl Bucket {
 
     /// Pause ticks per 6000 work ticks.
     pub fn pause_per_6000(&self) -> f64 {
-        if self.work_ticks <= 0.0 { 0.0 } else { self.pause_ticks * crate::rates_service::NORMALIZE_TICKS / self.work_ticks }
+        if self.work_ticks <= 0.0 { 0.0 } else { self.pause_ticks * crate::rates_parse::NORMALIZE_TICKS / self.work_ticks }
     }
 }
 

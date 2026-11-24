@@ -17,6 +17,7 @@ lifescape-market = { path = "../market" }
 lifescape-planner = { path = "../planner" }
 lifescape-store = { path = "../store" }
 lifescape-orch-core = { path = "../orch-core" }
+lifescape-orch-stats-model = { path = "../orch-stats-model" }
 lifescape-orch-world = { path = "../orch-world" }
 lifescape-orch-fleet = { path = "../orch-fleet" }
 lifescape-orch-market = { path = "../orch-market" }

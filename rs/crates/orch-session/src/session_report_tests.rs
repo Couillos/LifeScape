@@ -225,7 +225,7 @@ fn report_json_carries_the_contract() {
     let bare = report_value("t01", &build_report(&bot, &before, &empty_bank(), &after, &empty_bank(), &ctx("woodcut", "goal_reached")));
     assert_eq!((bare.get("method_source").as_str(), bare.get("planner_method").as_str()), (Some("none"), Some("")));
     // The legacy rates parser reads the contract-2 report unchanged.
-    let legacy = crate::rates_service::parse_report(&value).expect("legacy parse");
+    let legacy = crate::rates_parse::parse_report(&value).expect("legacy parse");
     assert_eq!((legacy.method.as_str(), legacy.items.len()), ("woodcut", 1));
 }
 

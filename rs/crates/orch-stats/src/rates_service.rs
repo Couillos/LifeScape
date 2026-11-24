@@ -28,12 +28,10 @@ use std::sync::Arc;
 mod trading;
 #[path = "web_rates.rs"]
 mod web_rates;
-#[path = "rates_parse.rs"]
-mod parse;
 #[path = "rates_snapshot_io.rs"]
 mod snapshot_io;
 
-pub use parse::*;
+pub use crate::rates_parse::*;
 pub use snapshot_io::{install_snapshot_path, rebuild_from_store, snapshot_path};
 pub(crate) use snapshot_io::write_snapshot_file;
 #[cfg(any(test, feature = "test-support"))]
@@ -44,13 +42,6 @@ use snapshot_io::global_snapshot;
 use crate::rates_estimator::YieldBook;
 use crate::rates_measure::{admit, xp_gaps, Admission};
 use crate::report_contract::ParsedContract;
-
-/// Ticks of one normalised engagement window (one in-game hour in prod).
-pub const NORMALIZE_TICKS: f64 = 6000.0;
-/// Width of a level band: bands are 1-5, 6-10, ...
-pub const LEVEL_BAND: i64 = 5;
-/// Runs from which a measure counts (page AND brain, one threshold).
-pub const MIN_MEASURED_REPORTS: usize = 3;
 
 /// Whole rates state: the yield estimator and the merchant book.
 #[derive(Clone, Debug, Default)]
