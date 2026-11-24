@@ -199,3 +199,20 @@ test("a candle's change and amplitude in percent (user 2026-11-18)", () => {
   const falling = LifeChart.candleTooltip(1_700_000_000, 3600, { o: 10, h: 10, l: 5, c: 5, v: 1 });
   assert.deepEqual(falling[2], { text: 'Variation -50.0%', color: LifeChart.DOWN });
 });
+
+test('lineRuns splits on gaps, or bridges them without extending the ends', () => {
+  const rows = [null, 1, 2, null, null, 5, null];
+  assert.deepEqual(LifeChart.lineRuns(rows, false), [[1, 2], [5]]);
+  assert.deepEqual(LifeChart.lineRuns(rows, true), [[1, 2, 5]]);
+  assert.deepEqual(LifeChart.lineRuns([null, null], true), []);
+  assert.deepEqual(LifeChart.lineRuns([3], true), [[0]]);
+});
+
+test('leadEdge interpolates across the left edge only when a gap crosses it', () => {
+  const points = [{ t: 0, v: 10 }, { t: 100, v: 30 }, { t: 200, v: 40 }];
+  assert.equal(LifeChart.leadEdge(points, 50), 20);
+  assert.equal(LifeChart.leadEdge(points, 100), null, 'a point on the edge: no gap');
+  assert.equal(LifeChart.leadEdge(points, -10), null, 'nothing before');
+  assert.equal(LifeChart.leadEdge(points, 250), null, 'nothing after');
+  assert.equal(LifeChart.leadEdge([], 5), null);
+});

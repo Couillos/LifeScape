@@ -332,11 +332,16 @@ function draw() {
   const now = Math.floor(Date.now() / 1000);
   const from = Math.floor(now / width) * width - (count - 1) * width;
   const slots = LifeChart.slotStarts(from, width, count);
-  // Fixed slots (§6.1): sparse measures align, empty slots stay gaps.
-  const aligned = LifeChart.fillSlots(slots, ((curve && curve.res === res) ? curve.points : []) || []);
+  // Fixed slots (§6.1): sparse measures align; the empty slots of a
+  // downtime are bridged by a straight segment (user 2026-11-24).
+  const points = ((curve && curve.res === res) ? curve.points : []) || [];
+  const aligned = LifeChart.fillSlots(slots, points);
   const rows = aligned.map(row => row ? row.v : null);
+  // A downtime crossing the left edge: the line starts there, on the
+  // segment from the last point before the window.
+  const leadValue = rows[0] === null ? LifeChart.leadEdge(points, from) : null;
   LifeChart.draw(canvas, {
-    slots, width, kind: 'line', rows,
+    slots, width, kind: 'line', rows, bridgeGaps: true, leadValue,
     leftTitle: 'Nombre d’objets',
     legend: [{ swatch: 'line', color: LifeChart.UP, label: title() + ' — en direct : ' + live }],
     live: true,

@@ -162,6 +162,13 @@ mêmes comptes que la liste) ; `GET /api/items/history?res=&index=<key>`
 sert la courbe de l'indice (somme par créneau de `holdings_hourly` /
 `holdings_daily`, `Store::hourly_points_sum`). Clic sur un indice : sa
 courbe et la liste filtrée sur ses objets ; « Total » efface le filtre.
+Trous de la courbe (2026-11-24) : les heures sans relevé (démon arrêté)
+sont franchies par un segment droit entre les points qui les bordent
+(`bridgeGaps` de `chart.js`, `lineRuns`) ; un trou qui coupe le bord
+gauche part de la valeur interpolée au bord (`leadEdge`, avec le dernier
+point d'avant la fenêtre). Jamais prolongée avant le premier point ni
+après le dernier ; l'info-bulle ne montre que des relevés réels. Les
+autres courbes (marché, taux, erreurs) gardent leurs trous.
 Onglet « Cerveau » de la page Lives (`/life`, `brain.js`, 2026-11-13) :
 `GET /api/brain/<compte>` (`src/web_brain.rs`, lecture seule) agrège le
 fichier de vie (ambition passée telle quelle si présente, but + jalon

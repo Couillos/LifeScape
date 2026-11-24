@@ -4,7 +4,7 @@
 // hover and touch tooltip with crosshair, live end.
 // Series: `candles` (market OHLCV) and `line` (holdings curve).
 //
-// Pure helpers (slotStarts, liveSlots, fillSlots, carryFlat, candleColor, niceTicks, axisLabel, candleTooltip,
+// Pure helpers (slotStarts, liveSlots, fillSlots, lineRuns, leadEdge, carryFlat, candleColor, niceTicks, axisLabel, candleTooltip,
 // volumeSplit, volumeScaleMax, foldPrint) touch no
 // DOM, so `node --test chart.test.js` covers them; draw() needs a canvas.
 const LifeChart = (() => {
@@ -31,6 +31,38 @@ const LifeChart = (() => {
     const byTime = new Map();
     for (const row of rows || []) byTime.set(row.t, row);
     return slots.map((start) => byTime.get(start) || null);
+  }
+
+  // Index runs of a line series, each drawn as one stroke. A null row
+  // splits the line (a gap), unless `bridge` (holdings, user 2026-11-24:
+  // a downtime leaves empty hours, joined by a straight segment between
+  // the points around them). Never extended before the first point or
+  // past the last one.
+  function lineRuns(rows, bridge) {
+    const runs = [];
+    let run = null;
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i] === null || rows[i] === undefined) {
+        if (!bridge) run = null;
+        continue;
+      }
+      if (!run) { run = []; runs.push(run); }
+      run.push(i);
+    }
+    return runs;
+  }
+
+  // Value at the window's left edge `from` when a gap crosses it: the
+  // straight line between the last point before `from` and the first one
+  // after it (sorted `{t, v}`). Null when no gap crosses the edge.
+  function leadEdge(points, from) {
+    let prev = null, next = null;
+    for (const point of points || []) {
+      if (point.t < from) prev = point;
+      else { next = point; break; }
+    }
+    if (!prev || !next || next.t === from) return null;
+    return prev.v + (next.v - prev.v) * (from - prev.t) / (next.t - prev.t);
   }
 
   // Graduated ticks covering [lo, hi]: round 1/2/2.5/5 steps, at most
@@ -229,6 +261,8 @@ const LifeChart = (() => {
 
   // Full render. Model:
   // { slots, width, kind: 'candles'|'line', rows (aligned, null = empty),
+  //   bridgeGaps (line: join the points around empty slots), leadValue
+  //   (with bridgeGaps: value at the left edge, see leadEdge),
   //   leftTitle, rightTitle, legend: [{swatch, label}], live, emptyText,
   //   tooltipFor(slot, row) -> string[] }
   // Canvas height for a width: the 720:340 ratio, capped by `maxHeight`
@@ -285,6 +319,8 @@ const LifeChart = (() => {
         lo = Math.min(lo, row); hi = Math.max(hi, row);
       }
     }
+    const lead = model.bridgeGaps && typeof model.leadValue === 'number' ? model.leadValue : null;
+    if (lead !== null) { lo = Math.min(lo, lead); hi = Math.max(hi, lead); }
     if (!(hi > lo)) { lo -= 1; hi += 1; }
     if (model.kind === 'candles') volMax = volumeScaleMax(rows);
     if (volMax <= 0) volMax = 1;
@@ -388,12 +424,14 @@ const LifeChart = (() => {
       ctx.strokeStyle = UP;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      let pen = false;
-      for (let i = 0; i < rows.length; i++) {
-        if (rows[i] === null || rows[i] === undefined) { pen = false; continue; }
-        const x = xOf(i), y = yOf(rows[i]);
-        if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
-      }
+      lineRuns(rows, model.bridgeGaps).forEach((run, r) => {
+        // A gap crossing the left edge starts at its interpolated value.
+        if (r === 0 && lead !== null) ctx.moveTo(xOf(0), yOf(lead));
+        run.forEach((i, k) => {
+          if (k === 0 && !(r === 0 && lead !== null)) ctx.moveTo(xOf(i), yOf(rows[i]));
+          else ctx.lineTo(xOf(i), yOf(rows[i]));
+        });
+      });
       ctx.stroke();
       ctx.lineWidth = 1;
     }
@@ -590,7 +628,7 @@ const LifeChart = (() => {
   }
 
   return {
-    slotStarts, liveSlots, fillSlots, carryFlat, candleColor, niceTicks, periodLabel, axisLabel, candleTooltip, candleChangePct, candleRangePct, lineTooltip, nearestFilled, labelEvery, tickCount, spaced,
+    slotStarts, liveSlots, fillSlots, lineRuns, leadEdge, carryFlat, candleColor, niceTicks, periodLabel, axisLabel, candleTooltip, candleChangePct, candleRangePct, lineTooltip, nearestFilled, labelEvery, tickCount, spaced,
     volumeSplit, volumeScaleMax, foldPrint, draw, chartHeight, UP, DOWN, FLAT,
   };
 })();
