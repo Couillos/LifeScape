@@ -190,3 +190,146 @@ fn decoding_is_independent_of_segmentation() {
         }
     }
 }
+
+/// The pump's own shape: one blocking `recv`, then `available()` and
+/// `recv` while more is waiting (lot 6.3: `available` leaves the socket
+/// non-blocking, reads come in blocks). Same frames for any cutting.
+fn decode_pumped(seed: [i32; 4], wire: Vec<u8>, chunks: Vec<usize>, total: usize) -> Vec<(String, Vec<u8>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback bind");
+    let port = listener.local_addr().expect("local addr").port();
+    let server = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().expect("accept");
+        sock.set_nodelay(true).expect("nodelay");
+        let mut at = 0;
+        let mut sizes = chunks.into_iter().cycle();
+        while at < wire.len() {
+            let end = (at + sizes.next().expect("cycle").max(1)).min(wire.len());
+            sock.write_all(&wire[at..end]).expect("chunk");
+            at = end;
+            std::thread::sleep(Duration::from_micros(300));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    });
+    let client = TcpStream::connect(("127.0.0.1", port)).expect("loopback dial");
+    client.set_nodelay(true).expect("nodelay");
+    client.set_read_timeout(Some(Duration::from_millis(100))).expect("client read timeout");
+    let mut conn = Connection::new(Duration::from_millis(300));
+    conn.attach_for_test(client, [1, 2, 3, 4], seed);
+    let mut got = Vec::new();
+    while got.len() < total {
+        match conn.recv() {
+            Ok(frame) => got.push((frame.name, frame.body)),
+            Err(crate::error::Error::Timeout(_)) => continue,
+            Err(other) => panic!("after {} frames: {other}", got.len()),
+        }
+        while got.len() < total && conn.available().expect("available") {
+            match conn.recv() {
+                Ok(frame) => got.push((frame.name, frame.body)),
+                Err(crate::error::Error::Timeout(_)) => break,
+                Err(other) => panic!("after {} frames: {other}", got.len()),
+            }
+        }
+    }
+    server.join().expect("server thread");
+    got
+}
+
+#[test]
+fn pumped_decoding_is_independent_of_segmentation() {
+    let seed = [21, 34, 55, 89];
+    let (wire, expected) = sample_stream(seed);
+    let expected: Vec<(String, Vec<u8>)> = expected.into_iter().map(|(name, body)| (name.to_string(), body)).collect();
+    for pattern in [vec![1], vec![wire.len()], vec![2, 1, 3], vec![7], vec![255], vec![1460], vec![1, 255, 1]] {
+        let got = decode_pumped(seed, wire.clone(), pattern.clone(), expected.len());
+        assert_eq!(got, expected, "frames for cuts {:?}", &pattern[..pattern.len().min(8)]);
+    }
+}
+
+/// A send after `available()` (which leaves the socket non-blocking)
+/// goes through whole, and reads still work afterwards.
+#[test]
+fn a_send_after_available_still_goes_through() {
+    use std::io::Read;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback bind");
+    let port = listener.local_addr().expect("local addr").port();
+    let incoming_seed = [7, 11, 13, 17];
+    let server = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().expect("accept");
+        sock.set_read_timeout(Some(Duration::from_secs(5))).expect("server read timeout");
+        let mut got = [0u8; 1];
+        sock.read_exact(&mut got).expect("the keepalive arrives");
+        let mut cipher = Isaac::new(incoming_seed);
+        sock.write_all(&[171u8.wrapping_add(cipher.next_int() as u8)]).expect("frame");
+        std::thread::sleep(Duration::from_millis(300));
+    });
+    let client = TcpStream::connect(("127.0.0.1", port)).expect("loopback dial");
+    client.set_read_timeout(Some(Duration::from_millis(100))).expect("client read timeout");
+    let mut conn = Connection::new(Duration::from_millis(500));
+    conn.attach_for_test(client, [1, 2, 3, 4], incoming_seed);
+    assert!(!conn.available().expect("idle socket"), "nothing waits");
+    conn.send("NO_TIMEOUT", &[]).expect("send after a non-blocking probe");
+    let mut frame = conn.recv();
+    for _ in 0..20 {
+        if matches!(frame, Err(crate::error::Error::Timeout(_))) {
+            frame = conn.recv();
+        }
+    }
+    assert_eq!(frame.expect("the frame decodes").name, "IF_CLOSE");
+    server.join().expect("server thread");
+}
+
+/// Micro-benchmark (`--ignored --nocapture`): `available()` on a quiet
+/// socket, and a 48-frame burst consumed the pump's way.
+#[test]
+#[ignore]
+fn bench_available_and_burst() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback bind");
+    let port = listener.local_addr().expect("local addr").port();
+    let seed = [21, 34, 55, 89];
+    let (wire, expected) = sample_stream(seed);
+    let rounds = 300usize;
+    let server_wire = wire.clone();
+    let server = std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for _ in 0..rounds {
+            let (mut sock, _) = listener.accept().expect("accept");
+            sock.set_nodelay(true).expect("nodelay");
+            sock.write_all(&server_wire).expect("burst");
+            held.push(sock);
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    });
+    let mut idle_ns = 0f64;
+    let mut burst_ns = 0f64;
+    for round in 0..rounds {
+        let client = TcpStream::connect(("127.0.0.1", port)).expect("loopback dial");
+        client.set_read_timeout(Some(Duration::from_millis(500))).expect("client read timeout");
+        let mut conn = Connection::new(Duration::from_millis(500));
+        conn.attach_for_test(client, [1, 2, 3, 4], seed);
+        let mut frames = 0;
+        frames += conn.recv().map(|_| 1).expect("first frame");
+        let started = std::time::Instant::now();
+        loop {
+            while conn.available().expect("available") {
+                conn.recv().expect("frame");
+                frames += 1;
+            }
+            if frames >= expected.len() {
+                break;
+            }
+            conn.recv().expect("frame");
+            frames += 1;
+        }
+        burst_ns += started.elapsed().as_nanos() as f64;
+        if round == 0 {
+            let started = std::time::Instant::now();
+            let calls = 100_000;
+            for _ in 0..calls {
+                assert!(!conn.available().expect("available"));
+            }
+            idle_ns = started.elapsed().as_nanos() as f64 / f64::from(calls);
+        }
+    }
+    server.join().expect("server thread");
+    eprintln!("BENCH idle available(): {idle_ns:.0} ns/call; {}-frame burst: {:.0} ns/burst (incl. the probes)", expected.len(), burst_ns / rounds as f64);
+}

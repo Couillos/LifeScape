@@ -445,7 +445,17 @@ pub struct Connection {
     stream: Option<TcpStream>,
     outgoing: Option<Isaac>,
     incoming: Option<Isaac>,
+    /// Bytes read from the socket in blocks, not yet consumed: the live
+    /// part is `buffer[buffer_head..]` (a cursor, so serving a field never
+    /// shifts the rest).
     buffer: Vec<u8>,
+    buffer_head: usize,
+    /// Reusable receive block (one read takes whatever the socket holds).
+    block: Vec<u8>,
+    /// The socket is in non-blocking mode (`available` leaves it there; a
+    /// read that must wait and a write switch it back, so the mode is
+    /// toggled when it changes, not at every check).
+    nonblocking: bool,
     packet_index: u64,
     timeout: Duration,
     last_send: Option<Instant>,
@@ -485,7 +495,7 @@ fn read_wait(kind: std::io::ErrorKind) -> bool {
 
 impl Connection {
     pub fn new(timeout: Duration) -> Connection {
-        Connection { stream: None, outgoing: None, incoming: None, buffer: Vec::new(), packet_index: 0, timeout, last_send: None, sent_total: 0, sent_window_start: None, sent_window: 0, last_op: String::new(), recent_ops: Vec::new(), pending: None, recent_frames: std::collections::VecDeque::new() }
+        Connection { stream: None, outgoing: None, incoming: None, buffer: Vec::new(), buffer_head: 0, block: Vec::new(), nonblocking: false, packet_index: 0, timeout, last_send: None, sent_total: 0, sent_window_start: None, sent_window: 0, last_op: String::new(), recent_ops: Vec::new(), pending: None, recent_frames: std::collections::VecDeque::new() }
     }
 
     /// The last decoded frames, oldest first (`name op=N len=L`).
@@ -524,7 +534,8 @@ impl Connection {
             .map_err(|err| Error::Io(format!("cannot connect to {address}: {err}")))?;
         stream.set_read_timeout(Some(Duration::from_millis(500))).map_err(Error::from)?;
         self.stream = Some(stream);
-        self.buffer.clear();
+        self.nonblocking = false;
+        self.clear_buffer();
         self.pending = None;
         self.recent_frames.clear();
         Ok(())
@@ -543,7 +554,7 @@ impl Connection {
     /// its script from wherever the server put the bot.
     pub fn drop_desynced(&mut self, detail: &str) -> Error {
         self.close();
-        self.buffer.clear();
+        self.clear_buffer();
         self.pending = None;
         Error::Io(format!("protocol desync, connection dropped: {detail}"))
     }
@@ -694,29 +705,78 @@ impl Connection {
         Ok(Frame { opcode, name: name.to_string(), body })
     }
 
-    /// True when the server already sent more than we read. Non-blocking
-    /// on purpose: a client that waits here falls behind the tick.
-    pub fn available(&mut self) -> Result<bool> {
-        if !self.buffer.is_empty() {
-            return Ok(true);
+    fn clear_buffer(&mut self) {
+        self.buffer.clear();
+        self.buffer_head = 0;
+    }
+
+    /// Bytes received and not yet consumed.
+    fn buffered(&self) -> usize {
+        self.buffer.len() - self.buffer_head
+    }
+
+    /// Socket mode, set only when it differs (one syscall per change).
+    fn set_nonblocking(&mut self, nonblocking: bool) -> Result<()> {
+        if self.nonblocking == nonblocking {
+            return Ok(());
         }
         let stream = self.stream.as_mut().ok_or_else(|| Error::Io("no socket".to_string()))?;
-        stream.set_nonblocking(true).map_err(Error::from)?;
-        let mut chunk = [0u8; 65536];
-        let outcome = stream.read(&mut chunk);
-        let _ = stream.set_nonblocking(false);
-        match outcome {
+        stream.set_nonblocking(nonblocking).map_err(Error::from)?;
+        self.nonblocking = nonblocking;
+        Ok(())
+    }
+
+    /// One read of whatever the socket holds (up to 64 KiB) appended to
+    /// the buffer, in the socket's current mode. The outer error is "no
+    /// socket"; the inner one is the read's own (timeout, would-block...).
+    fn read_block(&mut self) -> Result<std::io::Result<usize>> {
+        const BLOCK: usize = 65536;
+        let stream = self.stream.as_mut().ok_or_else(|| Error::Io("no socket".to_string()))?;
+        if self.block.len() < BLOCK {
+            self.block.resize(BLOCK, 0);
+        }
+        let outcome = stream.read(&mut self.block);
+        if let Ok(got) = outcome {
+            if self.buffer_head == self.buffer.len() {
+                self.buffer.clear();
+                self.buffer_head = 0;
+            }
+            self.buffer.extend_from_slice(&self.block[..got]);
+        }
+        Ok(outcome)
+    }
+
+    /// The close error of a read (no send-window figure).
+    fn closed_error_plain(&self) -> Error {
+        Error::Io(format!("server closed the socket (sent_total={} last_op={} ops=[{}])", self.sent_total, self.last_op, self.ops_ring()))
+    }
+
+    fn closed_error(&self, window: u64) -> Error {
+        Error::Io(format!("server closed the socket (sent_total={} sent_last10s={} last_op={} ops=[{}])", self.sent_total, window, self.last_op, self.ops_ring()))
+    }
+
+    /// True when the server already sent more than we read. Non-blocking
+    /// on purpose: a client that waits here falls behind the tick. Bytes
+    /// already received count without touching the socket; otherwise one
+    /// non-blocking read (the mode switch only when the socket was not
+    /// already non-blocking).
+    pub fn available(&mut self) -> Result<bool> {
+        if self.buffered() > 0 {
+            return Ok(true);
+        }
+        if self.stream.is_none() {
+            return Err(Error::Io("no socket".to_string()));
+        }
+        self.set_nonblocking(true)?;
+        match self.read_block()? {
             Ok(0) => {
                 let window = match self.sent_window_start {
                     Some(start) if start.elapsed() < Duration::from_secs(10) => self.sent_window,
                     _ => 0,
                 };
-                Err(Error::Io(format!("server closed the socket (sent_total={} sent_last10s={} last_op={} ops=[{}])", self.sent_total, window, self.last_op, self.ops_ring())))
+                Err(self.closed_error(window))
             }
-            Ok(got) => {
-                self.buffer.extend_from_slice(&chunk[..got]);
-                Ok(true)
-            }
+            Ok(_) => Ok(true),
             Err(err) if err.kind() == std::io::ErrorKind::WouldBlock || err.kind() == std::io::ErrorKind::Interrupted => Ok(false),
             Err(err) => Err(Error::from(err)),
         }
@@ -747,6 +807,9 @@ impl Connection {
     }
 
     fn write_packet(&mut self, data: &[u8]) -> Result<()> {
+        // Writes want the blocking socket (`available` may have left it
+        // non-blocking).
+        self.set_nonblocking(false)?;
         let stream = self.stream.as_mut().ok_or_else(|| Error::Io("no socket".to_string()))?;
         let outcome = stream.write_all(data).map_err(|error| {
             let now = Instant::now();
@@ -784,17 +847,27 @@ impl Connection {
         let deadline = Instant::now() + self.timeout.min(Self::READ_BUDGET);
         let mut keepalive_sent = false;
         while out.len() < length {
-            if !self.buffer.is_empty() {
-                let take = (length - out.len()).min(self.buffer.len());
-                out.extend_from_slice(&self.buffer[..take]);
-                self.buffer.drain(..take);
+            if self.buffered() > 0 {
+                let take = (length - out.len()).min(self.buffered());
+                out.extend_from_slice(&self.buffer[self.buffer_head..self.buffer_head + take]);
+                self.buffer_head += take;
                 continue;
             }
-            let stream = self.stream.as_mut().ok_or_else(|| Error::Io("no socket".to_string()))?;
-            let mut chunk = vec![0u8; length - out.len()];
-            match stream.read(&mut chunk) {
-                Ok(0) => return Err(Error::Io(format!("server closed the socket (sent_total={} last_op={} ops=[{}])", self.sent_total, self.last_op, self.ops_ring()))),
-                Ok(got) => out.extend_from_slice(&chunk[..got]),
+            // Buffer empty. Left non-blocking by `available`: data may
+            // already wait (no mode switch then); only when nothing does,
+            // switch back and wait under the read timeout.
+            if self.nonblocking {
+                match self.read_block()? {
+                    Ok(0) => return Err(self.closed_error_plain()),
+                    Ok(_) => continue,
+                    Err(err) if read_wait(err.kind()) => {}
+                    Err(err) => return Err(Error::from(err)),
+                }
+                self.set_nonblocking(false)?;
+            }
+            match self.read_block()? {
+                Ok(0) => return Err(self.closed_error_plain()),
+                Ok(_) => {}
                 Err(err) if read_wait(err.kind()) => {
                     let now = Instant::now();
                     // One forced keepalive per stalled read: enough to
@@ -808,8 +881,9 @@ impl Connection {
                     if now > deadline {
                         // All or nothing: the bytes read so far go back in
                         // front of the buffer, the next read resumes them.
-                        out.extend(self.buffer.drain(..));
+                        // (The buffer is empty here: nothing was left to serve.)
                         self.buffer = out;
+                        self.buffer_head = 0;
                         return Err(Error::Timeout(format!("read timed out after {}s", self.timeout.min(Self::READ_BUDGET).as_secs())));
                     }
                 }
