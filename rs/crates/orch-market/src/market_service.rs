@@ -13,6 +13,7 @@
 //! ledger at match time; a later `failed` report refunds the transfer
 //! and both sides keep their reliability counters.
 
+use lifescape_scripts::market_ops::MarketOp;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -531,31 +532,31 @@ impl MarketService {
     /// One JSON-lines request in, one reply out. Pure dispatch: every
     /// op below is also covered by the service tests over fake clients.
     pub fn handle(&self, request: &Value) -> Value {
-        match request.get("op").as_str().unwrap_or("") {
-            "quote" => self.op_quote(request),
-            "book" => self.op_book(request),
-            "history" => self.op_history(request),
-            "trades" => self.op_trades(request),
-            "list" => self.op_list(request),
-            "place" => self.op_place(request),
-            "amend" => self.op_amend(request),
-            "cancel" => self.op_cancel(request),
-            "my_orders" => self.op_my_orders(request),
-            "my_deals" => self.op_my_deals(request),
-            "recent" => self.op_recent(request),
-            "deal_arrived" => self.op_deal_arrived(request),
-            "deal_report" => self.op_deal_report(request),
-            "pending" => self.op_pending(request),
-            "convene" => self.op_convene(request),
-            "sweep" => self.op_sweep(request),
-            "fund" => self.op_fund(request),
-            "tick" => self.op_tick(request),
-            "stats" => self.op_stats(),
-            "seller_quote" => crate::market_facts::seller_quote(self, request),
-            other => object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value(&format!("unknown market op '{other}'"))),
-            ]),
+        let op = match MarketOp::of(request) {
+            Ok(op) => op,
+            Err(refusal) => return object(vec![("ok", Value::Bool(false)), ("error", str_value(&refusal))]),
+        };
+        match op {
+            MarketOp::Quote => self.op_quote(request),
+            MarketOp::Book => self.op_book(request),
+            MarketOp::History => self.op_history(request),
+            MarketOp::Trades => self.op_trades(request),
+            MarketOp::List => self.op_list(request),
+            MarketOp::Place => self.op_place(request),
+            MarketOp::Amend => self.op_amend(request),
+            MarketOp::Cancel => self.op_cancel(request),
+            MarketOp::MyOrders => self.op_my_orders(request),
+            MarketOp::MyDeals => self.op_my_deals(request),
+            MarketOp::Recent => self.op_recent(request),
+            MarketOp::DealArrived => self.op_deal_arrived(request),
+            MarketOp::DealReport => self.op_deal_report(request),
+            MarketOp::Pending => self.op_pending(request),
+            MarketOp::Convene => self.op_convene(request),
+            MarketOp::Sweep => self.op_sweep(request),
+            MarketOp::Fund => self.op_fund(request),
+            MarketOp::Tick => self.op_tick(request),
+            MarketOp::Stats => self.op_stats(),
+            MarketOp::SellerQuote => crate::market_facts::seller_quote(self, request),
         }
     }
 

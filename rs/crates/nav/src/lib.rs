@@ -50,6 +50,7 @@ mod service_admission;
 mod service_caches;
 mod service_counters;
 mod service_fast;
+pub mod service_ops;
 mod service_reads;
 #[cfg(test)]
 mod service_costs_tests;

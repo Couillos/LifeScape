@@ -17,25 +17,8 @@ use lifescape_json::{object, str_value, Value};
 use crate::plan;
 use crate::service::Snapshot;
 use crate::service_counters::Counters;
+use crate::service_ops::ReadOp;
 use crate::service_queries as queries;
-
-/// True when `op` is one of the grouped reads.
-pub(crate) fn is_read(op: &str) -> bool {
-    matches!(
-        op,
-        "door_defs"
-            | "tiles_flags"
-            | "static_locs_near"
-            | "in_f2p"
-            | "toll_fence"
-            | "wants"
-            | "diff"
-            | "debug"
-            | "transitions_list"
-            | "probe_targets"
-            | "doors_near"
-    )
-}
 
 fn failure(error: &str, version: &str) -> Value {
     object(vec![("ok", Value::Bool(false)), ("error", str_value(error)), ("version", str_value(version))])
@@ -53,20 +36,17 @@ pub(crate) fn stale_refusal(request: &Value, version: &str, counters: &Counters)
     Some(failure(&format!("refused:stale-version client={client_version} server={version}"), version))
 }
 
-/// Serve one grouped read off `snapshot`, or `None` when `op` is not one.
-pub(crate) fn serve(op: &str, snapshot: &Snapshot, request: &Value, counters: &Counters) -> Option<Value> {
-    if !is_read(op) {
-        return None;
-    }
+/// Serve one grouped read off `snapshot`.
+pub(crate) fn serve(op: ReadOp, snapshot: &Snapshot, request: &Value, counters: &Counters) -> Value {
     let version = snapshot.version.as_str();
     if let Some(refusal) = stale_refusal(request, version, counters) {
-        return Some(refusal);
+        return refusal;
     }
     let served = |counter: &std::sync::atomic::AtomicU64| {
         counter.fetch_add(1, Ordering::Relaxed);
     };
-    Some(match op {
-        "door_defs" => match queries::parse_door_defs_request(request) {
+    match op {
+        ReadOp::DoorDefs => match queries::parse_door_defs_request(request) {
             Err(error) => failure(&error, version),
             Ok(locs) => {
                 let defs = queries::door_defs(snapshot, &locs);
@@ -74,7 +54,7 @@ pub(crate) fn serve(op: &str, snapshot: &Snapshot, request: &Value, counters: &C
                 queries::encode_door_defs_reply(&defs, version)
             }
         },
-        "tiles_flags" => match queries::parse_tiles_flags_request(request) {
+        ReadOp::TilesFlags => match queries::parse_tiles_flags_request(request) {
             Err(error) => failure(&error, version),
             Ok(tiles) => {
                 let rows = queries::tiles_flags(snapshot, &tiles);
@@ -82,7 +62,7 @@ pub(crate) fn serve(op: &str, snapshot: &Snapshot, request: &Value, counters: &C
                 queries::encode_tiles_flags_reply(&rows, version)
             }
         },
-        "static_locs_near" => match queries::parse_static_locs_near_request(request) {
+        ReadOp::StaticLocsNear => match queries::parse_static_locs_near_request(request) {
             Err(error) => failure(&error, version),
             Ok(center) => {
                 let locs = queries::static_locs_near(snapshot, center.0, center.1, center.2, center.3);
@@ -90,7 +70,7 @@ pub(crate) fn serve(op: &str, snapshot: &Snapshot, request: &Value, counters: &C
                 queries::encode_static_locs_near_reply(&locs, version)
             }
         },
-        "in_f2p" => match queries::parse_tiles_flags_request(request) {
+        ReadOp::InF2p => match queries::parse_tiles_flags_request(request) {
             Err(error) => failure(&error, version),
             Ok(tiles) => {
                 let inside = queries::in_f2p_batch(snapshot, &tiles);
@@ -98,19 +78,19 @@ pub(crate) fn serve(op: &str, snapshot: &Snapshot, request: &Value, counters: &C
                 queries::encode_in_f2p_reply(&inside, version)
             }
         },
-        "toll_fence" => match queries::parse_toll_fence_request(request) {
+        ReadOp::TollFence => match queries::parse_toll_fence_request(request) {
             Err(error) => failure(&error, version),
             Ok(center) => {
                 served(&counters.toll_fence_served);
                 toll_fence(snapshot, request, center, version)
             }
         },
-        "wants" => {
+        ReadOp::Wants => {
             let tags = queries::wants(snapshot);
             served(&counters.wants_served);
             queries::encode_wants_reply(&tags, version)
         }
-        "diff" => match queries::parse_diff_request(request) {
+        ReadOp::Diff => match queries::parse_diff_request(request) {
             Err(error) => failure(&error, version),
             Ok(cells) => {
                 let entries = queries::diff_cells(snapshot, &cells);
@@ -121,7 +101,7 @@ pub(crate) fn serve(op: &str, snapshot: &Snapshot, request: &Value, counters: &C
         // The Dijkstra runs inline on the reader thread (admin-only, one
         // caller): a slow exhaustive NoRoute still lands inside the poll
         // guard.
-        "debug" => match queries::parse_debug_request(request) {
+        ReadOp::Debug => match queries::parse_debug_request(request) {
             Err(error) => failure(&error, version),
             Ok((from, dest, options)) => {
                 let (flags_here, flags_dest, locs, defs) = queries::debug_static(snapshot, &from, &dest);
@@ -130,18 +110,18 @@ pub(crate) fn serve(op: &str, snapshot: &Snapshot, request: &Value, counters: &C
                 queries::encode_debug_reply(flags_here, flags_dest, &locs, &defs, &outcome, version)
             }
         },
-        "transitions_list" => {
+        ReadOp::TransitionsList => {
             let rows = queries::transitions_list(snapshot);
             served(&counters.transitions_list_served);
             queries::encode_transitions_list_reply(&rows, version)
         }
-        "probe_targets" => {
+        ReadOp::ProbeTargets => {
             let filter = request.get("filter").as_str().map(str::to_string);
             let targets = queries::probe_targets(snapshot, filter.as_deref());
             served(&counters.probe_targets_served);
             queries::encode_probe_targets_reply(&targets, version)
         }
-        "doors_near" => match queries::parse_center_radius(request) {
+        ReadOp::DoorsNear => match queries::parse_center_radius(request) {
             Err(error) => failure(&error, version),
             Ok(center) => {
                 let doors = queries::doors_near(snapshot, center.0, center.1, center.2, center.3);
@@ -149,8 +129,7 @@ pub(crate) fn serve(op: &str, snapshot: &Snapshot, request: &Value, counters: &C
                 queries::encode_static_locs_near_reply(&doors, version)
             }
         },
-        _ => unreachable!("is_read lists exactly the ops above"),
-    })
+    }
 }
 
 /// Nearest toll-gate tile within the radius, or null. With a covering
@@ -188,33 +167,21 @@ mod tests {
     }
 
     #[test]
-    fn only_the_grouped_ops_are_reads() {
-        for op in ["door_defs", "tiles_flags", "static_locs_near", "in_f2p", "toll_fence", "wants", "diff", "debug", "transitions_list", "probe_targets", "doors_near"] {
-            assert!(is_read(op), "{op}");
-        }
-        for op in ["submit", "poll", "cancel", "walk_costs", "stats", "plan", ""] {
-            assert!(!is_read(op), "{op}");
-        }
-        let counters = Counters::default();
-        assert!(serve("poll", &snapshot(), &request("poll", vec![]), &counters).is_none());
-    }
-
-    #[test]
     fn a_skewed_version_is_refused_and_counted_before_anything_runs() {
         let snapshot = snapshot();
         let counters = Counters::default();
         let skewed = request("transitions_list", vec![("version", str_value("another-version"))]);
-        let reply = serve("transitions_list", &snapshot, &skewed, &counters).expect("a read");
+        let reply = serve(ReadOp::TransitionsList, &snapshot, &skewed, &counters);
         assert_eq!(reply.get("ok").as_bool(), Some(false));
         assert!(reply.get("error").as_str().unwrap().starts_with("refused:stale-version client=another-version"));
         assert_eq!(reply.get("version").as_str(), Some(snapshot.version.as_str()));
         assert_eq!(counters.refused_stale.load(Ordering::Relaxed), 1);
         assert_eq!(counters.transitions_list_served.load(Ordering::Relaxed), 0, "nothing was served");
         // No version pinned, or the served one: read.
-        let plain = serve("transitions_list", &snapshot, &request("transitions_list", vec![]), &counters).expect("a read");
+        let plain = serve(ReadOp::TransitionsList, &snapshot, &request("transitions_list", vec![]), &counters);
         assert_eq!(plain.get("ok").as_bool(), Some(true));
         let pinned = request("transitions_list", vec![("version", str_value(&snapshot.version))]);
-        assert_eq!(serve("transitions_list", &snapshot, &pinned, &counters).expect("a read").get("ok").as_bool(), Some(true));
+        assert_eq!(serve(ReadOp::TransitionsList, &snapshot, &pinned, &counters).get("ok").as_bool(), Some(true));
         assert_eq!(counters.transitions_list_served.load(Ordering::Relaxed), 2);
     }
 
@@ -222,7 +189,7 @@ mod tests {
     fn a_bad_request_answers_a_failure_frame_with_the_version() {
         let snapshot = snapshot();
         let counters = Counters::default();
-        let reply = serve("door_defs", &snapshot, &request("door_defs", vec![]), &counters).expect("a read");
+        let reply = serve(ReadOp::DoorDefs, &snapshot, &request("door_defs", vec![]), &counters);
         assert_eq!(reply.get("ok").as_bool(), Some(false));
         assert!(reply.get("error").as_str().is_some());
         assert_eq!(reply.get("version").as_str(), Some(snapshot.version.as_str()));
@@ -233,12 +200,12 @@ mod tests {
     fn reads_count_one_batch_each_and_match_the_pure_functions() {
         let snapshot = snapshot();
         let counters = Counters::default();
-        let wants = serve("wants", &snapshot, &request("wants", vec![]), &counters).expect("a read");
+        let wants = serve(ReadOp::Wants, &snapshot, &request("wants", vec![]), &counters);
         let tags = queries::decode_wants_reply(&wants).expect("decodes");
         assert_eq!(tags, queries::wants(&snapshot), "the frame carries the pure read");
         assert_eq!(counters.wants_served.load(Ordering::Relaxed), 1);
         let tiles = Value::Arr(vec![Value::Arr(vec![Value::Int(3222), Value::Int(3218), Value::Int(0)])]);
-        let flags = serve("tiles_flags", &snapshot, &request("tiles_flags", vec![("tiles", tiles)]), &counters).expect("a read");
+        let flags = serve(ReadOp::TilesFlags, &snapshot, &request("tiles_flags", vec![("tiles", tiles)]), &counters);
         let rows = queries::decode_tiles_flags_reply(&flags).expect("decodes");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].flags, snapshot.world.get(3222, 3218, 0));

@@ -12,11 +12,10 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use lifescape_json::{object, str_value, Value};
-
 use crate::fast_hop::FAST_RADIUS;
 use crate::plan::{Plan, Tile};
-use crate::service::{encode_plan, parse_tile};
+use crate::service::encode_plan;
+use crate::service_ops::{PlanRequest, PlanTerminal};
 
 /// Fast path counters (`stats` op, `nav-stats`, `cpu-profile nav`).
 #[derive(Default)]
@@ -44,25 +43,19 @@ impl FastCounters {
 
 /// Start and destination of a short same-level request, else `None`
 /// (two tile reads: a long request costs nothing more here).
-pub(crate) fn short_pair(request: &Value) -> Option<(Tile, Tile)> {
-    let from = parse_tile(request.get("from")).ok()?;
-    let dest = parse_tile(request.get("dest")).ok()?;
+pub(crate) fn short_pair(request: &PlanRequest) -> Option<(Tile, Tile)> {
+    let (from, dest) = (request.from, request.dest);
     (from.level == dest.level && from.chebyshev(dest) <= FAST_RADIUS).then_some((from, dest))
 }
 
 /// True when the client pinned another snapshot version: the usual path
 /// refuses it stale (the worker learns the version), never the fast one.
-pub(crate) fn version_skew(request: &Value, served: &str) -> bool {
-    let client = request.get("version").as_str().unwrap_or("");
+pub(crate) fn version_skew(request: &PlanRequest, served: &str) -> bool {
+    let client = request.version.as_str();
     !client.is_empty() && !served.is_empty() && client != served
 }
 
-/// Terminal `plan` frame, same shape as a waited one (`plan_once`).
-pub(crate) fn ready_reply(plan: &Plan, version: &str) -> Value {
-    object(vec![
-        ("ok", Value::Bool(true)),
-        ("outcome", str_value("ready")),
-        ("plan", encode_plan(plan)),
-        ("version", str_value(version)),
-    ])
+/// Terminal outcome of a short hop, same as a waited one (`plan_once`).
+pub(crate) fn ready(plan: &Plan, version: &str) -> PlanTerminal {
+    PlanTerminal::Ready { plan: encode_plan(plan), version: version.to_string() }
 }

@@ -30,6 +30,7 @@
 //!   and an object an open obtain node wants (its need takes the
 //!   lineage over).
 
+use lifescape_scripts::market_ops::MarketOp;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Mutex, OnceLock};
 
@@ -213,7 +214,7 @@ pub fn stock_pass(job: &Job, life: &Life, live: &Value, deps: &crate::brain_deps
     }
     let wanted = crate::brain_wishlist::wanted_names(life);
     for (order, reason) in stale_stock(&rows, &plan, &claimed, &wanted, &name_of) {
-        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(&job.account)), ("order", Value::Int(order)), ("reason", str_value(reason))]));
+        let reply = service.handle(&object(vec![MarketOp::Cancel.field(), ("account", str_value(&job.account)), ("order", Value::Int(order)), ("reason", str_value(reason))]));
         crate::logln!("brain {}: stock bid {order} withdrawn ({reason}, {:?})", job.account, reply.get("ok").as_bool());
     }
     kept_table().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(job.account.clone(), plan.iter().map(|line| line.item.clone()).collect());

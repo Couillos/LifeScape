@@ -20,6 +20,7 @@
 //! brain re-adopts its resting listings (`adopt`) and its standing bids
 //! (`keep_bid`), lineage and t0 read back from the carnet.
 
+use lifescape_scripts::market_ops::MarketOp;
 use std::collections::HashMap;
 
 use lifescape_json::{object, str_value, Value};
@@ -335,7 +336,7 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
             continue;
         };
         let reply = service.handle(&object(vec![
-            ("op", str_value("amend")),
+            MarketOp::Amend.field(),
             ("account", str_value(&window.account)),
             ("order", Value::Int(order)),
             ("price", Value::Int(next)),
@@ -553,7 +554,7 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
         None => remembered.max(open_at.min(open_cap)).min(open_cap),
     };
     let reply = service.handle(&object(vec![
-        ("op", str_value("place")),
+        MarketOp::Place.field(),
         ("account", str_value(account)),
         ("side", str_value("buy")),
         ("item", Value::Int(item)),
@@ -592,7 +593,7 @@ fn amend_resting(service: &MarketService, account: &str, row: &lifescape_store::
     let trim = max_remaining.filter(|cap| *cap >= 1 && *cap < row.remaining);
     if target.is_some() || trim.is_some() {
         let next = target.unwrap_or(row.price);
-        let mut request = vec![("op", str_value("amend")), ("account", str_value(account)), ("order", Value::Int(order)), ("price", Value::Int(next)), ("per_lot", Value::Bool(true))];
+        let mut request = vec![MarketOp::Amend.field(), ("account", str_value(account)), ("order", Value::Int(order)), ("price", Value::Int(next)), ("per_lot", Value::Bool(true))];
         if let Some(cap) = trim {
             request.push(("max_remaining", Value::Int(cap)));
         }

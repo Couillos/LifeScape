@@ -125,6 +125,14 @@ fn registry() -> &'static Mutex<Option<Arc<Service>>> {
     SERVICE.get_or_init(|| Mutex::new(None))
 }
 
+/// The running service itself, for in-process callers of the daemon
+/// (`market_eta` plans through it, no socket to its own process).
+/// `None` when nav is down: the caller treats it like an unreachable
+/// socket.
+pub fn service() -> Option<Arc<Service>> {
+    registry().lock().unwrap().clone()
+}
+
 /// Daemon-side snapshot for read-only consumers (the market handover
 /// ring): the live `Arc`, or `None` when nav is down. Every worker plan
 /// still fails `nav-down`; this never plans, it only reads tiles.

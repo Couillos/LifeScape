@@ -19,6 +19,7 @@
 //!
 //! The pure rules live in `lifescape_planner::quest_hold`.
 
+use lifescape_scripts::market_ops::MarketOp;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, OnceLock};
 
@@ -96,7 +97,7 @@ pub(crate) fn release_listings(service: &MarketService, account: &str, item: &st
     for (order, cut) in release_plan(&listings, free, need) {
         let Some(row) = rows.iter().find(|row| row.order_id == order) else { continue };
         let floor = service.lock_engine().quote_bounds.get(&order).map(|bounds| bounds.floor).unwrap_or(row.price);
-        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(order))]));
+        let reply = service.handle(&object(vec![MarketOp::Cancel.field(), ("account", str_value(account)), ("order", Value::Int(order))]));
         if reply.get("ok").as_bool() != Some(true) {
             notes.push(format!("listing {order} not released ({})", reply.get("error").as_str().unwrap_or("?")));
             continue;
@@ -107,7 +108,7 @@ pub(crate) fn release_listings(service: &MarketService, account: &str, item: &st
             continue;
         }
         let placed = service.handle(&object(vec![
-            ("op", str_value("place")),
+            MarketOp::Place.field(),
             ("account", str_value(account)),
             ("side", str_value("sell")),
             ("item", Value::Int(row.item_id)),

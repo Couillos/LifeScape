@@ -10,6 +10,7 @@
 //! deals already promise, and cancels the orders that cover nothing:
 //! oldest first keep their claim, the rest go.
 
+use lifescape_scripts::market_ops::MarketOp;
 use std::collections::{BTreeMap, HashMap};
 
 use lifescape_json::Value;
@@ -358,7 +359,7 @@ impl MarketService {
         let mut done = Vec::new();
         for (order, price) in lowered {
             let reply = self.handle(&lifescape_json::object(vec![
-                ("op", lifescape_json::str_value("amend")),
+                MarketOp::Amend.field(),
                 ("account", lifescape_json::str_value(account)),
                 ("order", Value::Int(*order)),
                 ("price", Value::Int(*price)),
@@ -383,7 +384,7 @@ impl MarketService {
         let mut done = 0usize;
         for id in ids {
             let reply = self.handle(&lifescape_json::object(vec![
-                ("op", lifescape_json::str_value("cancel")),
+                MarketOp::Cancel.field(),
                 ("account", lifescape_json::str_value(account)),
                 ("order", Value::Int(*id)),
                 ("reason", lifescape_json::str_value("audit")),

@@ -34,6 +34,11 @@ pub use crate::service_codec::{decode_noroute, decode_options, decode_plan, enco
 use crate::route_cache::{Fast, PlanEntry, RouteStats, NEGATIVE_TTL};
 use crate::{route_path, route_splice};
 use crate::service_admission::{Admission, Polled, Refusal, Submitted};
+use crate::service_ops::{
+    decode_poll_reply, decode_submit_reply, encode_cancel, encode_cancel_needs_id, encode_cancel_reply, encode_fault, encode_poll,
+    encode_poll_reply, encode_refusal, encode_submit, encode_submit_reply, encode_terminal, NavOp, PlanRequest, PlanTerminal, PollReply,
+    ReadOp,
+};
 use crate::static_world::StaticWorld;
 use crate::tables::Tables;
 use crate::{costs, walk_costs};
@@ -527,44 +532,44 @@ impl Service {
             .read_line(&mut line)
             .map_err(|error| error.to_string())
             .and_then(|_| json::parse(&line).map_err(|error| error.to_string()));
+        // The frame is parsed once, here: everything below is typed.
+        let op = request.map(|frame| NavOp::parse(frame));
         // E3 fast lane: `plan` waits server-side on the bounded waiter
         // pool and answers terminal on the same connection — the 2 ms
         // poll loop never happens. The stream moves to the pool.
         // Short hops answer here, on this lane (`service_fast.rs`).
-        if let Ok(ref request) = request {
-            if request.get("op").as_str() == Some("plan") {
-                match self.fast_plan(request) {
-                    Some(reply) => {
-                        let mut buf = json::stringify(&reply);
+        let op = match op {
+            Ok(NavOp::Plan { request, wait_ms }) => {
+                let answered = request.as_ref().ok().and_then(|plan| self.fast_plan(plan));
+                match answered {
+                    Some(terminal) => {
+                        let mut buf = json::stringify(&encode_terminal(&terminal));
                         buf.push('\n');
                         let _ = (&stream).write_all(buf.as_bytes());
                     }
-                    None => self.plan_handoff(stream, request),
+                    None => self.plan_handoff(stream, crate::service_plan::PlanJob { request, wait_ms }),
                 }
                 return;
             }
-        }
-        let reply = match request {
-            Ok(request) => self.dispatch(&request),
-            Err(error) => object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value(&error)),
-            ]),
+            other => other,
+        };
+        let reply = match op {
+            Ok(op) => self.dispatch(op),
+            Err(error) => encode_fault(&error),
         };
         let mut buf = json::stringify(&reply);
         buf.push('\n');
         let _ = (&stream).write_all(buf.as_bytes());
     }
 
-    /// Terminal `plan` frame for a short hop, or `None` (usual path).
-    fn fast_plan(&self, request: &Value) -> Option<Value> {
+    /// Terminal outcome of a short hop, or `None` (usual path).
+    pub(crate) fn fast_plan(&self, request: &PlanRequest) -> Option<PlanTerminal> {
         let (from, dest) = crate::service_fast::short_pair(request)?;
         if crate::service_fast::version_skew(request, &self.version()) {
             return None;
         }
-        let options = decode_options(request.get("options")).ok()?;
-        let (plan, version) = self.fast_hop(from, dest, &options)?;
-        Some(crate::service_fast::ready_reply(&plan, &version))
+        let (plan, version) = self.fast_hop(from, dest, &request.options)?;
+        Some(crate::service_fast::ready(&plan, &version))
     }
 
     /// Short hop off the current snapshot (`fast_hop::short_hop`) and
@@ -594,77 +599,52 @@ impl Service {
     /// E3 handoff: the `plan` stream moves to the bounded waiter pool.
     /// A full waiter queue refuses loudly on the stream itself (the
     /// client falls back to submit/poll); the acceptor never blocks.
-    fn plan_handoff(&self, stream: UnixStream, request: &Value) {
+    fn plan_handoff(&self, stream: UnixStream, request: crate::service_plan::PlanJob) {
+        let refuse = |mut stream: &UnixStream, reason: &str| {
+            let mut buf = json::stringify(&encode_refusal(reason, &self.version()));
+            buf.push('\n');
+            let _ = stream.write_all(buf.as_bytes());
+        };
         let sender = self.wait_tx.lock().unwrap().clone();
         let Some(sender) = sender else {
-            let reply = object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value("refused:wait-down")),
-                ("version", str_value(&self.version())),
-            ]);
-            let mut buf = json::stringify(&reply);
-            buf.push('\n');
-            let _ = (&stream).write_all(buf.as_bytes());
+            refuse(&stream, "refused:wait-down");
             return;
         };
-        let job = crate::service_plan::WaitJob { stream, request: request.clone() };
+        let job = crate::service_plan::WaitJob { stream, request };
         if let Err(error) = sender.try_send(job) {
             // Full or disconnected: answer on the returned stream, the
             // client falls back to submit/poll. Never drop a stream
             // silently (the client would hang to its timeout).
-            let mut job = match error {
+            let job = match error {
                 mpsc::TrySendError::Full(job) => job,
                 mpsc::TrySendError::Disconnected(job) => job,
             };
-            let reply = object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value("refused:wait-full")),
-                ("version", str_value(&self.version())),
-            ]);
-            let mut buf = json::stringify(&reply);
-            buf.push('\n');
-            let _ = (&mut job.stream).write_all(buf.as_bytes());
+            refuse(&job.stream, "refused:wait-full");
         }
     }
 
-    /// Waiter-pool submit: the terminal ticket id, or the refusal frame
-    /// the client falls back on.
-    pub(crate) fn op_submit_public(&self, request: &Value) -> Result<u64, Value> {
-        let reply = self.op_submit(request);
-        if reply.get("ok").as_bool() == Some(true) {
-            match reply.get("id").as_i64() {
-                Some(id) => Ok(id as u64),
-                None => Err(reply),
-            }
-        } else {
-            Err(reply)
+    /// Waiter-pool submit: the ticket id, or the refusal that ends the
+    /// `plan` (the client falls back on it).
+    pub(crate) fn op_submit_public(&self, request: Result<PlanRequest, String>) -> Result<u64, PlanTerminal> {
+        match self.op_submit(request, false) {
+            Submit::Accepted { id, .. } => Ok(id),
+            Submit::Refused { reason, version } => Err(PlanTerminal::Refused { reason, version }),
         }
     }
 
-    /// Waiter-pool poll: terminal frames or still pending. Unknown
+    /// Waiter-pool poll: terminal outcomes or still pending. Unknown
     /// tickets surface as terminal refusals (the waiter answers and
     /// exits, never spins).
     pub(crate) fn op_poll_public(&self, id: u64) -> crate::service_plan::WaitPoll {
         use crate::service_plan::WaitPoll;
-        let reply = self.poll_slot(&object(vec![("id", Value::Int(id as i64))]));
-        if reply.get("ok").as_bool() != Some(true) {
-            return WaitPoll::Terminal(reply);
-        }
-        let version = reply.get("version").clone();
-        match reply.get("status").as_str().unwrap_or("") {
-            "ready" => WaitPoll::Terminal(object(vec![
-                ("ok", Value::Bool(true)),
-                ("outcome", str_value("ready")),
-                ("plan", reply.get("plan").clone()),
-                ("version", version),
-            ])),
-            "failed" => WaitPoll::Terminal(object(vec![
-                ("ok", Value::Bool(true)),
-                ("outcome", str_value("failed")),
-                ("error", reply.get("error").clone()),
-                ("version", version),
-            ])),
-            _ => WaitPoll::Pending,
+        match self.poll_slot(Some(id)) {
+            PollReply::Ready { plan, version } => WaitPoll::Terminal(PlanTerminal::Ready { plan, version }),
+            PollReply::Failed { error, version } => WaitPoll::Terminal(PlanTerminal::Failed { error, version }),
+            PollReply::Unknown { version } => {
+                WaitPoll::Terminal(PlanTerminal::Refused { reason: "unknown-ticket".to_string(), version })
+            }
+            PollReply::NeedsId => WaitPoll::Terminal(PlanTerminal::Refused { reason: "poll needs id".to_string(), version: String::new() }),
+            PollReply::Pending { .. } => WaitPoll::Pending,
         }
     }
 
@@ -690,29 +670,27 @@ impl Service {
         self.version()
     }
 
-    fn dispatch(&self, request: &Value) -> Value {
-        let op = request.get("op").as_str().unwrap_or("");
-        let kind = match op {
-            "walk_costs" => crate::nav_meter::Kind::WalkCosts,
-            "debug" => crate::nav_meter::Kind::Debug,
-            "toll_fence" => crate::nav_meter::Kind::TollFence,
-            "door_defs" | "tiles_flags" | "static_locs_near" | "in_f2p" | "wants" | "diff" | "transitions_list"
-            | "probe_targets" | "doors_near" => crate::nav_meter::Kind::Grouped,
+    fn dispatch(&self, op: NavOp) -> Value {
+        let kind = match &op {
+            NavOp::WalkCosts(_) => crate::nav_meter::Kind::WalkCosts,
+            NavOp::Read { op: ReadOp::Debug, .. } => crate::nav_meter::Kind::Debug,
+            NavOp::Read { op: ReadOp::TollFence, .. } => crate::nav_meter::Kind::TollFence,
+            NavOp::Read { .. } => crate::nav_meter::Kind::Grouped,
             _ => crate::nav_meter::Kind::Other,
         };
         let probe = crate::nav_meter::Probe::start();
-        let reply = self.dispatch_op(request);
+        let reply = self.dispatch_op(op);
         self.counters.meter.record(kind, probe);
         reply
     }
 
-    fn dispatch_op(&self, request: &Value) -> Value {
-        match request.get("op").as_str().unwrap_or("") {
-            "submit" => self.op_submit(request),
-            "poll" => self.op_poll(request),
-            "cancel" => self.op_cancel(request),
-            "walk_costs" => self.op_walk_costs(request),
-            "stats" => {
+    fn dispatch_op(&self, op: NavOp) -> Value {
+        match op {
+            NavOp::Submit(request) => encode_submit_reply(&self.op_submit(request, true)),
+            NavOp::Poll(id) => encode_poll_reply(&self.op_poll(id)),
+            NavOp::Cancel(id) => self.op_cancel(id),
+            NavOp::WalkCosts(request) => self.op_walk_costs(request),
+            NavOp::Stats => {
                 let stats = self.stats();
                 object(vec![
                     ("ok", Value::Bool(true)),
@@ -772,13 +750,11 @@ impl Service {
                 ])
             }
             // Grouped reads (`service_reads`): one prelude, pure reads.
-            other => match crate::service_reads::serve(other, &self.snapshot(), request, &self.counters) {
-                Some(reply) => reply,
-                None => object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&format!("unknown op {other:?}"))),
-                ]),
-            },
+            NavOp::Read { op, frame } => crate::service_reads::serve(op, &self.snapshot(), &frame, &self.counters),
+            // `plan` frames never reach the dispatch (the fast lane and
+            // the waiter pool take them); `Unknown` is every other name.
+            NavOp::Plan { .. } => encode_fault(&format!("unknown op {:?}", "plan")),
+            NavOp::Unknown(other) => encode_fault(&format!("unknown op {other:?}")),
         }
     }
 
@@ -786,56 +762,32 @@ impl Service {
         self.snapshot.lock().unwrap().version.clone()
     }
 
-    fn op_submit(&self, request: &Value) -> Value {
+    /// Ticket admission of a `submit` frame (`via_submit_frame`) or of the
+    /// waiter pool's `plan` (the fast lane already tried the short hop).
+    /// The request is typed; a fault is the refusal frame's text.
+    pub(crate) fn op_submit(&self, request: Result<PlanRequest, String>, via_submit_frame: bool) -> Submit {
         self.counters.submits_served.fetch_add(1, Ordering::Relaxed);
         let version = self.version();
-        let parsed = (|| -> Result<(String, Tile, Tile, NavOptions, String), String> {
-            let account = request
-                .get("account")
-                .as_str()
-                .ok_or_else(|| "account".to_string())?
-                .to_string();
-            let from = parse_tile(request.get("from"))?;
-            let dest = parse_tile(request.get("dest"))?;
-            let options = decode_options(request.get("options"))?;
-            let client_version = request.get("version").as_str().unwrap_or("").to_string();
-            Ok((account, from, dest, options, client_version))
-        })();
-        let (account, from, dest, options, client_version): (
-            String,
-            Tile,
-            Tile,
-            NavOptions,
-            String,
-        ) = match parsed {
+        let refused = |reason: &str| Submit::Refused { reason: reason.to_string(), version: version.clone() };
+        let parsed = request.and_then(|request| match request.account.clone() {
+            Some(account) => Ok((account, request)),
+            None => Err("account".to_string()),
+        });
+        let (account, request) = match parsed {
             Ok(parsed) => parsed,
-            Err(error) => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&error)),
-                    ("version", str_value(&version)),
-                ])
-            }
+            Err(error) => return refused(&error),
         };
+        let PlanRequest { from, dest, options, version: client_version, .. } = request;
         if !client_version.is_empty() && !version.is_empty() && client_version != version {
             self.counters.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={client_version} server={version}"
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
+            return refused(&format!("refused:stale-version client={client_version} server={version}"));
         }
         // Sorted squares (a set for every reader): cached entries and
         // requests of one bot compare as equal slices (`route_cache`).
         let mut options = options;
         options.danger.sort_unstable();
         // Short hop on a `submit` frame (a `plan` frame tried it already).
-        if request.get("op").as_str() == Some("submit") {
+        if via_submit_frame {
             if let Some((plan, _)) = self.fast_hop(from, dest, &options) {
                 return self.instant_slot(true, encode_plan(&plan));
             }
@@ -852,11 +804,7 @@ impl Service {
                     "pathfinding ram shed rss={}B: submit refused, nav-down",
                     Self::rss_bytes()
                 );
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value("refused:ram-shed")),
-                    ("version", str_value(&version)),
-                ]);
+                return refused("refused:ram-shed");
             }
             RamGate::Warn => {
                 self.counters.ram_warn.fetch_add(1, Ordering::Relaxed);
@@ -889,20 +837,7 @@ impl Service {
         }
         // Join the pending identical request, else take an account unit
         // and queue (`Admission::submit`: join, cap, slot before queue).
-        let ticket = |id: u64| {
-            object(vec![
-                ("ok", Value::Bool(true)),
-                ("id", Value::Int(id as i64)),
-                ("version", str_value(&version)),
-            ])
-        };
-        let refused = |reason: &str| {
-            object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value(reason)),
-                ("version", str_value(&version)),
-            ])
-        };
+        let ticket = |id: u64| Submit::Accepted { id, version: version.clone() };
         match self.admission.submit(&account, key, from, dest, options) {
             Submitted::Joined(id) => {
                 self.counters.joins.fetch_add(1, Ordering::Relaxed);
@@ -925,77 +860,39 @@ impl Service {
 
     /// A cache hit answers as a fresh terminal ticket (poll reads it
     /// once, same shape as a computed plan, no queue involved).
-    fn instant_slot(&self, is_plan: bool, body: Value) -> Value {
+    fn instant_slot(&self, is_plan: bool, body: Value) -> Submit {
         let version = self.version();
         let id = self.admission.instant(is_plan, body);
-        object(vec![
-            ("ok", Value::Bool(true)),
-            ("id", Value::Int(id as i64)),
-            ("version", str_value(&version)),
-        ])
+        Submit::Accepted { id, version }
     }
 
-    fn op_poll(&self, request: &Value) -> Value {
+    fn op_poll(&self, id: Option<u64>) -> PollReply {
         self.counters.polls_served.fetch_add(1, Ordering::Relaxed);
-        self.poll_slot(request)
+        self.poll_slot(id)
     }
 
     /// Poll core without the public gauge. The waiter pool (E3
     /// server-side wait) spins here every 10 ms, so counting it priced
     /// every `plan` at ~7 polls and read 1.4 polls/s with no client
     /// polling at all. Only client `poll` ops move the gauge now.
-    fn poll_slot(&self, request: &Value) -> Value {
+    fn poll_slot(&self, id: Option<u64>) -> PollReply {
         let version = self.version();
-        let id = match request.get("id").as_i64() {
-            Some(id) => id as u64,
-            None => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value("poll needs id")),
-                ])
-            }
-        };
+        let Some(id) = id else { return PollReply::NeedsId };
         match self.admission.poll(id) {
-            Polled::Pending => object(vec![
-                ("ok", Value::Bool(true)),
-                ("status", str_value("pending")),
-                ("version", str_value(&version)),
-            ]),
-            Polled::Ready(plan) => object(vec![
-                ("ok", Value::Bool(true)),
-                ("status", str_value("ready")),
-                ("plan", plan),
-                ("version", str_value(&version)),
-            ]),
-            Polled::Failed(error) => object(vec![
-                ("ok", Value::Bool(true)),
-                ("status", str_value("failed")),
-                ("error", error),
-                ("version", str_value(&version)),
-            ]),
+            Polled::Pending => PollReply::Pending { version },
+            Polled::Ready(plan) => PollReply::Ready { plan, version },
+            Polled::Failed(error) => PollReply::Failed { error, version },
             Polled::Unknown => {
                 self.counters.unknown_polls.fetch_add(1, Ordering::Relaxed);
-                object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value("unknown-ticket")),
-                    ("version", str_value(&version)),
-                ])
+                PollReply::Unknown { version }
             }
         }
     }
 
-    fn op_cancel(&self, request: &Value) -> Value {
-        let id = match request.get("id").as_i64() {
-            Some(id) => id as u64,
-            None => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value("cancel needs id")),
-                ])
-            }
-        };
+    fn op_cancel(&self, id: Option<u64>) -> Value {
+        let Some(id) = id else { return encode_cancel_needs_id() };
         self.admission.cancel(id);
-        object(vec![("ok", Value::Bool(true))])
+        encode_cancel_reply()
     }
 
     /// Multi-target costs (N1): one Dijkstra from the requester, stopped
@@ -1004,32 +901,16 @@ impl Service {
     /// on the acceptor answers faster than a ticket round-trip. Same
     /// version discipline as the other direct reads: the worker adopts
     /// the served version and retries once, never plans local.
-    fn op_walk_costs(&self, request: &Value) -> Value {
+    fn op_walk_costs(&self, request: Result<walk_costs::WalkCostsReq, String>) -> Value {
         self.counters.walk_costs_served.fetch_add(1, Ordering::Relaxed);
         let version = self.version();
-        let parsed = match walk_costs::decode_request(request) {
+        let parsed = match request {
             Ok(parsed) => parsed,
-            Err(error) => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&error)),
-                    ("version", str_value(&version)),
-                ])
-            }
+            Err(error) => return encode_refusal(&error, &version),
         };
         if !parsed.version.is_empty() && !version.is_empty() && parsed.version != version {
             self.counters.refused_stale.fetch_add(1, Ordering::Relaxed);
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                (
-                    "error",
-                    str_value(&format!(
-                        "refused:stale-version client={} server={version}",
-                        parsed.version
-                    )),
-                ),
-                ("version", str_value(&version)),
-            ]);
+            return encode_refusal(&format!("refused:stale-version client={} server={version}", parsed.version), &version);
         }
         let snapshot = self.snapshot.lock().unwrap().clone();
         let Some((shared, pockets)) = self.shared_edges(&snapshot) else {
@@ -1199,60 +1080,27 @@ impl PlanClient {
         options: &NavOptions,
         version: &str,
     ) -> Result<Submit, String> {
-        let reply = self.round_trip(
-            &object(vec![
-                ("op", str_value("submit")),
-                ("account", str_value(&self.account)),
-                ("from", tile_value(from)),
-                ("dest", tile_value(dest)),
-                ("options", encode_options(options)),
-                ("version", str_value(version)),
-            ]),
-            SUBMIT_TIMEOUT,
-        )?;
-        if reply.get("ok").as_bool() != Some(true) {
-            return Ok(Submit::Refused {
-                reason: reply.get("error").as_str().unwrap_or("refused").to_string(),
-                version: reply.get("version").as_str().unwrap_or("").to_string(),
-            });
-        }
-        Ok(Submit::Accepted {
-            id: reply.get("id").as_i64().ok_or("submit without id")? as u64,
-            version: reply.get("version").as_str().unwrap_or("").to_string(),
-        })
+        let request = PlanRequest {
+            account: Some(self.account.clone()),
+            from,
+            dest,
+            options: options.clone(),
+            version: version.to_string(),
+        };
+        let reply = self.round_trip(&encode_submit(&request), SUBMIT_TIMEOUT)?;
+        decode_submit_reply(&reply)
     }
 
     /// Poll one round-trip: the outcome plus the serving snapshot
     /// version (the worker rejects a stale-version answer + resubmits
     /// once, never serves it).
     pub fn poll(&self, id: u64) -> Result<(Poll, String), String> {
-        let reply = self.round_trip(
-            &object(vec![
-                ("op", str_value("poll")),
-                ("id", Value::Int(id as i64)),
-            ]),
-            POLL_TIMEOUT,
-        )?;
-        let version = reply.get("version").as_str().unwrap_or("").to_string();
-        if reply.get("ok").as_bool() != Some(true) {
-            return Ok((Poll::Unknown, version));
-        }
-        match reply.get("status").as_str().unwrap_or("") {
-            "pending" => Ok((Poll::Pending, version)),
-            "ready" => Ok((Poll::Ready(decode_plan(reply.get("plan"))?), version)),
-            "failed" => Ok((Poll::Failed(decode_noroute(reply.get("error"))?), version)),
-            _ => Ok((Poll::Unknown, version)),
-        }
+        let reply = self.round_trip(&encode_poll(id), POLL_TIMEOUT)?;
+        decode_poll_reply(&reply)
     }
 
     pub fn cancel(&self, id: u64) -> Result<(), String> {
-        self.round_trip(
-            &object(vec![
-                ("op", str_value("cancel")),
-                ("id", Value::Int(id as i64)),
-            ]),
-            POLL_TIMEOUT,
-        )?;
+        self.round_trip(&encode_cancel(id), POLL_TIMEOUT)?;
         Ok(())
     }
 

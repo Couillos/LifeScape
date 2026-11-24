@@ -7,11 +7,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
-use lifescape_json::{object, str_value, Value};
+use lifescape_json::{str_value, Value};
 
 use lifescape_sdk::Bot;
 
 use crate::kit::bank::nearest_bank;
+use crate::market_ops::MarketOp;
 use crate::ScriptError;
 
 /// One open deal row for this account (counterparty, terms).
@@ -30,7 +31,7 @@ pub struct DealRow {
 
 /// Open deals of one account (buyer, seller, item, qty, price).
 pub fn my_deals(account: &str) -> Result<Vec<DealRow>, ScriptError> {
-    let reply = market_call("my_deals", vec![("account", str_value(account))])?;
+    let reply = market_call(MarketOp::MyDeals, vec![("account", str_value(account))])?;
     let mut rows = Vec::new();
     for entry in reply.get("deals").as_arr().cloned().unwrap_or_default() {
         let buyer = entry.get("buyer").as_str().unwrap_or("").to_string();
@@ -78,15 +79,13 @@ pub fn deal_report(account: &str, id: i64, outcome: &str, reason: &str, received
     if let Some(received) = received {
         fields.push(("received", Value::Int(received)));
     }
-    let _ = market_call("deal_report", fields);
+    let _ = market_call(MarketOp::DealReport, fields);
 }
 
 /// One market request, one reply. Transport failures are loud IO errors,
 /// never empty books.
-pub fn market_call(op: &str, params: Vec<(&str, Value)>) -> Result<Value, ScriptError> {
-    let mut pairs = vec![("op", str_value(op))];
-    pairs.extend(params);
-    let mut body = lifescape_json::stringify(&object(pairs));
+pub fn market_call(op: MarketOp, params: Vec<(&str, Value)>) -> Result<Value, ScriptError> {
+    let mut body = lifescape_json::stringify(&op.frame(params));
     body.push('\n');
     let sock = std::path::Path::new("run/market.sock");
     let stream = UnixStream::connect(sock)
@@ -248,7 +247,7 @@ pub fn place_sell(bot: &mut Bot, item: u16, qty: i64, floor: i64) -> Result<bool
     let qty = quoted.qty;
     let price = quoted.price.max(floor);
     let reply = market_call(
-        "place",
+        MarketOp::Place,
         vec![
             ("account", str_value(&bot.username)),
             ("side", str_value("sell")),
@@ -268,7 +267,7 @@ pub fn place_sell(bot: &mut Bot, item: u16, qty: i64, floor: i64) -> Result<bool
 
 /// Cancel every open order of one item (D17: the drop follows the cancel).
 pub fn cancel_for(bot: &mut Bot, item: u16) -> Result<(), ScriptError> {
-    let reply = market_call("my_orders", vec![("account", str_value(&bot.username))])?;
+    let reply = market_call(MarketOp::MyOrders, vec![("account", str_value(&bot.username))])?;
     // Resting orders on the object or its banknote book, partly filled
     // ones too (`matched`): each cancel frees its lock at once (live
     // 2026-11-15: open-only cancels left every lock, 56 types stayed).
@@ -281,7 +280,7 @@ pub fn cancel_for(bot: &mut Bot, item: u16) -> Result<(), ScriptError> {
         }
         let order = entry.get("order").as_i64().unwrap_or(-1);
         let done =
-            market_call("cancel", vec![("account", str_value(&bot.username)), ("order", Value::Int(order))])?;
+            market_call(MarketOp::Cancel, vec![("account", str_value(&bot.username)), ("order", Value::Int(order))])?;
         if done.get("ok").as_bool() != Some(true) {
             bot.log(&format!("cleanup cancel {order} refused: {}", done.get("error").as_str().unwrap_or("?")));
             continue;
@@ -297,7 +296,7 @@ pub fn cancel_for(bot: &mut Bot, item: u16) -> Result<(), ScriptError> {
 /// Items with at least one open sell order of this account.
 pub fn open_sell_items(bot: &mut Bot) -> std::collections::HashSet<u16> {
     let mut listed = std::collections::HashSet::new();
-    let Ok(reply) = market_call("my_orders", vec![("account", str_value(&bot.username))]) else { return listed };
+    let Ok(reply) = market_call(MarketOp::MyOrders, vec![("account", str_value(&bot.username))]) else { return listed };
     for entry in reply.get("orders").as_arr().cloned().unwrap_or_default() {
         if entry.get("status").as_str() != Some("open") || entry.get("side").as_str() != Some("sell") {
             continue;

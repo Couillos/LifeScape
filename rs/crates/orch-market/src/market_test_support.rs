@@ -4,6 +4,7 @@
 //! is a promise; executions, candles and prints exist only once the
 //! handover settled in game.
 
+use lifescape_scripts::market_ops::MarketOp;
 use lifescape_json::{object, str_value, Value};
 use lifescape_market::DealStatus;
 
@@ -26,7 +27,7 @@ pub fn settle_matched(service: &MarketService) -> usize {
             }
         }
         let reply = service.handle(&object(vec![
-            ("op", str_value("deal_report")),
+            MarketOp::DealReport.field(),
             ("account", str_value(buyer)),
             ("deal", Value::Int(*id as i64)),
             ("outcome", str_value("settled")),

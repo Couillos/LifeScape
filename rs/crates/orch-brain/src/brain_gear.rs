@@ -39,6 +39,7 @@
 //! `file_step`: same cooldown, same no-ban rule); smithed-only axe tiers
 //! stay with the wishlist (`brain_wishlist`).
 
+use lifescape_scripts::market_ops::MarketOp;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
@@ -261,7 +262,7 @@ fn withdraw_unworthy_bid(service: &crate::market_service::MarketService, account
 
 fn cancel_order(service: &crate::market_service::MarketService, account: &str, order: i64) -> bool {
     let reply = service.handle(&lifescape_json::object(vec![
-        ("op", lifescape_json::str_value("cancel")),
+        MarketOp::Cancel.field(),
         ("account", lifescape_json::str_value(account)),
         ("order", Value::Int(order)),
         ("reason", lifescape_json::str_value(lifescape_store::market_criteria::GEAR_PLAN_REASON)),

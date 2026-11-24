@@ -4,6 +4,7 @@
 //! frees what it held and refunds the ledger through
 //! `refund_and_relist`.
 
+use lifescape_scripts::market_ops::MarketOp;
 use lifescape_json::{object, str_value, Value};
 use lifescape_market::{DealStatus, FailReason};
 
@@ -211,7 +212,7 @@ impl MarketService {
                 || (row.status == lifescape_store::OrderStatus::Matched && row.remaining > 0)
         }) {
             let reply = self.handle(&object(vec![
-                ("op", str_value("cancel")),
+                MarketOp::Cancel.field(),
                 ("account", str_value(account)),
                 ("order", Value::Int(row.order_id)),
                 ("reason", str_value(reason)),

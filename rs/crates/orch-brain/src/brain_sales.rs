@@ -16,6 +16,7 @@
 //! pieces and next step, wanted upgrades. Produced goods (bars, smithed,
 //! crafted, cooked) are sold. Iron accounts never list.
 
+use lifescape_scripts::market_ops::MarketOp;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
@@ -331,7 +332,7 @@ fn adopt_listings(service: &crate::market_service::MarketService,
         }
         let (order, floor) = match decision {
             Adoption::Withdraw(why) => {
-                let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(row.order_id))]));
+                let reply = service.handle(&object(vec![MarketOp::Cancel.field(), ("account", str_value(account)), ("order", Value::Int(row.order_id))]));
                 if reply.get("ok").as_bool() == Some(true) {
                     withdrawn += 1;
                 } else {
@@ -341,7 +342,7 @@ fn adopt_listings(service: &crate::market_service::MarketService,
             }
             Adoption::Raise { price, floor } | Adoption::Lower { price, floor } => {
                 let up = matches!(decision, Adoption::Raise { .. });
-                let reply = service.handle(&object(vec![("op", str_value("amend")), ("account", str_value(account)), ("order", Value::Int(row.order_id)), ("price", Value::Int(price))]));
+                let reply = service.handle(&object(vec![MarketOp::Amend.field(), ("account", str_value(account)), ("order", Value::Int(row.order_id)), ("price", Value::Int(price))]));
                 let Some(order) = reply.get("order").as_i64().filter(|_| reply.get("ok").as_bool() == Some(true)) else {
                     let target = if up { "raised to its reserve" } else { "lowered to today's opening" };
                     crate::logln!("brain {account}: listing {} of {name} not {target} {price}: {:?}", row.order_id, reply.get("error").as_str());
@@ -416,7 +417,7 @@ fn regroup_slivers(
         if !crate::market_seller::undersized(row.quantity, row.remaining, spare, lot) {
             continue;
         }
-        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(row.order_id)), ("reason", str_value(lifescape_store::REGROUPED_REASON))]));
+        let reply = service.handle(&object(vec![MarketOp::Cancel.field(), ("account", str_value(account)), ("order", Value::Int(row.order_id)), ("reason", str_value(lifescape_store::REGROUPED_REASON))]));
         if reply.get("ok").as_bool() == Some(true) {
             crate::logln!("brain {account}: listing {} of {} {name} withdrawn ({spare} more free, lot {lot}): the stack lists as one lot", row.order_id, row.remaining);
             withdrawn.push(row.order_id);
@@ -446,7 +447,7 @@ pub fn tool_listings(selling: &[lifescape_store::Order], stacks: &[(String, i64)
 fn withdraw_tool_listings(service: &crate::market_service::MarketService, account: &str, listings: &[(i64, String)]) -> Vec<i64> {
     let mut kept = Vec::new();
     for (order, name) in listings {
-        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(*order))]));
+        let reply = service.handle(&object(vec![MarketOp::Cancel.field(), ("account", str_value(account)), ("order", Value::Int(*order))]));
         if reply.get("ok").as_bool() == Some(true) {
             crate::logln!("brain {account}: listing {order} of {name} cancelled (its last copy of a kit or work tool)");
         } else {
@@ -637,7 +638,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life, deps: &crate::brain_deps::Brai
             continue;
         }
         let reply = service.handle(&object(vec![
-            ("op", str_value("place")),
+            MarketOp::Place.field(),
             ("account", str_value(&job.account)),
             ("side", str_value("sell")),
             ("item", Value::Int(item)),

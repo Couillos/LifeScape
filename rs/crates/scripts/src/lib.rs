@@ -12,6 +12,7 @@ pub mod devtools_probe;
 pub mod kit;
 pub mod legacy;
 pub mod market_client;
+pub mod market_ops;
 pub mod market_handover;
 pub mod market_lots;
 pub mod maze;

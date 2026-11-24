@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use lifescape_nav::plan::{NavOptions, Tile};
+use lifescape_nav::service_ops::PlanRequest;
 
 
 /// Zone granularity for the ETA cache (tiles >> 5).
@@ -99,12 +100,17 @@ impl EtaCache {
     }
 }
 
-/// One blocking nav plan, daemon-side. Retries once on version skew
-/// like every worker plan, then `None`: the caller leaves the deals
-/// pending — never a local guess.
+/// One blocking nav plan, daemon-side, through the service in this very
+/// process (`Service::plan_in_process`: same admission, caches and
+/// refusals as the socket `plan`, no frame). Retries once on version
+/// skew like every worker plan, then `None`: the caller leaves the deals
+/// pending — never a local guess. A service that is down is `None`.
 fn plan_eta_ticks(from: (i32, i32, i32), dest: Tile, version: &mut String) -> Option<u64> {
-    let client =
-        lifescape_nav::service::PlanClient::new(&crate::plan_service::socket_path(), "market-convene");
+    let service = crate::plan_service::service()?;
+    eta_ticks_via(&service, from, dest, version)
+}
+
+fn eta_ticks_via(service: &lifescape_nav::service::Service, from: (i32, i32, i32), dest: Tile, version: &mut String) -> Option<u64> {
     let options = NavOptions {
         allow_paid: false,
         f2p_only: true,
@@ -112,7 +118,14 @@ fn plan_eta_ticks(from: (i32, i32, i32), dest: Tile, version: &mut String) -> Op
         excluded_edges: HashSet::new(), danger: Vec::new() };
     let from_tile = Tile { x: from.1, z: from.2, level: from.0 };
     for _ in 0..2 {
-        match client.plan_once(from_tile, dest, &options, version, 8000) {
+        let request = PlanRequest {
+            account: Some("market-convene".to_string()),
+            from: from_tile,
+            dest,
+            options: options.clone(),
+            version: version.clone(),
+        };
+        match service.plan_in_process(request, 8000) {
             Ok((lifescape_nav::service::Poll::Ready(plan), served)) => {
                 *version = served;
                 return Some(plan.cost as u64);
@@ -124,4 +137,32 @@ fn plan_eta_ticks(from: (i32, i32, i32), dest: Tile, version: &mut String) -> Op
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ETA through the service in this process equals the cost the
+    /// socket `plan` gives the same pair (one daemon, one service, one
+    /// answer), and a stale pinned version is adopted then retried once.
+    #[test]
+    fn eta_in_process_equals_the_socket_plan() {
+        let snapshot = crate::plan_service::load_snapshot().expect("daemon snapshot loads");
+        let sock = lifescape_nav::service::test_socket("eta-in-process");
+        let service = lifescape_nav::service::Service::start(snapshot, &sock, 1).expect("service starts");
+        let dest = Tile { x: 3214, z: 3429, level: 0 };
+        let from = (0, 3222, 3218);
+        let mut version = "stale".to_string();
+        let ticks = eta_ticks_via(&service, from, dest, &mut version).expect("eta through the service");
+        assert_eq!(version, service.current_version(), "the served version is adopted");
+        let client = lifescape_nav::service::PlanClient::new(service.socket_path(), "market-convene");
+        let options = NavOptions { allow_paid: false, f2p_only: true, satisfied: HashSet::new(), excluded_edges: HashSet::new(), danger: Vec::new() };
+        let from_tile = Tile { x: from.1, z: from.2, level: from.0 };
+        match client.plan_once(from_tile, dest, &options, &version, 8000) {
+            Ok((lifescape_nav::service::Poll::Ready(plan), _)) => assert_eq!(plan.cost as u64, ticks),
+            other => panic!("socket plan: {other:?}"),
+        }
+        let _ = std::fs::remove_file(&sock);
+    }
 }

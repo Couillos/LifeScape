@@ -17,10 +17,9 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lifescape_json::{object, str_value, Value};
-
 use crate::plan::{NavOptions, Tile};
 use crate::service::{self, PlanClient, Poll};
+use crate::service_ops::{self, PlanRequest, PlanTerminal};
 
 /// Waiter threads answering `plan` ops (server-side waits, no polls).
 /// Scaled from the compute pool (4x): 16 beside the 4 prod lanes, 4 in
@@ -37,9 +36,16 @@ pub const PLAN_ONCE_WAIT_MS: u64 = 8000;
 /// 500 ms replaces the 2 ms poll: 250x fewer connections, same guards.
 pub const PLAN_SLICE_WAIT_MS: u64 = 500;
 
+/// A `plan` op on its way to the waiter pool: the typed request (or its
+/// fault) and the wait the client asked for.
+pub struct PlanJob {
+    pub request: Result<PlanRequest, String>,
+    pub wait_ms: Option<u64>,
+}
+
 pub struct WaitJob {
     pub stream: UnixStream,
-    pub request: Value,
+    pub request: PlanJob,
 }
 
 /// Start the bounded waiter pool; the sender lives on `Service`.
@@ -59,7 +65,7 @@ pub fn start_wait_pool(service: Arc<service::Service>, threads: usize) -> SyncSe
                     guard.recv().map_err(|_| ())
                 };
                 match job {
-                    Ok(job) => answer_plan(&worker, job.stream, &job.request),
+                    Ok(job) => answer_plan(&worker, job.stream, job.request),
                     Err(()) => return,
                 }
             })
@@ -71,22 +77,25 @@ pub fn start_wait_pool(service: Arc<service::Service>, threads: usize) -> SyncSe
 /// Server-side `plan` handling, called with the accepted stream:
 /// submit internally, wait in slices, answer terminal on the same
 /// connection. Runs on a `plan-wait` pool thread, never the acceptor.
+pub fn answer_plan(service: &service::Service, mut stream: UnixStream, job: PlanJob) {
+    let terminal = wait_terminal(service, job.request, job.wait_ms);
+    let mut buf = lifescape_json::stringify(&service_ops::encode_terminal(&terminal));
+    buf.push('\n');
+    let _ = stream.write_all(buf.as_bytes());
+}
+
+/// The wait itself, shared by the socket (`answer_plan`) and the
+/// in-process caller (`Service::plan_in_process`).
 /// Protocol: terminal answers release the waiter books (the Ready/Failed
 /// slot stays consumable for joins); a slice timeout answers
 /// `plan-timeout` WITHOUT cancelling — the client rejoins the same
 /// in-flight ticket, never a recompute. Abandoned tickets complete and
 /// age out under RESULTS_CAP like any unconsumed terminal.
-pub fn answer_plan(service: &service::Service, mut stream: UnixStream, request: &Value) {
-    let wait_ms = request.get("wait_ms").as_i64().unwrap_or(PLAN_ONCE_WAIT_MS as i64).max(0) as u64;
-    let submit = service.op_submit_public(request);
-    let id = match submit {
+pub(crate) fn wait_terminal(service: &service::Service, request: Result<PlanRequest, String>, wait_ms: Option<u64>) -> PlanTerminal {
+    let wait_ms = wait_ms.unwrap_or(PLAN_ONCE_WAIT_MS);
+    let id = match service.op_submit_public(request) {
         Ok(id) => id,
-        Err(refused) => {
-            let mut buf = lifescape_json::stringify(&refused);
-            buf.push('\n');
-            let _ = stream.write_all(buf.as_bytes());
-            return;
-        }
+        Err(refused) => return refused,
     };
     let deadline = std::time::Instant::now() + Duration::from_millis(wait_ms.min(15_000));
     loop {
@@ -97,24 +106,13 @@ pub fn answer_plan(service: &service::Service, mut stream: UnixStream, request: 
                 // dropped tickets/inflight/admission, and the Ready/Failed
                 // slot stays for joins until RESULTS_CAP evicts it.
                 service.op_release_waiter(id);
-                let mut buf = lifescape_json::stringify(&outcome);
-                buf.push('\n');
-                let _ = stream.write_all(buf.as_bytes());
-                return;
+                return outcome;
             }
             WaitPoll::Pending => {
                 if std::time::Instant::now() >= deadline {
                     // No cancel: the ticket keeps computing (or queueing);
                     // the client rejoins it with the next slice.
-                    let reply = object(vec![
-                        ("ok", Value::Bool(false)),
-                        ("error", str_value("plan-timeout")),
-                        ("version", str_value(&service.version_public())),
-                    ]);
-                    let mut buf = lifescape_json::stringify(&reply);
-                    buf.push('\n');
-                    let _ = stream.write_all(buf.as_bytes());
-                    return;
+                    return PlanTerminal::Refused { reason: "plan-timeout".to_string(), version: service.version_public() };
                 }
                 // Woken by the completing search (condvar), the slice
                 // only bounds a missed wake-up.
@@ -124,9 +122,23 @@ pub fn answer_plan(service: &service::Service, mut stream: UnixStream, request: 
     }
 }
 
+impl service::Service {
+    /// The same `plan` op without the socket (`market_eta` lives in the
+    /// daemon, beside the service): short hop first, else the ticket
+    /// path and its wait. Same admission, same caches, same counters,
+    /// same refusals as a worker's `plan_once`; no JSON frame, no
+    /// connection, no `plan-wait` thread.
+    pub fn plan_in_process(&self, request: PlanRequest, wait_ms: u64) -> Result<(Poll, String), PlanOnceError> {
+        if let Some(terminal) = self.fast_plan(&request) {
+            return terminal.into_result();
+        }
+        wait_terminal(self, Ok(request), Some(wait_ms)).into_result()
+    }
+}
+
 /// One poll from the waiter pool: terminal frames or still pending.
 pub enum WaitPoll {
-    Terminal(Value),
+    Terminal(PlanTerminal),
     Pending,
 }
 
@@ -152,46 +164,83 @@ impl PlanClient {
         version: &str,
         wait_ms: u64,
     ) -> Result<(Poll, String), PlanOnceError> {
+        let request = PlanRequest {
+            account: Some(self.account_name().to_string()),
+            from,
+            dest,
+            options: options.clone(),
+            version: version.to_string(),
+        };
         let reply = self
-            .round_trip(
-                &object(vec![
-                    ("op", str_value("plan")),
-                    ("account", str_value(self.account_name())),
-                    ("from", service::tile_value(from)),
-                    ("dest", service::tile_value(dest)),
-                    ("options", service::encode_options(options)),
-                    ("version", str_value(version)),
-                    ("wait_ms", Value::Int(wait_ms as i64)),
-                ]),
-                Duration::from_millis(wait_ms.saturating_add(5000)),
-            )
+            .round_trip(&service_ops::encode_plan_op(&request, wait_ms), Duration::from_millis(wait_ms.saturating_add(5000)))
             .map_err(PlanOnceError::Transport)?;
-        if reply.get("ok").as_bool() != Some(true) {
-            return Err(PlanOnceError::Refused {
-                reason: reply.get("error").as_str().unwrap_or("refused").to_string(),
-                served: reply.get("version").as_str().unwrap_or("").to_string(),
-            });
-        }
-        let served = reply.get("version").as_str().unwrap_or("").to_string();
-        match reply.get("outcome").as_str().unwrap_or("") {
-            "ready" => service::decode_plan(reply.get("plan"))
-                .map(|plan| (Poll::Ready(plan), served))
-                .map_err(PlanOnceError::Transport),
-            "failed" => service::decode_noroute(reply.get("error"))
-                .map(|no| (Poll::Failed(no), served))
-                .map_err(PlanOnceError::Transport),
-            other => Err(PlanOnceError::Transport(format!("bad plan outcome {other:?}"))),
-        }
+        service_ops::parse_terminal(&reply).map_err(PlanOnceError::Transport)?.into_result()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::PLAN_ONCE_WAIT_MS;
+    use super::*;
+    use crate::service::{test_socket, Service};
 
     /// The single wait covers exhaustive NoRoutes with margin.
     #[test]
     fn wait_covers_slow_plans() {
         assert!(PLAN_ONCE_WAIT_MS >= 5000, "median is 70 ms, exhaustive 1.5 s");
+    }
+
+    fn options() -> NavOptions {
+        NavOptions {
+            allow_paid: false,
+            f2p_only: true,
+            satisfied: std::collections::HashSet::new(),
+            excluded_edges: std::collections::HashSet::new(),
+            danger: Vec::new(),
+        }
+    }
+
+    /// The in-process `plan` answers what the socket `plan` answers, for a
+    /// short hop (fast lane), a long plan (ticket path, cache hit on the
+    /// second ask), a stale pinned version (typed refusal with the served
+    /// version) and a missing account (the ticket path's own fault).
+    #[test]
+    fn in_process_plan_matches_the_socket_plan() {
+        let (snapshot, _world, _tables) = crate::service_replay_tests::real_snapshot();
+        let service = Service::start(snapshot, &test_socket("plan-in-process"), 1).expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "inproc");
+        let version = service.current_version();
+        let pairs = [
+            (Tile { x: 3228, z: 3214, level: 0 }, Tile { x: 3224, z: 3214, level: 0 }),
+            (Tile { x: 3222, z: 3218, level: 0 }, Tile { x: 3165, z: 3487, level: 0 }),
+        ];
+        for (from, dest) in pairs {
+            let over_socket = client.plan_once(from, dest, &options(), &version, 10_000).expect("socket plan");
+            let request = PlanRequest { account: Some("inproc".into()), from, dest, options: options(), version: version.clone() };
+            let direct = service.plan_in_process(request, 10_000).expect("in-process plan");
+            match (over_socket, direct) {
+                ((Poll::Ready(left), left_version), (Poll::Ready(right), right_version)) => {
+                    assert_eq!(left_version, right_version);
+                    assert_eq!(left.cost, right.cost);
+                    assert_eq!(service_ops::encode_terminal(&PlanTerminal::Ready { plan: crate::service::encode_plan(&left), version: String::new() }).get("plan"),
+                        service_ops::encode_terminal(&PlanTerminal::Ready { plan: crate::service::encode_plan(&right), version: String::new() }).get("plan"));
+                }
+                ((Poll::Failed(left), _), (Poll::Failed(right), _)) => assert_eq!(left.reason.as_str(), right.reason.as_str()),
+                other => panic!("the two paths disagree: {other:?}"),
+            }
+        }
+        let (from, dest) = pairs[1];
+        let stale = PlanRequest { account: Some("inproc".into()), from, dest, options: options(), version: "bogus".into() };
+        match service.plan_in_process(stale, 1000) {
+            Err(PlanOnceError::Refused { reason, served }) => {
+                assert!(reason.starts_with("refused:stale-version"), "{reason}");
+                assert_eq!(served, version);
+            }
+            other => panic!("a stale version must refuse, got {other:?}"),
+        }
+        let nameless = PlanRequest { account: None, from, dest, options: options(), version: String::new() };
+        match service.plan_in_process(nameless, 1000) {
+            Err(PlanOnceError::Refused { reason, .. }) => assert_eq!(reason, "account"),
+            other => panic!("{other:?}"),
+        }
     }
 }

@@ -12,6 +12,7 @@
 //! to arrange the meeting; each bot only ever receives its own tile and
 //! its own departure tick in the pose args.
 
+use lifescape_scripts::market_ops::MarketOp;
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -795,7 +796,7 @@ pub fn convene_round(
 ) -> Vec<ConvocationPose> {
     let wall = wall_now();
     service.handle(&object(vec![
-        ("op", str_value("sweep")),
+        MarketOp::Sweep.field(),
         ("now_wall", Value::Float(wall)),
         ("nav_up", Value::Bool(nav_up)),
     ]));
@@ -803,7 +804,7 @@ pub fn convene_round(
         return Vec::new();
     }
     let pending = service.handle(&object(vec![
-        ("op", str_value("pending")),
+        MarketOp::Pending.field(),
         ("now_wall", Value::Float(wall)),
         ("tick_ms", Value::Int(tick_ms as i64)),
     ]));
@@ -850,7 +851,7 @@ pub fn convene_round(
     if want.is_empty() {
         return Vec::new();
     }
-    let reply = service.handle(&object(vec![("op", str_value("convene")), ("deals", Value::Arr(want))]));
+    let reply = service.handle(&object(vec![MarketOp::Convene.field(), ("deals", Value::Arr(want))]));
     let mut poses = Vec::new();
     for pose in reply.get("poses").as_arr().cloned().unwrap_or_default() {
         let account = pose.get("account").as_str().unwrap_or("").to_string();

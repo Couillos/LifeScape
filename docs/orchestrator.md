@@ -12,6 +12,9 @@ Le daemon héberge aussi le service de navigation : un snapshot
 (monde + tables + version) chargé au démarrage (`plan_service.rs`),
 servi sur `run/pathfinding.sock`. Les workers ne portent que le handle
 (`plan_client`) et la version épinglée — aucune carte en worker.
+Les opérations du service sont typées (`nav::service_ops::NavOp`) et celles du
+marché aussi (`scripts::market_ops::MarketOp`) ; le démon lui-même (`market_eta`)
+planifie par `plan_service::service()` en direct, sans passer par la socket.
 
 CLI (`src/cli.rs`, `src/main.rs`, le daemon démarre seul) :
 `open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|redeploy|shutdown|daemon|direct|map|route|replay-nav|dump-transitions|reload-nav|nav-stats`.

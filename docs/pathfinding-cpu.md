@@ -760,3 +760,10 @@ Condition du plan : les recherches finissant à l'horizon pèsent encore plus de
 ### Test de caractérisation de `reach_wall`
 
 `reach/wall_table_tests.rs` : 200 lignes (formes 0, 1, 2, 3 et 9 × 4 angles × 10 drapeaux) × 25 positions du poseur autour du mur, **tirées de `ReachStrategy.reached` du moteur** (bun, simulacre de `CollisionEngine` répondant un drapeau partout) ; `reach_wall` et `reached` doivent répondre pareil. La fonction n'est pas restructurée.
+
+### Lot 5.6 : opérations typées, `market_eta` en direct
+
+`service_ops.rs` est le seul module qui connaît les trames du service : `NavOp` (`Plan`, `Submit`, `Poll`, `Cancel`, `WalkCosts`, `Stats`, `Read(ReadOp)`, `Unknown`) lue **une fois** à la socket (`NavOp::parse`), réponses typées (`PollReply`, `PlanTerminal`, `Submit`) encodées et décodées au même endroit, `PlanRequest` partagée par la socket et l'appel en direct. Le service (`dispatch`, `op_submit`, `poll_slot`, `answer_plan`, `fast_plan`) ne manipule plus de `Value` pour les requêtes ; les trames sont les mêmes octet pour octet (mêmes textes de refus, même écho de version, même ordre de lecture des fautes : compte d'abord). Restent en JSON, par choix : les corps de plans et de verdicts gardés par l'admission et le cache de routes (ils sont stockés encodés), et les charges utiles des lectures groupées (`service_queries`, `walk_costs`).
+
+`Service::plan_in_process` (`service_plan.rs`) fait le même `plan` sans connexion : saut court d'abord, sinon admission, attente et même file ; mêmes compteurs (`submits`, `fast_hits`), mêmes refus (version périmée, plafond de compte). `market_eta` (démon) l'appelle par `plan_service::service()` au lieu de se connecter à la socket de son propre processus : plus de connexion, de trame ni de fil `plan-wait` par ETA ; service absent = `None`, comme une socket injoignable. Preuve : empreinte du rejeu inchangée (`plans=41ede8cd5e5bafe3 walk_costs=f98ca99051466f72`), `in_process_plan_matches_the_socket_plan` (saut court, plan long, version périmée, compte absent), `eta_in_process_equals_the_socket_plan`.
+

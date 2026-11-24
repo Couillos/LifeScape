@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::market_ops::MarketOp;
 use lifescape_json::{str_value, Value};
 use lifescape_sdk::client::actions::ExchangeOutcome;
 use lifescape_sdk::Bot;
@@ -119,7 +120,7 @@ fn deliver_groups(
             continue;
         }
         for id in ids {
-            let _ = market_call("deal_arrived", vec![("account", str_value(&bot.username)), ("deal", Value::Int(*id))]);
+            let _ = market_call(MarketOp::DealArrived, vec![("account", str_value(&bot.username)), ("deal", Value::Int(*id))]);
         }
         let later: Vec<&DealGroup> = if detours < max_detours { queue[1..].iter().map(|later| &groups[*later]).collect() } else { Vec::new() };
         match meet_and_trade(bot, group, deadline, coins, reports, &later)? {

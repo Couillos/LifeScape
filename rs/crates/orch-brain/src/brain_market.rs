@@ -4,6 +4,7 @@
 //! standing bid beside a production (D-B), and its cancellation once the
 //! node lands.
 
+use lifescape_scripts::market_ops::MarketOp;
 use lifescape_json::{object, str_value, Value};
 use lifescape_planner::expand::ReadyCtx;
 use lifescape_planner::{Node, NodeKind};
@@ -130,7 +131,7 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn 
     let covered = ctx.best_ask.is_some_and(|ask| ask >= 1 && ask <= ceiling);
     let price = if covered || service.reference(id).traded { price } else { crate::market_reprice::discovery_bid(&service, &job.account, id, reserve.map(|value| value.round() as i64), ceiling).unwrap_or(price) };
     let reply = service.handle(&object(vec![
-        ("op", str_value("place")),
+        MarketOp::Place.field(),
         ("account", str_value(&job.account)),
         ("side", str_value("buy")),
         ("item", Value::Int(id)),
@@ -361,7 +362,7 @@ pub fn release_stale_unowned(job: &Job, life: &lifescape_planner::Life, deps: &c
     let wanted = crate::brain_wishlist::wanted_names(life);
     let mut closed = 0;
     for order in stale_unowned(&rows, &wanted, &crate::brain_gear::name_of) {
-        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(&job.account)), ("order", Value::Int(order)), ("reason", str_value(STALE_UNOWNED_REASON))]));
+        let reply = service.handle(&object(vec![MarketOp::Cancel.field(), ("account", str_value(&job.account)), ("order", Value::Int(order)), ("reason", str_value(STALE_UNOWNED_REASON))]));
         if reply.get("ok").as_bool() == Some(true) {
             closed += 1;
         }
@@ -390,7 +391,7 @@ pub fn release_orphan_needs(job: &Job, life: &lifescape_planner::Life, deps: &cr
     let wanted = crate::brain_wishlist::wanted_names(life);
     let mut closed = 0;
     for order in orphan_needs(&rows, &wanted, &crate::brain_gear::name_of) {
-        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(&job.account)), ("order", Value::Int(order)), ("reason", str_value("need_gone"))]));
+        let reply = service.handle(&object(vec![MarketOp::Cancel.field(), ("account", str_value(&job.account)), ("order", Value::Int(order)), ("reason", str_value("need_gone"))]));
         if reply.get("ok").as_bool() == Some(true) {
             closed += 1;
         }

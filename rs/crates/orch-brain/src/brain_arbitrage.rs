@@ -37,6 +37,7 @@
 //! stock, its trip judged on the shop's whole proceeds, the janitor
 //! carries it), never under what the market pays plus one.
 
+use lifescape_scripts::market_ops::MarketOp;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Mutex, OnceLock};
 
@@ -243,7 +244,7 @@ pub(crate) fn arbitrage_pass(job: &Job, life: &Life, live: &Value, deps: &crate:
         crate::brain_npc_sale::settle_arbitrage(account, &lot.item, crate::brain_npc_sale::bought_since(&deals, account, lot.item_id, lot.since), still);
     }
     let withdraw = |row: &lifescape_store::Order| {
-        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(row.order_id)), ("reason", str_value(STALE_REASON))]));
+        let reply = service.handle(&object(vec![MarketOp::Cancel.field(), ("account", str_value(account)), ("order", Value::Int(row.order_id)), ("reason", str_value(STALE_REASON))]));
         if reply.get("ok").as_bool() != Some(true) {
             crate::logln!("brain {account}: arbitrage bid {} not withdrawn: {:?}", row.order_id, reply.get("error").as_str());
             return;
@@ -301,7 +302,7 @@ pub(crate) fn arbitrage_pass(job: &Job, life: &Life, live: &Value, deps: &crate:
     // unit net of the trip (the market's walk): the price climbs toward
     // the outlet through play.
     let reply = service.handle(&object(vec![
-        ("op", str_value("place")),
+        MarketOp::Place.field(),
         ("account", str_value(account)),
         ("side", str_value("buy")),
         ("item", Value::Int(id)),

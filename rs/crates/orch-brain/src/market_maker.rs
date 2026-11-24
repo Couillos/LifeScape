@@ -32,6 +32,7 @@
 //! Information: public prints, the public book, the maker's own deals and
 //! holdings only (D22). No cheat (rule 13): the stock comes from deals.
 
+use lifescape_scripts::market_ops::MarketOp;
 use std::collections::{BTreeMap, HashMap};
 
 use lifescape_json::{object, str_value, Value};
@@ -315,7 +316,7 @@ fn live_stock(job: &Job) -> HashMap<i64, i64> {
 
 pub(crate) fn cancel(service: &crate::market_service::MarketService, account: &str, order: i64, reason: &str) -> bool {
     let reply = service.handle(&object(vec![
-        ("op", str_value("cancel")),
+        MarketOp::Cancel.field(),
         ("account", str_value(account)),
         ("order", Value::Int(order)),
         ("reason", str_value(reason)),
@@ -531,10 +532,10 @@ fn apply(service: &crate::market_service::MarketService, account: &str, item: i6
     let reply = match planned {
         Move::Cancel(order) => return usize::from(cancel(service, account, order, REQUOTE_REASON)),
         Move::Amend(order, price) => {
-            service.handle(&object(vec![("op", str_value("amend")), ("account", str_value(account)), ("order", Value::Int(order)), ("price", Value::Int(price))]))
+            service.handle(&object(vec![MarketOp::Amend.field(), ("account", str_value(account)), ("order", Value::Int(order)), ("price", Value::Int(price))]))
         }
         Move::Place(leg) => service.handle(&object(vec![
-            ("op", str_value("place")),
+            MarketOp::Place.field(),
             ("account", str_value(account)),
             ("side", str_value(side)),
             ("item", Value::Int(item)),

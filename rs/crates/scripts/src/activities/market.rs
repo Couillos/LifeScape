@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::market_ops::MarketOp;
 use lifescape_json::{str_value, Value};
 use lifescape_sdk::Bot;
 
@@ -119,7 +120,7 @@ pub(crate) fn place_refused(buying: bool, item: &str, reason: &str) -> ScriptErr
 fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
     let SideOrder { item, mut qty, price, ceiling, mut floor } = parse_side(args)?;
     let price = if buying {
-        let quote = market_call("quote", vec![("item", Value::Int(i64::from(item)))])?;
+        let quote = market_call(MarketOp::Quote, vec![("item", Value::Int(i64::from(item)))])?;
         let reference = quote.get("reference").as_i64().unwrap_or(1).max(1);
         price.unwrap_or_else(|| opening_bid_price(reference, quote.get("ask").as_i64(), ceiling))
     } else {
@@ -149,7 +150,7 @@ fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
     if let Some(reserve) = floor.filter(|_| !buying) {
         params.push(("floor", Value::Int(reserve.min(price))));
     }
-    let reply = market_call("place", params)?;
+    let reply = market_call(MarketOp::Place, params)?;
     if reply.get("ok").as_bool() != Some(true) {
         let reason = reply.get("error").as_str().unwrap_or("?").to_string();
         bot.log(&format!("place refused: {reason}"));
@@ -193,7 +194,7 @@ impl SellerQuote {
 /// The daemon's quote for selling `qty` of `item` (the bot's own reserve
 /// and demand lot); `None` = hold, logged.
 pub(crate) fn seller_quote(bot: &mut Bot, item: u16, qty: i64) -> Result<Option<SellerQuote>, ScriptError> {
-    let reply = market_call("seller_quote", vec![("account", str_value(&bot.username)), ("item", Value::Int(i64::from(item))), ("qty", Value::Int(qty))])?;
+    let reply = market_call(MarketOp::SellerQuote, vec![("account", str_value(&bot.username)), ("item", Value::Int(i64::from(item))), ("qty", Value::Int(qty))])?;
     match SellerQuote::from_reply(&reply) {
         Ok(Some(quote)) => Ok(Some(quote)),
         Ok(None) => {
