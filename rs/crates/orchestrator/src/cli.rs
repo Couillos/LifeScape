@@ -678,7 +678,7 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|await|verify|check-method|economy|bid-why|fund-makers|purge-measures-v1|store-compact|migrate-lives|rates-rebuild|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|ambition|close|redeploy|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ... (run ... --wait [--timeout-s N] [--json]; await <compte> [--timeout-s N] [--json]; verify [ids|--all] [--parallel N]; ambition <compte> alcher|natural|<métier>)");
+        println!("usage: orchestrator open|run|await|verify|check-method|economy|bid-why|fund-makers|purge-measures-v1|retention [--check]|store-compact|migrate-lives|rates-rebuild|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|ambition|close|redeploy|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ... (run ... --wait [--timeout-s N] [--json]; await <compte> [--timeout-s N] [--json]; verify [ids|--all] [--parallel N]; ambition <compte> alcher|natural|<métier>)");
         return 2;
     }
     if argv[1].as_str() == "dump-npc-ranges" {
@@ -713,6 +713,8 @@ pub fn cli(argv: &[String]) -> i32 {
         "obtain" => return crate::obtaincmd::obtain_cmd(&argv[2..].to_vec()),
         // Offline: refuses while the daemon runs, so never start it first.
         "purge-measures-v1" => return crate::purge_cmd::purge_cli(argv.get(2..).unwrap_or(&[])),
+        // Retention of cancelled orders and failure dossiers: `--check` counts only.
+        "retention" => return crate::retention_cmd::retention_cli(argv.get(2..).unwrap_or(&[])),
         // Offline: the one-time D3 mark and A4 report (lot 5), refuses while the daemon runs.
         "migrate-lives" => return crate::migrate_cmd::migrate_lives_cli(argv.get(2..).unwrap_or(&[])),
         // Offline: VACUUM of the store, refuses while the daemon runs.

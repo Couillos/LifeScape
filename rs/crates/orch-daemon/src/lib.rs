@@ -17,6 +17,7 @@ pub mod daemon_watch;
 pub mod supervise;
 pub mod push_hub;
 pub mod errors_ingest;
+pub mod retention;
 pub mod rares_cmd;
 pub mod funding_cmd;
 pub mod funding_plan;
