@@ -35,7 +35,7 @@ mod rates_price_tests;
 mod xp_rates_tests;
 pub use lifescape_orch_core::{paths, logln, cpu_profile, log_markers, clock, client, log_sink, error_stamp, log_rotate, disk_guard, res_stats, store_pool, names, api_shapes, nav_profile, economy_guard, daemon_clock};
 pub use lifescape_orch_world::{png, mapcache, mapbuild, minimap, staticmap, zones, plan_service};
-pub use lifescape_orch_fleet::{frame_codec, job_state, jobs, registry, site_crowd, worker_owner, daemon_pool, fleet};
+pub use lifescape_orch_fleet::{frame_codec, job_state, worker_call, worker_command, jobs, registry, site_crowd, worker_owner, daemon_pool, fleet};
 pub use lifescape_orch_market::{market_service, market_orders, market_auction, market_uncross, market_merge, market_prints, market_claims, market_units, market_lineage, market_eta, market_reference, market_seed, market_audit, market_reprice, market_daemon, market_convene, market_convene_sweep, market_absent, funding_gifts, market_host, market_facts, market_own};
 #[cfg(test)]
 pub use lifescape_orch_market::market_test_support;

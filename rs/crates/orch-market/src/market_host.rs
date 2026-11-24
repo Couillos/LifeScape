@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lifescape_json::{object, str_value, Value};
 
 use crate::fleet::Fleet;
 use crate::jobs::Job;
@@ -35,7 +34,7 @@ pub trait MarketHost: Fleet {
 impl<T: Fleet + ?Sized> MarketHost for T {
     fn push_locks(&self, service: &MarketService, accounts: &[String]) {
         let failures = push_locks_with(service, accounts, &mut |account, request| {
-            self.send_worker(account, request, Duration::from_secs(2)).map(|_| ())
+            self.send_worker(account, request, Duration::from_secs(2)).map(|_| ()).map_err(String::from)
         });
         for (account, error) in failures {
             crate::logln!("market-locks: set_locks to {account} failed: {error}");
@@ -72,11 +71,7 @@ impl<T: Fleet + ?Sized> MarketHost for T {
     }
 
     fn pose_market_script(&self, account: &str, args: &[String]) -> bool {
-        let request = object(vec![
-            ("cmd", str_value("pose_market")),
-            ("script", str_value("market")),
-            ("args", Value::Arr(args.iter().map(|arg| str_value(arg)).collect())),
-        ]);
+        let request = crate::worker_command::WorkerCommand::PoseMarket { script: "market".to_string(), args: args.to_vec() }.encode();
         match self.send_worker(account, &request, Duration::from_secs(10)) {
             Ok(reply) => reply.get("ok").as_bool() == Some(true),
             Err(_) => false,

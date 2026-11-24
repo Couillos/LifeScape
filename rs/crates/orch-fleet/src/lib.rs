@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 pub mod frame_codec;
+pub mod worker_call;
+pub mod worker_command;
 pub mod job_state;
 pub mod jobs;
 pub mod registry;

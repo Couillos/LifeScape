@@ -9,14 +9,15 @@
 use std::collections::HashMap;
 use std::io::Write;
 pub(crate) use crate::daemon_conn::{is_pktlog_line, live_binary, tail_lines};
-use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::frame_codec::{Frame, FrameError, SessionFacts};
-use crate::jobs::{Job, now_secs, resolve_state};
+use crate::jobs::{Job, now_secs};
+use crate::worker_call::CallError;
+use crate::worker_command::WorkerCommand;
 use lifescape_json::{self as json, Value, object, str_value};
 use crate::paths;
 use crate::registry;
@@ -107,7 +108,7 @@ impl crate::fleet::Fleet for Orchestrator {
         Orchestrator::proc_alive(self, account)
     }
 
-    fn send_worker(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, String> {
+    fn send_worker(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, CallError> {
         Orchestrator::send_worker(self, account, request, timeout)
     }
 
@@ -287,7 +288,7 @@ impl Orchestrator {
         let live = crate::worker_owner::live_workers(account);
         let answers = !tracked_alive
             && !live.is_empty()
-            && self.send_worker(account, &object(vec![("cmd", str_value("ping"))]), Duration::from_secs(2)).is_ok();
+            && self.send_worker(account, &WorkerCommand::Ping.encode(), Duration::from_secs(2)).is_ok();
         match crate::worker_owner::open_verdict(tracked_alive, &live, answers) {
             crate::worker_owner::OpenVerdict::Spawn => {}
             crate::worker_owner::OpenVerdict::AlreadyOpen => {
@@ -318,7 +319,7 @@ impl Orchestrator {
         self.jobs.lock().unwrap().insert(account.to_string(), job.clone());
         if let Ok(reply) = self.send_worker(
             account,
-            &object(vec![("cmd", str_value("status"))]),
+            &WorkerCommand::Status.encode(),
             Duration::from_secs(WORKER_TIMEOUT),
         ) {
             job.apply_session(reply.get("session"));
@@ -358,15 +359,11 @@ impl Orchestrator {
         }
         let reply = self.send_worker(
             account,
-            &object(vec![
-                ("cmd", str_value("run")),
-                ("script", str_value(script)),
-                ("args", Value::Arr(args.to_vec())),
-            ]),
+            &WorkerCommand::Run { script: script.to_string(), args: args.to_vec() }.encode(),
             Duration::from_secs(WORKER_TIMEOUT),
         );
         let reply = reply.unwrap_or_else(|error| {
-            object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))])
+            object(vec![("ok", Value::Bool(false)), ("error", str_value(error.text()))])
         });
         if reply.get("ok").as_bool() == Some(true) {
             job.apply_session(reply.get("session"));
@@ -378,7 +375,7 @@ impl Orchestrator {
     /// Manual hold: stop the running script and let the worker idle drain
     /// run no rescue until resumed. The session stays open for manual
     /// `call` piloting.
-    fn hold_job(&self, account: &str) -> Value {
+    pub(crate) fn hold_job(&self, account: &str) -> Value {
         let job = match self.jobs.lock().unwrap().get(account).cloned() {
             Some(job) => job,
             None => {
@@ -391,11 +388,11 @@ impl Orchestrator {
         job.inner.lock().unwrap().held = true;
         let reply = self.send_worker(
             account,
-            &object(vec![("cmd", str_value("hold"))]),
+            &WorkerCommand::Hold.encode(),
             Duration::from_secs(WORKER_TIMEOUT),
         );
         let reply = reply.unwrap_or_else(|error| {
-            object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))])
+            object(vec![("ok", Value::Bool(false)), ("error", str_value(error.text()))])
         });
         if reply.get("ok").as_bool() == Some(true) {
             job.apply_session(reply.get("session"));
@@ -406,7 +403,7 @@ impl Orchestrator {
     }
 
     /// Release a manual hold (and resume a worker pause when there is one).
-    fn resume_job(&self, account: &str) -> Value {
+    pub(crate) fn resume_job(&self, account: &str) -> Value {
         let job = match self.jobs.lock().unwrap().get(account).cloned() {
             Some(job) => job,
             None => {
@@ -417,7 +414,7 @@ impl Orchestrator {
             }
         };
         let was_held = std::mem::replace(&mut job.inner.lock().unwrap().held, false);
-        let reply = self.simple_worker_cmd(account, "resume");
+        let reply = self.simple_worker_cmd(account, WorkerCommand::Resume);
         if reply.get("ok").as_bool() == Some(true) {
             return reply;
         }
@@ -428,7 +425,8 @@ impl Orchestrator {
         reply
     }
 
-    fn simple_worker_cmd(&self, account: &str, cmd: &str) -> Value {        let job = match self.jobs.lock().unwrap().get(account).cloned() {
+    pub(crate) fn simple_worker_cmd(&self, account: &str, command: WorkerCommand) -> Value {
+        let job = match self.jobs.lock().unwrap().get(account).cloned() {
             Some(job) => job,
             None => {
                 return object(vec![
@@ -439,11 +437,11 @@ impl Orchestrator {
         };
         let reply = self.send_worker(
             account,
-            &object(vec![("cmd", str_value(cmd))]),
+            &command.encode(),
             Duration::from_secs(WORKER_TIMEOUT),
         );
         let reply = reply.unwrap_or_else(|error| {
-            object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))])
+            object(vec![("ok", Value::Bool(false)), ("error", str_value(error.text()))])
         });
         if reply.get("ok").as_bool() == Some(true) {
             job.apply_session(reply.get("session"));
@@ -452,7 +450,7 @@ impl Orchestrator {
         reply
     }
 
-    fn call_job(&self, account: &str, method: &str, args: &[Value]) -> Value {
+    pub(crate) fn call_job(&self, account: &str, method: &str, args: &[Value]) -> Value {
         if self.jobs.lock().unwrap().get(account).is_none() {
             return object(vec![
                 ("ok", Value::Bool(false)),
@@ -467,18 +465,13 @@ impl Orchestrator {
         }
         self.send_worker(
             account,
-            &object(vec![
-                ("cmd", str_value("call")),
-                ("method", str_value(method)),
-                ("args", Value::Arr(args.to_vec())),
-                ("admin", Value::Bool(crate::economy_guard::is_staff(account))),
-            ]),
+            &WorkerCommand::Call { method: method.to_string(), args: args.to_vec(), admin: crate::economy_guard::is_staff(account) }.encode(),
             Duration::from_secs(WORKER_TIMEOUT),
         )
-        .unwrap_or_else(|error| object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]))
+        .unwrap_or_else(|error| object(vec![("ok", Value::Bool(false)), ("error", str_value(error.text()))]))
     }
 
-    fn methods_job(&self, account: &str) -> Value {
+    pub(crate) fn methods_job(&self, account: &str) -> Value {
         if self.jobs.lock().unwrap().get(account).is_none() {
             return object(vec![
                 ("ok", Value::Bool(false)),
@@ -487,13 +480,10 @@ impl Orchestrator {
         }
         self.send_worker(
             account,
-            &object(vec![
-                ("cmd", str_value("methods")),
-                ("admin", Value::Bool(crate::economy_guard::is_staff(account))),
-            ]),
+            &WorkerCommand::Methods { admin: crate::economy_guard::is_staff(account) }.encode(),
             Duration::from_secs(WORKER_TIMEOUT),
         )
-        .unwrap_or_else(|error| object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]))
+        .unwrap_or_else(|error| object(vec![("ok", Value::Bool(false)), ("error", str_value(error.text()))]))
     }
 
     /// Drop a job whose worker is gone and say so plainly, instead of
@@ -689,7 +679,7 @@ impl Orchestrator {
             }
             // A worker busy in a script answers late: one longer retry
             // before giving up on it (never an orphan, see send_worker).
-            let status = object(vec![("cmd", str_value("status"))]);
+            let status = WorkerCommand::Status.encode();
             let reply = self
                 .send_worker(&account, &status, Duration::from_secs(3))
                 .or_else(|_| self.send_worker(&account, &status, Duration::from_secs(10)));
@@ -699,7 +689,7 @@ impl Orchestrator {
                     // Only a socket nobody listens on is stale. A slow but
                     // live worker (busy at restart) keeps its socket: removing
                     // it orphaned the worker, still logged in, unreachable.
-                    let dead = error.contains("refused") || error.contains("No such file") || error.contains("not found");
+                    let dead = error.is_socket_stale();
                     if dead {
                         let _ = std::fs::remove_file(&sock_path);
                     } else {
@@ -715,14 +705,14 @@ impl Orchestrator {
                 if self
                     .send_worker(
                         &account,
-                        &object(vec![("cmd", str_value("unload"))]),
+                        &WorkerCommand::Unload.encode(),
                         Duration::from_secs(WORKER_TIMEOUT),
                     )
                     .is_ok()
                 {
                     if let Ok(reply) = self.send_worker(
                         &account,
-                        &object(vec![("cmd", str_value("status"))]),
+                        &WorkerCommand::Status.encode(),
                         Duration::from_secs(3),
                     ) {
                         session = reply.get("session").clone();
@@ -752,242 +742,9 @@ impl Orchestrator {
             crate::logln!("restored {account} (idle)");
         }
     }
-
-    pub fn dispatch(&self, request: &Value) -> Value {
-        let command = request.get("cmd").as_str().unwrap_or("");
-        let account = request.get("account").as_str().unwrap_or("");
-        match command {
-            "open" => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value("open needs daemon context")),
-                ]);
-            }
-            "run" => {
-                let script = request.get("script").as_str().unwrap_or("");
-                let args = request.get("args").as_arr().cloned().unwrap_or_default();
-                return self.run_job(account, script, &args);
-            }
-            "unload" => {
-                crate::brain_grace::note_operator_stop(account);
-                return self.simple_worker_cmd(account, "unload");
-            }
-            "pause" => return self.simple_worker_cmd(account, "pause"),
-            "resume" => return self.resume_job(account),
-            "hold" => return self.hold_job(account),
-            "close" => {
-                crate::brain_grace::note_operator_stop(account);
-                return self.close_job(account);
-            }
-            "call" => {
-                let method = request.get("method").as_str().unwrap_or("");
-                let args = request.get("args").as_arr().cloned().unwrap_or_default();
-                // CLI sends raw strings; the worker parses JSON-or-string.
-                let args: Vec<Value> = args
-                    .iter()
-                    .map(|arg| arg.as_str().map(str_value).unwrap_or_else(|| arg.clone()))
-                    .collect();
-                return self.call_job(account, method, &args);
-            }
-            "methods" => return self.methods_job(account),
-            "ambition" => {
-                let kind = request.get("kind").as_str().unwrap_or("");
-                return match crate::brain_operator::request(account, kind) {
-                    Ok(()) => object(vec![("ok", Value::Bool(true)), ("pending", str_value(kind))]),
-                    Err(error) => object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]),
-                };
-            }
-            "rares" => {
-                let accounts: Vec<String> = self.jobs.lock().unwrap().keys().cloned().collect();
-                return match crate::rares_cmd::rares_lines(&accounts) {
-                    Ok(lines) => object(vec![("ok", Value::Bool(true)), ("lines", Value::Arr(lines.iter().map(|line| str_value(line)).collect()))]),
-                    Err(error) => object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]),
-                };
-            }
-            "fund_makers" => return crate::funding_cmd::fund_makers(self, request.get("dry_run").as_bool().unwrap_or(true), request.get("force").as_bool().unwrap_or(false)),
-            "bid_why" => {
-                let item = request.get("item").as_str().unwrap_or("");
-                return match crate::brain_bids::explain_for(account, item, &lifescape_orch_brain::brain_deps::BrainDeps::live()) {
-                    Ok(lines) => object(vec![("ok", Value::Bool(true)), ("lines", Value::Arr(lines.iter().map(|line| str_value(line)).collect()))]),
-                    Err(error) => object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]),
-                };
-            }
-            "status" => {
-                let live: HashMap<String, Arc<Job>> = self.jobs.lock().unwrap().clone();
-                let mut names: Vec<String> = if account.is_empty() {
-                    live.keys().cloned().collect()
-                } else if live.contains_key(account) {
-                    vec![account.to_string()]
-                } else {
-                    Vec::new()
-                };
-                names.sort();
-                let mut described: Vec<Value> = names
-                    .iter()
-                    .filter_map(|name| live.get(name))
-                    .map(|job| {
-                        let mut entry = job.describe();
-                        if let Value::Obj(map) = &mut entry {
-                            map.insert(
-                                "account_name".to_string(),
-                                str_value(&crate::jobs::humanize(job.account.as_str())),
-                            );
-                        }
-                        entry
-                    })
-                    .collect();
-                crate::jobs::sort_status_rows(&mut described);
-                return object(vec![("ok", Value::Bool(true)), ("jobs", Value::Arr(described))]);
-            }
-            "job_list" => {
-                // The dashboard's bot list (lot 1.2): `status` sliced to the
-                // columns the list shows, built from those fields only.
-                let live: HashMap<String, Arc<Job>> = self.jobs.lock().unwrap().clone();
-                let mut names: Vec<&String> = live.keys().collect();
-                names.sort();
-                let mut rows: Vec<Value> = names.iter().filter_map(|name| live.get(*name)).map(|job| job.list_row()).collect();
-                crate::jobs::sort_status_rows(&mut rows);
-                return object(vec![("ok", Value::Bool(true)), ("jobs", Value::Arr(rows))]);
-            }
-            "items" => {
-                let described = crate::holdings::described_jobs(self);
-                return object(vec![("ok", Value::Bool(true)), ("data", crate::holdings::snapshot(&described))]);
-            }
-            "scripts" => {
-                return object(vec![
-                    ("ok", Value::Bool(true)),
-                    (
-                        "scripts",
-                        Value::Arr(registry::script_names_sorted().iter().map(|n| str_value(n)).collect()),
-                    ),
-                ]);
-            }
-            "accounts" => {
-                let live: Vec<String> = {
-                    let jobs = self.jobs.lock().unwrap();
-                    let mut names: Vec<String> = jobs.keys().cloned().collect();
-                    names.sort();
-                    names
-                };
-                let mut known = known_accounts();
-                for name in &live {
-                    if !known.contains(name) {
-                        known.push(name.clone());
-                    }
-                }
-                known.sort();
-                return object(vec![
-                    ("ok", Value::Bool(true)),
-                    ("accounts", Value::Arr(known.iter().map(|n| str_value(n)).collect())),
-                    ("live", Value::Arr(live.iter().map(|n| str_value(n)).collect())),
-                ]);
-            }
-            "show" => {
-                // Memory first (pushed snapshots); the files are only the
-                // adoption fallback when no worker is attached.
-                let state = match self.jobs.lock().unwrap().get(account).cloned() {
-                    Some(job) => job.describe(),
-                    None => {
-                        let (merged_path, _partial, _log) = paths::user_paths(account);
-                        let state = paths::read_json(&merged_path).unwrap_or(Value::Null);
-                        if state.as_obj().is_some() { state } else { object(vec![]) }
-                    }
-                };
-                return object(vec![("ok", Value::Bool(true)), ("state", resolve_state(state))]);
-            }
-            "live" => {
-                let state = match self.jobs.lock().unwrap().get(account).cloned() {
-                    Some(job) => job.describe(),
-                    None => {
-                        let (merged_path, partial_path, _log) = paths::user_paths(account);
-                        let merged = paths::read_json(&merged_path).unwrap_or(Value::Null);
-                        let state = match (merged, paths::read_json(&partial_path)) {
-                            (Value::Obj(mut base), Some(Value::Obj(extra))) => {
-                                base.extend(extra);
-                                Value::Obj(base)
-                            }
-                            (base, _) => base,
-                        };
-                        if state.as_obj().is_some() { state } else { object(vec![]) }
-                    }
-                };
-                return object(vec![("ok", Value::Bool(true)), ("state", resolve_state(state))]);
-            }
-            "logs" => {
-                let (_merged, _partial, log_path) = paths::user_paths(account);
-                let lines = request.get("lines").as_i64().unwrap_or(40).max(0) as usize;
-                // Spectate shows the game, not the wire: over-fetch the tail
-                // (a spammy window is mostly pktlog) then drop the packet
-                // lines. The file keeps everything for debug.
-                let fetch = lines.saturating_mul(8).max(lines).min(2000);
-                let tail = tail_lines(&log_path, fetch);
-                let mut game: Vec<String> =
-                    tail.into_iter().filter(|line| !is_pktlog_line(line)).collect();
-                if game.len() > lines {
-                    game.drain(..game.len() - lines);
-                }
-                return object(vec![
-                    ("ok", Value::Bool(true)),
-                    ("lines", Value::Arr(game.iter().map(|line| str_value(line)).collect())),
-                ]);
-            }
-            "shutdown" => {
-                self.close_all();
-                self.running.store(false, std::sync::atomic::Ordering::SeqCst);
-                let _ = UnixStream::connect(paths::socket_path());
-                return object(vec![("ok", Value::Bool(true))]);
-            }
-            "reload-nav" => {
-                // Gamedata changed on disk (overrides, transitions,
-                // pack): rebuild the snapshot beside the live one and
-                // swap it. In-flight requests finish on the old Arc;
-                // the bumped version rejects every stale answer.
-                return match crate::plan_service::reload() {
-                    Ok(report) => object(vec![
-                        ("ok", Value::Bool(true)),
-                        ("reloaded", str_value(&report)),
-                    ]),
-                    Err(error) => object(vec![
-                        ("ok", Value::Bool(false)),
-                        ("error", str_value(&error)),
-                    ]),
-                };
-            }
-            "nav-stats" => {
-                // Lot 4 operator gauge: counters + queue + RAM, no log
-                // spam. Down service = explicit error, never stale numbers.
-                return match crate::plan_service::stats_json() {
-                    Some(stats) => stats,
-                    None => object(vec![
-                        ("ok", Value::Bool(false)),
-                        ("error", str_value("pathfinding service not running")),
-                    ]),
-                };
-            }
-            "res-stats" => {
-                // Attribution gauge: pushes, bytes, plans, polls, files,
-                // connections, each with its per-second average.
-                return crate::res_stats::snapshot_json(crate::plan_service::stats_json());
-            }
-            "brain_wishes" => {
-                // Brain tab of the Lives page: the brain's own wishlist.
-                let job = self.jobs.lock().unwrap().get(account).cloned();
-                return crate::web_brain::wishes_reply(job.as_deref(), account);
-            }
-            "market" => {
-                // Market socket API over HTTP: {cmd:"market", op, ...}.
-                return crate::market_service::handle(request);
-            }
-            _ => {}
-        }
-        object(vec![
-            ("ok", Value::Bool(false)),
-            ("error", str_value(&format!("unknown command '{command}'"))),
-        ])
-    }
 }
 
-fn known_accounts() -> Vec<String> {
+pub(crate) fn known_accounts() -> Vec<String> {
     let mut accounts = Vec::new();
     if let Ok(names) = std::fs::read_dir(paths::users_dir()) {
         for entry in names.flatten() {

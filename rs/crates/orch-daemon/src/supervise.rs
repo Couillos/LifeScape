@@ -2,6 +2,7 @@
 //! Supervision: one thread per account, event telemetry, live state.
 //! Methods on daemon::Orchestrator; session control stays in daemon.rs.
 
+use crate::worker_command::WorkerCommand;
 use crate::job_state::{Phase, Status};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -290,7 +291,7 @@ impl Orchestrator {
             let reply = self
                 .send_worker(
                     &job.account,
-                    &object(vec![("cmd", str_value("status"))]),
+                    &WorkerCommand::Status.encode(),
                     Duration::from_secs(5),
                 )
                 .ok()
@@ -389,7 +390,7 @@ impl Orchestrator {
         }
         let reply = self.send_worker(
             &job.account,
-            &object(vec![("cmd", str_value("settle"))]),
+            &WorkerCommand::Settle.encode(),
             Duration::from_secs(WORKER_TIMEOUT),
         );
         if let Ok(reply) = reply {

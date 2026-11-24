@@ -90,7 +90,7 @@ pub fn fold_stopped(life: &mut lifescape_planner::Life, position: usize) {
 /// answered busy, or no session took the run. A transport error is no
 /// proof (the run may have started): crash recovery keeps judging it.
 pub fn refusal_never_ran(error: &str) -> bool {
-    error.starts_with("busy") || error.starts_with("no session") || error.contains(" died, open ")
+    crate::worker_call::Refusal::parse(error).never_ran()
 }
 
 /// Pure verdict of the idle detector: the active node failed for want of

@@ -5,6 +5,7 @@
 //! above the fleet layer takes `&Arc<dyn Fleet>` instead of naming the
 //! daemon (layering step A5, 2026-11-23).
 
+use crate::worker_call::CallError;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,7 +22,7 @@ pub trait Fleet: Send + Sync + 'static {
     /// Does the account's worker process still live?
     fn proc_alive(&self, account: &str) -> bool;
     /// One request to the account's worker socket, one reply.
-    fn send_worker(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, String>;
+    fn send_worker(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, CallError>;
     /// Load and run a script on the account's worker.
     fn run_job(&self, account: &str, script: &str, args: &[Value]) -> Value;
     /// Open the account's session (spawn the worker, wait for its socket).

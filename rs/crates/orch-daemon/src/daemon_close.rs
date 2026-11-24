@@ -4,6 +4,7 @@
 //! closes then reopens under one lifecycle claim, so no other open
 //! (market-absent, brain) slips in between.
 
+use crate::worker_command::WorkerCommand;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -70,7 +71,7 @@ impl Orchestrator {
         }
         let mut session = Value::Null;
         let mut acked = false;
-        match self.send_worker(account, &object(vec![("cmd", str_value("close"))]), Duration::from_secs(5)) {
+        match self.send_worker(account, &WorkerCommand::Close.encode(), Duration::from_secs(5)) {
             Ok(reply) if reply.get("ok").as_bool() == Some(true) => {
                 session = reply.get("session").clone();
                 acked = true;

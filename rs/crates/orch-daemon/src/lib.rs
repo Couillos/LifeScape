@@ -2,7 +2,7 @@
 pub use lifescape_orch_core::{logln, daemon_clock};
 pub use lifescape_orch_core::{paths, clock, downtime, log_sink, client, log_markers, cpu_profile, error_stamp, log_rotate, disk_guard, res_stats, store_pool, names, api_shapes, nav_profile, economy_guard};
 pub use lifescape_orch_world::{png, mapcache, mapbuild, minimap, staticmap, zones, plan_service};
-pub use lifescape_orch_fleet::{frame_codec, job_state, jobs, registry, site_crowd, worker_owner, daemon_pool, fleet, wake_hub};
+pub use lifescape_orch_fleet::{frame_codec, job_state, worker_call, worker_command, jobs, registry, site_crowd, worker_owner, daemon_pool, fleet, wake_hub};
 pub use lifescape_orch_market::{market_service, market_orders, market_auction, market_uncross, market_merge, market_prints, market_claims, market_units, market_lineage, market_eta, market_reference, market_seed, market_audit, market_reprice, market_daemon, market_convene, market_convene_sweep, market_absent, funding_gifts, market_host, market_facts, market_own};
 #[cfg(test)]
 pub use lifescape_orch_market::market_test_support;
@@ -12,6 +12,7 @@ pub use lifescape_orch_brain::{bid_why, brain_deps, brain, brain_alch, brain_amb
 pub use lifescape_orch_web::{web, web_brain, web_brain_view, web_errors, web_guides, web_items, web_job_lives, web_lives, web_market, web_rates_view, web_ws};
 pub mod daemon;
 pub mod daemon_close;
+pub mod daemon_commands;
 pub mod daemon_conn;
 pub mod daemon_watch;
 pub mod supervise;

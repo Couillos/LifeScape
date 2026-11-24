@@ -3,6 +3,7 @@
 //! staleness decision plus the supervisor-side tick that restarts wedged
 //! workers. The supervisor thread owns the states, keyed by account.
 
+use crate::worker_command::WorkerCommand;
 use crate::job_state::Status;
 use std::sync::Arc;
 use std::time::Duration;
@@ -137,7 +138,7 @@ impl Orchestrator {
         let deadline = crate::jobs::now_secs() + 15.0;
         let mut ready = false;
         while crate::jobs::now_secs() < deadline {
-            match self.send_worker(&job.account, &object(vec![("cmd", str_value("status"))]), Duration::from_secs(3)) {
+            match self.send_worker(&job.account, &WorkerCommand::Status.encode(), Duration::from_secs(3)) {
                 Ok(reply) if reply.get("ok").as_bool() == Some(true) => {
                     ready = true;
                     break;

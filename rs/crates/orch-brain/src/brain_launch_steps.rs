@@ -177,7 +177,7 @@ pub(crate) fn tutorial(pass: &mut LaunchPass) -> Flow {
             if reply.get("ok").as_bool() != Some(true) {
                 let error = reply.get("error").as_str().unwrap_or("?");
                 crate::logln!("brain {}: launch refused: {error}", job.account);
-                if crate::brain_inflight::refusal_never_ran(error) {
+                if crate::worker_call::Refusal::parse(error).never_ran() {
                     refused_launch(&job.account, &id);
                 }
             }

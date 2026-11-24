@@ -249,7 +249,7 @@ impl Fx for LiveFx<'_> {
             crate::logln!("brain {}: launch refused: {error}", self.job.account);
             // Never ran (P2-5): back to ready, uncounted, relaunched once the
             // worker reads idle (no "no report" on a run that never started).
-            if crate::brain_inflight::refusal_never_ran(error) {
+            if crate::worker_call::Refusal::parse(error).never_ran() {
                 crate::brain_launch::refused_launch(&self.job.account, node_id);
             }
         }

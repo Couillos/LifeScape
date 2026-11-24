@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use lifescape_json::{self as json, Value, object};
 use crate::daemon::Orchestrator;
+use crate::worker_call::CallError;
 use crate::paths;
 
 /// Bounded unix connect: the blocking `connect` runs on a reused helper
@@ -21,16 +22,16 @@ use crate::paths;
 fn connect_worker(
     sock_path: &std::path::Path,
     timeout: Duration,
-) -> Result<UnixStream, String> {
+) -> Result<UnixStream, CallError> {
     if !sock_path.exists() {
-        return Err(format!("session unreachable (no socket at {})", sock_path.display()));
+        return Err(CallError::Unreachable(format!("session unreachable (no socket at {})", sock_path.display())));
     }
     let path = sock_path.to_path_buf();
     // Lot 4.5: reused helper threads (`bounded_call`), no thread per call.
     crate::bounded_call::run_bounded(timeout, move || {
-        UnixStream::connect(&path).map_err(|error| format!("session unreachable: {error}"))
+        UnixStream::connect(&path).map_err(|error| CallError::Unreachable(format!("session unreachable: {error}")))
     })
-    .unwrap_or_else(|| Err("connect timed out (wedged session)".to_string()))
+    .unwrap_or_else(|| Err(CallError::TimedOut("connect timed out (wedged session)".to_string())))
 }
 
 impl Orchestrator {
@@ -43,7 +44,7 @@ impl Orchestrator {
     /// frame per connexion, so persistence needs its serve loop, and
     /// these calls are operator-paced, never steady-state traffic
     /// (pushes ride the persistent hub, plans the single `plan` op).
-    pub(crate) fn send_worker(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, String> {
+    pub(crate) fn send_worker(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, CallError> {
         let (sock_path, _ready) = paths::session_paths(account);
         let stream = match connect_worker(&sock_path, timeout) {
             Ok(stream) => stream,
@@ -53,29 +54,33 @@ impl Orchestrator {
                 // Only a socket nobody listens on is removed: a worker the
                 // daemon does not track yet (restore) and could not kill
                 // would be orphaned, logged in and unreachable.
-                if error.contains("refused") || error.contains("no socket") {
+                if error.text().contains("refused") || error.text().contains("no socket") {
                     let _ = std::fs::remove_file(&sock_path);
                 }
-                return Err(format!("session unreachable for {account}: {error}"));
+                let text = format!("session unreachable for {account}: {error}");
+                return Err(match error {
+                    CallError::TimedOut(_) => CallError::TimedOut(text),
+                    _ => CallError::Unreachable(text),
+                });
             }
         };
-        stream.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
-        stream.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+        stream.set_read_timeout(Some(timeout)).map_err(|e| CallError::Protocol(e.to_string()))?;
+        stream.set_write_timeout(Some(timeout)).map_err(|e| CallError::Protocol(e.to_string()))?;
         let mut buf = json::stringify(request);
         buf.push('\n');
-        (&stream).write_all(buf.as_bytes()).map_err(|e| e.to_string())?;
+        (&stream).write_all(buf.as_bytes()).map_err(|e| CallError::Protocol(e.to_string()))?;
         let mut line = String::new();
         BufReader::new(&stream).read_line(&mut line).map_err(|error| {
             if error.kind() == std::io::ErrorKind::WouldBlock {
-                format!("worker for {account} did not answer in time (busy script or wedged session)")
+                CallError::TimedOut(format!("worker for {account} did not answer in time (busy script or wedged session)"))
             } else {
-                error.to_string()
+                CallError::Protocol(error.to_string())
             }
         })?;
         if line.trim().is_empty() {
             return Ok(object(vec![]));
         }
-        json::parse(&line).map_err(|e| e.to_string())
+        json::parse(&line).map_err(|e| CallError::Protocol(e.to_string()))
     }
 }
 /// Live worker binary behind a `current_exe()` path: after `cargo build`
@@ -171,7 +176,7 @@ mod tests {
         let before = crate::bounded_call::spawned();
         let start = std::time::Instant::now();
         let error = connect_worker(&missing, Duration::from_secs(30)).expect_err("missing socket refuses");
-        assert!(error.contains("session unreachable"), "typed, got {error}");
+        assert!(error.is_unreachable() && error.text().contains("session unreachable"), "typed, got {error}");
         assert!(start.elapsed() < Duration::from_secs(5), "no thread, no connect wait");
         assert_eq!(crate::bounded_call::spawned(), before, "no helper thread for a doomed connect");
     }

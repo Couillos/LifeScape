@@ -43,8 +43,8 @@ impl Fleet for IdleFleet {
     fn proc_alive(&self, _account: &str) -> bool {
         false
     }
-    fn send_worker(&self, _account: &str, _request: &Value, _timeout: Duration) -> Result<Value, String> {
-        Err("idle fleet".to_string())
+    fn send_worker(&self, _account: &str, _request: &Value, _timeout: Duration) -> Result<Value, lifescape_orch_fleet::worker_call::CallError> {
+        Err(lifescape_orch_fleet::worker_call::CallError::Unreachable("idle fleet".to_string()))
     }
     fn run_job(&self, _account: &str, _script: &str, _args: &[Value]) -> Value {
         Value::Null
