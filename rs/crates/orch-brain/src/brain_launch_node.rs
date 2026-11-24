@@ -23,7 +23,7 @@ pub(crate) fn pick_next_ready(pass: &mut LaunchPass) -> Result<usize, Save> {
         if !waiting.is_empty() && crate::cpu_profile::timed("wait_answer", || crate::brain_wait_answer::answer_while_waiting(&mut pass.life, &pass.live)) {
             return Err(Save::Always);
         }
-        if !waiting.is_empty() && crate::cpu_profile::timed("filler.launch", || crate::brain_filler::launch_filler(orch, job, &mut pass.life, &pass.live, waiting)) {
+        if !waiting.is_empty() && crate::cpu_profile::timed("filler.launch", || crate::brain_filler::launch_filler(orch, job, &mut pass.life, &pass.live, waiting, &pass.deps)) {
             return Err(Save::None);
         }
         return Err(Save::IfDirty);
@@ -100,13 +100,13 @@ pub(crate) fn build_ctx(pass: &mut LaunchPass, position: usize, quests_done: Vec
     // Alchemy of its own stock is a money method too (2026-11-14).
     crate::cpu_profile::timed("alch.publish", || crate::brain_alch::publish(&mut ctx, &life.nodes[position], life, live));
     // 100 % market lots read from the precomputed money guide (R5).
-    crate::cpu_profile::timed("trade.publish", || crate::brain_trade::publish(&mut ctx, &life.nodes[position], life, live, job));
+    crate::cpu_profile::timed("trade.publish", || crate::brain_trade::publish(&mut ctx, &life.nodes[position], life, live, job, &pass.deps));
     // The money guide's lines the bot may take (R7), its trade offers
     // mapped to their lots.
-    crate::cpu_profile::timed("money.publish", || crate::brain_money::publish(&mut ctx, &life.nodes[position], life, live, job));
+    crate::cpu_profile::timed("money.publish", || crate::brain_money::publish_in(&mut ctx, &life.nodes[position], life, live, job, &pass.deps));
     // Smithing and magic (from 21) climbs pick their method with the
     // market: what to hammer or smelt, alchemy or a combat spell.
-    crate::cpu_profile::timed("train.fill_ctx", || crate::brain_train::fill_ctx(&mut ctx, &life.nodes[position], life, live));
+    crate::cpu_profile::timed("train.fill_ctx", || crate::brain_train::fill_ctx(&mut ctx, &life.nodes[position], life, live, &pass.deps));
     drop(ctx_phase);
     Picked { position, ctx, committed }
 }

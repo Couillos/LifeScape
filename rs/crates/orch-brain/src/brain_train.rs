@@ -233,7 +233,7 @@ pub(crate) fn pick_from_guide(set: &GuideSet, climb: &Climb, life: &Life, bot: &
 
 /// Fills `ctx.training` for a climb about to resolve (module doc),
 /// logging the pick with its numbers.
-pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value) {
+pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) {
     if node.method.is_some() {
         return;
     }
@@ -254,7 +254,7 @@ pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Valu
     if level >= *target {
         return;
     }
-    let Some(set) = crate::guides_store::current() else {
+    let Some(set) = deps.guides.clone() else {
         crate::logln!("brain {}: {} {skill} {level}->{target}: no training guide published yet, static tranche", life.account, node.id);
         return;
     };

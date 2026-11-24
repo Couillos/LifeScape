@@ -291,9 +291,14 @@ pub fn pick_window(node: &mut Node, ctx: &mut ReadyCtx, publish: &mut dyn FnMut(
 /// context, like a money node's (levels, tools, wallet, position, the
 /// fleet's sites, market, quests, its own draw seed).
 pub fn window_ctx(job: &Job, life: &Life, live: &Value, first: &str) -> (Node, ReadyCtx) {
+    window_ctx_in(job, life, live, first, &crate::brain_deps::BrainDeps::live())
+}
+
+/// `window_ctx` reading through the pass's handles (lot 3.5).
+pub(crate) fn window_ctx_in(job: &Job, life: &Life, live: &Value, first: &str, deps: &crate::brain_deps::BrainDeps) -> (Node, ReadyCtx) {
     let coins = crate::brain_plan::holdings_count(job, "coins");
     let node = Node::new(&format!("fill-{first}"), NodeKind::HaveCoins { amount: coins.saturating_add(1) }, Vec::new(), 0);
-    let mut ctx = crate::brain_plan::ready_ctx(life, &node, live);
+    let mut ctx = crate::brain_plan::ready_ctx_in(life, &node, live, deps);
     ctx.coins = coins;
     ctx.tools = crate::brain_plan::carried_tools(job);
     ctx.bank_known = live.get("bank_streamed").as_bool() == Some(true);
@@ -302,9 +307,9 @@ pub fn window_ctx(job: &Job, life: &Life, live: &Value, first: &str) -> (Node, R
         let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
         Some((part(1)?, part(2)?, part(0)?))
     });
-    ctx.crowd = crate::site_crowd::others(&job.account);
-    ctx.seats = crate::site_crowd::seats(&job.account);
-    crate::brain_market::fill_ctx(&mut ctx, &node, live);
+    ctx.crowd = deps.crowd.others(&job.account);
+    ctx.seats = deps.crowd.seats(&job.account);
+    crate::brain_market::fill_ctx_in(&mut ctx, &node, live, deps);
     // Like a money node (plan équilibre step 3): the quests it finished
     // gate the guide's lines, its draw has its own seed.
     ctx.quests_done = crate::brain_rescue::quests_done(life);
@@ -318,16 +323,21 @@ pub fn window_ctx(job: &Job, life: &Life, live: &Value, first: &str) -> (Node, R
 /// before): the window's node is never in the graph, so its
 /// `kept_except` is the alchemy's `kept`.
 pub fn publish_window(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job) {
+    publish_window_in(ctx, node, life, live, job, &crate::brain_deps::BrainDeps::live());
+}
+
+/// `publish_window` reading through the pass's handles (lot 3.5).
+pub(crate) fn publish_window_in(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job, deps: &crate::brain_deps::BrainDeps) {
     let keep = crate::brain_alch::kept_except(life, live, Some(&node.id));
     crate::brain_alch::publish_keeping(ctx, node, life, live, &keep);
-    crate::brain_money::publish_keeping(ctx, node, life, live, job, &keep);
+    crate::brain_money::publish_keeping(ctx, node, life, live, job, &keep, deps);
 }
 
 /// One filler window while `waiting` rests on the book and the graph has
 /// nothing else ready. Returns true when a run was queued (the caller
 /// saved the life first). Never through a ban; nothing workable is
 /// logged (typed reason), never a silent idle.
-pub(crate) fn launch_filler(orch: &Arc<dyn Fleet>, job: &Arc<Job>, life: &mut Life, live: &Value, waiting: &[String]) -> bool {
+pub(crate) fn launch_filler(orch: &Arc<dyn Fleet>, job: &Arc<Job>, life: &mut Life, live: &Value, waiting: &[String], deps: &crate::brain_deps::BrainDeps) -> bool {
     let Some(first) = waiting.first() else { return false };
     // A filler just queued: the worker may still read idle (one run at a time).
     if crate::brain_launch::recent_launch(&job.account) {
@@ -338,7 +348,7 @@ pub(crate) fn launch_filler(orch: &Arc<dyn Fleet>, job: &Arc<Job>, life: &mut Li
     if refused_recently(&job.account, now_secs()) {
         return false;
     }
-    let (mut node, mut ctx) = window_ctx(job, life, live, first);
+    let (mut node, mut ctx) = window_ctx_in(job, life, live, first, deps);
     let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now_secs() - stamp);
     let banned = lifescape_planner::banned_skills(&life.history, &ticks_since);
     // A filler that just failed (or ended without working) sits out,
@@ -346,7 +356,7 @@ pub(crate) fn launch_filler(orch: &Arc<dyn Fleet>, job: &Arc<Job>, life: &mut Li
     // reason to idle (2026-11-14, george_97: "no filler" for a whole ban).
     let failed = failed_filler_skills(life, &ticks_since);
     let reader: &Life = life;
-    let mut publish = |ctx: &mut ReadyCtx, node: &Node| publish_window(ctx, node, reader, live, job);
+    let mut publish = |ctx: &mut ReadyCtx, node: &Node| publish_window_in(ctx, node, reader, live, job, deps);
     let picked = pick_window(&mut node, &mut ctx, &mut publish, &banned, &failed);
     let pick = match picked {
         Ok(pick) => pick,

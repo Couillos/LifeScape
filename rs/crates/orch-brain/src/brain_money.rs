@@ -294,30 +294,36 @@ fn draws_money(node: &Node) -> bool {
 /// Publishes the bot's money lines in `ctx` (module doc). After
 /// `brain_trade::publish` (the trade offers it maps market rows to).
 pub fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job) {
+    publish_in(ctx, node, life, live, job, &crate::brain_deps::BrainDeps::live());
+}
+
+/// `publish` reading the guides and the market through the pass's handles
+/// (lot 3.5).
+pub(crate) fn publish_in(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job, deps: &crate::brain_deps::BrainDeps) {
     if !draws_money(node) {
         return;
     }
     // Its own candidates (the alternatives a previous resolve left) never
     // reserve the stock from it.
     let keep = crate::brain_alch::kept_except(life, live, Some(&node.id));
-    publish_keeping(ctx, node, life, live, job, &keep);
+    publish_keeping(ctx, node, life, live, job, &keep, deps);
 }
 
 /// `publish` with what the bot keeps already read (`keep`: its
 /// `brain_alch::kept_except` for `node`; a filler window reads it once
 /// for its alchemy and its money lines, lot 3 review, CPU).
-pub(crate) fn publish_keeping(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job, keep: &[String]) {
+pub(crate) fn publish_keeping(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job, keep: &[String], deps: &crate::brain_deps::BrainDeps) {
     if !draws_money(node) {
         return;
     }
-    let Some(set) = crate::guides_store::current() else {
+    let Some(set) = deps.guides.as_deref() else {
         crate::logln!("brain {}: {} money: no guide published yet, static money methods", job.account, node.id);
         return;
     };
     let levels = ctx.levels.clone();
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
     let stock = crate::brain_alch::own_stock(live, &life.account, keep);
-    let read = bot_rows(&set, &level_of, &stock);
+    let read = bot_rows(set, &level_of, &stock);
     let rows = read.all();
     for error in &read.errors {
         crate::logln!("brain {}: {} money guide on its stock: {error} (recipes read without its stock)", job.account, node.id);
@@ -326,11 +332,11 @@ pub(crate) fn publish_keeping(ctx: &mut ReadyCtx, node: &Node, life: &Life, live
     // counted once: the same figures as `holdings_count`.
     let holdings = crate::brain_plan::Holdings::of(job);
     let held = |item: &str| holdings.count(item) as f64;
-    let asks = |item: &str| crate::brain_trade::cycle_asks(&set, item);
+    let asks = |item: &str| crate::brain_trade::cycle_asks(set, item);
     let wallet = crate::brain_gear::free_coins(job, None);
     let quests = ctx.quests_done.clone();
     let bot = BotState { level_of: &level_of, combat: ctx.combat, quests_done: &quests, held: &held, coins: Some(wallet as f64), ironman: life.profile.ironman, asks: &asks };
-    let service = crate::market_service::shared();
+    let service = deps.market.clone();
     // The other producers' claims as they stand NOW (plan équilibre
     // step 2, the public board): supply on its way, never this bot's.
     let claims = crate::market_claims::claimed_by_others(&job.account);

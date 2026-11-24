@@ -70,15 +70,15 @@ pub fn cycle_asks(set: &GuideSet, item: &str) -> Option<f64> {
 /// an Ironman): no guide set yet, no offer (logged once per pass). The
 /// bot judged (D22): live levels and combat, its quests, its holdings,
 /// its free wallet, the cycle's asks.
-pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job) {
+pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job, deps: &crate::brain_deps::BrainDeps) {
     if !matches!(node.kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) || life.profile.ironman {
         return;
     }
-    let Some(set) = crate::guides_store::current() else {
+    let Some(set) = deps.guides.as_deref() else {
         crate::logln!("brain {}: no trade offer for {}: guides not built yet", job.account, node.id);
         return;
     };
-    publish_on(&set, ctx, node, live, job);
+    publish_on(set, ctx, node, live, job);
 }
 
 /// `publish` on a given set (the body after the set is read: the proof
