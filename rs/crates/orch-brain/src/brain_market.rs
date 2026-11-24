@@ -35,15 +35,21 @@ fn obj_id(item: &str) -> Option<i64> {
 /// the precomputed money guide (`guide_coins`); none before the first
 /// set.
 pub fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, live: &Value) {
+    fill_ctx_in(ctx, node, live, &crate::brain_deps::BrainDeps::live());
+}
+
+/// `fill_ctx` reading the market and the guides through the pass's handles
+/// (lot 3.5).
+pub(crate) fn fill_ctx_in(ctx: &mut ReadyCtx, node: &Node, live: &Value, deps: &crate::brain_deps::BrainDeps) {
     ctx.levels = live_levels(live);
     if let NodeKind::ObtainItems { item, .. } = &node.kind {
-        if let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) {
+        if let (Some(service), Some(id)) = (deps.market.as_deref(), obj_id(item)) {
             ctx.best_ask = service.lock_engine().books.get(&id).and_then(|book| book.best().1).map(|price| crate::market_units::to_unit(id, price));
             ctx.price = service.reference(id).price.max(1);
         }
     }
-    if let Some(set) = crate::guides_store::current() {
-        guide_coins(ctx, node, &set);
+    if let Some(set) = deps.guides.as_deref() {
+        guide_coins(ctx, node, set);
     }
 }
 

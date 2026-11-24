@@ -92,17 +92,19 @@ pub(crate) struct LiveUpkeepFx<'a> {
     orch: Option<&'a Arc<dyn Fleet>>,
     job: Option<&'a Arc<Job>>,
     live: &'a Value,
+    /// The pass's handles (market, rates, guides).
+    deps: crate::brain_deps::BrainDeps,
 }
 
 impl<'a> LiveUpkeepFx<'a> {
-    pub(crate) fn new(orch: &'a Arc<dyn Fleet>, job: &'a Arc<Job>, live: &'a Value) -> Self {
-        LiveUpkeepFx { orch: Some(orch), job: Some(job), live }
+    pub(crate) fn new(orch: &'a Arc<dyn Fleet>, job: &'a Arc<Job>, live: &'a Value, deps: crate::brain_deps::BrainDeps) -> Self {
+        LiveUpkeepFx { orch: Some(orch), job: Some(job), live, deps }
     }
 
     /// Without a worker: the rules that read the live snapshot only.
     #[cfg(test)]
     pub(crate) fn bare(live: &'a Value) -> Self {
-        LiveUpkeepFx { orch: None, job: None, live }
+        LiveUpkeepFx { orch: None, job: None, live, deps: crate::brain_deps::BrainDeps::live() }
     }
 }
 
@@ -115,8 +117,8 @@ impl RescueReader for LiveUpkeepFx<'_> {
         let lifescape_planner::NodeKind::ObtainItems { item, .. } = &node.kind else {
             return RouteFacts { best_ask: None, price: 0, held: 0, committed: 0 };
         };
-        let mut ctx = crate::brain_plan::ready_ctx(life, node, self.live);
-        crate::brain_market::fill_ctx(&mut ctx, node, self.live);
+        let mut ctx = crate::brain_plan::ready_ctx_in(life, node, self.live, &self.deps);
+        crate::brain_market::fill_ctx_in(&mut ctx, node, self.live, &self.deps);
         let held = self.job.map(|job| crate::brain_plan::holdings_count(job, item)).unwrap_or(0);
         let committed = crate::brain_gear::committed_coins(&life.account, crate::brain_gear::obj_id(item));
         RouteFacts { best_ask: ctx.best_ask, price: ctx.price, held, committed }
@@ -187,7 +189,7 @@ impl UpkeepFx for LiveUpkeepFx<'_> {
     }
 
     fn orders(&self) -> Option<Vec<OrderFact>> {
-        let (job, service) = (self.job?, crate::market_service::shared()?);
+        let (job, service) = (self.job?, self.deps.market.as_deref()?);
         let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
         Some(
             rows.iter()
@@ -207,8 +209,8 @@ impl UpkeepFx for LiveUpkeepFx<'_> {
     }
 
     fn cancel(&self, order: i64, reason: &str) -> bool {
-        match (self.job, crate::market_service::shared()) {
-            (Some(job), Some(service)) => crate::market_maker::cancel(&service, &job.account, order, reason),
+        match (self.job, self.deps.market.as_deref()) {
+            (Some(job), Some(service)) => crate::market_maker::cancel(service, &job.account, order, reason),
             _ => false,
         }
     }

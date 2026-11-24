@@ -89,6 +89,11 @@ pub(crate) fn farm_yield(snapshot: &crate::rates_service::Snapshot, method: &str
 /// fallback), the published yield of its production legs for this bot
 /// (live level and tool), trend score.
 pub fn ready_ctx(life: &Life, node: &Node, live: &Value) -> ReadyCtx {
+    ready_ctx_in(life, node, live, &crate::brain_deps::BrainDeps::live())
+}
+
+/// `ready_ctx` reading the rates through the pass's handles (lot 3.5).
+pub(crate) fn ready_ctx_in(life: &Life, node: &Node, live: &Value, deps: &crate::brain_deps::BrainDeps) -> ReadyCtx {
     // Every field of the context is named below (no `ReadyCtx::blind` base):
     // a field added to the planner's struct is a compile error here until
     // this reader decides its value. The ones the launch pass fills later
@@ -105,7 +110,7 @@ pub fn ready_ctx(life: &Life, node: &Node, live: &Value) -> ReadyCtx {
         NodeKind::ObtainItems { item, .. } => item.clone(),
         _ => String::new(),
     };
-    let snapshot = crate::rates_service::live_snapshot();
+    let snapshot = deps.rates.clone();
     // The prices come from the market's memory (no store read per pass);
     // `price_of` falls back to this thread's pooled connection only when
     // no market service runs.

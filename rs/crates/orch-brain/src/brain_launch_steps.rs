@@ -54,7 +54,7 @@ pub(crate) fn open<'a>(orch: &'a Arc<dyn Fleet>, job: &'a Arc<Job>) -> Option<La
 /// (`brain_upkeep_drive::operator_and_maker`, decisions in the planner's
 /// `upkeep_role`).
 pub(crate) fn operator_and_maker(pass: &mut LaunchPass) -> Flow {
-    let fx = LiveUpkeepFx::new(pass.orch, pass.job, &pass.live);
+    let fx = LiveUpkeepFx::new(pass.orch, pass.job, &pass.live, pass.deps.clone());
     // A quoting maker has no ambition pass, no gear, tool or wish bid, no
     // alchemy: its post, its quotes, its deals, its bank (Q6).
     pass.quoting = upkeep::operator_and_maker(&fx, &mut pass.life, &mut pass.dirty);
@@ -66,7 +66,7 @@ pub(crate) fn operator_and_maker(pass: &mut LaunchPass) -> Flow {
 /// releases, stale goal work, re-engage after a restart
 /// (`brain_upkeep_drive::ambition_upkeep`).
 pub(crate) fn ambition_upkeep(pass: &mut LaunchPass) -> Flow {
-    let fx = LiveUpkeepFx::new(pass.orch, pass.job, &pass.live);
+    let fx = LiveUpkeepFx::new(pass.orch, pass.job, &pass.live, pass.deps.clone());
     upkeep::ambition_upkeep(&fx, &mut pass.life, &mut pass.dirty, pass.quoting);
     Flow::Continue
 }
@@ -249,6 +249,6 @@ pub(crate) fn waits(pass: &mut LaunchPass) -> Flow {
 /// a stuck spell (`brain_upkeep_drive::graph_state`, decisions in the
 /// planner's `upkeep_graph`).
 pub(crate) fn graph_state(pass: &mut LaunchPass) -> Flow {
-    let fx = LiveUpkeepFx::new(pass.orch, pass.job, &pass.live);
+    let fx = LiveUpkeepFx::new(pass.orch, pass.job, &pass.live, pass.deps.clone());
     upkeep::graph_state(&fx, &mut pass.life, pass.dirty)
 }

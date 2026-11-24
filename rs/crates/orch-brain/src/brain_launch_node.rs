@@ -7,7 +7,6 @@
 
 use crate::brain::push_history;
 use crate::brain_launch_pass::{Flow, LaunchPass, Picked, Save};
-use crate::brain_plan::ready_ctx;
 
 /// The gear sub-goal first, then the goal's next node; the tutorial
 /// only ever starts through its gate. Parked market waits are skipped:
@@ -68,7 +67,7 @@ pub(crate) fn build_ctx(pass: &mut LaunchPass, position: usize, quests_done: Vec
     let ctx_phase = crate::cpu_profile::phase("ctx.build");
     let mut ctx = {
         let node = pass.life.nodes[position].clone();
-        ready_ctx(&pass.life, &node, &pass.live)
+        crate::brain_plan::ready_ctx_in(&pass.life, &node, &pass.live, &pass.deps)
     };
     ctx.quests_done = quests_done;
     // The seed of this resolve's draw from a guide (R7): the bot, the
@@ -97,7 +96,7 @@ pub(crate) fn build_ctx(pass: &mut LaunchPass, position: usize, quests_done: Vec
     // The fleet's sites: a crowded rock field reads farther.
     ctx.crowd = inputs.crowd.clone();
     ctx.seats = inputs.seats.clone();
-    crate::cpu_profile::timed("market.fill_ctx", || crate::brain_market::fill_ctx(&mut ctx, &life.nodes[position], live));
+    crate::cpu_profile::timed("market.fill_ctx", || crate::brain_market::fill_ctx_in(&mut ctx, &life.nodes[position], live, &pass.deps));
     // Alchemy of its own stock is a money method too (2026-11-14).
     crate::cpu_profile::timed("alch.publish", || crate::brain_alch::publish(&mut ctx, &life.nodes[position], life, live));
     // 100 % market lots read from the precomputed money guide (R5).

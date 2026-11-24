@@ -71,10 +71,8 @@ pub(crate) struct BrainDeps {
     /// The market service; `None` while it is down (no data, no decision).
     pub market: Option<Arc<MarketService>>,
     /// The measured rates (an `Arc` snapshot, never a copy).
-    #[allow(dead_code)] // read by the planning contexts (next commit)
     pub rates: Arc<Snapshot>,
     /// The last published guides, `None` before the first build.
-    #[allow(dead_code)] // read by the planning contexts (next commit)
     pub guides: Option<Arc<GuideSet>>,
     pub crowd: Arc<dyn Crowd>,
     pub clock: Arc<dyn Clock>,
