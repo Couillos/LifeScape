@@ -7,6 +7,7 @@
 //! /hiscores /hiscores.js /api/hiscores (cached snapshot, hiscores_service)
 //! /xp /xp.js /api/xp (cached snapshot, xp_service)
 //! /map/<dir>/<file>.png /map/<dir>/manifest.json /mapscene/<sprite>.png
+//! /icons.js /icons/<sheet>.png /icons/index.json (icon sheets, gamedata/tools/icons.mts)
 //! /api/map /api/status /api/state/<account> /api/items /api/items/history|flows
 //! /api/rates/table /api/rates/activities /api/rates/detail /api/rates/trading /api/lives /api/life/<account> /api/brain/<account> /api/economy
 //! /api/market/<op>?… /api/scripts /api/accounts /api/logs/<account> +

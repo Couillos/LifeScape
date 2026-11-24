@@ -22,6 +22,7 @@
 /guides-money? 200 text/html; charset=utf-8 no-store file
 /guides-training? 200 text/html; charset=utf-8 no-store file
 /guides.js? 200 application/javascript no-store file
+/icons.js? 200 application/javascript no-store file
 /api/status? 200 application/json no-store 791bdb4b661b8e22
 /api/map? 200 application/json no-store fec46e700204497f
 /api/state/smith? 200 application/json no-store 298b30bbeba3a375
@@ -36,6 +37,9 @@
 /map-8762ed9c85f8b53a/manifest.json? 200 application/json public, max-age=31536000, immutable bfb1a545ee4670e8
 /map-8762ed9c85f8b53a/missing.png? 500 application/json no-store 75c608dbc0ce99cd
 /map-xyz/manifest.json? 404 application/json no-store e76ca992da27c107
+/icons/nope.json? 404 application/json no-store e76ca992da27c107
+/icons/no-such-sheet.png? 404 application/json no-store e76ca992da27c107
+/icons/../index.html? 404 application/json no-store e76ca992da27c107
 /nope? 404 application/json no-store e76ca992da27c107
 /api/nope? 404 application/json no-store e76ca992da27c107
 /api? 404 application/json no-store e76ca992da27c107

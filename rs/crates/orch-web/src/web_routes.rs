@@ -60,6 +60,7 @@ const PAGES: &[Page] = &[
     Page { path: "guides-money", file: "guides_money.html", content_type: HTML },
     Page { path: "guides-training", file: "guides_training.html", content_type: HTML },
     Page { path: "guides.js", file: "guides.js", content_type: JS },
+    Page { path: "icons.js", file: "icons.js", content_type: JS },
 ];
 
 /// The page of a path (`[]` is the index, a single segment otherwise).
@@ -110,6 +111,38 @@ fn serve_map_file(ctx: &Ctx) -> Result<Response, String> {
         content_type: if file.ends_with(".json") { "application/json" } else { "image/png" },
         cache: "public, max-age=31536000, immutable",
         body,
+    })
+}
+
+/// One icon-sheet file (2026-11-24): `icons/index.json` or
+/// `icons/<name>.png`, written by `gamedata/tools/icons.mts` into
+/// `orchestration/static/icons/`. Nothing else (no traversal: ".." and
+/// any other name never match).
+pub(crate) fn icon_asset<'a>(parts: &[&'a str]) -> Option<&'a str> {
+    if parts.len() != 2 || parts[0] != "icons" {
+        return None;
+    }
+    let file = parts[1];
+    let png = file.len() > 4
+        && file.len() <= 32
+        && file.ends_with(".png")
+        && file[..file.len() - 4].chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    (file == "index.json" || png).then_some(file)
+}
+
+/// The index changes when the sheets are regenerated: never cached. The
+/// sheets are fetched as `<name>.png?v=<hash of the bytes>` (the hash
+/// comes from the index), so a long cache is safe.
+fn serve_icon_file(ctx: &Ctx) -> Result<Response, String> {
+    let file = icon_asset(ctx.parts).ok_or("no such icon file")?;
+    let body = match std::fs::read(paths::static_dir().join("icons").join(file)) {
+        Ok(body) => body,
+        Err(_) => return Ok(crate::web::not_found()),
+    };
+    Ok(if file == "index.json" {
+        Response { status: 200, content_type: "application/json", cache: "no-store", body }
+    } else {
+        Response { status: 200, content_type: "image/png", cache: "public, max-age=31536000, immutable", body }
     })
 }
 
@@ -230,6 +263,7 @@ const ROUTES: &[Route] = &[
     Route { matches: |parts| page_of(parts).is_some(), handle: serve_page },
     Route { matches: |parts| map_asset(parts).is_some(), handle: serve_map_file },
     Route { matches: is_mapscene, handle: serve_mapscene },
+    Route { matches: |parts| icon_asset(parts).is_some(), handle: serve_icon_file },
     Route { matches: |parts| parts == ["api", "status"], handle: api_status },
     Route { matches: |parts| parts == ["api", "map"], handle: api_map },
     Route { matches: |parts| under(parts, ["api", "state"]), handle: api_state },
@@ -288,6 +322,20 @@ mod tests {
         assert_eq!(map_asset(&["map-0123456789abcde", "c44-l0.png"]), None);
     }
 
+    #[test]
+    fn icon_asset_accepts_only_the_sheets_and_the_index() {
+        assert_eq!(icon_asset(&["icons", "index.json"]), Some("index.json"));
+        assert_eq!(icon_asset(&["icons", "items.png"]), Some("items.png"));
+        assert_eq!(icon_asset(&["icons", "skills.png"]), Some("skills.png"));
+        assert_eq!(icon_asset(&["icons", ".png"]), None);
+        assert_eq!(icon_asset(&["icons", ".."]), None);
+        assert_eq!(icon_asset(&["icons", "a.b.png"]), None);
+        assert_eq!(icon_asset(&["icons", "other.json"]), None);
+        assert_eq!(icon_asset(&["icons", "items.png", "x"]), None);
+        assert_eq!(icon_asset(&["icon", "items.png"]), None);
+        assert_eq!(icon_asset(&["icons"]), None);
+    }
+
     /// No two rows claim one path: the table order is a reading order,
     /// never a precedence (the two sub-routers, `errors` and the rates
     /// views, own paths no row has).
@@ -307,6 +355,9 @@ mod tests {
             &["api", "guides", "money"],
             &["map-0123456789abcdef", "manifest.json"],
             &["mapscene", "1.png"],
+            &["icons", "items.png"],
+            &["icons", "index.json"],
+            &["icons.js"],
         ];
         for parts in probes {
             let rows = ROUTES.iter().filter(|route| (route.matches)(parts)).count();
