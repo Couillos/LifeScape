@@ -61,7 +61,8 @@ fn items_of(books: &SharedBooks) -> BTreeMap<String, super::ItemBook> {
 fn the_shared_books_equal_the_per_bot_views_after_every_change() {
     let market = TestMarket::open("mv_books");
     let service = market.service.clone();
-    lifescape_orch_market::market_daemon::test_service::with_service(service.clone(), || {
+    let deps = &crate::brain_deps::BrainDeps::with_market(Some(service.clone()));
+    {
         let mut rng = Rng(0xB00C5);
         let items = market_items(30, &mut rng);
         fund(&service, &items);
@@ -103,7 +104,7 @@ fn the_shared_books_equal_the_per_bot_views_after_every_change() {
         assert!(changes > 50, "the generation barely moved ({changes})");
         // A reader sees the same views through the shared copy.
         for asker in ACCOUNTS {
-            let (live, old) = (MarketReader::live(asker), MarketReader::live_per_bot_reference(asker, false));
+            let (live, old) = (MarketReader::live(asker, deps), MarketReader::live_per_bot_reference(asker, false, deps));
             for (item, _) in &items {
                 assert_eq!(live.view(item), old.view(item), "reader view of {item} for {asker}");
             }
@@ -111,14 +112,14 @@ fn the_shared_books_equal_the_per_bot_views_after_every_change() {
             let none = |_: &str| None;
             assert_eq!(live.value_books(&none), old.value_books(&none), "value books of {asker}");
         }
-    });
+    }
 }
 
 #[test]
 fn the_day_volume_equals_the_store_sum_at_any_clock() {
     let market = TestMarket::open("mv_volume");
     let service = market.service.clone();
-    lifescape_orch_market::market_daemon::test_service::with_service(service.clone(), || {
+    {
         let mut rng = Rng(0x701);
         let items = market_items(8, &mut rng);
         fund(&service, &items);
@@ -147,7 +148,7 @@ fn the_day_volume_equals_the_store_sum_at_any_clock() {
         assert!(checked > 100);
         let traded: i64 = items.iter().map(|(_, id)| service.lock_store().volume_between(*id, 0, i64::MAX).expect("sum")).sum();
         assert!(traded > 0, "no execution was made: the volume proof is empty");
-    });
+    }
 }
 
 fn live_of(level: u8) -> Value {
@@ -160,8 +161,9 @@ fn live_of(level: u8) -> Value {
 fn same_choice_for(lives: &[lifescape_planner::Life], seed: u64) -> (usize, usize) {
     let market = TestMarket::open("mv_choice");
     let service = market.service.clone();
+    let deps = &crate::brain_deps::BrainDeps::with_market(Some(service.clone()));
     let (mut compared, mut chosen) = (0, 0);
-    lifescape_orch_market::market_daemon::test_service::with_service(service.clone(), || {
+    {
         let mut rng = Rng(seed);
         let items = market_items(120, &mut rng);
         fund(&service, &items);
@@ -180,15 +182,15 @@ fn same_choice_for(lives: &[lifescape_planner::Life], seed: u64) -> (usize, usiz
             let live = live_of(*[15u8, 40, 70].get(compared % 3).unwrap_or(&40));
             let rate = crate::brain_bids::bot_rate(life);
             for whole in [false, true] {
-                let (new, old) = (MarketReader::live_answering(&life.account), MarketReader::live_per_bot_reference(&life.account, true));
-                let from_new = with_bot_state(life, &live, |state| choose_in(life, &new, rate, state, whole));
-                let from_old = with_bot_state(life, &live, |state| choose_in(life, &old, rate, state, whole));
+                let (new, old) = (MarketReader::live_answering(&life.account, deps), MarketReader::live_per_bot_reference(&life.account, true, deps));
+                let from_new = with_bot_state(life, &live, |state| choose_in(life, &new, rate, state, whole), deps);
+                let from_old = with_bot_state(life, &live, |state| choose_in(life, &old, rate, state, whole), deps);
                 assert_eq!(from_new, from_old, "{} whole={whole}: the choice differs", life.account);
                 compared += 1;
                 chosen += usize::from(from_new.is_some());
             }
         }
-    });
+    }
     (compared, chosen)
 }
 

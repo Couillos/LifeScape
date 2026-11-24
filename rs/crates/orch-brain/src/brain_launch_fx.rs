@@ -58,12 +58,14 @@ pub(crate) trait Fx {
 /// The reader of the planner's rates and guides for one bot.
 pub(crate) struct LivePlan<'a> {
     pub live: &'a Value,
+    pub deps: crate::brain_deps::BrainDeps,
 }
 
 impl PlanSource for LivePlan<'_> {
     fn with_read(&self, account: &str, profile: &lifescape_planner::Profile, quests_done: &[String], body: &mut dyn FnMut(&lifescape_planner::plan_read::PlanRead)) {
+        let deps = &self.deps;
         let view = crate::brain_plan_read::BotView { account: account.to_string(), profile: profile.clone(), quests: quests_done.to_vec() };
-        crate::brain_plan_read::with_plan_read(&view, self.live, |read| body(read));
+        crate::brain_plan_read::with_plan_read(&view, self.live, |read| body(read), deps);
     }
 }
 
@@ -79,7 +81,7 @@ pub(crate) struct LiveFx<'a> {
 
 impl<'a> LiveFx<'a> {
     pub(crate) fn new(orch: &'a Arc<dyn Fleet>, job: &'a Arc<Job>, live: &'a Value, deps: crate::brain_deps::BrainDeps) -> Self {
-        LiveFx { orch, job, live, deps, plan: LivePlan { live } }
+        LiveFx { orch, job, live, plan: LivePlan { live, deps: deps.clone() }, deps }
     }
 }
 
@@ -114,11 +116,13 @@ impl Fx for LiveFx<'_> {
     }
 
     fn release_listings(&mut self, items: &[String]) -> usize {
-        crate::brain_tools::release_own_locks(&**self.orch, &self.job.account, items)
+        let deps = &self.deps.clone();
+        crate::brain_tools::release_own_locks(&**self.orch, &self.job.account, items, deps)
     }
 
     fn cancel_open_buys(&mut self, account: &str, item: &str) {
-        crate::brain_market::cancel_open_buys(account, item);
+        let deps = &self.deps.clone();
+        crate::brain_market::cancel_open_buys(account, item, deps);
     }
 
     fn note_gear_withdrawn(&mut self, account: &str, item: &str) {
@@ -126,7 +130,7 @@ impl Fx for LiveFx<'_> {
     }
 
     fn claim_lot(&mut self, life: &Life, lot: &TradeLot) {
-        let secs = crate::market_claims::claim_secs(crate::brain_trade::lot_ticks(lot), crate::market_eta::live_tick_ms());
+        let secs = crate::market_claims::claim_secs(crate::brain_trade::lot_ticks(lot), self.deps.clock.tick_ms());
         crate::market_claims::claim_run(&life.account, &lot.node, &lot.product, lot.lot, secs);
     }
 
@@ -135,7 +139,8 @@ impl Fx for LiveFx<'_> {
     }
 
     fn afford_food(&mut self, method: &str, needed: Vec<String>) -> Vec<String> {
-        crate::brain_food::afford_food_needs(self.job, method, needed)
+        let deps = &self.deps.clone();
+        crate::brain_food::afford_food_needs(self.job, method, needed, deps)
     }
 
     fn loot_facts(&mut self, spot: &str) -> LootFacts {
@@ -155,13 +160,14 @@ impl Fx for LiveFx<'_> {
     }
 
     fn cleanup_facts(&mut self, life: &Life, inputs: &LaunchInputs, snapshot: &Node) -> CleanupFacts {
+        let deps = &self.deps.clone();
         let (job, live) = (self.job, self.live);
         let levels = crate::brain_tools::live_levels(live);
         let mut keep = crate::brain::cleanup_keep(life);
         keep.extend(crate::brain_tools::kept_tools(life, &inputs.stacks, &crate::brain_tools::level_refs(&levels)));
         keep.extend(crate::brain_gear::ladder_keep(job, life, live));
         // A caster's alchemy stock and runes (2026-11-15).
-        keep.extend(crate::brain_alch::alch_keep(life, live));
+        keep.extend(crate::brain_alch::alch_keep(life, live, deps));
         // A quoting maker's slice is its trade (Q6): never sold nor
         // dropped by the janitor (its NPC dumps ride `--shopsell`).
         keep.extend(crate::market_maker::slice_names(life));
@@ -191,17 +197,18 @@ impl Fx for LiveFx<'_> {
     }
 
     fn market_buy(&mut self, life: &Life, position: usize, snapshot: &Node, ctx: &ReadyCtx) -> Result<(), String> {
+        let deps = &self.deps.clone();
         // What one unit is worth to this buyer: its own make cost.
         let worth = match &snapshot.kind {
             NodeKind::ObtainItems { item, count } => {
                 let units = (*count - ctx.held).max(1);
-                crate::brain_bids::production_costs_for(life, self.live, &[(item.clone(), units)]).get(item).map(|cost| cost.ceil() as i64)
+                crate::brain_bids::production_costs_for(life, self.live, &[(item.clone(), units)], deps).get(item).map(|cost| cost.ceil() as i64)
             }
             _ => None,
         };
         // An input of a product the graph makes: never over the product.
-        let reserve = crate::brain_market::derived_reserve(life, position, self.live);
-        crate::cpu_profile::timed("market.obtain_bid", || crate::brain_market::place_obtain_bid(self.job, snapshot, ctx, worth, reserve)).map(|_| ())
+        let reserve = crate::brain_market::derived_reserve(life, position, self.live, deps);
+        crate::cpu_profile::timed("market.obtain_bid", || crate::brain_market::place_obtain_bid(self.job, snapshot, ctx, worth, reserve, deps)).map(|_| ())
     }
 
     fn crowd_note(&mut self, site: Option<Site>, method: &str) {
@@ -209,17 +216,19 @@ impl Fx for LiveFx<'_> {
     }
 
     fn standing_bid(&mut self, life: &Life, position: usize, snapshot: &Node, ctx: &ReadyCtx) {
+        let deps = &self.deps.clone();
         let live = self.live;
-        let derived = || crate::brain_market::derived_reserve(life, position, live);
-        crate::cpu_profile::timed("market.standing_bid", || crate::brain_market::place_standing_bid(self.job, snapshot, ctx, &derived));
+        let derived = || crate::brain_market::derived_reserve(life, position, live, deps);
+        crate::cpu_profile::timed("market.standing_bid", || crate::brain_market::place_standing_bid(self.job, snapshot, ctx, &derived, deps));
     }
 
     fn claim_launch(&mut self, snapshot: &Node, method: &str, budget: Option<(u64, u64)>) {
+        let deps = &self.deps.clone();
         // A money run posts its product on the public order board (plan
         // équilibre step 2) once it really launches, released at its report
         // (`brain_fold::reported_node`), at a lost or refused run
         // (`brain_inflight`) or at expiry.
-        crate::brain_money::claim_launch(&self.job.account, snapshot, method, budget, self.live);
+        crate::brain_money::claim_launch(&self.job.account, snapshot, method, budget, self.live, deps);
     }
 
     fn note_launch(&mut self) {

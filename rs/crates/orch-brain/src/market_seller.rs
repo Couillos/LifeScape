@@ -138,10 +138,10 @@ pub fn undersized(quantity: i64, remaining: i64, free: i64, lot_of_whole: i64) -
 /// The `bid_response` make cost of `name` for `account` (its life and
 /// live snapshot from the supervisor), the reserve's cap; `None` when
 /// the bot is not supervised or cannot make it.
-fn make_cost_of(life: Option<&Life>, account: &str, name: &str, units: i64) -> Option<f64> {
+fn make_cost_of(life: Option<&Life>, account: &str, name: &str, units: i64, deps: &crate::brain_deps::BrainDeps) -> Option<f64> {
     let life = life?;
     let live = crate::jobs::live_of(account)?;
-    crate::brain_bids::production_costs_for(life, &live, &[(name.to_string(), units.max(1))]).remove(name)
+    crate::brain_bids::production_costs_for(life, &live, &[(name.to_string(), units.max(1))], deps).remove(name)
 }
 
 /// The seller's pricing policy on the engine (the engine itself keeps
@@ -154,7 +154,7 @@ pub trait SellerPolicy {
     /// (M4/M5); a never-traded object opens on its public anchors (M7,
     /// `market_discovery`, the own cast's net `own_alch` among them).
     #[allow(clippy::too_many_arguments)]
-    fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, unsold: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>, pressed: bool, own_alch: Option<i64>) -> (SaleDecision, Option<Reserve>);
+    fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, unsold: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>, pressed: bool, own_alch: Option<i64>, deps: &crate::brain_deps::BrainDeps) -> (SaleDecision, Option<Reserve>);
 }
 
 impl SellerPolicy for MarketService {
@@ -165,7 +165,7 @@ impl SellerPolicy for MarketService {
     /// (M4/M5); a never-traded object opens on its public anchors (M7,
     /// `market_discovery`, the own cast's net `own_alch` among them).
     #[allow(clippy::too_many_arguments)]
-    fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, unsold: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>, pressed: bool, own_alch: Option<i64>) -> (SaleDecision, Option<Reserve>) {
+    fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, unsold: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>, pressed: bool, own_alch: Option<i64>, deps: &crate::brain_deps::BrainDeps) -> (SaleDecision, Option<Reserve>) {
         let reserve = {
             let store = self.lock_store();
             costs.reserve(&store, name, item, life, make_cost)
@@ -182,7 +182,7 @@ impl SellerPolicy for MarketService {
             others_ask,
             anchor: lifescape_planner::alchemy::alch_value(name, true),
             pressed,
-            discovery: crate::market_discovery::seller_anchors(name, own_alch),
+            discovery: crate::market_discovery::seller_anchors(name, own_alch, deps),
             margin: crate::market_discovery::account_margin(self, account),
             unsold,
         };
@@ -192,7 +192,7 @@ impl SellerPolicy for MarketService {
 
 /// `seller_quote {account, item, qty}`: the account's own listing for
 /// `qty` free units (the `market sell` script's default price).
-pub fn seller_quote(service: &MarketService, request: &Value) -> Value {
+pub fn seller_quote(service: &MarketService, request: &Value, deps: &crate::brain_deps::BrainDeps) -> Value {
     let account = request.get("account").as_str().unwrap_or("").to_string();
     // One book per object: a banknote is quoted as its object.
     let item = request.get("item").as_i64().map(crate::market_audit::book_item).unwrap_or(-1);
@@ -204,12 +204,12 @@ pub fn seller_quote(service: &MarketService, request: &Value) -> Value {
     let rate = crate::brain_d17::coin_rate(&account);
     let costs = OwnCosts::load(&service.lock_store(), &account, rate);
     let life = crate::brain::load_life(&account);
-    let make_cost = make_cost_of(life.as_ref(), &account, name, qty);
+    let make_cost = make_cost_of(life.as_ref(), &account, name, qty, deps);
     let pressed = request.get("urgent").as_bool() == Some(true);
     let live = crate::jobs::live_of(&account);
-    let own_alch = live.as_ref().and_then(|live| crate::brain_alch::alch_floor(live, name));
+    let own_alch = live.as_ref().and_then(|live| crate::brain_alch::alch_floor(live, name, deps));
     let unsold = service.unsold_horizons(&account, item);
-    let (decision, reserve) = service.sale_decision(&account, name, item, qty, unsold, &costs, life.as_ref(), make_cost, pressed, own_alch);
+    let (decision, reserve) = service.sale_decision(&account, name, item, qty, unsold, &costs, life.as_ref(), make_cost, pressed, own_alch, deps);
     let reserve_value = reserve.map(|known| Value::Int(known.coins)).unwrap_or(Value::Null);
     match decision {
         SaleDecision::List { qty, price, floor } => object(vec![

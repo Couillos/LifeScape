@@ -164,7 +164,7 @@ fn last_pass() -> &'static Mutex<HashMap<String, f64>> {
 /// One wishlist pass for an idle, non-Iron bot: keeps a standing bid for
 /// each top wish, its ceiling the wallet share of the moment (a resting
 /// bid keeps its price walk). Returns the bids placed or kept.
-pub fn maybe_bid_wishes(job: &Job, life: &Life) -> usize {
+pub fn maybe_bid_wishes(job: &Job, life: &Life, deps: &crate::brain_deps::BrainDeps) -> usize {
     if life.profile.ironman {
         return 0;
     }
@@ -176,7 +176,7 @@ pub fn maybe_bid_wishes(job: &Job, life: &Life) -> usize {
         }
         table.insert(job.account.clone(), now);
     }
-    let Some(service) = crate::market_service::shared() else { return 0 };
+    let Some(service) = deps.market.clone() else { return 0 };
     let wishes = wishlist(job, life);
     // A tier the kit already obtains through a step (on offer, funded:
     // `brain_tool_shop`, 2026-11-17) is the step's: never a second bid.
@@ -193,7 +193,7 @@ pub fn maybe_bid_wishes(job: &Job, life: &Life) -> usize {
         // The free wallet (review 2026-11-13): coins minus what the bot's
         // other resting buys (gear step, the other tool, graph buys)
         // already commit, never the whole wallet again.
-        let coins = crate::brain_gear::free_coins(job, Some(id));
+        let coins = crate::brain_gear::free_coins(job, Some(id), deps);
         let ceiling = wish_ceiling(wish, coins, gear_wishes).max(1);
         match crate::market_reprice::keep_bid(&service, &job.account, id, 1, ceiling, crate::market_lineage::TOOL) {
             Ok(crate::market_reprice::StandingBid::Placed { price, .. }) => {

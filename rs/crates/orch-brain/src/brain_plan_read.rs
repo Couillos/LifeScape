@@ -51,8 +51,8 @@ pub(crate) fn measured_rate(book: &crate::rates_estimator::YieldBook, method: &s
 }
 
 /// The measured reader of the live snapshot (module doc).
-pub(crate) fn live_rate() -> impl Fn(&str, u8) -> Option<WorkRate> {
-    let snapshot = crate::rates_service::live_snapshot();
+pub(crate) fn live_rate(deps: &crate::brain_deps::BrainDeps) -> impl Fn(&str, u8) -> Option<WorkRate> {
+    let snapshot = deps.rates.clone();
     let now = crate::rates_service::now_secs();
     move |method: &str, level: u8| measured_rate(snapshot.book(), method, level, now)
 }
@@ -74,13 +74,13 @@ impl BotView {
 /// Runs `body` with the planner's readers for one bot (module doc): the
 /// measured rates, and the training guide of the last published set
 /// judged on the bot's live state (`live`: levels, stock, wallet).
-pub(crate) fn with_plan_read<T>(bot: &BotView, live: &Value, body: impl FnOnce(&PlanRead) -> T) -> T {
-    let rate = live_rate();
-    let set = crate::guides_store::current();
+pub(crate) fn with_plan_read<T>(bot: &BotView, live: &Value, body: impl FnOnce(&PlanRead) -> T, deps: &crate::brain_deps::BrainDeps) -> T {
+    let rate = live_rate(deps);
+    let set = deps.guides.clone();
     let levels = crate::brain_market::live_levels(live);
     let combat = crate::brain_plan::live_combat(live);
     let coins = crate::brain_ambition::live_count(live, "coins").max(0) as f64;
-    let locks = crate::brain_locks::locked_items(&bot.account);
+    let locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), &bot.account);
     let held = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item)) as f64;
     let trains = |skill: &str, from: u8, to: u8| {
         let Some(set) = set.as_ref() else { return false };
@@ -95,22 +95,22 @@ pub(crate) fn with_plan_read<T>(bot: &BotView, live: &Value, body: impl FnOnce(&
 /// One work session at a time: the open input obtains of the bot's climbs
 /// come down to what one session burns (`planner::session_resize`, the
 /// rule applied to the persisted state). Returns true when a node changed.
-pub(crate) fn resize_session_inputs(life: &mut Life, live: &Value) -> bool {
+pub(crate) fn resize_session_inputs(life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> bool {
     let _phase = crate::cpu_profile::phase("resize_session_inputs");
     // Fast exit (lot 3.4): no open climb with an open input obtain, nothing
     // to resize: the readers below are not built (the same `false`).
     if !lifescape_planner::session_resize::has_open_climb_inputs(life) {
         return false;
     }
-    resize_session_inputs_full(life, live)
+    resize_session_inputs_full(life, live, deps)
 }
 
 /// The resize with its readers built, whatever the graph holds (the
 /// reference of the fast exit).
-pub(crate) fn resize_session_inputs_full(life: &mut Life, live: &Value) -> bool {
+pub(crate) fn resize_session_inputs_full(life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> bool {
     let view = BotView::of(life);
     let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
-    let lines = with_plan_read(&view, live, |read| lifescape_planner::session_resize::resize_climb_inputs(life, &level_of, read.rate));
+    let lines = with_plan_read(&view, live, |read| lifescape_planner::session_resize::resize_climb_inputs(life, &level_of, read.rate), deps);
     for line in &lines {
         crate::logln!("brain {}: {line}", life.account);
     }
@@ -126,6 +126,7 @@ mod tests {
     /// open climb input (statuses, methods, dependencies).
     #[test]
     fn the_fast_exit_equals_the_full_resize() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         use lifescape_planner::{NodeKind, NodeStatus};
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lives");
         let lives = crate::brain_launch_equiv_tests::load_dir(&dir);
@@ -153,7 +154,7 @@ mod tests {
                 }
                 let exits = !lifescape_planner::session_resize::has_open_climb_inputs(&life);
                 let (mut fast, mut full) = (life.clone(), life.clone());
-                let (fast_answer, full_answer) = (resize_session_inputs(&mut fast, &live), resize_session_inputs_full(&mut full, &live));
+                let (fast_answer, full_answer) = (resize_session_inputs(&mut fast, &live, deps), resize_session_inputs_full(&mut full, &live, deps));
                 assert_eq!(fast_answer, full_answer, "{} variant {variant}", base.account);
                 assert_eq!(fast, full, "{} variant {variant}: life", base.account);
                 if exits {

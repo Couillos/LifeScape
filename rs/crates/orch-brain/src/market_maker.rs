@@ -180,11 +180,12 @@ impl crate::market_facts::AccountFacts for LifeFacts {
     }
 
     fn public_anchors(&self, item: &str) -> Option<lifescape_market::discovery::Anchors> {
-        Some(crate::market_discovery::public_anchors(item))
+        // The market engine's callback: the daemon's handles, read now.
+        Some(crate::market_discovery::public_anchors(item, &crate::brain_deps::BrainDeps::live()))
     }
 
     fn seller_quote(&self, service: &crate::market_service::MarketService, request: &lifescape_json::Value) -> lifescape_json::Value {
-        crate::market_seller::seller_quote(service, request)
+        crate::market_seller::seller_quote(service, request, &crate::brain_deps::BrainDeps::live())
     }
 }
 
@@ -338,7 +339,7 @@ pub fn outlet_units(equity: i64, value: i64) -> i64 {
 
 /// One quote pass of a quoting maker (rate-limited): returns the moves
 /// made (placed, amended, cancelled).
-pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
+pub(crate) fn quote_pass(job: &Job, life: &Life, deps: &crate::brain_deps::BrainDeps) -> usize {
     let Some(role) = lifescape_planner::maker_role(life).filter(|role| role.phase == lifescape_planner::MakerPhase::Quoting) else { return 0 };
     let wall = wall_now();
     // The previous pass (none after a daemon start: one pass back).
@@ -349,12 +350,12 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
         }
         table.insert(job.account.clone(), wall)
     };
-    let Some(service) = crate::market_service::shared() else { return 0 };
+    let Some(service) = deps.market.clone() else { return 0 };
     let account = job.account.as_str();
     // The maker's time value (D1) prices its shop trips (the outlet, D2);
     // read before any store lock (its refresh locks the store).
     let rate = crate::brain_d17::coin_rate(account);
-    let coins = crate::brain_plan::holdings_count(job, "coins");
+    let coins = crate::brain_plan::holdings_count(job, "coins", deps);
     let stock = live_stock(job);
     let lookback = ticks_as_secs(lifescape_market::maker::DEMAND_LOOKBACK_TICKS) as i64;
     let now_clock = crate::market_service::MarketService::now_clock();
@@ -395,7 +396,7 @@ pub(crate) fn quote_pass(job: &Job, life: &Life) -> usize {
         // M7: a never-traded object is quoted on its public anchor (the
         // published production cost); read only then (a traded object's
         // fair value is its current price).
-        let make_cost = if references[id].traded { None } else { crate::market_discovery::public_anchors(item.name).make_cost };
+        let make_cost = if references[id].traded { None } else { crate::market_discovery::public_anchors(item.name, deps).make_cost };
         let input = MakerInput {
             reference: references[id],
             best_bid: others_bid,

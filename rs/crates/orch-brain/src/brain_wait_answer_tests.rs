@@ -57,9 +57,10 @@ fn draw_answer(life: &mut Life) -> Option<String> {
 
 #[test]
 fn a_milestone_waiting_on_a_buy_is_set_aside_for_an_answer_of_any_trade() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let mut life = lily(NOW - 2_000);
     let stones_before = life.ambition.as_ref().map(|held| held.milestones.iter().map(|stone| (stone.id.clone(), stone.status.clone(), stone.progress, stone.blocked_count)).collect::<Vec<_>>());
-    assert!(super::set_aside_with(&mut life, &Value::Null, &ticks_since, &|_| true, &mut draw_answer));
+    assert!(super::set_aside_with(&mut life, &Value::Null, &ticks_since, &|_| true, &mut draw_answer, deps));
     assert_eq!(life.goal_origin.as_deref(), Some("bid:steel_platebody"));
     let stones_after = life.ambition.as_ref().map(|held| held.milestones.iter().map(|stone| (stone.id.clone(), stone.status.clone(), stone.progress, stone.blocked_count)).collect::<Vec<_>>());
     assert_eq!(stones_after, stones_before, "the milestone is neither done nor blocked");
@@ -72,27 +73,29 @@ fn a_milestone_waiting_on_a_buy_is_set_aside_for_an_answer_of_any_trade() {
 
 #[test]
 fn a_short_wait_a_running_node_a_non_milestone_goal_or_no_lot_keep_the_goal() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let mut never = |_: &mut Life| -> Option<String> { panic!("no draw expected") };
     // Under one filler window.
     let mut fresh = lily(NOW - 500);
-    assert!(!super::set_aside_with(&mut fresh, &Value::Null, &ticks_since, &|_| true, &mut never));
+    assert!(!super::set_aside_with(&mut fresh, &Value::Null, &ticks_since, &|_| true, &mut never, deps));
     // A node runs: its report first.
     let mut running = lily(NOW - 2_000);
     running.active = Some("n1434".to_string());
-    assert!(!super::set_aside_with(&mut running, &Value::Null, &ticks_since, &|_| true, &mut never));
+    assert!(!super::set_aside_with(&mut running, &Value::Null, &ticks_since, &|_| true, &mut never, deps));
     // A bid answer already (its own waits use the filler).
     let mut answering = lily(NOW - 2_000);
     answering.goal_origin = Some("bid:big_bones".to_string());
-    assert!(!super::set_aside_with(&mut answering, &Value::Null, &ticks_since, &|_| true, &mut never));
+    assert!(!super::set_aside_with(&mut answering, &Value::Null, &ticks_since, &|_| true, &mut never, deps));
     // No lot pays now: the filler runs as before, nothing touched.
     let mut idle = lily(NOW - 2_000);
     let before = idle.clone();
-    assert!(!super::set_aside_with(&mut idle, &Value::Null, &ticks_since, &|_| false, &mut never));
+    assert!(!super::set_aside_with(&mut idle, &Value::Null, &ticks_since, &|_| false, &mut never, deps));
     assert_eq!(idle, before);
 }
 
 #[test]
 fn a_draw_that_returns_to_the_milestone_is_not_marked() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let mut life = lily(NOW - 2_000);
     let first = life.goal_origin.clone();
     let mut back = |life: &mut Life| {
@@ -100,7 +103,7 @@ fn a_draw_that_returns_to_the_milestone_is_not_marked() {
         life.history.push(entry("goal", "next:prayer 70", NOW));
         Some("prayer 70".to_string())
     };
-    assert!(super::set_aside_with(&mut life, &Value::Null, &ticks_since, &|_| true, &mut back));
+    assert!(super::set_aside_with(&mut life, &Value::Null, &ticks_since, &|_| true, &mut back, deps));
     assert!(!lifescape_planner::bid_trade::drawn_while_waiting(&life.history));
 }
 
@@ -109,6 +112,7 @@ fn a_draw_that_returns_to_the_milestone_is_not_marked() {
 /// open, credited with what its goal made, and asks the rest.
 #[test]
 fn a_production_milestone_set_aside_is_neither_done_nor_lost() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let mut cook = lily(NOW - 2_000);
     cook.account = "wait_mila_wade".to_string();
     let stone = Milestone {
@@ -127,7 +131,7 @@ fn a_production_milestone_set_aside_is_neither_done_nor_lost() {
     pies.status = NodeStatus::Ready;
     pies.progress_current = 25;
     cook.nodes.push(pies);
-    assert!(super::set_aside_with(&mut cook, &Value::Null, &ticks_since, &|_| true, &mut draw_answer));
+    assert!(super::set_aside_with(&mut cook, &Value::Null, &ticks_since, &|_| true, &mut draw_answer, deps));
     let held = cook.ambition.as_ref().and_then(|ambition| ambition.milestones.iter().find(|stone| stone.id == "m42")).cloned().expect("m42 kept");
     assert_ne!(held.status, MilestoneStatus::Done, "not done");
     assert_eq!(held.blocked_count, 0, "not blocked");
@@ -139,10 +143,11 @@ fn a_production_milestone_set_aside_is_neither_done_nor_lost() {
 /// never sets the next goal aside.
 #[test]
 fn a_buy_of_an_earlier_goal_sets_nothing_aside() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let never = &mut |_: &mut Life| -> Option<String> { panic!("no draw expected") };
     let mut life = lily(NOW - 2_000);
     life.memory.floor = Some(1500);
-    assert!(!super::set_aside_with(&mut life, &Value::Null, &ticks_since, &|_| true, never));
+    assert!(!super::set_aside_with(&mut life, &Value::Null, &ticks_since, &|_| true, never, deps));
 }
 
 /// Live 2026-11-20 08:43 -> 09:43 UTC: 13 miners on gold and adamantite
@@ -169,36 +174,39 @@ fn miner(cooled_at: i64) -> Life {
 
 #[test]
 fn a_goal_whose_every_site_is_full_is_set_aside_at_once() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let mut life = miner(NOW - 10);
-    assert!(super::set_aside_with(&mut life, &Value::Null, &ticks_since, &|_| true, &mut draw_answer));
+    assert!(super::set_aside_with(&mut life, &Value::Null, &ticks_since, &|_| true, &mut draw_answer, deps));
     assert_eq!(life.goal_origin.as_deref(), Some("bid:steel_platebody"));
     assert!(lifescape_planner::bid_trade::drawn_while_waiting(&life.history));
     // A side goal (its milestones banned) on full rocks: the same.
     let mut side = miner(NOW - 10);
     side.goal_origin = Some(format!("{}demand:gold_ore", lifescape_planner::SIDE_PREFIX));
-    assert!(super::set_aside_with(&mut side, &Value::Null, &ticks_since, &|_| true, &mut draw_answer));
+    assert!(super::set_aside_with(&mut side, &Value::Null, &ticks_since, &|_| true, &mut draw_answer, deps));
 }
 
 #[test]
 fn a_cool_run_out_or_an_earlier_goals_wait_sets_nothing_aside() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let never = &mut |_: &mut Life| -> Option<String> { panic!("no draw expected") };
     let mut over = miner(NOW - 7_000);
-    assert!(!super::set_aside_with(&mut over, &Value::Null, &ticks_since, &|_| true, never));
+    assert!(!super::set_aside_with(&mut over, &Value::Null, &ticks_since, &|_| true, never, deps));
     let mut earlier = miner(NOW - 10);
     earlier.memory.floor = Some(1600);
-    assert!(!super::set_aside_with(&mut earlier, &Value::Null, &ticks_since, &|_| true, never));
+    assert!(!super::set_aside_with(&mut earlier, &Value::Null, &ticks_since, &|_| true, never, deps));
 }
 
 /// A wait spent with the daemon stopped does not set the milestone aside
 /// (user 2026-11-23); the same wait awake does.
 #[test]
 fn a_wait_spent_with_the_daemon_down_sets_nothing_aside() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let parked_at = NOW - 2_000;
     let mut awake = lily(parked_at);
-    assert!(super::set_aside_with(&mut awake, &Value::Null, &ticks_since, &|_| true, &mut draw_answer), "control: 2 000 ticks awake");
+    assert!(super::set_aside_with(&mut awake, &Value::Null, &ticks_since, &|_| true, &mut draw_answer, deps), "control: 2 000 ticks awake");
     lifescape_orch_core::downtime::set_for_test(vec![(parked_at + 10, parked_at + 1_900)]);
     let mut stopped = lily(parked_at);
     let mut never = |_: &mut Life| -> Option<String> { panic!("no draw expected") };
-    assert!(!super::set_aside_with(&mut stopped, &Value::Null, &ticks_since, &|_| true, &mut never), "110 ticks awake");
+    assert!(!super::set_aside_with(&mut stopped, &Value::Null, &ticks_since, &|_| true, &mut never, deps), "110 ticks awake");
     lifescape_orch_core::downtime::set_for_test(Vec::new());
 }

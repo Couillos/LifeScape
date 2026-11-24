@@ -117,12 +117,12 @@ pub(crate) fn ready_ctx_in(life: &Life, node: &Node, live: &Value, deps: &crate:
     let (mut price, mut shop_price, mut shop_window, mut yield_per_6000, mut leg_costs_out) = (10, 10, None, 200.0, Vec::new());
     if !item_debug.is_empty() {
         let display = display_of(&item_debug);
-        if let Some((found, _)) = crate::rates_price::price_of(&display) {
+        if let Some((found, _)) = crate::rates_price::price_of_in(deps.market.as_deref(), &display) {
             price = found.max(1.0) as i64;
             shop_price = shop_floor(&item_debug);
             shop_window = shop_window_units(&item_debug);
             yield_per_6000 = obtain_yield(&snapshot, node, &item_debug, &display, live);
-            leg_costs_out = leg_costs(&snapshot, node, &item_debug, &display, live, coins_per_tick);
+            leg_costs_out = leg_costs(&snapshot, node, &item_debug, &display, live, coins_per_tick, deps);
         }
     }
     ReadyCtx {
@@ -171,7 +171,7 @@ pub(crate) fn ready_ctx_in(life: &Life, node: &Node, live: &Value, deps: &crate:
 /// (live 2026-11-22: `ground:iron_bar` 555 ticks per bar won the tie
 /// over smelting). A leg the rates cannot estimate carries yield 0 (the
 /// planner reads it as unusable), the error logged.
-fn leg_costs(snapshot: &crate::rates_service::Snapshot, node: &Node, item_debug: &str, display: &str, live: &Value, coins_per_tick: f64) -> Vec<lifescape_planner::cost::LegCost> {
+fn leg_costs(snapshot: &crate::rates_service::Snapshot, node: &Node, item_debug: &str, display: &str, live: &Value, coins_per_tick: f64, deps: &crate::brain_deps::BrainDeps) -> Vec<lifescape_planner::cost::LegCost> {
     let trade = ["market:", "shop:", "dialogue:"];
     let candidates: Vec<String> = node.alternatives.iter().map(|alt| alt.method.clone()).filter(|method| !trade.iter().any(|prefix| method.starts_with(prefix))).collect();
     let mut out = Vec::new();
@@ -189,7 +189,7 @@ fn leg_costs(snapshot: &crate::rates_service::Snapshot, node: &Node, item_debug:
         let input_coins: f64 = leg
             .inputs
             .iter()
-            .map(|(input, quantity)| crate::rates_price::price_of(&display_of(input)).map_or(1.0, |(price, _)| price) * *quantity as f64)
+            .map(|(input, quantity)| crate::rates_price::price_of_in(deps.market.as_deref(), &display_of(input)).map_or(1.0, |(price, _)| price) * *quantity as f64)
             .sum();
         out.push(lifescape_planner::cost::LegCost { method: leg.method, yield_per_6000, input_ticks_per_unit: input_coins / coins_per_tick.max(0.01) });
     }
@@ -219,12 +219,12 @@ fn obtain_yield(snapshot: &crate::rates_service::Snapshot, node: &Node, item_deb
 /// what its own sell orders and seller deals lock is not usable (live
 /// 2026-11-13, b3gybcev: a listed hammer read as held). Coins are the
 /// raw wallet (their commitments: `brain_gear::free_coins`).
-pub fn holdings_count(job: &Job, item_debug: &str) -> i64 {
+pub fn holdings_count(job: &Job, item_debug: &str, deps: &crate::brain_deps::BrainDeps) -> i64 {
     let total = raw_holdings_count(job, item_debug);
     if item_debug.eq_ignore_ascii_case("coins") {
         return total;
     }
-    let locks = crate::brain_locks::locked_items(&job.account);
+    let locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), &job.account);
     crate::brain_locks::free_count(total, crate::brain_locks::locked_in(&locks, item_debug))
 }
 
@@ -240,9 +240,9 @@ pub(crate) struct Holdings {
 
 impl Holdings {
     /// The job's holdings as they stand now.
-    pub(crate) fn of(job: &Job) -> Self {
+    pub(crate) fn of(job: &Job, deps: &crate::brain_deps::BrainDeps) -> Self {
         let live = job.inner.try_lock().map(|inner| inner.live_or_null()).unwrap_or_else(|_| crate::jobs::null_live());
-        Holdings { live, locks: crate::brain_locks::locked_items(&job.account), counted: Default::default() }
+        Holdings { live, locks: crate::brain_locks::locked_items_in(deps.market.as_deref(), &job.account), counted: Default::default() }
     }
 
     /// What `holdings_count` reads for `item_debug`.
@@ -363,13 +363,13 @@ pub(crate) fn worn_names(job: &Job) -> Vec<String> {
 
 /// Carried debug names (live pack the brain already reads) for the
 /// planner tool gate: only positive counts ride along.
-pub(crate) fn carried_tools(job: &Job) -> Vec<String> {
+pub(crate) fn carried_tools(job: &Job, deps: &crate::brain_deps::BrainDeps) -> Vec<String> {
     let mut entries = live_entries(job, "inv");
     entries.extend(live_entries(job, "bank"));
     // A wielded pickaxe or axe works too (PRD3 lot 5).
     entries.extend(live_entries(job, "worn"));
     // A tool locked by the bot's own listing is not carried (b3gybcev).
-    let locks = crate::brain_locks::locked_items(&job.account);
+    let locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), &job.account);
     crate::brain_locks::free_tool_names(&entries, &|name: &str| crate::brain_locks::locked_in(&locks, name))
 }
 

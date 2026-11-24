@@ -37,10 +37,10 @@ fn now_secs() -> i64 {
 
 /// Sets the waiting ambition goal aside for a whole-market answer when
 /// the module's trigger holds. True when the life changed (save it).
-pub(crate) fn answer_while_waiting(life: &mut Life, live: &Value) -> bool {
+pub(crate) fn answer_while_waiting(life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> bool {
     let now = now_secs();
     let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now - stamp);
-    set_aside_with(life, live, &ticks_since, &|life| crate::brain_bids::whole_market_lot(life, live), &mut |life| crate::brain_succession::draw_next_with(life, live, true))
+    set_aside_with(life, live, &ticks_since, &|life| crate::brain_bids::whole_market_lot(life, live, deps), &mut |life| crate::brain_succession::draw_next_with(life, live, true, deps), deps)
 }
 
 /// True when the trigger holds (module doc), the lot aside.
@@ -74,7 +74,7 @@ fn waits_long(life: &Life, ticks_since: &dyn Fn(i64) -> u64) -> bool {
 }
 
 /// `answer_while_waiting` with the lot check and the draw given (tests).
-fn set_aside_with(life: &mut Life, live: &Value, ticks_since: &dyn Fn(i64) -> u64, lot_ready: &dyn Fn(&Life) -> bool, draw: &mut dyn FnMut(&mut Life) -> Option<String>) -> bool {
+fn set_aside_with(life: &mut Life, live: &Value, ticks_since: &dyn Fn(i64) -> u64, lot_ready: &dyn Fn(&Life) -> bool, draw: &mut dyn FnMut(&mut Life) -> Option<String>, deps: &crate::brain_deps::BrainDeps) -> bool {
     if !waits_long(life, ticks_since) || !lot_ready(life) {
         return false;
     }
@@ -92,7 +92,7 @@ fn set_aside_with(life: &mut Life, live: &Value, ticks_since: &dyn Fn(i64) -> u6
         abandoned.len(),
         abandoned.join(",")
     );
-    crate::brain_succession::close_goal(life, live, false);
+    crate::brain_succession::close_goal(life, live, false, deps);
     let drawn = draw(life);
     let origin = life.goal_origin.clone().unwrap_or_default();
     if drawn.is_some() && origin.starts_with(lifescape_planner::bid_response::BID_PREFIX) {

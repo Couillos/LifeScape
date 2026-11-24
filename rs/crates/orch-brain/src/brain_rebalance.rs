@@ -163,13 +163,13 @@ pub fn step(existing: Option<Marker>, plan: &dyn Fn() -> Option<Marker>, account
 /// Applies one row to the bot's own life (the unit tests of the rule as the
 /// loop ran it until lot 5: verdict, then the draw over the live snapshot).
 #[cfg(test)]
-fn apply_row(life: &mut Life, live: &Value, row: &PlanRow) -> bool {
+fn apply_row(life: &mut Life, live: &Value, row: &PlanRow, deps: &crate::brain_deps::BrainDeps) -> bool {
     use lifescape_planner::upkeep_ambition::{row_applied, row_verdict, RowVerdict};
     let row = RebalanceRow { from: row.from.clone(), kind: row.kind.clone(), why: row.why.clone(), numbers: row.numbers.clone() };
     match row_verdict(life, &row) {
         RowVerdict::Nothing | RowVerdict::Kept(_) => false,
         RowVerdict::Give => {
-            crate::brain_ambition::assign_rebalanced(life, live, &row.kind, &row.why, &row.numbers);
+            crate::brain_ambition::assign_rebalanced(life, live, &row.kind, &row.why, &row.numbers, deps);
             row_applied(life, &row)
         }
     }

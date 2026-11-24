@@ -129,7 +129,7 @@ fn a_placed_market_buy_is_stamped_now_and_not_expired() {
     let deadline = (crate::brain_await::AWAIT_FILL_TICKS * crate::market_eta::live_tick_ms() / 1000) as i64;
     assert!(waited < deadline, "the fill wait expired at once ({waited} >= {deadline})");
     let mut probe = life.clone();
-    let settled = crate::brain_await::settle_fill(&job, &mut probe, position, "logs", 5, waited);
+    let settled = crate::brain_await::settle_fill(&job, &mut probe, position, "logs", 5, waited, &deps);
     assert!(settled, "a fresh buy was settled as expired");
     assert!(probe.history.iter().all(|entry| entry.outcome != "failed" && entry.outcome != "abandoned"));
 }

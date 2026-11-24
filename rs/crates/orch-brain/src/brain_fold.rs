@@ -260,6 +260,7 @@ pub(crate) fn reported_node(account: &str, report: &Value) -> String {
 }
 
 pub(crate) fn handle_report(orch: &Arc<dyn Fleet>, job: &Arc<Job>, report: &Value) {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let account = job.account.clone();
     let node_id = reported_node(&account, report);
     let Some(mut life) = load_life(&account) else { return };
@@ -295,7 +296,7 @@ pub(crate) fn handle_report(orch: &Arc<dyn Fleet>, job: &Arc<Job>, report: &Valu
     let stop = report.get("stop").as_str().unwrap_or("").to_string();
     // A foodless fight obtains the best food its wallet buys (`brain_food`).
     let fight_method = life.nodes[index].method.clone().unwrap_or_default();
-    let missing = crate::brain_food::afford_food_needs(job, &fight_method, report_missing(report));
+    let missing = crate::brain_food::afford_food_needs(job, &fight_method, report_missing(report), deps);
     let ticks = report.get("ticks").as_i64().unwrap_or(0).max(0) as u64;
     life.nodes[index].spent_ticks = life.nodes[index].spent_ticks.saturating_add(ticks);
     // A rescue that ran out of budget mid-script is typed in the
@@ -338,13 +339,13 @@ pub(crate) fn handle_report(orch: &Arc<dyn Fleet>, job: &Arc<Job>, report: &Valu
         },
         NodeKind::ObtainItems { item, count } => {
             let quota = matches!(&life.goal, lifescape_planner::GoalKind::Produce { item: made, .. } if made == item);
-            let held = if quota { holdings_count(job, item) } else { lifescape_planner::tools::family_held(item, *count, &|name| holdings_count(job, name)) };
+            let held = if quota { holdings_count(job, item, deps) } else { lifescape_planner::tools::family_held(item, *count, &|name| holdings_count(job, name, deps)) };
             life.nodes[index].progress_current = held;
             (held >= *count, method == "market:buy")
         }
         // A coin target is met by the wallet, whatever the method sold.
         NodeKind::HaveCoins { amount } => {
-            let held = holdings_count(job, "coins");
+            let held = holdings_count(job, "coins", deps);
             life.nodes[index].progress_current = held;
             (held >= *amount, false)
         }
@@ -390,7 +391,7 @@ pub(crate) fn handle_report(orch: &Arc<dyn Fleet>, job: &Arc<Job>, report: &Valu
         Verdict::Done => {
             // D-B: whichever leg landed first, the other one closes.
             if let NodeKind::ObtainItems { item, .. } = &kind {
-                crate::brain_market::cancel_open_buys(&account, item);
+                crate::brain_market::cancel_open_buys(&account, item, deps);
             }
             let proof = life.nodes[index].progress_target.max(life.nodes[index].progress_current);
             complete_node(&mut life, index, proof);
@@ -432,7 +433,7 @@ pub(crate) fn handle_report(orch: &Arc<dyn Fleet>, job: &Arc<Job>, report: &Valu
             // A need its own listings lock (P5, `locked:<object>`): the
             // listings go, the node relaunches, no block counted, no buy.
             let locked = crate::brain_tools::locked_needs(needs);
-            let withdrawn = crate::brain_tools::release_own_locks(&**orch, &account, &locked);
+            let withdrawn = crate::brain_tools::release_own_locks(&**orch, &account, &locked, deps);
             if withdrawn > 0 {
                 crate::logln!("brain {account}: {id} blocked on its own listings ({}): {withdrawn} listing(s) withdrawn, relaunch", locked.join(", "));
                 retry_uncounted(&mut life, index);
@@ -451,7 +452,7 @@ pub(crate) fn handle_report(orch: &Arc<dyn Fleet>, job: &Arc<Job>, report: &Valu
                 // the count stays zero).
                 let made = if crate::errors_model::is_stock_out(report, &needs) { crate::errors_model::worked_units(report) } else { 0 };
                 lifescape_planner::record_made(&mut life, index, made);
-                let fold = crate::brain_plan_read::with_plan_read(&view, &live, |read| lifescape_planner::record_block_with(&mut life, index, &needs, &level_of, read));
+                let fold = crate::brain_plan_read::with_plan_read(&view, &live, |read| lifescape_planner::record_block_with(&mut life, index, &needs, &level_of, read), deps);
                 lifescape_planner::record_made(&mut life, index, made);
                 push_history(&mut life, &id, crate::brain_launch::block_outcome(&fold));
                 if let FailureFold::CycleBroken(line) = &fold {

@@ -800,7 +800,7 @@ impl Orchestrator {
             "fund_makers" => return crate::funding_cmd::fund_makers(self, request.get("dry_run").as_bool().unwrap_or(true), request.get("force").as_bool().unwrap_or(false)),
             "bid_why" => {
                 let item = request.get("item").as_str().unwrap_or("");
-                return match crate::brain_bids::explain_for(account, item) {
+                return match crate::brain_bids::explain_for(account, item, &lifescape_orch_brain::brain_deps::BrainDeps::live()) {
                     Ok(lines) => object(vec![("ok", Value::Bool(true)), ("lines", Value::Arr(lines.iter().map(|line| str_value(line)).collect()))]),
                     Err(error) => object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]),
                 };

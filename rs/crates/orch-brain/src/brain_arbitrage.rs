@@ -178,8 +178,8 @@ pub fn unclaimed_sells(sells: &[(String, String, i64, i64)], bids: &[(String, St
 /// Others' resting sells on the live book as `(object, account, unit
 /// price, units)` (banknote books read as their object), net of the
 /// bids of other accounts already resting on them (`unclaimed_sells`).
-fn live_sells(account: &str) -> Vec<(String, String, i64, i64)> {
-    let Some(service) = crate::market_service::shared() else { return Vec::new() };
+fn live_sells(account: &str, deps: &crate::brain_deps::BrainDeps) -> Vec<(String, String, i64, i64)> {
+    let Some(service) = deps.market.clone() else { return Vec::new() };
     let engine = service.lock_engine();
     let mut sells = Vec::new();
     let mut bids = Vec::new();
@@ -204,7 +204,7 @@ fn base_id(item: &str) -> Option<i64> {
 
 /// One arbitrage pass for an idle, non-Iron bot (module doc). Returns the
 /// bids placed (0 or 1).
-pub(crate) fn arbitrage_pass(job: &Job, life: &Life, live: &Value) -> usize {
+pub(crate) fn arbitrage_pass(job: &Job, life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> usize {
     if life.profile.ironman {
         return 0;
     }
@@ -218,7 +218,7 @@ pub(crate) fn arbitrage_pass(job: &Job, life: &Life, live: &Value) -> usize {
     }
     // The time value first: its refresh takes the store lock.
     let rate = crate::brain_d17::coin_rate(&job.account);
-    let Some(service) = crate::market_service::shared() else { return 0 };
+    let Some(service) = deps.market.clone() else { return 0 };
     let account = job.account.as_str();
     let clock = crate::market_service::MarketService::now_clock();
     let own = crate::brain_npc_sale::own_arbitrage(account);
@@ -255,7 +255,7 @@ pub(crate) fn arbitrage_pass(job: &Job, life: &Life, live: &Value) -> usize {
     };
     // One arbitrage bid at a time, until its motive's horizon: it climbs
     // 10 % a window toward its ceiling meanwhile (the market's walk).
-    let horizon_secs = i64::try_from(crate::market_lineage::horizon_ticks(crate::market_lineage::ARBITRAGE, false).saturating_mul(crate::market_eta::live_tick_ms()) / 1000).unwrap_or(i64::MAX);
+    let horizon_secs = i64::try_from(crate::market_lineage::horizon_ticks(crate::market_lineage::ARBITRAGE, false).saturating_mul(deps.clock.tick_ms()) / 1000).unwrap_or(i64::MAX);
     let mut walking: Option<&lifescape_store::Order> = None;
     for row in &resting {
         if walking.is_some() || clock - row.lineage_clock() > horizon_secs {
@@ -266,7 +266,7 @@ pub(crate) fn arbitrage_pass(job: &Job, life: &Life, live: &Value) -> usize {
     }
     // One bid per object: another motive's bid owns its object.
     let foreign: BTreeSet<i64> = rows.iter().filter(|row| crate::brain_gear::cancellable(row) && row.motive != crate::market_lineage::ARBITRAGE).map(|row| crate::market_audit::book_item(row.item_id)).collect();
-    let books: PublicAsks = asks_by_object(&live_sells(account), account)
+    let books: PublicAsks = asks_by_object(&live_sells(account, deps), account)
         .into_iter()
         .filter(|(item, _)| base_id(item).is_some_and(|id| !foreign.contains(&id)))
         .filter(|(item, _)| !lifescape_gamedata::shop_sale::npc_sale_shops(item).is_empty())
@@ -278,10 +278,10 @@ pub(crate) fn arbitrage_pass(job: &Job, life: &Life, live: &Value) -> usize {
     // The units of the bot's own lot of an object land first.
     let carried: HashMap<String, i64> = crate::brain_npc_sale::own_arbitrage(account).into_iter().map(|lot| (lot.item.clone(), lot.units())).collect();
     let ahead = |_: &str, item: &str| carried.get(item).copied().unwrap_or(0);
-    let mage = crate::brain_alch::caster_for(live);
+    let mage = crate::brain_alch::caster_for(live, deps);
     let alch = |item: &str| mage.as_ref().and_then(|caster| caster.net(item));
     let walking_book = walking.map(|row| crate::market_audit::book_item(row.item_id));
-    let wallet = crate::brain_gear::free_coins(job, walking_book);
+    let wallet = crate::brain_gear::free_coins(job, walking_book, deps);
     let Some(lot) = best_arbitrage(&books, &sales, &ahead, &alch, rate, wallet) else { return 0 };
     let OutletKind::Shop(shop) = &lot.outlet else { return 0 };
     let Some(id) = base_id(&lot.item) else { return 0 };

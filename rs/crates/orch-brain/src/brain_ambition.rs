@@ -177,8 +177,8 @@ fn fleet_view(life: &Life) -> (Vec<String>, bool, Vec<String>) {
 
 /// The draw inputs one bot reads (its own bids left out), the need
 /// saturated by the kinds the other bots hold (D3).
-fn need_demand(account: &str, held: &[String]) -> crate::market_demand::DrawDemand {
-    let mut demand = crate::market_demand::kind_demand_for(account);
+fn need_demand(account: &str, held: &[String], deps: &crate::brain_deps::BrainDeps) -> crate::market_demand::DrawDemand {
+    let mut demand = crate::market_demand::kind_demand_for(account, deps);
     let refs: Vec<&str> = held.iter().map(String::as_str).collect();
     demand.weights = saturate(&demand.weights, &refs);
     demand
@@ -220,7 +220,7 @@ impl DrawInputs {
 /// other ladder that gives the bot no milestone is refused (typed, logged)
 /// and drawn again without it, never an ambition achieved at birth. The
 /// generalist always builds, so the loop ends.
-fn build(account: &str, bot: &FleetBot, now: &BotNow, first: (String, String), inputs: &DrawInputs, exclude: &[&str], stamp: Stamp) -> Option<(Ambition, String)> {
+fn build(account: &str, bot: &FleetBot, now: &BotNow, first: (String, String), inputs: &DrawInputs, exclude: &[&str], stamp: Stamp, deps: &crate::brain_deps::BrainDeps) -> Option<(Ambition, String)> {
     let mut excluded: Vec<String> = exclude.iter().map(|kind| kind.to_string()).collect();
     let (mut kind, mut why) = first;
     for _ in 0..=specs().len() {
@@ -241,7 +241,7 @@ fn build(account: &str, bot: &FleetBot, now: &BotNow, first: (String, String), i
                 crate::logln!("brain {account}: {error} ({why}), drawing again without it");
                 excluded.push(kind.clone());
                 let refs: Vec<&str> = excluded.iter().map(String::as_str).collect();
-                match crate::brain_value::draw(account, bot, &inputs.gaps, &inputs.weights, &inputs.value, &inputs.surplus, &inputs.held, &refs) {
+                match crate::brain_value::draw(account, bot, &inputs.gaps, &inputs.weights, &inputs.value, &inputs.surplus, &inputs.held, &refs, deps) {
                     Ok(next) => (kind, why) = next,
                     Err(error) => {
                         crate::logln!("brain {account}: {error}");
@@ -263,13 +263,13 @@ pub(crate) fn with_now<T>(live: &Value, body: impl FnOnce(&BotNow) -> T) -> T {
 
 /// First pass on a life without ambition: assign the whole fleet. Returns
 /// true when this life got one (save it).
-pub(crate) fn ensure(orch: &dyn Fleet, life: &mut Life, live: &Value) -> bool {
+pub(crate) fn ensure(orch: &dyn Fleet, life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> bool {
     refresh_fleet(orch);
     if !lifescape_planner::upkeep_ambition::lacks_ambition(life) {
         return false;
     }
     let _guard = fleet_guard().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let demand = crate::market_demand::kind_demand();
+    let demand = crate::market_demand::kind_demand(deps);
     let others = other_lives(&life.account);
     // The snapshots are borrowed (the bot's own) or shared pointers (the
     // others', lot 1.5): no copy of a 35 to 85 KB tree per bot.
@@ -283,7 +283,7 @@ pub(crate) fn ensure(orch: &dyn Fleet, life: &mut Life, live: &Value) -> bool {
     let stamp = stamp_now();
     let inputs = DrawInputs::from_demand(demand, Vec::new(), Vec::new());
     let mut mine = false;
-    let assignments = crate::brain_value::with_context(&inputs.value, &inputs.surplus, |context| lifescape_planner::assign_by_value(&fleet, &inputs.weights, context));
+    let assignments = crate::brain_value::with_context(&inputs.value, &inputs.surplus, |context| lifescape_planner::assign_by_value(&fleet, &inputs.weights, context), deps);
     for assignment in assignments {
         let Some((bot, snapshot)) = bots.iter().find(|(bot, _)| bot.account == assignment.account) else { continue };
         let snapshot = snapshot.unwrap_or(&null);
@@ -291,7 +291,7 @@ pub(crate) fn ensure(orch: &dyn Fleet, life: &mut Life, live: &Value) -> bool {
         let held = |item: &str| live_count(snapshot, item);
         let now = BotNow { level_of: &level_of, coins: live_coins(snapshot), held: &held };
         let first = (assignment.kind.clone(), assignment.why.clone());
-        let Some((ambition, _)) = build(&assignment.account, bot, &now, first, &inputs, &[], stamp) else {
+        let Some((ambition, _)) = build(&assignment.account, bot, &now, first, &inputs, &[], stamp, deps) else {
             crate::logln!("brain {}: no ambition buildable, left unassigned", assignment.account);
             continue;
         };
@@ -317,22 +317,22 @@ pub(crate) fn ensure(orch: &dyn Fleet, life: &mut Life, live: &Value) -> bool {
 /// the only exception to A2), built like any redraw over the fleet's
 /// demand; the figures that chose it ride in the log.
 #[cfg(test)]
-pub(crate) fn assign_rebalanced(life: &mut Life, live: &Value, kind: &str, why: &str, numbers: &str) {
+pub(crate) fn assign_rebalanced(life: &mut Life, live: &Value, kind: &str, why: &str, numbers: &str, deps: &crate::brain_deps::BrainDeps) {
     let (gaps, _, held) = fleet_view(life);
-    let demand = need_demand(&life.account, &held);
+    let demand = need_demand(&life.account, &held, deps);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
     let inputs = DrawInputs::from_demand(demand, gaps, held);
     crate::logln!("brain {}: A4 rebalance gives {kind} ({numbers})", life.account);
-    replace(life, live, &bot, (kind.to_string(), why.to_string()), &inputs, &[], "rebalance");
+    replace(life, live, &bot, (kind.to_string(), why.to_string()), &inputs, &[], "rebalance", deps);
 }
 
 /// Redraw this life's ambition now (blocked, achieved past the throttle):
 /// the fleet's open gaps first, never back to `exclude`.
-fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str) -> bool {
+fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str, deps: &crate::brain_deps::BrainDeps) -> bool {
     let (gaps, _, held) = fleet_view(life);
-    let demand = need_demand(&life.account, &held);
+    let demand = need_demand(&life.account, &held, deps);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
-    let first = match crate::brain_value::draw(&life.account, &bot, &gaps, &demand.weights, &demand.value, &demand.surplus, &held, exclude) {
+    let first = match crate::brain_value::draw(&life.account, &bot, &gaps, &demand.weights, &demand.value, &demand.surplus, &held, exclude, deps) {
         Ok(first) => first,
         Err(error) => {
             crate::logln!("brain {}: {error}, the current ambition is kept", life.account);
@@ -340,27 +340,27 @@ fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str) -
         }
     };
     let inputs = DrawInputs::from_demand(demand, gaps, held);
-    replace(life, live, &bot, first, &inputs, exclude, revision_why)
+    replace(life, live, &bot, first, &inputs, exclude, revision_why, deps)
 }
 
 /// `ambition <compte> natural` (operator): the pin and operator type are
 /// already gone; the kind comes from the A4 value (`brain_value::draw`,
 /// the tenants of the other bots sharing the demand), nothing excluded.
-pub(crate) fn assign_natural(life: &mut Life, live: &Value) -> bool {
-    redraw(life, live, &[], "operator:natural")
+pub(crate) fn assign_natural(life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> bool {
+    redraw(life, live, &[], "operator:natural", deps)
 }
 
 /// Redraw by need (D3 review, need-led ladder end), nothing excluded: the
 /// sole holder of its primary group keeps it (`redraw_gaps`: its group is
 /// its only gap), a redundant bot fills the fleet's open gaps first.
-fn redraw_by_need(life: &mut Life, live: &Value, revision_why: &str) {
+fn redraw_by_need(life: &mut Life, live: &Value, revision_why: &str, deps: &crate::brain_deps::BrainDeps) {
     let (_, _, held) = fleet_view(life);
     let kind = life.ambition.as_ref().map(|ambition| ambition.kind.clone()).unwrap_or_default();
     let others: Vec<&str> = held.iter().map(String::as_str).collect();
     let gaps = lifescape_planner::redraw_gaps(&kind, &others);
-    let demand = need_demand(&life.account, &held);
+    let demand = need_demand(&life.account, &held, deps);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
-    let first = match crate::brain_value::draw(&life.account, &bot, &gaps, &demand.weights, &demand.value, &demand.surplus, &held, &[]) {
+    let first = match crate::brain_value::draw(&life.account, &bot, &gaps, &demand.weights, &demand.value, &demand.surplus, &held, &[], deps) {
         Ok(first) => first,
         Err(error) => {
             crate::logln!("brain {}: {error}, the current ambition is kept", life.account);
@@ -368,37 +368,37 @@ fn redraw_by_need(life: &mut Life, live: &Value, revision_why: &str) {
         }
     };
     let inputs = DrawInputs::from_demand(demand, gaps, held);
-    replace(life, live, &bot, first, &inputs, &[], revision_why);
+    replace(life, live, &bot, first, &inputs, &[], revision_why, deps);
 }
 
 /// A retired market maker's trade (user 2026-11-20): the neediest kind
 /// of the fleet (`neediest_kind`, the need saturated by the kinds the
 /// other bots hold), built like any redraw; nothing drawable, the usual
 /// need draw.
-pub(crate) fn redraw_neediest(life: &mut Life, live: &Value, revision_why: &str) {
+pub(crate) fn redraw_neediest(life: &mut Life, live: &Value, revision_why: &str, deps: &crate::brain_deps::BrainDeps) {
     let (gaps, _, held) = fleet_view(life);
-    let demand = need_demand(&life.account, &held);
+    let demand = need_demand(&life.account, &held, deps);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
     let first = neediest_kind(&bot, &demand.weights, &[]).unwrap_or_else(|| draw_kind(&bot, &gaps, &demand.weights, &[]));
     let inputs = DrawInputs::from_demand(demand, gaps, held);
-    replace(life, live, &bot, first, &inputs, &[], revision_why);
+    replace(life, live, &bot, first, &inputs, &[], revision_why, deps);
 }
 
 /// An operator's trade for this life (`brain_operator`): `kind` built
 /// like a redraw over the fleet's demand and surplus.
-pub(crate) fn assign_kind(life: &mut Life, live: &Value, kind: &str, revision_why: &str) -> bool {
+pub(crate) fn assign_kind(life: &mut Life, live: &Value, kind: &str, revision_why: &str, deps: &crate::brain_deps::BrainDeps) -> bool {
     let (gaps, _, held) = fleet_view(life);
-    let demand = need_demand(&life.account, &held);
+    let demand = need_demand(&life.account, &held, deps);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
     let inputs = DrawInputs::from_demand(demand, gaps, held);
-    replace(life, live, &bot, (kind.to_string(), revision_why.to_string()), &inputs, &[], revision_why)
+    replace(life, live, &bot, (kind.to_string(), revision_why.to_string()), &inputs, &[], revision_why, deps)
 }
 
 /// True when the ambition was replaced; false (nothing written, logged)
 /// when none could be built or the change is refused (`revise`).
-fn replace(life: &mut Life, live: &Value, bot: &FleetBot, first: (String, String), inputs: &DrawInputs, exclude: &[&str], revision_why: &str) -> bool {
+fn replace(life: &mut Life, live: &Value, bot: &FleetBot, first: (String, String), inputs: &DrawInputs, exclude: &[&str], revision_why: &str, deps: &crate::brain_deps::BrainDeps) -> bool {
     let stamp = stamp_now();
-    let built = with_now(live, |now| build(&life.account, bot, now, first, inputs, exclude, stamp));
+    let built = with_now(live, |now| build(&life.account, bot, now, first, inputs, exclude, stamp, deps));
     let Some((next, _)) = built else {
         crate::logln!("brain {}: no ambition buildable, kept the current one", life.account);
         return false;
@@ -418,17 +418,17 @@ fn replace(life: &mut Life, live: &Value, bot: &FleetBot, first: (String, String
 /// ambition is redrawn only when the 72 000-tick throttle allows it and
 /// another bot holds its group; otherwise its ladder extends (the sole
 /// holder never leaves its group, the throttle is the user's rule).
-pub(crate) fn before_draw(life: &mut Life, live: &Value) {
+pub(crate) fn before_draw(life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) {
     // Protected accounts always hold the overall ambition (never a draw).
     if lifescape_planner::protected(&life.account) && life.ambition.as_ref().is_some_and(|held| held.kind != lifescape_planner::OVERALL) {
         crate::logln!("brain {}: protected account, ambition set to overall", life.account);
-        assign_kind(life, live, lifescape_planner::OVERALL, lifescape_planner::PROTECTED_WHY);
+        assign_kind(life, live, lifescape_planner::OVERALL, lifescape_planner::PROTECTED_WHY, deps);
         return;
     }
-    let (items, surplus) = crate::market_demand::refresh_inputs_for(&life.account);
+    let (items, surplus) = crate::market_demand::refresh_inputs_for(&life.account, deps);
     // A bid whose serving does not pay the bot's time is no demand
     // milestone to adopt (value comparison, `brain_milestone_value`).
-    let items = crate::brain_milestone_value::paying_items(life, live, items);
+    let items = crate::brain_milestone_value::paying_items(life, live, items, deps);
     let seed = life.seed;
     let account = life.account.clone();
     let Some(ambition) = life.ambition.as_mut() else { return };
@@ -440,7 +440,7 @@ pub(crate) fn before_draw(life: &mut Life, live: &Value) {
         crate::logln!("brain {account}: milestone {milestone_id} done (live levels/coins)");
     }
     if achieved(ambition) {
-        on_achieved(life, live);
+        on_achieved(life, live, deps);
         return;
     }
     // Set-aside milestones come back (blocks reset) when nothing else is
@@ -455,7 +455,7 @@ pub(crate) fn before_draw(life: &mut Life, live: &Value) {
     }
 }
 
-fn on_achieved(life: &mut Life, live: &Value) {
+fn on_achieved(life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) {
     let Some(ambition) = life.ambition.as_ref() else { return };
     let kind = ambition.kind.clone();
     // D3 (user 2026-11-19): outside the exceptions and the operator pins,
@@ -464,7 +464,7 @@ fn on_achieved(life: &mut Life, live: &Value) {
     // ticks ago) »): it redraws by need, which may give the same kind.
     if !keeps_ladder_end(ambition, &fleet_bot(life, Vec::new())) {
         crate::logln!("brain {}: ambition {kind} ladder done, redrawn by need (D3: no extension outside the exceptions)", life.account);
-        redraw_by_need(life, live, "achieved");
+        redraw_by_need(life, live, "achieved", deps);
         return;
     }
     let throttled = !lifescape_planner::may_change(ambition, &ticks_since);
@@ -472,7 +472,7 @@ fn on_achieved(life: &mut Life, live: &Value) {
     // An operator pin never leaves its kind: it extends toward its level.
     let held = pinned(ambition);
     if redundant && !throttled && !held {
-        redraw(life, live, &[kind.as_str()], "achieved");
+        redraw(life, live, &[kind.as_str()], "achieved", deps);
         return;
     }
     let why = if held {
@@ -489,7 +489,7 @@ fn on_achieved(life: &mut Life, live: &Value) {
         crate::logln!("brain {}: ambition {kind} ladder done, extended ({why}): {}", life.account, describe_ambition(ambition));
     } else {
         crate::logln!("brain {}: ambition {kind} ladder done and nothing left to climb, redrawing", life.account);
-        redraw(life, live, &[kind.as_str()], "achieved");
+        redraw(life, live, &[kind.as_str()], "achieved", deps);
     }
 }
 

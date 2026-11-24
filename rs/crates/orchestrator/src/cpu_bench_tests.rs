@@ -28,6 +28,7 @@ fn timed<R>(label: &str, rounds: u32, mut work: impl FnMut() -> R) -> R {
 #[test]
 #[ignore]
 fn cpu_bench() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let Ok(root) = std::env::var("LIFESCAPE_BENCH_ROOT") else { return };
     assert!(!root.contains("/home/josh/dev/LifeScape/run"), "bench on a copy only");
     std::env::set_var("LIFESCAPE_ROOT", &root);
@@ -70,17 +71,17 @@ fn cpu_bench() {
         println!("--- {account}");
         let life = crate::brain::load_life(account).expect("life");
         let live = crate::paths::read_json(&crate::paths::user_paths(account).0).unwrap_or(Value::Null);
-        timed("MarketReader::live", 5, || crate::brain_bids::MarketReader::live(account));
+        timed("MarketReader::live", 5, || crate::brain_bids::MarketReader::live(account, deps));
         timed("OwnCosts::load", 5, || crate::brain_reserve::OwnCosts::load(&service.lock_store(), account, crate::brain_d17::coin_rate(account)));
         timed("brain_locks::locked_items", 5, || crate::brain_locks::locked_items(account));
         let all: Vec<(String, i64)> = ITEMS.iter().map(|item| (item.to_string(), 28)).collect();
-        let costs = timed("production_costs_for(15 items)", 10, || crate::brain_bids::production_costs_for(&life, &live, &all));
+        let costs = timed("production_costs_for(15 items)", 10, || crate::brain_bids::production_costs_for(&life, &live, &all, deps));
         println!("  costs: {costs:?}");
         let ironish = { let mut copy = life.clone(); copy.profile.ironman = true; copy };
-        timed("production_costs_for(15, as ironman)", 10, || crate::brain_bids::production_costs_for(&ironish, &live, &all).len());
+        timed("production_costs_for(15, as ironman)", 10, || crate::brain_bids::production_costs_for(&ironish, &live, &all, deps).len());
         timed("live_count(logs)", 200, || crate::brain_ambition::live_count(&live, "logs"));
-        timed("production_costs_for(iron_bar)", 20, || crate::brain_bids::production_costs_for(&life, &live, &[("iron_bar".to_string(), 28)]));
-        timed("bid_goal_for", 10, || crate::brain_bids::bid_goal_in(&life, &live, false));
+        timed("production_costs_for(iron_bar)", 20, || crate::brain_bids::production_costs_for(&life, &live, &[("iron_bar".to_string(), 28)], deps));
+        timed("bid_goal_for", 10, || crate::brain_bids::bid_goal_in(&life, &live, false, deps));
         let obtain = lifescape_planner::Node::new("bench", lifescape_planner::NodeKind::ObtainItems { item: "iron_bar".to_string(), count: 28 }, Vec::new(), 1);
         let money = lifescape_planner::Node::new("bench-money", lifescape_planner::NodeKind::MakeMoney, Vec::new(), 1);
         timed("ready_ctx(obtain iron_bar)", 5, || crate::brain_plan::ready_ctx(&life, &obtain, &lifescape_json::Value::Null));
@@ -103,6 +104,7 @@ fn cpu_bench() {
 #[test]
 #[ignore]
 fn filler_bench() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let Ok(root) = std::env::var("LIFESCAPE_BENCH_ROOT") else { return };
     assert!(!root.contains("/home/josh/dev/LifeScape/run"), "bench on a copy only");
     std::env::set_var("LIFESCAPE_ROOT", &root);
@@ -130,7 +132,7 @@ fn filler_bench() {
         timed("brain_alch::kept_except", 3, || crate::brain_alch::kept_except(&life, &live, Some(&node.id)).len());
         timed("brain_alch::publish", 3, || {
             let mut copy = ctx.clone();
-            crate::brain_alch::publish(&mut copy, &node, &life, &live);
+            crate::brain_alch::publish(&mut copy, &node, &life, &live, deps);
             copy.method_profit.len()
         });
         timed("brain_money::publish", 3, || {

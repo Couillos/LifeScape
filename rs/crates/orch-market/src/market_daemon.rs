@@ -24,47 +24,7 @@ fn registry() -> &'static OnceLock<Arc<MarketService>> {
 
 /// Daemon-side handle for the convene loop (same process, no socket).
 pub fn shared() -> Option<Arc<MarketService>> {
-    #[cfg(any(test, feature = "test-support"))]
-    {
-        if let Some(local) = test_service::current() {
-            return Some(local);
-        }
-    }
     registry().get().cloned()
-}
-
-/// A market service installed for the current thread only (tests and the
-/// `test-support` feature; absent from production builds): the benches
-/// that start from a raw world read the market through the same
-/// `shared()` the brain calls, without touching the process-wide registry
-/// other tests rely on being empty.
-#[cfg(any(test, feature = "test-support"))]
-pub mod test_service {
-    use std::cell::RefCell;
-    use std::sync::Arc;
-
-    use crate::market_service::MarketService;
-
-    thread_local! {
-        static LOCAL: RefCell<Option<Arc<MarketService>>> = const { RefCell::new(None) };
-    }
-
-    pub(super) fn current() -> Option<Arc<MarketService>> {
-        LOCAL.with(|slot| slot.borrow().clone())
-    }
-
-    /// Runs `body` with `service` as this thread's market, restoring the
-    /// previous one after (also on a panic).
-    pub fn with_service<R>(service: Arc<MarketService>, body: impl FnOnce() -> R) -> R {
-        struct Restore(Option<Arc<MarketService>>);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                LOCAL.with(|slot| *slot.borrow_mut() = self.0.take());
-            }
-        }
-        let _restore = Restore(LOCAL.with(|slot| slot.borrow_mut().replace(service)));
-        body()
-    }
 }
 
 /// Handle one market request on the daemon service. Down service is a

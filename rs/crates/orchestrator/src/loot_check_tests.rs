@@ -80,13 +80,14 @@ fn market_of(store: &lifescape_store::Store, resting: &[lifescape_store::Order],
 }
 
 fn decide(store: &lifescape_store::Store, resting: &[lifescape_store::Order], costs: &OwnCosts, life: &lifescape_planner::Life, job: &Value, name: &str, item: i64, free: i64) -> (SaleDecision, Option<CostSource>) {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let account = costs.account.clone();
     let reserve = costs.reserve(store, name, item, Some(life), None);
     let (view, reference, best_bid, others_ask) = market_of(store, resting, &account, item);
     let last = store.last_own_fill(&account, item, false).ok().flatten().map(|(price, _)| OwnFill { price, rested_ticks: None });
     let marks = FoundMarks { others_ask, anchor: lifescape_planner::alchemy::alch_value(name, true), ..FoundMarks::default() };
     let decision = match plan_sale(free, reserve, reference, best_bid, last, marks, &view) {
-        SaleDecision::List { qty, price, floor } => match crate::brain_alch::alch_floor(job, name) {
+        SaleDecision::List { qty, price, floor } => match crate::brain_alch::alch_floor(job, name, deps) {
             Some(alch) if alch > floor => SaleDecision::List { qty, price: price.max(alch), floor: alch },
             _ => SaleDecision::List { qty, price, floor },
         },
@@ -98,6 +99,7 @@ fn decide(store: &lifescape_store::Store, resting: &[lifescape_store::Order], co
 #[test]
 #[ignore]
 fn loot_check() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let (Ok(db), Ok(status)) = (std::env::var("LIFESCAPE_CHECK_DB"), std::env::var("LIFESCAPE_CHECK_STATUS")) else {
         eprintln!("loot_check: set LIFESCAPE_CHECK_DB and LIFESCAPE_CHECK_STATUS");
         return;
@@ -130,7 +132,7 @@ fn loot_check() {
         let mut gear = lifescape_planner::gear_plan::kept_gear(&levels, &quests, &owned);
         gear.extend(worn.iter().cloned());
         let tools = crate::brain_tools::kept_tools(&life, &stacks, &levels);
-        let mut wished = crate::brain_alch::alch_keep(&life, &job);
+        let mut wished = crate::brain_alch::alch_keep(&life, &job, deps);
         wished.extend(tools.iter().cloned());
         let whole = crate::brain_sales::working_keep(&life, &wished);
         let keep = crate::brain_plan::merge_keep(whole.clone(), gear.clone());

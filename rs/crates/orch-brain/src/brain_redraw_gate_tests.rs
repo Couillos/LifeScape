@@ -58,37 +58,39 @@ fn the_fingerprint_moves_with_each_family_and_only_with_them() {
     let base = closed(fixtures().into_iter().next().expect("fixture"), "gate_fp_a");
     let live = live_at(30);
     let market = TestMarket::open("gate_fp");
-    let world = RawWorld::new("gate_fp_a", live.clone(), Some(&market));
-    world.run(|| {
-        let print = fingerprint(&base, &live);
+    // The fleet's crowd is the process's own (the test writes it below).
+    let deps = &crate::brain_deps::BrainDeps::with_market(Some(market.service.clone()));
+    {
+        let print = fingerprint(&base, &live, deps);
         // Nothing changed: the same print, twice.
-        assert_eq!(moved(&print, &fingerprint(&base, &live)), Vec::<&str>::new());
+        assert_eq!(moved(&print, &fingerprint(&base, &live, deps)), Vec::<&str>::new());
         // The life: a history entry.
         let mut grown = base.clone();
         grown.history.push(entry("next:mining 40", wall_now()));
-        assert!(moved(&print, &fingerprint(&grown, &live)).contains(&"life"));
+        assert!(moved(&print, &fingerprint(&grown, &live, deps)).contains(&"life"));
         // The bot: a level.
-        assert!(moved(&print, &fingerprint(&base, &live_at(31))).contains(&"live"));
+        assert!(moved(&print, &fingerprint(&base, &live_at(31), deps)).contains(&"live"));
         // The market: an order in a book.
         let service = &market.service;
         let item = crate::brain_raw_world_tests::object_id("logs").expect("logs");
         service.sync_holdings("gate_fp_b", 1_000_000, &[(item, 100)]);
         place(service, "gate_fp_b", "buy", item, 5, 3);
-        assert!(moved(&print, &fingerprint(&base, &live)).contains(&"market"));
+        assert!(moved(&print, &fingerprint(&base, &live, deps)).contains(&"market"));
         // The fleet: another bot takes a site.
-        let after_market = fingerprint(&base, &live);
+        let after_market = fingerprint(&base, &live, deps);
         crate::site_crowd::note("gate_fp_other", Some((3200, 3200, 0)), "farm:gate_fp_logs");
-        let crowded = fingerprint(&base, &live);
+        let crowded = fingerprint(&base, &live, deps);
         crate::site_crowd::note("gate_fp_other", None, "");
         assert!(moved(&after_market, &crowded).contains(&"fleet"));
         service.retire_account("gate_fp_b", "gate");
-    });
+    }
 }
 
 /// A ban crossing its expiry moves the bans print though no entry was
 /// written (the clock alone changed the state).
 #[test]
 fn a_ban_running_out_moves_the_bans_print() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let mut life = closed(fixtures().into_iter().next().expect("fixture"), "gate_fp_ban");
     let live = live_at(30);
     let ticks = 1_000u64;
@@ -96,21 +98,22 @@ fn a_ban_running_out_moves_the_bans_print() {
     let now = wall_now();
     let ban = format!("{}mining@{ticks}:contract error (node n1, x)", lifescape_planner::goals::STUCK_TAG);
     life.history.push(entry(&ban, now - seconds_for(ticks) + 3));
-    let live_ban = fingerprint(&life, &live).bans;
-    assert_eq!(fingerprint(&life, &live).bans, live_ban, "stable while the ban runs");
+    let live_ban = fingerprint(&life, &live, deps).bans;
+    assert_eq!(fingerprint(&life, &live, deps).bans, live_ban, "stable while the ban runs");
     let mut over = life.clone();
     over.history.pop();
     over.history.push(entry(&ban, now - seconds_for(ticks) - 3));
-    assert_ne!(fingerprint(&over, &live).bans, live_ban, "the expiry is in the print");
+    assert_ne!(fingerprint(&over, &live, deps).bans, live_ban, "the expiry is in the print");
 }
 
-fn scripted(outcomes: Vec<(Option<&'static str>, bool)>) -> impl FnMut(&mut Life, &Value) -> (Option<String>, bool) {
+fn scripted(outcomes: Vec<(Option<&'static str>, bool)>) -> impl FnMut(&mut Life, &Value, &crate::brain_deps::BrainDeps) -> (Option<String>, bool) {
     let mut queue = outcomes.into_iter();
-    move |_life, _live| queue.next().map(|(label, changed)| (label.map(str::to_string), changed)).unwrap_or((None, false))
+    move |_life, _live, _deps| queue.next().map(|(label, changed)| (label.map(str::to_string), changed)).unwrap_or((None, false))
 }
 
 #[test]
 fn a_repeated_retry_is_skipped_in_on_mode_and_only_counted_in_shadow() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let live = live_at(30);
     for (mode, account) in [(Mode::Shadow, "gate_mode_shadow"), (Mode::On, "gate_mode_on")] {
         let gate = Gate::default();
@@ -118,10 +121,10 @@ fn a_repeated_retry_is_skipped_in_on_mode_and_only_counted_in_shadow() {
         let now = wall_now();
         let ran = std::cell::Cell::new(0);
         let run = |life: &mut Life, at: i64| {
-            gate.redraw_in(mode, at, life, &live, |_, _| {
+            gate.redraw_in(mode, at, life, &live, |_, _, _| {
                 ran.set(ran.get() + 1);
                 (None, false)
-            })
+            }, deps)
         };
         // First retry: nothing known, it runs.
         assert_eq!(run(&mut life, now), (None, false));
@@ -148,20 +151,21 @@ fn a_repeated_retry_is_skipped_in_on_mode_and_only_counted_in_shadow() {
 
 #[test]
 fn a_skippable_retry_the_old_code_answered_is_a_divergence() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let live = live_at(30);
     let gate = Gate::default();
     let mut life = closed(fixtures().into_iter().next().expect("fixture"), "gate_divergence");
     let now = wall_now();
     let mut old = scripted(vec![(None, false), (Some("mining 50"), true), (None, false), (None, true)]);
-    gate.redraw_in(Mode::Shadow, now, &mut life, &live, &mut old);
+    gate.redraw_in(Mode::Shadow, now, &mut life, &live, &mut old, deps);
     // The fake draws without touching the life: the print is unchanged, a skip was allowed.
-    let drawn = gate.redraw_in(Mode::Shadow, now + 5, &mut life, &live, &mut old);
+    let drawn = gate.redraw_in(Mode::Shadow, now + 5, &mut life, &live, &mut old, deps);
     assert_eq!(drawn.0.as_deref(), Some("mining 50"), "shadow: the old answer is the answer");
     assert_eq!(gate.counts().skip_drew, 1);
     // A drawn goal forgets the attempt: the next retry runs, it is no skip.
-    gate.redraw_in(Mode::Shadow, now + 6, &mut life, &live, &mut old);
+    gate.redraw_in(Mode::Shadow, now + 6, &mut life, &live, &mut old, deps);
     assert_eq!(gate.counts().retried, 2);
-    gate.redraw_in(Mode::Shadow, now + 7, &mut life, &live, &mut old);
+    gate.redraw_in(Mode::Shadow, now + 7, &mut life, &live, &mut old, deps);
     assert_eq!(gate.counts().skip_changed, 1, "a changed life with no goal is counted too");
 }
 
@@ -197,6 +201,7 @@ fn shadow_run(lives: &[Life], scenarios: usize, seed: u64) -> (u64, u64, u64, u6
             let mut level = [5u8, 20, 45, 70][rng.below(4) as usize];
             let mut live = live_at(level);
             let world = RawWorld::new(&account, live.clone(), Some(&market));
+            let deps = world.deps(&crate::brain_raw_world_tests::Seed::default());
             for pass in 0..8 {
                 match rng.below(10) {
                     // A bid of another account appears (the market moves).
@@ -218,10 +223,8 @@ fn shadow_run(lives: &[Life], scenarios: usize, seed: u64) -> (u64, u64, u64, u6
                     4 => life.ambition = if life.ambition.is_some() { None } else { base.ambition.clone() },
                     _ => {}
                 }
-                world.run(|| {
-                    let at = wall_now();
-                    gate.redraw_in(Mode::Shadow, at, &mut life, &live, |life, live| crate::brain_succession::redraw(life, live));
-                });
+                let at = wall_now();
+                gate.redraw_in(Mode::Shadow, at, &mut life, &live, crate::brain_succession::redraw, &deps);
                 // Close the goal again after a draw, to keep the retry going.
                 if !lifescape_planner::goal_closed(&life.history) && pass < 7 {
                     life.history.push(entry(&format!("{}mining", lifescape_planner::goals::DONE_TAG), wall_now()));

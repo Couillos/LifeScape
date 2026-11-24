@@ -73,8 +73,8 @@ fn last_pass() -> &'static Mutex<HashMap<String, f64>> {
 
 /// Cancels the account's resting buys on shop-sold tools (old wishlist
 /// bids nobody fills), except what the graph's own obtains want.
-fn cancel_merchant_tool_bids(job: &Job, life: &Life) {
-    let Some(service) = crate::market_service::shared() else { return };
+fn cancel_merchant_tool_bids(job: &Job, life: &Life, deps: &crate::brain_deps::BrainDeps) {
+    let Some(service) = deps.market.clone() else { return };
     let spared = crate::brain_wishlist::wanted_names(life);
     let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
     let mut names: Vec<String> = rows
@@ -86,7 +86,7 @@ fn cancel_merchant_tool_bids(job: &Job, life: &Life) {
     names.sort();
     names.dedup();
     for name in &names {
-        let closed = crate::brain_market::cancel_open_buys(&job.account, name);
+        let closed = crate::brain_market::cancel_open_buys(&job.account, name, deps);
         crate::logln!("brain {}: wish bid on {name} cancelled ({closed}): the kit buys it through a step", job.account);
     }
 }
@@ -115,10 +115,10 @@ struct KitView {
 }
 
 impl KitView {
-    fn read(job: &Job, life: &Life, levels: &[(&str, i64)]) -> KitView {
+    fn read(job: &Job, life: &Life, levels: &[(&str, i64)], deps: &crate::brain_deps::BrainDeps) -> KitView {
         let level_of = |skill: &str| levels.iter().find(|(name, _)| *name == skill).map(|(_, level)| *level).unwrap_or(1);
         let level_u8 = |skill: &str| u8::try_from(level_of(skill).clamp(1, 99)).unwrap_or(1);
-        let service = crate::market_service::shared();
+        let service = deps.market.clone();
         let mut offers = HashMap::new();
         let mut tiers: Vec<String> = lifescape_planner::tool_kit::KIT_SINGLES.iter().map(|single| single.to_string()).collect();
         for (_, canonical) in lifescape_planner::tool_kit::KIT_FAMILIES {
@@ -174,19 +174,19 @@ fn withdraw_unfunded(job: &Job, life: &mut Life, purchases: &[KitPurchase]) -> b
 /// Price of the kit purchase the rule names next at this free wallet
 /// (0: none, or the bank not streamed): the part of a donor's reserve
 /// kept for its own tools (`funding_plan`).
-pub fn next_kit_price(job: &Job, life: &Life, live: &Value) -> i64 {
+pub fn next_kit_price(job: &Job, life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> i64 {
     let levels_owned = crate::brain_tools::live_levels(live);
     if live.get("bank_streamed").as_bool() != Some(true) || levels_owned.is_empty() {
         return 0;
     }
     let levels = crate::brain_tools::level_refs(&levels_owned);
     let (owned, _) = crate::brain_gear::holdings(job);
-    let coins = crate::brain_gear::free_coins(job, None);
-    KitView::read(job, life, &levels).purchases(&levels, &owned, coins).first().map(|purchase| purchase.price.max(0)).unwrap_or(0)
+    let coins = crate::brain_gear::free_coins(job, None, deps);
+    KitView::read(job, life, &levels, deps).purchases(&levels, &owned, coins).first().map(|purchase| purchase.price.max(0)).unwrap_or(0)
 }
 
 /// One kit pass. Returns true when the life changed (save it).
-pub(crate) fn tool_shop_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
+pub(crate) fn tool_shop_pass(job: &Job, life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> bool {
     let now = wall_now();
     {
         let mut table = last_pass().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -196,7 +196,7 @@ pub(crate) fn tool_shop_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
         table.insert(job.account.clone(), now);
     }
     if !life.profile.ironman {
-        cancel_merchant_tool_bids(job, life);
+        cancel_merchant_tool_bids(job, life, deps);
     }
     // A bank not streamed yet hides banked tools: never buy a second one.
     if live.get("bank_streamed").as_bool() != Some(true) {
@@ -212,8 +212,8 @@ pub(crate) fn tool_shop_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
         return false;
     }
     let (owned, _) = crate::brain_gear::holdings(job);
-    let coins = crate::brain_gear::free_coins(job, None);
-    let view = KitView::read(job, life, &levels);
+    let coins = crate::brain_gear::free_coins(job, None, deps);
+    let view = KitView::read(job, life, &levels, deps);
     let purchases = view.purchases(&levels, &owned, coins);
     if gear_ladder::step_open(life) {
         return withdraw_unfunded(job, life, &purchases);

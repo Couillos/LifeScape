@@ -44,7 +44,7 @@ pub(crate) fn units_per_tick(item: &str, level_of: &dyn Fn(&str) -> u8, units: &
 }
 
 /// Names of the `demand` items serving which pays for this bot's time.
-pub(crate) fn paying_demand(life: &Life, live: &Value, demand: &[DemandItem]) -> Vec<String> {
+pub(crate) fn paying_demand(life: &Life, live: &Value, demand: &[DemandItem], deps: &crate::brain_deps::BrainDeps) -> Vec<String> {
     crate::brain_bids::with_bot_state(life, live, |state| {
         let time_value = crate::brain_bids::bot_rate(life);
         demand
@@ -52,7 +52,7 @@ pub(crate) fn paying_demand(life: &Life, live: &Value, demand: &[DemandItem]) ->
             .filter(|wanted| wanted.margin.is_some_and(|margin| lifescape_planner::pays_its_way(margin, units_per_tick(&wanted.item, state.level_of, state.units), time_value)))
             .map(|wanted| wanted.item.clone())
             .collect()
-    })
+    }, deps)
 }
 
 /// What the decision to give back an open `side:demand:` goal reads: the
@@ -61,10 +61,10 @@ pub(crate) fn paying_demand(life: &Life, live: &Value, demand: &[DemandItem]) ->
 /// is the rule). Levels the goal trains on the way are its own cost (bid
 /// answers carry their training): every leg counts. No margin read, no
 /// facts: no data, no decision; the bot state is only read after a margin.
-pub(crate) fn serve_facts(life: &Life, live: &Value, query: &ServeQuery) -> Option<ServeFacts> {
-    let signals = crate::market_demand::signals_for(&life.account);
+pub(crate) fn serve_facts(life: &Life, live: &Value, query: &ServeQuery, deps: &crate::brain_deps::BrainDeps) -> Option<ServeFacts> {
+    let signals = crate::market_demand::signals_for(&life.account, deps);
     let margin = crate::market_demand::serving_margin(&query.item, &signals)?;
-    let (per_tick, time_value) = crate::brain_bids::with_bot_state(life, live, |state| (units_per_tick(&query.item, &|_| u8::MAX, state.units), crate::brain_bids::bot_rate(life)));
+    let (per_tick, time_value) = crate::brain_bids::with_bot_state(life, live, |state| (units_per_tick(&query.item, &|_| u8::MAX, state.units), crate::brain_bids::bot_rate(life)), deps);
     Some(ServeFacts { margin, per_tick, time_value })
 }
 

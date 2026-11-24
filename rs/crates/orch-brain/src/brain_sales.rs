@@ -287,15 +287,13 @@ fn spare_tools(life: &Life, stacks: &[(String, i64)], kept: &[String], listed: &
 /// bot's own reserve is amended up to it, one over the demand lot or
 /// without a known own cost is withdrawn (its stock back in the bank,
 /// the next pass lists a lot), the rest walks down to the reserve.
-fn adopt_listings(
-    service: &crate::market_service::MarketService,
+fn adopt_listings(service: &crate::market_service::MarketService,
     account: &str,
     selling: &[lifescape_store::Order],
     costs: &crate::brain_reserve::OwnCosts,
     life: &Life,
     make_costs: &HashMap<String, f64>,
-    live: &Value,
-) {
+    live: &Value, deps: &crate::brain_deps::BrainDeps) {
     use crate::market_seller::{Adoption, SaleDecision};
     let (mut walked, mut raised, mut lowered, mut withdrawn) = (0usize, 0usize, 0usize, 0usize);
     // Plan prix §1: the learned floors, one carnet read when any listing
@@ -312,7 +310,7 @@ fn adopt_listings(
         // Today's opening for this stock (2026-11-14: an ask anchored on
         // an old reserve or an outlier comes down to it).
         let unsold = learning.get(&row.item_id).copied().unwrap_or(0);
-        let (today, reserve) = service.sale_decision(account, name, row.item_id, row.remaining, unsold, costs, Some(life), make_cost, false, crate::brain_alch::alch_floor(live, name));
+        let (today, reserve) = service.sale_decision(account, name, row.item_id, row.remaining, unsold, costs, Some(life), make_cost, false, crate::brain_alch::alch_floor(live, name, deps), deps);
         // The adopted listing walks to today's floor (own cost learned down
         // per unsold horizon, plan prix §1, no price floor); held stock
         // keeps the own cost.
@@ -461,7 +459,7 @@ fn withdraw_tool_listings(service: &crate::market_service::MarketService, accoun
 
 /// One listing pass for an idle, non-Iron bot (rate-limited per account).
 /// Returns the number of sell orders placed.
-pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
+pub fn maybe_list_surplus(job: &Job, life: &Life, deps: &crate::brain_deps::BrainDeps) -> usize {
     if life.profile.ironman {
         return 0;
     }
@@ -472,7 +470,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
             return 0;
         }
     }
-    let Some(service) = crate::market_service::shared() else { return 0 };
+    let Some(service) = deps.market.clone() else { return 0 };
     last_pass().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(job.account.clone(), now);
     let worn = crate::brain_plan::worn_names(job);
     let mut wished: Vec<String> = crate::brain_wishlist::wishlist(job, life).into_iter().map(|wish| wish.item).collect();
@@ -482,7 +480,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     let mut gear = crate::brain_gear::ladder_keep(job, life, &live);
     gear.extend(worn.iter().cloned());
     // A caster keeps what alchs for more than it sells (2026-11-14).
-    wished.extend(crate::brain_alch::alch_keep(life, &live));
+    wished.extend(crate::brain_alch::alch_keep(life, &live, deps));
     // Stock bought ahead for the next work slices (plan marché M6).
     wished.extend(crate::brain_stock::kept(&job.account));
     let stacks = crate::brain_plan::live_stacks(job);
@@ -495,7 +493,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     // listings locked every banked air talisman): a listing that locks
     // them is cut first, and they are never offered below.
     let reserved = lifescape_planner::reserved_quest_objects(life);
-    crate::brain_quest_gate::release_for_quests(&service, &job.account, &stacks, &reserved);
+    crate::brain_quest_gate::release_for_quests(&service, &job.account, &stacks, &reserved, deps);
     let mut selling: Vec<lifescape_store::Order> = service
         .lock_store()
         .account_orders(&job.account)
@@ -523,14 +521,14 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         Some(role) if role.phase == lifescape_planner::MakerPhase::Quoting => crate::market_maker::slice_items(role.slice).into_iter().collect(),
         _ => HashSet::new(),
     };
-    let mut locks = crate::brain_locks::locked_items(&job.account);
+    let mut locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), &job.account);
     let mut free = lifescape_planner::withhold_reserved(&free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name)), &reserved);
     // A sliver listed out of a big stack is withdrawn and the whole
     // stack lists as one lot in this same pass.
     let regrouped = regroup_slivers(&service, &job.account, &selling, &free, &keep, &quoted);
     if !regrouped.is_empty() {
         selling.retain(|row| !regrouped.contains(&row.order_id));
-        locks = crate::brain_locks::locked_items(&job.account);
+        locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), &job.account);
         free = lifescape_planner::withhold_reserved(&free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name)), &reserved);
     }
     // A family whose best tool stays locked (its listing could not be
@@ -553,8 +551,8 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         let name = lifescape_gamedata::obj_by_id(usize::try_from(crate::market_audit::base_of(row.item_id)).ok()?)?.name?;
         Some((name.to_string(), row.remaining))
     }));
-    let make_costs = crate::brain_bids::production_costs_for(life, &live, &priced);
-    adopt_listings(&service, &job.account, &selling, &costs, life, &make_costs, &live);
+    let make_costs = crate::brain_bids::production_costs_for(life, &live, &priced, deps);
+    adopt_listings(&service, &job.account, &selling, &costs, life, &make_costs, &live, deps);
     let mut placed = 0;
     let trade_products = lifescape_planner::trade_craft::lot_products(&life.memory.trades);
     // Only what no listing or deal already promises (the market refuses
@@ -611,7 +609,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         // 2026-11-19: carl_miller relisted yew at twice its cost 8 times,
         // its learned floor never read).
         let unsold = learning.get(&crate::market_audit::book_item(item)).copied().unwrap_or(0);
-        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, unsold, &costs, Some(life), make_costs.get(&name).copied(), pressed, crate::brain_alch::alch_floor(&live, &name));
+        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, unsold, &costs, Some(life), make_costs.get(&name).copied(), pressed, crate::brain_alch::alch_floor(&live, &name, deps), deps);
         let (lot, price, floor) = match decision {
             crate::market_seller::SaleDecision::List { qty: lot, price, floor } => (lot, price, floor),
             crate::market_seller::SaleDecision::Hold(why) => {
@@ -663,7 +661,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     // time value (D1); the janitor node carries it (`brain_npc_sale`).
     let min_gain = (crate::brain_npc_sale::SHOP_TRIP_TICKS * costs.coins_per_tick).ceil() as i64;
     // A keeper behind the boat only while the free wallet pays its fare.
-    let free_coins = crate::brain_gear::free_coins(job, None);
+    let free_coins = crate::brain_gear::free_coins(job, None, deps);
     let shops_of = |item: &str| crate::brain_npc_sale::payable_sale_sites(crate::brain_npc_sale::shops_at_likely_stock(item, fleet_sales()), free_coins);
     match crate::brain_npc_sale::plan_shop_sale(&shop_candidates, crate::brain_npc_sale::live_position(&live), min_gain, &whole_units, &shops_of) {
         Some(plan) => {

@@ -69,8 +69,8 @@ fn restored() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
 /// its lot takes now (`brain_bids::lot_seats`), once per account, so the
 /// first hour after a deploy does not send extra bots onto taken fields.
 /// True when seats were engaged.
-pub(crate) fn reengage_after_restart(life: &Life, live: &lifescape_json::Value) -> bool {
-    reengage_with(life, &|item, count| crate::brain_bids::lot_seats(life, live, item, count))
+pub(crate) fn reengage_after_restart(life: &Life, live: &lifescape_json::Value, deps: &crate::brain_deps::BrainDeps) -> bool {
+    reengage_with(life, &|item, count| crate::brain_bids::lot_seats(life, live, item, count, deps))
 }
 
 /// `reengage_after_restart` with the lot's seats read by `seats_of`

@@ -148,13 +148,14 @@ fn build_world(life: &Life, template: &Ambition, rng: &mut Rng, market: &TestMar
     ]);
     let raw = RawWorld::new(account, live, market_up.then_some(market));
     raw.seed(&seed);
-    let (clock, levels, wallet, held, orders, slice_items, stamp, routes) = raw.run(|| {
-        let fx = LiveUpkeepFx::new(&raw.orch, &raw.job, &raw.live, raw.deps(&Seed::default()));
+    let (clock, levels, wallet, held, orders, slice_items, stamp, routes) = {
+        let deps = &raw.deps(&Seed::default());
+        let fx = LiveUpkeepFx::new(&raw.orch, &raw.job, &raw.live, deps.clone());
         let levels: Vec<(String, u8)> = (0u8..23).map(|stat| lifescape_sdk::provenance::skill_name(stat).to_string()).map(|name| { let level = fx.level_of(&name); (name, level) }).collect();
-        let held: Vec<(String, i64)> = ITEMS.iter().map(|item| (item.to_string(), crate::brain_plan::holdings_count(&raw.job, item))).collect();
+        let held: Vec<(String, i64)> = ITEMS.iter().map(|item| (item.to_string(), crate::brain_plan::holdings_count(&raw.job, item, deps))).collect();
         let routes: Vec<(String, RouteFacts)> = life.nodes.iter().map(|node| (node.id.clone(), fx.facts(life, node))).collect();
         (fx.clock(), levels, fx.coins(), held, fx.orders(), fx.slice_items(slice), fx.stamp(), routes)
-    });
+    };
     raw.clear(&seed);
     World {
         clock,

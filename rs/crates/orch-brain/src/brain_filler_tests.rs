@@ -364,6 +364,7 @@ fn a_crowded_site_is_never_drawn_by_a_second_filler() {
 /// is never in the graph).
 #[test]
 fn a_filler_pick_reads_the_same_holdings_from_the_cache() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let stack = |name: &str, count: i64| {
         let obj = lifescape_gamedata::objs_by_name(name).into_iter().next().expect("in the dump");
         lifescape_json::object(vec![("id", lifescape_json::Value::Int(obj.obj_id as i64)), ("name", lifescape_json::str_value(obj.display.unwrap_or(name))), ("count", lifescape_json::Value::Int(count))])
@@ -375,9 +376,9 @@ fn a_filler_pick_reads_the_same_holdings_from_the_cache() {
     ]);
     let job = crate::jobs::Job::new("filler_holdings_probe");
     job.inner.lock().expect("job").live = Some(std::sync::Arc::new(live.clone()));
-    let cached = crate::brain_plan::Holdings::of(&job);
+    let cached = crate::brain_plan::Holdings::of(&job, deps);
     for item in ["coins", "iron_ore", "coal", "raw_trout", "rune_pickaxe", "bronze_platebody", "yew_logs", "iron_ore", "coal"] {
-        assert_eq!(cached.count(item), crate::brain_plan::holdings_count(&job, item), "{item}");
+        assert_eq!(cached.count(item), crate::brain_plan::holdings_count(&job, item, deps), "{item}");
     }
     assert_eq!(cached.count("iron_ore"), 25);
     assert_eq!(cached.count("coal"), 300, "the banknotes count as the object");

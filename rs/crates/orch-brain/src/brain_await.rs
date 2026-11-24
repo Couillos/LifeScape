@@ -30,26 +30,27 @@ pub(crate) trait FillMarket {
 
 struct LiveMarket<'account> {
     account: &'account str,
+    deps: &'account crate::brain_deps::BrainDeps,
 }
 
 impl FillMarket for LiveMarket<'_> {
     fn buy_closed(&self, item: &str) -> bool {
-        crate::brain_market::buy_closed(self.account, item)
+        crate::brain_market::buy_closed(self.account, item, self.deps)
     }
 
     fn close_need(&self, item: &str) -> usize {
-        crate::brain_market::cancel_open_buys(self.account, item)
+        crate::brain_market::cancel_open_buys(self.account, item, self.deps)
     }
 }
 
 /// One pass over the obtain node at `position`, waiting `waited` seconds
 /// for its buy of `count` `item`. Returns true while it keeps waiting
 /// (nothing changed), false once the node moved on (`settle_with`).
-pub(crate) fn settle_fill(job: &Job, life: &mut Life, position: usize, item: &str, count: i64, waited: i64) -> bool {
-    let held = holdings_count(job, item);
-    let deadline = (AWAIT_FILL_TICKS * crate::market_eta::live_tick_ms() / 1000) as i64;
+pub(crate) fn settle_fill(job: &Job, life: &mut Life, position: usize, item: &str, count: i64, waited: i64, deps: &crate::brain_deps::BrainDeps) -> bool {
+    let held = holdings_count(job, item, deps);
+    let deadline = (AWAIT_FILL_TICKS * deps.clock.tick_ms() / 1000) as i64;
     let baseline = life.nodes[position].progress_current;
-    let outcome = settle_with(life, position, item, count, held, waited, deadline, &LiveMarket { account: &job.account });
+    let outcome = settle_with(life, position, item, count, held, waited, deadline, &LiveMarket { account: &job.account, deps });
     // A partial fill landed: the reservation shrinks by it (a full one
     // ends with the need, `cancel_open_buys`).
     let landed = life.nodes.get(position).map(|node| node.progress_current - baseline).unwrap_or(0);

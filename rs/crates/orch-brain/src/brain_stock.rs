@@ -135,7 +135,7 @@ pub fn stale_stock(rows: &[lifescape_store::Order], plan: &[StockLine], claimed:
 }
 
 /// One stock pass. Returns the bids placed or kept.
-pub fn stock_pass(job: &Job, life: &Life, live: &Value) -> usize {
+pub fn stock_pass(job: &Job, life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> usize {
     if life.profile.ironman {
         return 0;
     }
@@ -147,7 +147,7 @@ pub fn stock_pass(job: &Job, life: &Life, live: &Value) -> usize {
         }
         table.insert(job.account.clone(), now);
     }
-    let Some(service) = crate::market_service::shared() else { return 0 };
+    let Some(service) = deps.market.clone() else { return 0 };
     let levels = crate::brain_market::live_levels(live);
     if levels.is_empty() {
         return 0;
@@ -155,12 +155,12 @@ pub fn stock_pass(job: &Job, life: &Life, live: &Value) -> usize {
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
     let slices = stock_target::work_slices(life, &level_of);
     let owned = crate::brain_plan::live_owned(live);
-    let coins = crate::brain_plan::holdings_count(job, "coins");
-    let reader = crate::brain_bids::MarketReader::live(&job.account);
+    let coins = crate::brain_plan::holdings_count(job, "coins", deps);
+    let reader = crate::brain_bids::MarketReader::live(&job.account, deps);
     let price_of = |item: &str| reader.view(item).and_then(|view| view.best_ask().or(view.current));
     let fitted = lifescape_gamedata::melee_ladder::food_to_ask(i64::from(level_of("hitpoints")));
     let food = lifescape_gamedata::melee_ladder::affordable_food(fitted, lifescape_planner::replan::FOOD_BATCH, coins, &price_of);
-    let snapshot = crate::rates_service::live_snapshot();
+    let snapshot = deps.rates.clone();
     let consumption = slice_consumption(snapshot.book(), &slices, &owned, Some(&food), &level_of, crate::rates_service::now_secs());
     let mut needs = stock_target::slice_needs(&consumption);
     let (rows, deals) = {
@@ -174,7 +174,7 @@ pub fn stock_pass(job: &Job, life: &Life, live: &Value) -> usize {
     let claimed = crate::brain_alch::claimed(&job.account);
     let foreign: BTreeSet<i64> = rows.iter().filter(|row| crate::brain_gear::cancellable(row) && row.motive != crate::market_lineage::STOCK).map(|row| row.item_id).collect();
     needs.retain(|(item, _)| id_of(item).is_none_or(|id| !foreign.contains(&id) && !claimed.contains(&id)));
-    let locks = crate::brain_locks::locked_items(&job.account);
+    let locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), &job.account);
     let free = crate::brain_sales::free_stacks(&crate::brain_plan::live_stacks(job), &|name| crate::brain_locks::locked_in(&locks, name));
     let held = |item: &str| {
         let banked: i64 = free.iter().filter(|(name, _)| name == item).map(|(_, count)| *count).sum();
@@ -191,7 +191,7 @@ pub fn stock_pass(job: &Job, life: &Life, live: &Value) -> usize {
         let view = reader.view(item);
         stock_ceiling(view.as_ref().and_then(|view| view.current), view.as_ref().and_then(|view| view.best_ask()), lifescape_gamedata::obtain::merchant_price(item))
     };
-    let budget = crate::brain_gear::free_coins(job, None).saturating_mul(stock_target::STOCK_BUDGET_PCT) / 100;
+    let budget = crate::brain_gear::free_coins(job, None, deps).saturating_mul(stock_target::STOCK_BUDGET_PCT) / 100;
     let view = StockView { held: &held, resting: &resting, ceiling_of: &ceiling_of, market_affinity: life.profile.market_affinity, budget };
     let plan = stock_target::stock_plan(&needs, &view);
     let mut placed = 0;

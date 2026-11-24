@@ -19,8 +19,8 @@ use crate::market_demand::ValueInputs;
 
 /// Runs `body` with a `ValueContext` over `inputs` and the fleet's
 /// `surplus` (the piles the training of a consumer skill burns).
-pub(crate) fn with_context<T>(inputs: &ValueInputs, surplus: &[(String, f64)], body: impl FnOnce(&ValueContext) -> T) -> T {
-    let rate = crate::brain_plan_read::live_rate();
+pub(crate) fn with_context<T>(inputs: &ValueInputs, surplus: &[(String, f64)], body: impl FnOnce(&ValueContext) -> T, deps: &crate::brain_deps::BrainDeps) -> T {
+    let rate = crate::brain_plan_read::live_rate(deps);
     let price = |item: &str| inputs.price_of(item);
     let (roster, targets) = fleet_roster();
     let context = ValueContext { bids: &inputs.bids, alch_offers: &inputs.alch_offers, surplus, price: &price, xp_rate: &best_xp_rate, rate: &rate, roster: Some(&roster), targets: &targets };
@@ -88,12 +88,12 @@ impl std::fmt::Display for DrawError {
 /// drawable (every kind excluded) the draw ends in a typed error, never
 /// another rule. `exclude`: kinds kept out (the one just refused). Logs
 /// the numbers of a value pick.
-pub(crate) fn draw(account: &str, bot: &FleetBot, gaps: &[String], weights: &[KindDemand], inputs: &ValueInputs, surplus: &[(String, f64)], held: &[String], exclude: &[&str]) -> Result<(String, String), DrawError> {
+pub(crate) fn draw(account: &str, bot: &FleetBot, gaps: &[String], weights: &[KindDemand], inputs: &ValueInputs, surplus: &[(String, f64)], held: &[String], exclude: &[&str], deps: &crate::brain_deps::BrainDeps) -> Result<(String, String), DrawError> {
     if level_led(bot) {
         return Ok(draw_kind(bot, gaps, weights, exclude));
     }
     let refs: Vec<&str> = held.iter().map(String::as_str).collect();
-    match with_context(inputs, surplus, |context| pick_by_value(bot, &refs, context, exclude)) {
+    match with_context(inputs, surplus, |context| pick_by_value(bot, &refs, context, exclude), deps) {
         Some(pick) => {
             crate::logln!("brain {account}: ambition {} given by value ({})", pick.kind, pick.numbers());
             Ok((pick.kind.clone(), pick.why()))
@@ -107,7 +107,7 @@ pub(crate) fn draw(account: &str, bot: &FleetBot, gaps: &[String], weights: &[Ki
 const INPUTS_REUSE_SECS: u64 = 60;
 
 /// The fleet's value inputs and surplus now, reused `INPUTS_REUSE_SECS`.
-fn fleet_inputs() -> (ValueInputs, Vec<(String, f64)>) {
+fn fleet_inputs(deps: &crate::brain_deps::BrainDeps) -> (ValueInputs, Vec<(String, f64)>) {
     type Cache = Option<(std::time::Instant, ValueInputs, Vec<(String, f64)>)>;
     static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(None);
     let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -116,7 +116,7 @@ fn fleet_inputs() -> (ValueInputs, Vec<(String, f64)>) {
             return (inputs.clone(), surplus.clone());
         }
     }
-    let demand = crate::market_demand::kind_demand();
+    let demand = crate::market_demand::kind_demand(deps);
     *cache = Some((std::time::Instant::now(), demand.value.clone(), demand.surplus.clone()));
     (demand.value, demand.surplus)
 }
@@ -126,8 +126,8 @@ fn fleet_inputs() -> (ValueInputs, Vec<(String, f64)>) {
 /// level (`investment` over the skill's own gates), the alchemy for
 /// magic; `lifescape_planner::investment::time_value` turns them into the
 /// coins a tick of the bot's time is worth. Empty when nothing pays.
-pub fn pending_investments(skill: &str, level_of: &dyn Fn(&str) -> u8) -> Vec<lifescape_planner::investment::Investment> {
-    let (inputs, surplus) = fleet_inputs();
+pub fn pending_investments(skill: &str, level_of: &dyn Fn(&str) -> u8, deps: &crate::brain_deps::BrainDeps) -> Vec<lifescape_planner::investment::Investment> {
+    let (inputs, surplus) = fleet_inputs(deps);
     with_context(&inputs, &surplus, |context| {
         let own = [skill];
         let mut out: Vec<lifescape_planner::investment::Investment> = inputs
@@ -141,5 +141,5 @@ pub fn pending_investments(skill: &str, level_of: &dyn Fn(&str) -> u8) -> Vec<li
             out.extend(lifescape_planner::investment::alchemy_investment(level_of, context.alch_offers, context.price, context.xp_rate).filter(|found| found.climb_ticks > 0.0));
         }
         out
-    })
+    }, deps)
 }

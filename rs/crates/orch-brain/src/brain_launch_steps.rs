@@ -40,7 +40,7 @@ pub(crate) fn open<'a>(orch: &'a Arc<dyn Fleet>, job: &'a Arc<Job>) -> Option<La
     if let Some((tile, first)) = crate::brain_stranded::gate(&job.account, inputs.position) {
         if first {
             crate::logln!("{}", crate::brain_stranded::verdict_line(&job.account, tile));
-            if let Some(service) = crate::market_service::shared() {
+            if let Some(service) = deps.market.clone() {
                 let (failed, cancelled) = service.retire_account(&job.account, crate::brain_stranded::STRANDED_REASON);
                 crate::logln!("market: {} stranded, deals {failed:?} failed no_show, {cancelled} order(s) retired", job.account);
             }
@@ -101,6 +101,7 @@ pub(crate) fn bank_and_normalize(pass: &mut LaunchPass) -> Flow {
 /// (worker crash, daemon restart): counted as a failure, so a script
 /// that kills its worker cannot relaunch forever.
 pub(crate) fn running_node(pass: &mut LaunchPass) -> Flow {
+    let deps = &pass.deps.clone();
     let job = pass.job;
     let Some(active_id) = pass.life.active.clone() else { return Flow::Continue };
     // lot 3: the grace mark and the report flags are other threads' state
@@ -115,7 +116,7 @@ pub(crate) fn running_node(pass: &mut LaunchPass) -> Flow {
         // A wait locked by an older daemon (or a worker-side buy)
         // parks: the bid rests, the worker works on (no idle bot).
         (NodeKind::ObtainItems { item, count }, Some(waited)) => {
-            if crate::brain_await::settle_fill(job, &mut pass.life, position, item, *count, waited) {
+            if crate::brain_await::settle_fill(job, &mut pass.life, position, item, *count, waited, deps) {
                 crate::logln!("brain {}: {active_id} parked on the book, the worker works on", job.account);
                 // Its last entry stays `awaiting_fill`: the deadline
                 // keeps counting from the placement.
@@ -220,13 +221,14 @@ pub(crate) fn market_passes(pass: &mut LaunchPass) -> Flow {
 /// Orphan needs, parked settles, the quest hold and cooled methods: what
 /// waits like a parked buy.
 pub(crate) fn waits(pass: &mut LaunchPass) -> Flow {
+    let deps = &pass.deps.clone();
     let job = pass.job;
     // Persistent needs (plan marché M2): a need's bid outlives its fill
     // wait; it closes here once no open node wants its object.
-    crate::cpu_profile::timed("market.orphan_needs", || crate::brain_market::release_orphan_needs(job, &pass.life));
+    crate::cpu_profile::timed("market.orphan_needs", || crate::brain_market::release_orphan_needs(job, &pass.life, deps));
     // Market buys parked on the book settle every pass; the worker never
     // waits for them (no idle bot, 2026-11-13).
-    let (settled, waiting) = crate::cpu_profile::timed("filler.settle_parked", || crate::brain_filler::settle_parked(job, &mut pass.life));
+    let (settled, waiting) = crate::cpu_profile::timed("filler.settle_parked", || crate::brain_filler::settle_parked(job, &mut pass.life, deps));
     pass.waiting = waiting;
     if settled {
         pass.dirty = true;
@@ -234,7 +236,7 @@ pub(crate) fn waits(pass: &mut LaunchPass) -> Flow {
     // Quest gate (2026-11-14): a ready quest launches only with its
     // objects at hand (missing ones obtained first, listed ones
     // released); a cooled quest waits like a parked buy.
-    let (gated, quest_waits) = crate::cpu_profile::timed("quest_gate.hold_pass", || crate::brain_quest_gate::hold_pass(job, &mut pass.life, &pass.live));
+    let (gated, quest_waits) = crate::cpu_profile::timed("quest_gate.hold_pass", || crate::brain_quest_gate::hold_pass(job, &mut pass.life, &pass.live, deps));
     if gated {
         pass.dirty = true;
     }

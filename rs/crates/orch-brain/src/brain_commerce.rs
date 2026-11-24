@@ -39,6 +39,8 @@ pub(crate) struct Commerce<'a> {
     pub job: &'a Job,
     pub life: &'a mut Life,
     pub live: &'a Value,
+    /// The pass's handles on the world (market, rates, guides, crowd, clock).
+    pub deps: &'a crate::brain_deps::BrainDeps,
     /// A quoting market maker: quotes its slice, none of the other bids.
     pub quoting: bool,
     /// A step changed the life (saved by the stopping step as asked).
@@ -78,7 +80,7 @@ pub(crate) fn run(commerce: &mut Commerce) {
 
 /// The launch pass's side market passes (`steps::market_passes`).
 pub(crate) fn market_passes(pass: &mut LaunchPass) -> Flow {
-    let mut commerce = Commerce { job: pass.job, life: &mut pass.life, live: &pass.live, quoting: pass.quoting, dirty: false };
+    let mut commerce = Commerce { job: pass.job, life: &mut pass.life, live: &pass.live, deps: &pass.deps, quoting: pass.quoting, dirty: false };
     run(&mut commerce);
     let dirty = commerce.dirty;
     pass.dirty |= dirty;
@@ -88,64 +90,71 @@ pub(crate) fn market_passes(pass: &mut LaunchPass) -> Flow {
 /// The open quests' objects never go on sale (2026-11-14, bh99tw2f):
 /// published before any listing pass.
 fn quest_reserve(commerce: &mut Commerce) {
+    let deps = commerce.deps;
     let (job, life) = (commerce.job, &*commerce.life);
-    crate::cpu_profile::timed("quest_gate.publish", || crate::brain_quest_gate::publish_reserved(&job.account, life));
+    crate::cpu_profile::timed("quest_gate.publish", || crate::brain_quest_gate::publish_reserved(&job.account, life, deps));
 }
 
 /// PRD3 lot 3: idle bots list their tradeable surplus on the market
 /// (rate-limited, never an NPC sale).
 fn list_surplus(commerce: &mut Commerce) {
+    let deps = commerce.deps;
     let (job, life) = (commerce.job, &*commerce.life);
-    crate::cpu_profile::timed("sales.list_surplus", || crate::brain_sales::maybe_list_surplus(job, life));
+    crate::cpu_profile::timed("sales.list_surplus", || crate::brain_sales::maybe_list_surplus(job, life, deps));
 }
 
 /// Q6: the maker quotes its slice (rate-limited, public data).
 fn maker_quotes(commerce: &mut Commerce) {
+    let deps = commerce.deps;
     if !commerce.quoting {
         return;
     }
     let (job, life) = (commerce.job, &*commerce.life);
-    crate::cpu_profile::timed("market_maker.quote_pass", || crate::market_maker::quote_pass(job, life));
+    crate::cpu_profile::timed("market_maker.quote_pass", || crate::market_maker::quote_pass(job, life, deps));
 }
 
 /// PRD3 lot 5: upgrade wishes bid on the market, never blocking.
 fn wish_bids(commerce: &mut Commerce) {
+    let deps = commerce.deps;
     if commerce.quoting {
         return;
     }
     let (job, life) = (commerce.job, &*commerce.life);
-    crate::cpu_profile::timed("wishlist.bid_wishes", || crate::brain_wishlist::maybe_bid_wishes(job, life));
+    crate::cpu_profile::timed("wishlist.bid_wishes", || crate::brain_wishlist::maybe_bid_wishes(job, life, deps));
 }
 
 /// Alchemy (2026-11-14): nature runes for the stock a caster alchs, asks
 /// under the alch floor bought to alch.
 fn alchemy(commerce: &mut Commerce) {
+    let deps = commerce.deps;
     if commerce.quoting {
         return;
     }
     let (job, life, live) = (commerce.job, &*commerce.life, commerce.live);
-    crate::cpu_profile::timed("alch.market_pass", || crate::brain_alch::market_pass(job, life, live));
+    crate::cpu_profile::timed("alch.market_pass", || crate::brain_alch::market_pass(job, life, live, deps));
 }
 
 /// Merchant arbitrage (plan équilibre D2): asks under what a shop pays,
 /// net of the trip at the bot's time value, bought for it.
 fn arbitrage(commerce: &mut Commerce) {
+    let deps = commerce.deps;
     if commerce.quoting {
         return;
     }
     let (job, life, live) = (commerce.job, &*commerce.life, commerce.live);
-    crate::cpu_profile::timed("arbitrage.pass", || crate::brain_arbitrage::arbitrage_pass(job, life, live));
+    crate::cpu_profile::timed("arbitrage.pass", || crate::brain_arbitrage::arbitrage_pass(job, life, live, deps));
 }
 
 /// Future stock (plan marché M6, Q5): patient bids for what the current
 /// work slice and the next will burn, after the alchemy pass (its own
 /// `stock` bids are claimed first).
 fn future_stock(commerce: &mut Commerce) {
+    let deps = commerce.deps;
     if commerce.quoting {
         return;
     }
     let (job, life, live) = (commerce.job, &*commerce.life, commerce.live);
-    crate::cpu_profile::timed("stock.future_pass", || crate::brain_stock::stock_pass(job, life, live));
+    crate::cpu_profile::timed("stock.future_pass", || crate::brain_stock::stock_pass(job, life, live, deps));
 }
 
 /// Permanent tool kit (2026-11-14): axe, pickaxe, hammer, tinderbox, the
@@ -153,12 +162,13 @@ fn future_stock(commerce: &mut Commerce) {
 /// for an axe), never a market bid nobody fills. Before the gear plan: the
 /// cheap base kit first.
 fn tool_kit(commerce: &mut Commerce) {
+    let deps = commerce.deps;
     if commerce.quoting {
         return;
     }
     let (job, live) = (commerce.job, commerce.live);
     let life = &mut *commerce.life;
-    if crate::cpu_profile::timed("tool_shop_pass", || crate::brain_tool_shop::tool_shop_pass(job, life, live)) {
+    if crate::cpu_profile::timed("tool_shop_pass", || crate::brain_tool_shop::tool_shop_pass(job, life, live, deps)) {
         commerce.dirty = true;
     }
 }
@@ -166,12 +176,13 @@ fn tool_kit(commerce: &mut Commerce) {
 /// Gear plan (2026-11-14): the best affordable piece of every slot,
 /// standing bids that wait for a producer, steps for covered asks.
 fn gear_plan(commerce: &mut Commerce) {
+    let deps = commerce.deps;
     if commerce.quoting {
         return;
     }
     let (job, live) = (commerce.job, commerce.live);
     let life = &mut *commerce.life;
-    if crate::cpu_profile::timed("gear_pass", || crate::brain_gear::gear_pass(job, life, live)) {
+    if crate::cpu_profile::timed("gear_pass", || crate::brain_gear::gear_pass(job, life, live, deps)) {
         commerce.dirty = true;
     }
 }

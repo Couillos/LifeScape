@@ -164,14 +164,14 @@ pub(crate) fn parked_waits(life: &Life) -> Vec<(usize, String, i64)> {
 
 /// Settle every parked wait (holdings read live). Returns (the life
 /// changed, ids still waiting).
-pub(crate) fn settle_parked(job: &Job, life: &mut Life) -> (bool, Vec<String>) {
+pub(crate) fn settle_parked(job: &Job, life: &mut Life, deps: &crate::brain_deps::BrainDeps) -> (bool, Vec<String>) {
     let now = now_secs();
     let mut changed = false;
     let mut waiting = Vec::new();
     for (_, node_id, since) in parked_waits(life) {
         let Some(position) = life.nodes.iter().position(|node| node.id == node_id) else { continue };
         let NodeKind::ObtainItems { item, count } = life.nodes[position].kind.clone() else { continue };
-        if crate::brain_await::settle_fill(job, life, position, &item, count, crate::downtime::awake_secs(since, now)) {
+        if crate::brain_await::settle_fill(job, life, position, &item, count, crate::downtime::awake_secs(since, now), deps) {
             waiting.push(node_id);
         } else {
             changed = true;
@@ -296,11 +296,11 @@ pub fn window_ctx(job: &Job, life: &Life, live: &Value, first: &str) -> (Node, R
 
 /// `window_ctx` reading through the pass's handles (lot 3.5).
 pub(crate) fn window_ctx_in(job: &Job, life: &Life, live: &Value, first: &str, deps: &crate::brain_deps::BrainDeps) -> (Node, ReadyCtx) {
-    let coins = crate::brain_plan::holdings_count(job, "coins");
+    let coins = crate::brain_plan::holdings_count(job, "coins", deps);
     let node = Node::new(&format!("fill-{first}"), NodeKind::HaveCoins { amount: coins.saturating_add(1) }, Vec::new(), 0);
     let mut ctx = crate::brain_plan::ready_ctx_in(life, &node, live, deps);
     ctx.coins = coins;
-    ctx.tools = crate::brain_plan::carried_tools(job);
+    ctx.tools = crate::brain_plan::carried_tools(job, deps);
     ctx.bank_known = live.get("bank_streamed").as_bool() == Some(true);
     ctx.combat = crate::brain_plan::live_combat(live);
     ctx.position = live.get("position").as_arr().and_then(|cells| {
@@ -329,7 +329,7 @@ pub fn publish_window(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value
 /// `publish_window` reading through the pass's handles (lot 3.5).
 pub(crate) fn publish_window_in(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value, job: &Job, deps: &crate::brain_deps::BrainDeps) {
     let keep = crate::brain_alch::kept_except(life, live, Some(&node.id));
-    crate::brain_alch::publish_keeping(ctx, node, life, live, &keep);
+    crate::brain_alch::publish_keeping(ctx, node, life, live, &keep, deps);
     crate::brain_money::publish_keeping(ctx, node, life, live, job, &keep, deps);
 }
 
@@ -387,7 +387,7 @@ pub(crate) fn launch_filler(orch: &Arc<dyn Fleet>, job: &Arc<Job>, life: &mut Li
     crate::brain_picks::record_filler(life, &node, &ctx, now_secs());
     // Its product goes on the public order board until its report (plan
     // équilibre step 2).
-    crate::brain_money::claim_launch(&job.account, &node, &method, Some((0, FILLER_TICKS)), live);
+    crate::brain_money::claim_launch(&job.account, &node, &method, Some((0, FILLER_TICKS)), live, deps);
     let through = through.map(|skill| format!(" through the {skill} ban (every workable money method is banned)")).unwrap_or_default();
     crate::logln!("brain {}: {} awaiting its fill, working {method} meanwhile{through} ({FILLER_TICKS} ticks): {script} {}", job.account, waiting.join(","), args.join(" "));
     push_history(life, &node.id, &format!("{FILLER_LAUNCH_TAG}{}", lifescape_planner::cooldown::cool_key(&method, node.site)));

@@ -114,13 +114,14 @@ impl RescueReader for LiveUpkeepFx<'_> {
     }
 
     fn facts(&self, life: &Life, node: &Node) -> RouteFacts {
+        let deps = &self.deps;
         let lifescape_planner::NodeKind::ObtainItems { item, .. } = &node.kind else {
             return RouteFacts { best_ask: None, price: 0, held: 0, committed: 0 };
         };
         let mut ctx = crate::brain_plan::ready_ctx_in(life, node, self.live, &self.deps);
         crate::brain_market::fill_ctx_in(&mut ctx, node, self.live, &self.deps);
-        let held = self.job.map(|job| crate::brain_plan::holdings_count(job, item)).unwrap_or(0);
-        let committed = crate::brain_gear::committed_coins(&life.account, crate::brain_gear::obj_id(item));
+        let held = self.job.map(|job| crate::brain_plan::holdings_count(job, item, deps)).unwrap_or(0);
+        let committed = crate::brain_gear::committed_coins(&life.account, crate::brain_gear::obj_id(item), deps);
         RouteFacts { best_ask: ctx.best_ask, price: ctx.price, held, committed }
     }
 }
@@ -136,7 +137,7 @@ impl UpkeepFx for LiveUpkeepFx<'_> {
 
     fn clock(&self) -> Clock {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
-        Clock { now, tick_ms: crate::market_eta::live_tick_ms(), down: crate::downtime::overlap }
+        Clock { now, tick_ms: self.deps.clock.tick_ms(), down: crate::downtime::overlap }
     }
 
     fn level_of(&self, skill: &str) -> u8 {
@@ -156,36 +157,44 @@ impl UpkeepFx for LiveUpkeepFx<'_> {
     }
 
     fn assign_natural(&self, draft: &mut Life) -> bool {
-        crate::brain_ambition::assign_natural(draft, self.live)
+        let deps = &self.deps;
+        crate::brain_ambition::assign_natural(draft, self.live, deps)
     }
 
     fn assign_kind(&self, draft: &mut Life, kind: &str, why: &str) -> bool {
-        crate::brain_ambition::assign_kind(draft, self.live, kind, why)
+        let deps = &self.deps;
+        crate::brain_ambition::assign_kind(draft, self.live, kind, why, deps)
     }
 
     fn succeed_goal(&self, life: &mut Life, stuck: bool) -> Option<String> {
-        crate::brain_succession::succeed_goal(life, self.live, stuck)
+        let deps = &self.deps;
+        crate::brain_succession::succeed_goal(life, self.live, stuck, deps)
     }
 
     fn close_goal(&self, life: &mut Life, stuck: bool) {
-        crate::brain_succession::close_goal(life, self.live, stuck);
+        let deps = &self.deps;
+        crate::brain_succession::close_goal(life, self.live, stuck, deps);
     }
 
     fn draw_next(&self, life: &mut Life) -> Option<String> {
-        crate::brain_succession::draw_next(life, self.live)
+        let deps = &self.deps;
+        crate::brain_succession::draw_next(life, self.live, deps)
     }
 
     fn redraw(&self, life: &mut Life) -> (Option<String>, bool) {
+        let deps = &self.deps;
         // Behind the gate (lot 3.3, `LIFESCAPE_REDRAW_GATE`, shadow by default).
-        crate::brain_redraw_gate::redraw(life, self.live, crate::brain_succession::redraw)
+        crate::brain_redraw_gate::redraw(life, self.live, crate::brain_succession::redraw, deps)
     }
 
     fn redraw_neediest(&self, life: &mut Life, why: &str) {
-        crate::brain_ambition::redraw_neediest(life, self.live, why);
+        let deps = &self.deps;
+        crate::brain_ambition::redraw_neediest(life, self.live, why, deps);
     }
 
     fn coins(&self) -> i64 {
-        self.job.map(|job| crate::brain_plan::holdings_count(job, "coins")).unwrap_or(0)
+        let deps = &self.deps;
+        self.job.map(|job| crate::brain_plan::holdings_count(job, "coins", deps)).unwrap_or(0)
     }
 
     fn orders(&self) -> Option<Vec<OrderFact>> {
@@ -220,7 +229,8 @@ impl UpkeepFx for LiveUpkeepFx<'_> {
     }
 
     fn ensure(&self, life: &mut Life) -> bool {
-        self.orch.is_some_and(|orch| crate::brain_ambition::ensure(&**orch, life, self.live))
+        let deps = &self.deps;
+        self.orch.is_some_and(|orch| crate::brain_ambition::ensure(&**orch, life, self.live, deps))
     }
 
     fn coverage(&self, life: &Life) {
@@ -228,18 +238,22 @@ impl UpkeepFx for LiveUpkeepFx<'_> {
     }
 
     fn fleet_surplus(&self) -> Vec<(String, f64)> {
-        crate::market_demand::fleet_surplus()
+        let deps = &self.deps;
+        crate::market_demand::fleet_surplus(deps)
     }
 
     fn serve_facts(&self, life: &Life, query: &ServeQuery) -> Option<ServeFacts> {
-        crate::brain_serve_value::serve_facts(life, self.live, query)
+        let deps = &self.deps;
+        crate::brain_serve_value::serve_facts(life, self.live, query, deps)
     }
 
     fn judge(&self, life: &Life, items: &[(String, String)]) -> Vec<(String, ServeVerdict)> {
-        crate::brain_milestone_value::judge_items(life, self.live, items)
+        let deps = &self.deps;
+        crate::brain_milestone_value::judge_items(life, self.live, items, deps)
     }
 
     fn reengage(&self, life: &Life) -> bool {
-        crate::brain_bid_release::reengage_after_restart(life, self.live)
+        let deps = &self.deps;
+        crate::brain_bid_release::reengage_after_restart(life, self.live, deps)
     }
 }

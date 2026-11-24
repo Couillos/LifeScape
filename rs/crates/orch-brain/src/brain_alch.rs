@@ -43,15 +43,15 @@ pub(crate) fn obj_id(item: &str) -> Option<i64> {
 
 /// Current price of one object (`MarketService::reference`), 1 while the
 /// market is down.
-fn current_price(item: &str) -> f64 {
-    let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return 1.0 };
+fn current_price(item: &str, deps: &crate::brain_deps::BrainDeps) -> f64 {
+    let (Some(service), Some(id)) = (deps.market.clone(), obj_id(item)) else { return 1.0 };
     service.reference(id).price.max(1) as f64
 }
 
 /// What selling one unit brings now: the best bid, else the current
 /// price of a traded object, else nothing (no buyer, no trade).
-pub(crate) fn sale_price(item: &str) -> f64 {
-    let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return 0.0 };
+pub(crate) fn sale_price(item: &str, deps: &crate::brain_deps::BrainDeps) -> f64 {
+    let (Some(service), Some(id)) = (deps.market.clone(), obj_id(item)) else { return 0.0 };
     let bid = service.lock_engine().books.get(&id).and_then(|book| book.best().0).map(|price| crate::market_units::to_unit(id, price)).unwrap_or(0);
     let reference = service.reference(id);
     let traded = if reference.traded { reference.price } else { 0 };
@@ -60,10 +60,10 @@ pub(crate) fn sale_price(item: &str) -> f64 {
 
 /// The bot as a caster (magic level, staff of fire held, runes at their
 /// current market price), `None` under magic 21.
-pub(crate) fn caster_for(live: &Value) -> Option<Caster> {
+pub(crate) fn caster_for(live: &Value, deps: &crate::brain_deps::BrainDeps) -> Option<Caster> {
     let magic = crate::brain_succession::live_level(live, "magic");
     let staff = crate::brain_ambition::live_count(live, FIRE_STAFF) > 0;
-    caster(magic, staff, &current_price)
+    caster(magic, staff, &|item: &str| current_price(item, deps))
 }
 
 /// Free stacks of the pack and bank by debug name (coins and runes out).
@@ -91,8 +91,8 @@ fn stacks_of(live: &Value) -> Vec<(String, i64)> {
 /// The bot's own free stock (pack and bank, coins and runes out, banknotes
 /// as their object, its listings out) minus what it keeps (`keep`): what
 /// a guide line on its own stock may transform (R7, `GuideFilter::held`).
-pub(crate) fn own_stock(live: &Value, account: &str, keep: &[String]) -> Vec<(String, f64)> {
-    let locks = crate::brain_locks::locked_items(account);
+pub(crate) fn own_stock(live: &Value, account: &str, keep: &[String], deps: &crate::brain_deps::BrainDeps) -> Vec<(String, f64)> {
+    let locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), account);
     stacks_of(live)
         .into_iter()
         .filter(|(name, _)| !keep.contains(name))
@@ -106,8 +106,8 @@ pub(crate) fn own_stock(live: &Value, account: &str, keep: &[String]) -> Vec<(St
 
 /// Stock the bot could alch: `(object, free units, what one sells for)`,
 /// minus what it keeps (`keep`: its plan's inputs, its gear, its tools).
-pub(crate) fn alch_stock(live: &Value, account: &str, keep: &[String]) -> Vec<(String, i64, f64)> {
-    let locks = crate::brain_locks::locked_items(account);
+pub(crate) fn alch_stock(live: &Value, account: &str, keep: &[String], deps: &crate::brain_deps::BrainDeps) -> Vec<(String, i64, f64)> {
+    let locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), account);
     stacks_of(live)
         .into_iter()
         .filter(|(name, _)| !keep.contains(name))
@@ -117,7 +117,7 @@ pub(crate) fn alch_stock(live: &Value, account: &str, keep: &[String]) -> Vec<(S
         })
         .filter(|(name, free)| *free > 0 && lifescape_planner::alchemy::alch_value(name, true).is_some())
         .map(|(name, free)| {
-            let price = sale_price(&name);
+            let price = sale_price(&name, deps);
             (name, free, price)
         })
         .collect()
@@ -146,20 +146,20 @@ pub fn kept_except(life: &Life, live: &Value, skip: Option<&str>) -> Vec<String>
 }
 
 /// The bot's best alchemy now (`None`: no caster, nothing beats selling).
-pub(crate) fn best_for(life: &Life, live: &Value) -> Option<(Caster, AlchPick)> {
-    let mage = caster_for(live)?;
+pub(crate) fn best_for(life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> Option<(Caster, AlchPick)> {
+    let mage = caster_for(live, deps)?;
     let keep = kept(life, live);
-    let pick = best_alch(&mage, &alch_stock(live, &life.account, &keep))?;
+    let pick = best_alch(&mage, &alch_stock(live, &life.account, &keep, deps))?;
     Some((mage, pick))
 }
 
 /// Publishes the bot's best alchemy as a money method of `ctx` (a money
 /// or coin node): `alch:<object>` at its profit per 6000 ticks.
-pub fn publish(ctx: &mut lifescape_planner::expand::ReadyCtx, node: &lifescape_planner::Node, life: &Life, live: &Value) {
+pub fn publish(ctx: &mut lifescape_planner::expand::ReadyCtx, node: &lifescape_planner::Node, life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) {
     if !matches!(node.kind, lifescape_planner::NodeKind::MakeMoney | lifescape_planner::NodeKind::HaveCoins { .. }) {
         return;
     }
-    if let Some((_, pick)) = best_for(life, live) {
+    if let Some((_, pick)) = best_for(life, live, deps) {
         ctx.method_profit.push((format!("{ALCH_PREFIX}{}", pick.item), pick.profit_per_6000));
     }
 }
@@ -167,12 +167,12 @@ pub fn publish(ctx: &mut lifescape_planner::expand::ReadyCtx, node: &lifescape_p
 /// `publish` with what the bot keeps already read (`keep`: its `kept`;
 /// a filler window reads it once for its alchemy and its money lines,
 /// lot 3 review, CPU).
-pub(crate) fn publish_keeping(ctx: &mut lifescape_planner::expand::ReadyCtx, node: &lifescape_planner::Node, life: &Life, live: &Value, keep: &[String]) {
+pub(crate) fn publish_keeping(ctx: &mut lifescape_planner::expand::ReadyCtx, node: &lifescape_planner::Node, life: &Life, live: &Value, keep: &[String], deps: &crate::brain_deps::BrainDeps) {
     if !matches!(node.kind, lifescape_planner::NodeKind::MakeMoney | lifescape_planner::NodeKind::HaveCoins { .. }) {
         return;
     }
-    let Some(mage) = caster_for(live) else { return };
-    if let Some(pick) = best_alch(&mage, &alch_stock(live, &life.account, keep)) {
+    let Some(mage) = caster_for(live, deps) else { return };
+    if let Some(pick) = best_alch(&mage, &alch_stock(live, &life.account, keep, deps)) {
         ctx.method_profit.push((format!("{ALCH_PREFIX}{}", pick.item), pick.profit_per_6000));
     }
 }
@@ -205,9 +205,9 @@ fn time_rate(life: &Life) -> f64 {
 /// counts no time, `time_rate`), its nature runes held for at least
 /// `MIN_ALCH_CASTS`. Origin `alch:<object>`: no milestone, the ambition
 /// untouched.
-pub(crate) fn alch_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, String)> {
+pub(crate) fn alch_goal_for(life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> Option<(GoalKind, String)> {
     let _phase = crate::cpu_profile::phase("alch.goal_for");
-    let (_, pick) = best_for(life, live)?;
+    let (_, pick) = best_for(life, live, deps)?;
     let casts = pick.casts.min(natures_held(live));
     if casts < lifescape_planner::alchemy::MIN_ALCH_CASTS {
         return None;
@@ -232,10 +232,10 @@ pub(crate) fn alch_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, Stri
 
 /// Objects a caster keeps for alchemy instead of listing them: their
 /// cast nets more than selling brings now.
-pub fn alch_keep(life: &Life, live: &Value) -> Vec<String> {
-    let Some(mage) = caster_for(live) else { return Vec::new() };
+pub fn alch_keep(life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> Vec<String> {
+    let Some(mage) = caster_for(live, deps) else { return Vec::new() };
     let keep = kept(life, live);
-    let mut out: Vec<String> = alch_stock(live, &life.account, &keep)
+    let mut out: Vec<String> = alch_stock(live, &life.account, &keep, deps)
         .into_iter()
         .filter(|(item, _, price)| mage.profit(item, *price).is_some_and(|profit| profit > 0.0) )
         .map(|(item, _, _)| item)
@@ -255,8 +255,8 @@ pub(crate) fn caster_means() -> Vec<String> {
 
 /// A caster's net on one cast of `item`, rounded up (`None`: no caster,
 /// or the cast loses): an opening anchor, never a price floor.
-pub fn alch_floor(live: &Value, item: &str) -> Option<i64> {
-    let net = caster_for(live)?.net(item)?;
+pub fn alch_floor(live: &Value, item: &str, deps: &crate::brain_deps::BrainDeps) -> Option<i64> {
+    let net = caster_for(live, deps)?.net(item)?;
     (net >= 1.0).then(|| net.ceil() as i64)
 }
 
@@ -274,16 +274,16 @@ fn wall_now() -> f64 {
 /// decreasing (user rule 2026-11-15: buy the biggest margins first):
 /// `(object, book id, ask, units resting, ceiling)` (a banknote book
 /// bids on its own id).
-fn alch_asks(mage: &Caster, account: &str, own_rate: f64) -> Vec<(String, i64, i64, i64, i64)> {
-    let mut out: Vec<(String, i64, i64, i64, i64)> = alch_book(mage, account, own_rate).into_iter().filter(|row| row.2 <= row.4).collect();
+fn alch_asks(mage: &Caster, account: &str, own_rate: f64, deps: &crate::brain_deps::BrainDeps) -> Vec<(String, i64, i64, i64, i64)> {
+    let mut out: Vec<(String, i64, i64, i64, i64)> = alch_book(mage, account, own_rate, deps).into_iter().filter(|row| row.2 <= row.4).collect();
     rank_by_profit(&mut out);
     out
 }
 
 /// Every alchable book's cheapest other ask with the caster's ceiling:
 /// `(object, book id, ask, units resting, ceiling)`, whatever the ask.
-fn alch_book(mage: &Caster, account: &str, own_rate: f64) -> Vec<(String, i64, i64, i64, i64)> {
-    let Some(service) = crate::market_service::shared() else { return Vec::new() };
+fn alch_book(mage: &Caster, account: &str, own_rate: f64, deps: &crate::brain_deps::BrainDeps) -> Vec<(String, i64, i64, i64, i64)> {
+    let Some(service) = deps.market.clone() else { return Vec::new() };
     let asks: Vec<(i64, i64, i64)> = {
         let engine = service.lock_engine();
         engine
@@ -344,7 +344,7 @@ pub(crate) fn claimed(account: &str) -> std::collections::BTreeSet<i64> {
 /// One alchemy market pass for an idle, non-Iron caster: nature runes
 /// for the stock it alchs, and an ask under the alch floor bought to
 /// alch it. Returns the bids placed or kept.
-pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
+pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> usize {
     if life.profile.ironman {
         return 0;
     }
@@ -356,13 +356,13 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
         }
         table.insert(job.account.clone(), now);
     }
-    let Some(service) = crate::market_service::shared() else { return 0 };
-    let Some(mage) = caster_for(live) else { return 0 };
+    let Some(service) = deps.market.clone() else { return 0 };
+    let Some(mage) = caster_for(live, deps) else { return 0 };
     if let Some(id) = obj_id(NATURE_RUNE) {
         claim(&job.account, id);
     }
     let own_rate = time_rate(life);
-    let coins = crate::brain_gear::free_coins(job, None);
+    let coins = crate::brain_gear::free_coins(job, None, deps);
     let natures = natures_held(live);
     let mut placed = 0;
     // Runes for the stock: a nature rune is worth its price plus half the
@@ -370,12 +370,12 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
     // The opportunity a rune serves: the bot's own stock to alch, else the
     // best ask to buy and alch (a caster with nothing in hand still buys
     // runes for the cheap lots others list, live 2026-11-15).
-    let opportunity = best_for(life, live).map(|(_, pick)| (pick.item, pick.casts, pick.profit_each)).or_else(|| {
-        alch_asks(&mage, &job.account, own_rate).into_iter().next().map(|(item, _, ask, resting, ceiling)| (item, resting.min(ALCH_LOT), (ceiling - ask) as f64))
+    let opportunity = best_for(life, live, deps).map(|(_, pick)| (pick.item, pick.casts, pick.profit_each)).or_else(|| {
+        alch_asks(&mage, &job.account, own_rate, deps).into_iter().next().map(|(item, _, ask, resting, ceiling)| (item, resting.min(ALCH_LOT), (ceiling - ask) as f64))
     });
     if let (Some((item, casts, margin)), Some(id)) = (opportunity, obj_id(NATURE_RUNE)) {
         let missing = (casts.max(lifescape_planner::alchemy::MIN_ALCH_CASTS) - natures).clamp(0, ALCH_LOT);
-        let ceiling = nature_ceiling(current_price(NATURE_RUNE), margin);
+        let ceiling = nature_ceiling(current_price(NATURE_RUNE, deps), margin);
         if missing > 0 && ceiling >= 1 && coins >= ceiling {
             let qty = missing.min(coins / ceiling.max(1));
             if let Ok(crate::market_reprice::StandingBid::Placed { price, .. }) = crate::market_reprice::keep_bid(&service, &job.account, id, qty, ceiling, crate::market_lineage::STOCK) {
@@ -388,7 +388,7 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
     // runes, coins and the lot last (user rule 2026-11-15).
     if natures >= lifescape_planner::alchemy::MIN_ALCH_CASTS {
         let (mut runes_left, mut coins_left, mut lot_left) = (natures, coins, ALCH_LOT);
-        for (item, id, ask, resting, ceiling) in alch_asks(&mage, &job.account, own_rate) {
+        for (item, id, ask, resting, ceiling) in alch_asks(&mage, &job.account, own_rate, deps) {
             let qty = resting.min(runes_left).min(lot_left).min(coins_left / ask.max(1));
             if qty < 1 {
                 continue;
@@ -409,8 +409,8 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
     // An alcher bids ahead under the asks still over its ceiling (plan
     // prix §4): a real buyer the sellers' learned floors walk down to.
     if lifescape_planner::is_alcher(life) {
-        let mut coins_left = crate::brain_gear::free_coins(job, None);
-        for (item, id, ask, resting, ceiling) in standing_targets(alch_book(&mage, &job.account, own_rate)) {
+        let mut coins_left = crate::brain_gear::free_coins(job, None, deps);
+        for (item, id, ask, resting, ceiling) in standing_targets(alch_book(&mage, &job.account, own_rate, deps)) {
             let qty = resting.min(STANDING_ALCH_LOT).min(coins_left / ceiling.max(1));
             if qty < 1 {
                 continue;

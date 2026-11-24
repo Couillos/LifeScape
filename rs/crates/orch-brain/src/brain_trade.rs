@@ -78,21 +78,21 @@ pub(crate) fn publish(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Value
         crate::logln!("brain {}: no trade offer for {}: guides not built yet", job.account, node.id);
         return;
     };
-    publish_on(set, ctx, node, live, job);
+    publish_on(set, ctx, node, live, job, deps);
 }
 
 /// `publish` on a given set (the body after the set is read: the proof
 /// runs it on a set of its own, never touching the shared store).
-pub(crate) fn publish_on(set: &GuideSet, ctx: &mut ReadyCtx, node: &Node, live: &Value, job: &Job) {
+pub(crate) fn publish_on(set: &GuideSet, ctx: &mut ReadyCtx, node: &Node, live: &Value, job: &Job, deps: &crate::brain_deps::BrainDeps) {
     let levels = crate::brain_market::live_levels(live);
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
     // The job's holdings read once (`brain_plan::Holdings`, lot 1.1, as
     // `brain_money` does): the same figures as `holdings_count` per object,
     // without a copy of the live state and two store reads for each.
-    let holdings = crate::brain_plan::Holdings::of(job);
+    let holdings = crate::brain_plan::Holdings::of(job, deps);
     let held = |item: &str| holdings.count(item) as f64;
     let asks = |item: &str| cycle_asks(set, item);
-    let wallet = crate::brain_gear::free_coins(job, None);
+    let wallet = crate::brain_gear::free_coins(job, None, deps);
     let bot = BotState { level_of: &level_of, combat: ctx.combat, quests_done: &ctx.quests_done, held: &held, coins: Some(wallet as f64), ironman: false, asks: &asks };
     let claims = crate::market_claims::claimed_by_others(&job.account);
     let claimed = |item: &str| claims.get(item).copied().unwrap_or(0) as f64;

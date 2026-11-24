@@ -168,8 +168,8 @@ pub(crate) fn deal_coins_from(account: &str, deals: &[lifescape_store::Deal]) ->
 /// Coins this account's resting buys commit, except on `except`, plus
 /// what its in-flight buyer deals promise (0 while the market service is
 /// down: nothing rests then).
-pub fn committed_coins(account: &str, except: Option<i64>) -> i64 {
-    let Some(service) = crate::market_service::shared() else { return 0 };
+pub fn committed_coins(account: &str, except: Option<i64>, deps: &crate::brain_deps::BrainDeps) -> i64 {
+    let Some(service) = deps.market.clone() else { return 0 };
     let (rows, deals) = {
         let store = service.lock_store();
         (store.account_orders(account).unwrap_or_default(), store.open_deals_for_account(account).unwrap_or_default())
@@ -182,16 +182,16 @@ pub fn committed_coins(account: &str, except: Option<i64>) -> i64 {
 /// coins held minus what this bot's other resting buys already commit, so
 /// gear (50 %), tools (25 % each) and the graph's buys never promise more
 /// than the wallet holds.
-pub(crate) fn free_coins(job: &Job, except: Option<i64>) -> i64 {
-    (crate::brain_plan::holdings_count(job, "coins") - committed_coins(&job.account, except)).max(0)
+pub(crate) fn free_coins(job: &Job, except: Option<i64>, deps: &crate::brain_deps::BrainDeps) -> i64 {
+    (crate::brain_plan::holdings_count(job, "coins", deps) - committed_coins(&job.account, except, deps)).max(0)
 }
 
 /// The wallet the gear budget shares: coins minus what the bot's
 /// NON-gear resting buys and in-flight deals commit (the gear bids are
 /// re-shared by the plan itself, never counted against it).
-fn gear_free_coins(job: &Job) -> i64 {
-    let coins = crate::brain_plan::holdings_count(job, "coins");
-    let Some(service) = crate::market_service::shared() else { return coins.max(0) };
+fn gear_free_coins(job: &Job, deps: &crate::brain_deps::BrainDeps) -> i64 {
+    let coins = crate::brain_plan::holdings_count(job, "coins", deps);
+    let Some(service) = deps.market.clone() else { return coins.max(0) };
     let store = service.lock_store();
     let rows = store.account_orders(&job.account).unwrap_or_default();
     let deals = store.open_deals_for_account(&job.account).unwrap_or_default();
@@ -220,10 +220,10 @@ fn obtainable_now(service: Option<&std::sync::Arc<crate::market_service::MarketS
 /// nobody makes (`lifescape_planner::equip_wait`): not held (pack, bank,
 /// worn per the live snapshot) and not obtainable now. `None`: every
 /// missing piece has a way, the failure is the bot's.
-pub(crate) fn unmade_equip_piece(life: &Life, live: &Value) -> Option<String> {
+pub(crate) fn unmade_equip_piece(life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> Option<String> {
     let quests_owned = crate::brain_rescue::quests_done(life);
     let quests: Vec<&str> = quests_owned.iter().map(String::as_str).collect();
-    let service = crate::market_service::shared();
+    let service = deps.market.clone();
     let now = wall_now();
     let held = |item: &str| crate::brain_ambition::live_count(live, item) > 0;
     let obtainable = |item: &str| obtainable_now(service.as_ref(), item, &quests, now);
@@ -233,7 +233,7 @@ pub(crate) fn unmade_equip_piece(life: &Life, live: &Value) -> Option<String> {
 /// What the gear plan would buy next at this wallet (its wants at their
 /// expected prices, same budget as `gear_pass`): the part of a donor's
 /// reserve kept for its own gear (`funding_plan`). An Iron buys none.
-pub fn next_gear_cost(job: &Job, life: &Life, live: &Value) -> i64 {
+pub fn next_gear_cost(job: &Job, life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> i64 {
     let levels_owned = crate::brain_market::live_levels(live);
     if life.profile.ironman || levels_owned.is_empty() {
         return 0;
@@ -242,8 +242,8 @@ pub fn next_gear_cost(job: &Job, life: &Life, live: &Value) -> i64 {
     let quests_owned = crate::brain_rescue::quests_done(life);
     let quests: Vec<&str> = quests_owned.iter().map(String::as_str).collect();
     let (owned, _) = holdings(job);
-    let service = crate::market_service::shared();
-    let budget = gear_ladder::wallet_ceiling(gear_free_coins(job), gear_ladder::GEAR_SHARE_PCT);
+    let service = deps.market.clone();
+    let budget = gear_ladder::wallet_ceiling(gear_free_coins(job, deps), gear_ladder::GEAR_SHARE_PCT);
     let now = wall_now();
     let allowed = |item: &str| obtainable_now(service.as_ref(), item, &quests, now);
     let wants = gear_plan::plan_gear_from(goal_style(life), &levels, &quests, &owned, budget, &|item| expected_price(service.as_ref(), item), &allowed);
@@ -275,8 +275,8 @@ fn cancel_order(service: &crate::market_service::MarketService, account: &str, o
 /// other motives (arbitrage, stock, need: 1 818 of 2 501 live
 /// "not wanted by the gear plan" cancels were arbitrage bids the plan
 /// never owned), what the graph's own obtains want, and tools.
-fn cancel_stale_bids(job: &Job, life: &Life, wanted: &[String]) {
-    let Some(service) = crate::market_service::shared() else { return };
+fn cancel_stale_bids(job: &Job, life: &Life, wanted: &[String], deps: &crate::brain_deps::BrainDeps) {
+    let Some(service) = deps.market.clone() else { return };
     let spared = crate::brain_wishlist::wanted_names(life);
     let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
     let candidates: Vec<crate::brain_gear_stale::Candidate> = rows
@@ -295,13 +295,13 @@ fn cancel_stale_bids(job: &Job, life: &Life, wanted: &[String]) {
 /// EVERY launch pass, before `graph_state`, whatever the goal's style, so
 /// an abandoned step never leaves the goal Stuck (closed stuck, its skill
 /// banned for a gear cause). Returns true when the life changed.
-pub(crate) fn withdraw_dead(job: &Job, life: &mut Life) -> bool {
+pub(crate) fn withdraw_dead(job: &Job, life: &mut Life, deps: &crate::brain_deps::BrainDeps) -> bool {
     // Old melee equip goals carried the level-1 set as market obtains
     // (live 2026-11-13: amulet_of_power, iron_platebody on 1-coin bids):
     // the ladder owns melee pieces now, those obtains and bids go.
     let set = lifescape_planner::withdraw_melee_set(life);
     for (node_id, item) in &set {
-        let closed = crate::brain_market::cancel_open_buys(&job.account, item);
+        let closed = crate::brain_market::cancel_open_buys(&job.account, item, deps);
         crate::logln!("brain {}: {node_id} ({item}) left the melee equip goal: the ladder buys melee pieces ({closed} bid cancelled)", job.account);
         push_history(life, node_id, "gear_withdrawn");
     }
@@ -376,11 +376,11 @@ pub(crate) fn shop_only(item: &str) -> bool {
 /// Iron gear (user 2026-11-14, no market): the plan over the pieces an
 /// NPC shop sells, priced at the shop, the first want filed as a step
 /// when none is open. Returns true when the life changed.
-fn iron_gear(job: &Job, life: &mut Life, plan: &IronPlan) -> bool {
+fn iron_gear(job: &Job, life: &mut Life, plan: &IronPlan, deps: &crate::brain_deps::BrainDeps) -> bool {
     if gear_ladder::step_open(life) {
         return false;
     }
-    let budget = gear_ladder::wallet_ceiling(crate::brain_plan::holdings_count(job, "coins"), gear_ladder::GEAR_SHARE_PCT);
+    let budget = gear_ladder::wallet_ceiling(crate::brain_plan::holdings_count(job, "coins", deps), gear_ladder::GEAR_SHARE_PCT);
     let price_of = |item: &str| lifescape_gamedata::obtain::merchant_price(item).unwrap_or(i64::MAX / 64);
     // A guild keeper opens with its quest points (Scavvo, Valaine: 32).
     let quests = plan.quests();
@@ -412,8 +412,8 @@ impl IronPlan {
 }
 
 /// One gear pass. Returns true when the life changed (save it).
-pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
-    let mut changed = withdraw_dead(job, life);
+pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> bool {
+    let mut changed = withdraw_dead(job, life, deps);
     let now = wall_now();
     {
         let mut table = last_pass().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -454,7 +454,7 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
                 quests: quests_owned.clone(),
                 owned: owned.clone(),
             };
-            changed |= iron_gear(job, life, &plan);
+            changed |= iron_gear(job, life, &plan, deps);
         }
         return changed;
     }
@@ -463,8 +463,8 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
     if !crate::brain_gear_fleet::warm(now) {
         return changed;
     }
-    let service = crate::market_service::shared();
-    let budget = gear_ladder::wallet_ceiling(gear_free_coins(job), gear_ladder::GEAR_SHARE_PCT);
+    let service = deps.market.clone();
+    let budget = gear_ladder::wallet_ceiling(gear_free_coins(job, deps), gear_ladder::GEAR_SHARE_PCT);
     // Only the pieces the plan keeps (best wearable per slot and style,
     // or better) move the signature: stock held for a sale (arbitrage,
     // loot) comes and goes without replanning the whole gear.
@@ -475,7 +475,7 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
     let plan = |budget: i64| gear_plan::plan_gear_from(style, &levels, &quests, &owned, budget, &|item| expected_price(service.as_ref(), item), &allowed);
     let wants = crate::brain_gear_hold::held_wants(&job.account, budget, now_tick, &signature, &plan);
     let wanted: Vec<String> = wants.iter().map(|want| want.item.clone()).collect();
-    cancel_stale_bids(job, life, &wanted);
+    cancel_stale_bids(job, life, &wanted, deps);
     let stepping = crate::brain_wishlist::wanted_names(life);
     let rate = crate::brain_d17::coin_rate(&job.account);
     for want in &wants {

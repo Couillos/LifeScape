@@ -192,8 +192,8 @@ pub fn held_verdict(count: i64, held: i64, free: i64) -> HeldVerdict {
 }
 
 /// Units of `name` the bot's own resting sell orders lock.
-pub fn listed_units(account: &str, name: &str) -> i64 {
-    let (Some(service), Some(id)) = (crate::market_service::shared(), crate::brain_gear::obj_id(name)) else { return 0 };
+pub fn listed_units(account: &str, name: &str, deps: &crate::brain_deps::BrainDeps) -> i64 {
+    let (Some(service), Some(id)) = (deps.market.clone(), crate::brain_gear::obj_id(name)) else { return 0 };
     service.resting_rows(account, id, lifescape_store::OrderSide::Sell).iter().map(|row| row.remaining.max(0)).sum()
 }
 
@@ -228,8 +228,8 @@ pub fn release_own_locks_with(
 /// daemon's `set_locks`.
 use crate::market_host::MarketHost;
 
-pub(crate) fn release_own_locks(orch: &dyn crate::fleet::Fleet, account: &str, items: &[String]) -> usize {
-    let Some(service) = crate::market_service::shared() else { return 0 };
+pub(crate) fn release_own_locks(orch: &dyn crate::fleet::Fleet, account: &str, items: &[String], deps: &crate::brain_deps::BrainDeps) -> usize {
+    let Some(service) = deps.market.clone() else { return 0 };
     release_own_locks_with(&service, account, items, &mut |service, account| orch.push_locks(service, &[account.to_string()]))
 }
 

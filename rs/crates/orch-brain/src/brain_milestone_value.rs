@@ -28,9 +28,9 @@ pub const UNPAID_MILESTONE_CAUSE: &str = lifescape_planner::upkeep::UNPAID_MILES
 
 /// Judges `item` sold at the bid the fleet shows (the market reference
 /// when none rests) for this bot; `use_verdict` receives the judge.
-fn with_judge<R>(life: &Life, live: &Value, use_verdict: impl FnOnce(&dyn Fn(&str) -> ServeVerdict) -> R) -> R {
-    let signals = crate::market_demand::signals_for(&life.account);
-    let reader = crate::brain_bids::MarketReader::live(&life.account);
+fn with_judge<R>(life: &Life, live: &Value, use_verdict: impl FnOnce(&dyn Fn(&str) -> ServeVerdict) -> R, deps: &crate::brain_deps::BrainDeps) -> R {
+    let signals = crate::market_demand::signals_for(&life.account, deps);
+    let reader = crate::brain_bids::MarketReader::live(&life.account, deps);
     let time_value = crate::brain_bids::bot_rate(life);
     crate::brain_bids::with_bot_state(life, live, |state| {
         let ask_of = |item: &str| reader.view(item).and_then(|view| view.best_ask()).map(|price| price as f64);
@@ -40,7 +40,7 @@ fn with_judge<R>(life: &Life, live: &Value, use_verdict: impl FnOnce(&dyn Fn(&st
             None => ServeVerdict::NoData,
         };
         use_verdict(&judge)
-    })
+    }, deps)
 }
 
 fn exempt(life: &Life) -> bool {
@@ -50,19 +50,19 @@ fn exempt(life: &Life) -> bool {
 /// Demand items (of `items`) whose serving is not judged unpaying: the
 /// ones a new demand milestone may be adopted for. Only computed while no
 /// demand milestone is open (adoption adds one at a time).
-pub(crate) fn paying_items(life: &Life, live: &Value, items: Vec<lifescape_planner::DemandItem>) -> Vec<lifescape_planner::DemandItem> {
+pub(crate) fn paying_items(life: &Life, live: &Value, items: Vec<lifescape_planner::DemandItem>, deps: &crate::brain_deps::BrainDeps) -> Vec<lifescape_planner::DemandItem> {
     let Some(ambition) = life.ambition.as_ref() else { return items };
     let open = ambition.milestones.iter().any(|stone| lifescape_planner::drawable(stone) && stone.origin.starts_with("demand:"));
     if open || exempt(life) {
         return items;
     }
-    with_judge(life, live, |judge| items.into_iter().filter(|wanted| !matches!(judge(&wanted.item), ServeVerdict::Unpaying { .. })).collect())
+    with_judge(life, live, |judge| items.into_iter().filter(|wanted| !matches!(judge(&wanted.item), ServeVerdict::Unpaying { .. })).collect(), deps)
 }
 
 /// The verdict of each open demand milestone `(id, item)` (the planner's
 /// `upkeep::milestone_aside` sets the unpaying ones aside).
-pub(crate) fn judge_items(life: &Life, live: &Value, items: &[(String, String)]) -> Vec<(String, ServeVerdict)> {
-    with_judge(life, live, |judge| items.iter().map(|(id, item)| (id.clone(), judge(item))).collect())
+pub(crate) fn judge_items(life: &Life, live: &Value, items: &[(String, String)], deps: &crate::brain_deps::BrainDeps) -> Vec<(String, ServeVerdict)> {
+    with_judge(life, live, |judge| items.iter().map(|(id, item)| (id.clone(), judge(item))).collect(), deps)
 }
 
 #[cfg(test)]

@@ -183,14 +183,6 @@ impl<'a> RawWorld<'a> {
         RawWorld { job, live, orch: IdleFleet::shared(), market }
     }
 
-    /// Runs `body` with this world's market as the thread's `shared()`.
-    pub(crate) fn run<R>(&self, body: impl FnOnce() -> R) -> R {
-        match self.market {
-            Some(market) => lifescape_orch_market::market_daemon::test_service::with_service(market.service.clone(), body),
-            None => body(),
-        }
-    }
-
     fn seller(&self) -> String {
         format!("{}_seller", self.job.account)
     }
@@ -255,7 +247,7 @@ impl<'a> RawWorld<'a> {
     /// production functions: `gather` at the start, `build_ctx` (which runs
     /// `ready_ctx`, `gather_market` and the publishers) at its point.
     pub(crate) fn launch_read(&self, life: &Life, position: usize, seed: &Seed) -> (LaunchInputs, ReadyCtx, i64) {
-        self.run(|| {
+        {
             let deps = self.deps(seed);
             let inputs = crate::brain_launch_inputs::gather(&self.job, &self.live, &deps);
             let quests_done = crate::brain_rescue::quests_done(life);
@@ -263,7 +255,7 @@ impl<'a> RawWorld<'a> {
             let picked = crate::brain_launch_node::build_ctx(&mut pass, position, quests_done);
             self.assert_account_views_fresh();
             (pass.inputs, picked.ctx, picked.committed)
-        })
+        }
     }
 }
 

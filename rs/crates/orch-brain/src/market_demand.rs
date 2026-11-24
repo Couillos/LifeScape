@@ -122,14 +122,14 @@ pub fn others_orders(orders: Vec<Order>, account: &str) -> Vec<Order> {
 
 /// Live demand signals from the daemon's market (heaviest first), the
 /// whole fleet's (draw weights, fleet assignment).
-pub fn signals() -> Vec<DemandSignal> {
-    signals_seen_by(None)
+pub fn signals(deps: &crate::brain_deps::BrainDeps) -> Vec<DemandSignal> {
+    signals_seen_by(None, deps)
 }
 
 /// Live demand signals one bot may answer: every resting bid but its own
 /// (its own wishes and graph buys included: they are its orders).
-pub fn signals_for(account: &str) -> Vec<DemandSignal> {
-    signals_seen_by(Some(account))
+pub fn signals_for(account: &str, deps: &crate::brain_deps::BrainDeps) -> Vec<DemandSignal> {
+    signals_seen_by(Some(account), deps)
 }
 
 /// The planner inputs of a draw, from ONE read of the book.
@@ -163,15 +163,15 @@ impl ValueInputs {
 }
 
 /// The planner inputs as one bot sees them (own bids left out).
-pub fn kind_demand_for(account: &str) -> DrawDemand {
-    kind_demand_seen_by(Some(account))
+pub fn kind_demand_for(account: &str, deps: &crate::brain_deps::BrainDeps) -> DrawDemand {
+    kind_demand_seen_by(Some(account), deps)
 }
 
 /// The bids `account` may answer and the fleet's surplus, from one read
 /// of the book (a milestone refresh: `ambition::refresh_supplied`).
-pub fn refresh_inputs_for(account: &str) -> (Vec<DemandItem>, Vec<(String, f64)>) {
-    let orders = resting();
-    let surplus = fleet_surplus_from(&fleet_holdings(), &orders, &name_of);
+pub fn refresh_inputs_for(account: &str, deps: &crate::brain_deps::BrainDeps) -> (Vec<DemandItem>, Vec<(String, f64)>) {
+    let orders = resting(deps);
+    let surplus = fleet_surplus_from(&fleet_holdings(deps), &orders, &name_of);
     let items = demand_items(&signals_seen_from(orders, Some(account), crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks));
     (items, surplus)
 }
@@ -179,12 +179,12 @@ pub fn refresh_inputs_for(account: &str) -> (Vec<DemandItem>, Vec<(String, f64)>
 /// The draw inputs from ONE read of the book: the bids `account` may
 /// answer (`None`: the fleet's), the kind weights, the fleet surplus
 /// (the outlet signal, `fleet_surplus_from`).
-fn kind_demand_seen_by(account: Option<&str>) -> DrawDemand {
-    let orders = resting();
-    let surplus = fleet_surplus_from(&fleet_holdings(), &orders, &name_of);
-    let value = value_inputs(&orders, account, &surplus);
+fn kind_demand_seen_by(account: Option<&str>, deps: &crate::brain_deps::BrainDeps) -> DrawDemand {
+    let orders = resting(deps);
+    let surplus = fleet_surplus_from(&fleet_holdings(deps), &orders, &name_of);
+    let value = value_inputs(&orders, account, &surplus, deps);
     let items = demand_items(&signals_seen_from(orders, account, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks));
-    let weights = kind_weights_with(&items, &kind_profits(), &surplus);
+    let weights = kind_weights_with(&items, &kind_profits(deps), &surplus);
     DrawDemand { items, weights, surplus, value }
 }
 
@@ -195,13 +195,13 @@ fn kind_demand_seen_by(account: Option<&str>) -> DrawDemand {
 /// per object); the market price of every object these touch
 /// (`investment::priced_items`, the surplus objects, the runes of the
 /// spells), one store read for the whole table.
-fn value_inputs(orders: &[Order], account: Option<&str>, surplus: &[(String, f64)]) -> ValueInputs {
+fn value_inputs(orders: &[Order], account: Option<&str>, surplus: &[(String, f64)], deps: &crate::brain_deps::BrainDeps) -> ValueInputs {
     let now = crate::market_service::MarketService::now_clock();
-    let volumes = match crate::market_service::shared() {
+    let volumes = match deps.market.clone() {
         Some(service) => service.lock_store().volumes_since(now - 86_400).unwrap_or_default(),
         None => Vec::new(),
     };
-    let days = lifescape_planner::investment::INVESTMENT_HORIZON_TICKS * crate::market_eta::live_tick_ms() as f64 / 86_400_000.0;
+    let days = lifescape_planner::investment::INVESTMENT_HORIZON_TICKS * deps.clock.tick_ms() as f64 / 86_400_000.0;
     value_inputs_from(orders, account, surplus, &volumes, days, &|wanted: &[String]| match crate::store_pool::open(&crate::market_service::db_path()) {
         Ok(store) => price_table(&store, wanted),
         Err(error) => {
@@ -347,10 +347,10 @@ const HOLDINGS_REUSE_SECS: u64 = 300;
 /// book: never a store opened by path), reused `HOLDINGS_REUSE_SECS`.
 /// Market service down, store unreadable or no point yet: empty (no
 /// data, no decision), logged.
-fn fleet_holdings() -> Vec<(i64, i64)> {
+fn fleet_holdings(deps: &crate::brain_deps::BrainDeps) -> Vec<(i64, i64)> {
     type Cache = Option<(std::time::Instant, Vec<(i64, i64)>)>;
     static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(None);
-    let Some(service) = crate::market_service::shared() else { return Vec::new() };
+    let Some(service) = deps.market.clone() else { return Vec::new() };
     let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some((read_at, rows)) = cache.as_ref() {
         if read_at.elapsed().as_secs() < HOLDINGS_REUSE_SECS {
@@ -379,7 +379,7 @@ const SURPLUS_REUSE_SECS: u64 = 60;
 
 /// The fleet's surplus now (`fleet_surplus_from` over the last holdings
 /// point and the resting book), reused `SURPLUS_REUSE_SECS`.
-pub fn fleet_surplus() -> Vec<(String, f64)> {
+pub fn fleet_surplus(deps: &crate::brain_deps::BrainDeps) -> Vec<(String, f64)> {
     type Cache = Option<(std::time::Instant, Vec<(String, f64)>)>;
     static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(None);
     if let Some((read_at, rows)) = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref() {
@@ -387,7 +387,7 @@ pub fn fleet_surplus() -> Vec<(String, f64)> {
             return rows.clone();
         }
     }
-    let rows = fleet_surplus_from(&fleet_holdings(), &resting(), &name_of);
+    let rows = fleet_surplus_from(&fleet_holdings(deps), &resting(deps), &name_of);
     *CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((std::time::Instant::now(), rows.clone()));
     rows
 }
@@ -396,7 +396,7 @@ pub fn fleet_surplus() -> Vec<(String, f64)> {
 /// Objects of the open bids no bot can make now
 /// (`ambition_supply::lot_workable` over `fleet_surplus`): the bid draw
 /// skips them (`brain_bids::with_bot_state`). Reused like the surplus.
-pub fn unworkable_lots() -> Vec<String> {
+pub fn unworkable_lots(deps: &crate::brain_deps::BrainDeps) -> Vec<String> {
     type Cache = Option<(std::time::Instant, Vec<String>)>;
     static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(None);
     if let Some((read_at, rows)) = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref() {
@@ -404,8 +404,8 @@ pub fn unworkable_lots() -> Vec<String> {
             return rows.clone();
         }
     }
-    let surplus = fleet_surplus();
-    let mut items: Vec<String> = resting().iter().filter(|row| row.side == lifescape_store::OrderSide::Buy).filter_map(|row| name_of(row.item_id)).collect();
+    let surplus = fleet_surplus(deps);
+    let mut items: Vec<String> = resting(deps).iter().filter(|row| row.side == lifescape_store::OrderSide::Buy).filter_map(|row| name_of(row.item_id)).collect();
     items.sort();
     items.dedup();
     items.retain(|item| !lifescape_planner::ambition_supply::lot_workable(item, &surplus));
@@ -418,8 +418,8 @@ pub(crate) fn name_of(item_id: i64) -> Option<String> {
 }
 
 /// Resting orders of the daemon's market (empty while it is down).
-fn resting() -> Vec<Order> {
-    let Some(service) = crate::market_service::shared() else { return Vec::new() };
+fn resting(deps: &crate::brain_deps::BrainDeps) -> Vec<Order> {
+    let Some(service) = deps.market.clone() else { return Vec::new() };
     let read = service.lock_store().resting_orders();
     match read {
         Ok(rows) => rows,
@@ -454,8 +454,8 @@ pub fn fleet_surplus_from(holdings: &[(i64, i64)], orders: &[Order], name_of: &d
     by_item.into_iter().filter(|(_, units)| *units > 0).filter_map(|(item_id, units)| Some((name_of(item_id)?, units as f64))).collect()
 }
 
-fn signals_seen_by(account: Option<&str>) -> Vec<DemandSignal> {
-    signals_seen_from(resting(), account, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks)
+fn signals_seen_by(account: Option<&str>, deps: &crate::brain_deps::BrainDeps) -> Vec<DemandSignal> {
+    signals_seen_from(resting(deps), account, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks)
 }
 
 /// Pure `signals_seen_by`: the bids of every account but `account` (a bot
@@ -563,13 +563,13 @@ fn display_of(item: &str) -> String {
 }
 
 /// Best profit per ambition kind: the money guide's (module doc).
-pub fn kind_profits() -> Vec<(String, f64)> {
-    crate::guides_store::current().map(|set| crate::brain_d17::kind_profits(&set)).unwrap_or_default()
+pub fn kind_profits(deps: &crate::brain_deps::BrainDeps) -> Vec<(String, f64)> {
+    deps.guides.clone().map(|set| crate::brain_d17::kind_profits(&set)).unwrap_or_default()
 }
 
 /// The fleet's draw inputs at once: demand items, kind weights, surplus.
-pub fn kind_demand() -> DrawDemand {
-    kind_demand_seen_by(None)
+pub fn kind_demand(deps: &crate::brain_deps::BrainDeps) -> DrawDemand {
+    kind_demand_seen_by(None, deps)
 }
 
 #[cfg(test)]

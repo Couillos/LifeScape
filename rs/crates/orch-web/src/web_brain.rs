@@ -524,7 +524,7 @@ fn progression_sources(run_dir: &std::path::Path, account: &str, life_value: &Va
             let levels = crate::brain_market::live_levels(live);
             let level_of = |skill: &str| levels.iter().find(|(known, _)| known == skill).map(|(_, level)| *level).unwrap_or(1);
             let skill = skills[0].clone();
-            let pending = crate::brain_value::pending_investments(&skill, &level_of);
+            let pending = crate::brain_value::pending_investments(&skill, &level_of, &lifescape_orch_brain::brain_deps::BrainDeps::live());
             Some(TrainingInput { skill, own_rate: crate::brain_d17::coin_rate(account), pending })
         }
         _ => None,

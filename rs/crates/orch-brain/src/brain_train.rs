@@ -258,7 +258,7 @@ pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Valu
         crate::logln!("brain {}: {} {skill} {level}->{target}: no training guide published yet, static tranche", life.account, node.id);
         return;
     };
-    let locks = crate::brain_locks::locked_items(&life.account);
+    let locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), &life.account);
     let free_of = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item));
     let held = |item: &str| family_units(item, &free_of) as f64;
     let levels = ctx.levels.clone();
@@ -266,14 +266,14 @@ pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Valu
     let asks = |item: &str| crate::brain_trade::cycle_asks(&set, item);
     let quests = ctx.quests_done.clone();
     let bot = BotState { level_of: &level_of, combat: ctx.combat, quests_done: &quests, held: &held, coins: Some(ctx.coins.max(0) as f64), ironman: life.profile.ironman, asks: &asks };
-    let stock = crate::brain_alch::own_stock(live, &life.account, &crate::brain_alch::kept(life, live));
+    let stock = crate::brain_alch::own_stock(live, &life.account, &crate::brain_alch::kept(life, live), deps);
     let sick = |method: &str| ctx.sick(method).is_some() || node.excluded.iter().any(|excluded| excluded == method);
-    let rate = crate::brain_plan_read::live_rate();
+    let rate = crate::brain_plan_read::live_rate(deps);
     let food = |method: &str| lifescape_planner::food_gate::food_short(method, ctx);
     // A1 (a): a pending climb that opens a lucrative way makes a tick worth
     // that way's gain per tick (`investment::time_value`).
     let own_rate = crate::brain_d17::coin_rate(&life.account);
-    let pending = crate::brain_value::pending_investments(skill, &level_of);
+    let pending = crate::brain_value::pending_investments(skill, &level_of, deps);
     let coin_rate = lifescape_planner::investment::time_value(own_rate, &pending);
     if coin_rate > own_rate {
         let top = pending.iter().max_by(|left, right| left.value_6000.total_cmp(&right.value_6000)).map(|found| format!("{} (climb {:.0} ticks)", found.item, found.climb_ticks)).unwrap_or_default();

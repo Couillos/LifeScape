@@ -107,7 +107,7 @@ fn now_secs() -> i64 {
 }
 
 /// The fingerprint of the inputs of `redraw(life, live)` now.
-pub(crate) fn fingerprint(life: &Life, live: &Value) -> Fingerprint {
+pub(crate) fn fingerprint(life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> Fingerprint {
     let now = now_secs();
     let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now - stamp);
     // The life: the goal and the ambition the draw reads, the history it
@@ -144,11 +144,11 @@ pub(crate) fn fingerprint(life: &Life, live: &Value) -> Fingerprint {
         let mut stacks = crate::brain_plan::stacks_of(live);
         stacks.sort();
         write_debug(hasher, &stacks);
-        write_debug(hasher, &crate::brain_locks::locked_items(&life.account));
+        write_debug(hasher, &crate::brain_locks::locked_items_in(deps.market.as_deref(), &life.account));
         write_debug(hasher, &crate::brain_rescue::quests_done(life));
     });
     // The market: the books' generation, the execution log, the service.
-    let market = digest(|hasher| match crate::market_service::shared() {
+    let market = digest(|hasher| match deps.market.clone() {
         Some(service) => {
             hasher.write_u64(service.instance_id());
             hasher.write_u64(crate::brain_market_view::books_generation(&service));
@@ -158,7 +158,7 @@ pub(crate) fn fingerprint(life: &Life, live: &Value) -> Fingerprint {
     });
     // The guides and the rates the draw prices with.
     let guides = digest(|hasher| {
-        hasher.write_i64(crate::guides_store::current().map_or(-1, |set| set.built_unix_ms));
+        hasher.write_i64(deps.guides.clone().map_or(-1, |set| set.built_unix_ms));
         hasher.write_u64(crate::rates_service::generation());
     });
     // The fleet: the best level of each skill, the last holdings point
@@ -167,11 +167,11 @@ pub(crate) fn fingerprint(life: &Life, live: &Value) -> Fingerprint {
     let fleet = digest(|hasher| {
         let best: Vec<i64> = (0u8..23).map(|stat| crate::brain_gear_fleet::best_now(lifescape_sdk::provenance::skill_name(stat))).collect();
         write_debug(hasher, &best);
-        if let Some(service) = crate::market_service::shared() {
+        if let Some(service) = deps.market.clone() {
             hasher.write_i64(service.lock_store().holdings_stamp().unwrap_or(-1));
         }
-        write_debug(hasher, &crate::site_crowd::others(&life.account));
-        write_debug(hasher, &crate::site_crowd::seats(&life.account));
+        write_debug(hasher, &deps.crowd.others(&life.account));
+        write_debug(hasher, &deps.crowd.seats(&life.account));
         write_debug(hasher, &sorted(&crate::market_claims::claimed_by_others(&life.account)));
         write_debug(hasher, &sorted(&crate::market_claims::purchases_by_others(&life.account)));
         hasher.write_usize(crate::time_value::current().map_or(0, |values| std::sync::Arc::as_ptr(&values) as usize));
@@ -221,8 +221,8 @@ fn global() -> &'static Gate {
 }
 
 /// `brain_succession::redraw` behind the gate, in this process's mode.
-pub(crate) fn redraw(life: &mut Life, live: &Value, old: impl FnOnce(&mut Life, &Value) -> (Option<String>, bool)) -> (Option<String>, bool) {
-    global().redraw_in(mode(), now_secs(), life, live, old)
+pub(crate) fn redraw(life: &mut Life, live: &Value, old: impl FnOnce(&mut Life, &Value, &crate::brain_deps::BrainDeps) -> (Option<String>, bool), deps: &crate::brain_deps::BrainDeps) -> (Option<String>, bool) {
+    global().redraw_in(mode(), now_secs(), life, live, old, deps)
 }
 
 impl Gate {
@@ -259,18 +259,18 @@ impl Gate {
     }
 
     /// `redraw` in a given mode at a given wall clock (the tests').
-    pub(crate) fn redraw_in(&self, mode: Mode, now: i64, life: &mut Life, live: &Value, old: impl FnOnce(&mut Life, &Value) -> (Option<String>, bool)) -> (Option<String>, bool) {
+    pub(crate) fn redraw_in(&self, mode: Mode, now: i64, life: &mut Life, live: &Value, old: impl FnOnce(&mut Life, &Value, &crate::brain_deps::BrainDeps) -> (Option<String>, bool), deps: &crate::brain_deps::BrainDeps) -> (Option<String>, bool) {
         if mode == Mode::Off {
-            return old(life, live);
+            return old(life, live, deps);
         }
-        let before = fingerprint(life, live);
+        let before = fingerprint(life, live, deps);
         let skippable = self.table.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&life.account).is_some_and(|seen| seen.print == before && now >= seen.at && now - seen.at < MAX_SKIP_SECS);
         if skippable && mode == Mode::On {
             self.skipped.fetch_add(1, Ordering::Relaxed);
             self.maybe_summary(now, mode);
             return (None, false);
         }
-        let (drawn, changed) = old(life, live);
+        let (drawn, changed) = old(life, live, deps);
         if !skippable {
             self.retried.fetch_add(1, Ordering::Relaxed);
         } else if drawn.is_some() || changed {
@@ -288,7 +288,7 @@ impl Gate {
             self.agreed.fetch_add(1, Ordering::Relaxed);
         }
         // An attempt that drew nothing is remembered under the state it left.
-        let after = (drawn.is_none()).then(|| fingerprint(life, live));
+        let after = (drawn.is_none()).then(|| fingerprint(life, live, deps));
         let mut seen = self.table.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match after {
             Some(print) => {

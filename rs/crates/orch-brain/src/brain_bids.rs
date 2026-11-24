@@ -70,15 +70,15 @@ pub fn views_from(orders: &[Resting], account: &str) -> HashMap<String, BookView
 /// out when a view is read. Empty while the market is down (no data, no
 /// decision). 24 h volume and current prices are read on demand
 /// (`MarketReader::view`).
-fn live_books() -> Option<std::sync::Arc<crate::brain_market_view::SharedBooks>> {
-    let service = crate::market_service::shared()?;
+fn live_books(deps: &crate::brain_deps::BrainDeps) -> Option<std::sync::Arc<crate::brain_market_view::SharedBooks>> {
+    let service = deps.market.clone()?;
     Some(crate::brain_market_view::shared_books(&service))
 }
 
 /// Units traded in the last 24 h for one object (every form), summed
 /// from the copy of the day's executions (`brain_market_view::volume_24h_of`).
-fn volume_24h(item: &str) -> i64 {
-    let Some(service) = crate::market_service::shared() else { return 0 };
+fn volume_24h(item: &str, deps: &crate::brain_deps::BrainDeps) -> i64 {
+    let Some(service) = deps.market.clone() else { return 0 };
     let clock = crate::market_service::MarketService::now_clock();
     lifescape_gamedata::objs_by_name(item)
         .into_iter()
@@ -89,8 +89,8 @@ fn volume_24h(item: &str) -> i64 {
 
 /// Current price of one object when it traded (median of the last five
 /// fills clamped by the impact prices), `None` otherwise.
-fn current_of(item_id: i64) -> Option<i64> {
-    let service = crate::market_service::shared()?;
+fn current_of(item_id: i64, deps: &crate::brain_deps::BrainDeps) -> Option<i64> {
+    let service = deps.market.clone()?;
     let reference = service.reference(item_id);
     reference.traded.then_some(reference.price.max(1))
 }
@@ -112,13 +112,15 @@ pub struct MarketReader {
     /// the resting asks (`market_claims::purchases_by_others`).
     purchases: HashMap<String, i64>,
     live: bool,
+    /// The handles a live reader prices through (`None`: offline).
+    deps: Option<crate::brain_deps::BrainDeps>,
 }
 
 impl MarketReader {
     /// Offline reader (tests, sims): views as given (volume, current
     /// price and claims included).
     pub fn fixed(views: HashMap<String, BookView>) -> Self {
-        MarketReader { views, books: None, own_views: RefCell::new(HashMap::new()), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims: HashMap::new(), purchases: HashMap::new(), live: false }
+        MarketReader { views, books: None, own_views: RefCell::new(HashMap::new()), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims: HashMap::new(), purchases: HashMap::new(), live: false, deps: None }
     }
 
     /// The board other producers posted (sims): units claimed per object
@@ -129,19 +131,19 @@ impl MarketReader {
         self
     }
 
-    pub fn live(account: &str) -> Self {
-        let books = live_books().map(|books| (books, account.to_string()));
+    pub fn live(account: &str, deps: &crate::brain_deps::BrainDeps) -> Self {
+        let books = live_books(deps).map(|books| (books, account.to_string()));
         let claims = crate::market_claims::claimed_by_others(account);
-        MarketReader { views: HashMap::new(), books, own_views: RefCell::new(HashMap::new()), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims, purchases: HashMap::new(), live: true }
+        MarketReader { views: HashMap::new(), books, own_views: RefCell::new(HashMap::new()), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims, purchases: HashMap::new(), live: true, deps: Some(deps.clone()) }
     }
 
     /// The reader as it was before the shared view: every view built for
     /// this asker from the rows of every book (`views_from`), same claims,
     /// same on-demand volume and price (tests compare it with `live`).
     #[cfg(test)]
-    pub(crate) fn live_per_bot_reference(account: &str, answering: bool) -> Self {
-        let rows = crate::brain_market_view::rows_of(&crate::market_service::shared().expect("a market")).2;
-        let mut reader = MarketReader { views: views_from(&rows, account), books: None, own_views: RefCell::new(HashMap::new()), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims: crate::market_claims::claimed_by_others(account), purchases: HashMap::new(), live: true };
+    pub(crate) fn live_per_bot_reference(account: &str, answering: bool, deps: &crate::brain_deps::BrainDeps) -> Self {
+        let rows = crate::brain_market_view::rows_of(&deps.market.clone().expect("a market")).2;
+        let mut reader = MarketReader { views: views_from(&rows, account), books: None, own_views: RefCell::new(HashMap::new()), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims: crate::market_claims::claimed_by_others(account), purchases: HashMap::new(), live: true, deps: Some(deps.clone()) };
         if answering {
             reader.purchases = crate::market_claims::purchases_by_others(account);
         }
@@ -188,8 +190,8 @@ impl MarketReader {
     /// `live` for a bid answer (the draw, `bid-why`): the asks other
     /// answers will buy are left out too (2026-11-20). Price caps (seller
     /// reserve, a buy's worth) read the plain `live` book.
-    pub fn live_answering(account: &str) -> Self {
-        let mut reader = MarketReader::live(account);
+    pub fn live_answering(account: &str, deps: &crate::brain_deps::BrainDeps) -> Self {
+        let mut reader = MarketReader::live(account, deps);
         reader.purchases = crate::market_claims::purchases_by_others(account);
         reader
     }
@@ -202,7 +204,7 @@ impl MarketReader {
             return *known;
         }
         let id = self.id_of(item).or_else(|| lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.obj_id as i64));
-        let price = id.and_then(current_of);
+        let price = id.and_then(|id| current_of(id, self.deps.as_ref().expect("a live reader holds its handles")));
         self.currents.borrow_mut().insert(item.to_string(), price);
         price
     }
@@ -211,7 +213,7 @@ impl MarketReader {
     pub fn view(&self, item: &str) -> Option<BookView> {
         let mut view = self.base_view(item);
         if self.live {
-            let volume = *self.volumes.borrow_mut().entry(item.to_string()).or_insert_with(|| volume_24h(item));
+            let volume = *self.volumes.borrow_mut().entry(item.to_string()).or_insert_with(|| volume_24h(item, self.deps.as_ref().expect("a live reader holds its handles")));
             if volume > 0 {
                 view.get_or_insert_with(BookView::default).volume_24h = volume;
             }
@@ -364,17 +366,17 @@ pub fn planned_levels(life: &Life) -> Vec<(String, u8)> {
 /// `orchestrator bid-why <account> <item>`: every stage of the bid
 /// response for one bot and one object (`bid_response::explain`), read
 /// from the live book and the bot's own state.
-pub fn explain_for(account: &str, item: &str) -> Result<Vec<String>, String> {
+pub fn explain_for(account: &str, item: &str, deps: &crate::brain_deps::BrainDeps) -> Result<Vec<String>, String> {
     // The operator may name the object by display name, banknote or id
     // (C13: "Holy symbol" is `blessedstar`, `stringstar` its input).
     let item = &crate::bid_why::resolve_item(item)?;
     let life = crate::brain::load_life(account).ok_or_else(|| format!("no life file for {account}"))?;
     let live = crate::jobs::live_of(account).ok_or_else(|| format!("{account}: no live snapshot (not supervised, or busy)"))?;
-    if crate::market_service::shared().is_none() {
+    if deps.market.clone().is_none() {
         return Err("market service down".to_string());
     }
-    let reader = MarketReader::live_answering(account);
-    let guides = crate::guides_store::current();
+    let reader = MarketReader::live_answering(account, deps);
+    let guides = deps.guides.clone();
     Ok(with_bot_state(&life, &live, |state| {
         let key = key_of(&life, state);
         let best = guides.as_deref().and_then(|set| crate::brain_d17::best_row(set, &key));
@@ -405,7 +407,7 @@ pub fn explain_for(account: &str, item: &str) -> Result<Vec<String>, String> {
             lines.extend(lifescape_planner::bid_response::explain(item, &view, &market, producer));
             lines
         })
-    }))
+    }, deps))
 }
 
 /// What a D17 read knows of this bot (`brain_d17`): its live levels,
@@ -461,11 +463,11 @@ pub fn choose_in(life: &Life, reader: &MarketReader, rate: f64, state: &BotState
 /// holdings, bans, quests, rates, position, plans, caster): shared by the
 /// bid draw, the seller reserve cap and the priced training, so all price
 /// a unit the same way.
-pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnce(&BotState) -> R) -> R {
+pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnce(&BotState) -> R, deps: &crate::brain_deps::BrainDeps) -> R {
     let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
-    let locks = crate::brain_locks::locked_items(&life.account);
+    let locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), &life.account);
     let held = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item));
-    let snapshot = crate::rates_service::live_snapshot();
+    let snapshot = deps.rates.clone();
     let owned = crate::brain_plan::live_owned(live);
     // Read at the bot's own level in the method's skill and its best
     // tool tier (plan rendements R2), never a forced band.
@@ -515,13 +517,13 @@ pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnc
         combat: crate::brain_plan::live_combat(live),
         position,
         planned: planned_levels(life),
-        caster: if life.profile.ironman { None } else { crate::brain_alch::caster_for(live) },
+        caster: if life.profile.ironman { None } else { crate::brain_alch::caster_for(live, deps) },
         rate: &rate,
-        seats: crate::site_crowd::seats(&life.account),
+        seats: deps.crowd.seats(&life.account),
         cooled: cooled.clone(),
         // Given back lately, or no bot can make it now (a tool nobody can
         // come by: the water talisman, `market_demand::unworkable_lots`).
-        shunned: lifescape_planner::bid_release::shunned_items(&life.history, &ticks_since).into_iter().chain(crate::market_demand::unworkable_lots()).collect(),
+        shunned: lifescape_planner::bid_release::shunned_items(&life.history, &ticks_since).into_iter().chain(crate::market_demand::unworkable_lots(deps)).collect(),
     };
     use_state(&state)
 }
@@ -532,12 +534,12 @@ pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnc
 /// quota is priced with. The seller reserve never exceeds it
 /// (`brain_reserve`, 2026-11-14). Items it cannot make now are absent.
 /// One book read and one rates read for the whole pass.
-pub fn production_costs_for(life: &Life, live: &Value, items: &[(String, i64)]) -> HashMap<String, f64> {
+pub fn production_costs_for(life: &Life, live: &Value, items: &[(String, i64)], deps: &crate::brain_deps::BrainDeps) -> HashMap<String, f64> {
     let _phase = crate::cpu_profile::phase("bids.production_costs");
-    if items.is_empty() || crate::market_service::shared().is_none() {
+    if items.is_empty() || deps.market.clone().is_none() {
         return HashMap::new();
     }
-    let reader = MarketReader::live(&life.account);
+    let reader = MarketReader::live(&life.account, deps);
     with_bot_state(life, live, |state| {
         let rate = bot_rate(life);
         // A cap (seller reserve, a buy's worth) prices the make path
@@ -552,7 +554,7 @@ pub fn production_costs_for(life: &Life, live: &Value, items: &[(String, i64)]) 
                 })
                 .collect()
         })
-    })
+    }, deps)
 }
 
 /// Gathering seats a chosen lot takes: (method, site) of each made leg
@@ -568,14 +570,14 @@ pub fn engaged_seats(found: &Opportunity) -> Vec<(String, (i64, i64, i64))> {
 /// read): the engagement a bid goal restores after a daemon restart
 /// (`brain_bid_release::reengage_after_restart`). Empty when no make path
 /// has a free seat.
-pub(crate) fn lot_seats(life: &Life, live: &Value, item: &str, count: i64) -> Vec<(String, (i64, i64, i64))> {
-    let reader = MarketReader::live_answering(&life.account);
+pub(crate) fn lot_seats(life: &Life, live: &Value, item: &str, count: i64, deps: &crate::brain_deps::BrainDeps) -> Vec<(String, (i64, i64, i64))> {
+    let reader = MarketReader::live_answering(&life.account, deps);
     with_bot_state(life, live, |state| {
         state.with_producer(life, bot_rate(life), |producer| {
             let market = |name: &str| reader.view(name);
             lifescape_planner::bid_response::feasible_lot(item, count.max(1), &market, producer).map(|(_, unit)| unit.seats).unwrap_or_default()
         })
-    })
+    }, deps)
 }
 
 /// Last market-wide choice per account: (wall seconds, spread window,
@@ -602,8 +604,8 @@ fn choice_key(account: &str, whole: bool) -> String {
 
 /// The cached (or freshly weighed) choice of this life, own trade or
 /// whole market.
-fn cached_choice(life: &Life, live: &Value, whole: bool) -> Choice {
-    if life.profile.ironman || crate::market_service::shared().is_none() {
+fn cached_choice(life: &Life, live: &Value, whole: bool, deps: &crate::brain_deps::BrainDeps) -> Choice {
+    if life.profile.ironman || deps.market.clone().is_none() {
         return None;
     }
     let window = crate::brain_ambition::stamp_now().tick / lifescape_planner::bid_response::BID_WINDOW_TICKS;
@@ -613,8 +615,8 @@ fn cached_choice(life: &Life, live: &Value, whole: bool) -> Choice {
     match cached {
         Some((at, seen_window, choice)) if now.saturating_sub(at) < CHOICE_TTL_SECS && seen_window == window => choice,
         _ => {
-            let reader = MarketReader::live_answering(&life.account);
-            let choice = with_bot_state(life, live, |state| choose_in(life, &reader, bot_rate(life), state, whole));
+            let reader = MarketReader::live_answering(&life.account, deps);
+            let choice = with_bot_state(life, live, |state| choose_in(life, &reader, bot_rate(life), state, whole), deps);
             choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(key, (now, window, choice.clone()));
             choice
         }
@@ -624,20 +626,20 @@ fn cached_choice(life: &Life, live: &Value, whole: bool) -> Choice {
 /// True when a lot of the whole market pays this bot now (the check
 /// before its ambition goal is set aside, `brain_wait_answer`); the
 /// choice is kept for the draw that follows.
-pub(crate) fn whole_market_lot(life: &Life, live: &Value) -> bool {
-    cached_choice(life, live, true).is_some()
+pub(crate) fn whole_market_lot(life: &Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> bool {
+    cached_choice(life, live, true, deps).is_some()
 }
 
 /// The bid goal for this life on a draw (live book, rates, own state;
 /// its own trade, the whole market when `whole`), logged with its
 /// numbers, its claim posted on the board; `None` when no lot beats the
 /// ambition.
-pub fn bid_goal_in(life: &Life, live: &Value, whole: bool) -> Option<(GoalKind, String)> {
+pub fn bid_goal_in(life: &Life, live: &Value, whole: bool, deps: &crate::brain_deps::BrainDeps) -> Option<(GoalKind, String)> {
     let _phase = crate::cpu_profile::phase("bids.goal_for");
-    let (found, rate) = cached_choice(life, live, whole)?;
+    let (found, rate) = cached_choice(life, live, whole, deps)?;
     // Taken: the next draw weighs the market again.
     choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&choice_key(&life.account, whole));
-    let secs = crate::market_claims::claim_secs(found.ticks, crate::market_eta::live_tick_ms());
+    let secs = crate::market_claims::claim_secs(found.ticks, deps.clock.tick_ms());
     crate::market_claims::claim(&life.account, &found.item, found.count, secs);
     // What the lot buys and the gathering seats it takes are no other
     // producer's to count (2026-11-20).

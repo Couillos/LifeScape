@@ -48,8 +48,8 @@ pub fn reserved_ids(reserved: &[(String, i64)]) -> BTreeMap<i64, i64> {
 }
 
 /// Hands the open quests' objects to the market service (every pass).
-pub(crate) fn publish_reserved(account: &str, life: &Life) {
-    let Some(service) = crate::market_service::shared() else { return };
+pub(crate) fn publish_reserved(account: &str, life: &Life, deps: &crate::brain_deps::BrainDeps) {
+    let Some(service) = deps.market.clone() else { return };
     service.set_quest_reserved(account, reserved_ids(&lifescape_planner::reserved_quest_objects(life)));
 }
 
@@ -130,11 +130,11 @@ pub(crate) fn release_listings(service: &MarketService, account: &str, item: &st
 /// holds (`stacks`: pack + bank) but whose free part (held minus what
 /// its listings lock) falls short is released up to what it holds.
 /// Returns the number of listings touched.
-pub(crate) fn release_for_quests(service: &MarketService, account: &str, stacks: &[(String, i64)], reserved: &[(String, i64)]) -> usize {
+pub(crate) fn release_for_quests(service: &MarketService, account: &str, stacks: &[(String, i64)], reserved: &[(String, i64)], deps: &crate::brain_deps::BrainDeps) -> usize {
     if reserved.is_empty() {
         return 0;
     }
-    let locks = crate::brain_locks::locked_items(account);
+    let locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), account);
     let mut touched = 0;
     for (name, units) in reserved {
         let held: i64 = stacks.iter().filter(|(stack, _)| stack == name).map(|(_, qty)| *qty).sum();
@@ -209,7 +209,7 @@ pub fn gate_move(gaps: &[QuestShortfall], bank_known: bool) -> GateMove {
 
 /// The quest gate over every ready quest node. Returns whether the graph
 /// changed (an obtain filed) and the node ids that wait this pass.
-pub(crate) fn hold_pass(job: &Job, life: &mut Life, live: &Value) -> (bool, Vec<String>) {
+pub(crate) fn hold_pass(job: &Job, life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> (bool, Vec<String>) {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
     let cooled = lifescape_planner::cooled_quests(&life.history, &|stamp: i64| crate::brain_stuck::seconds_to_ticks(now - stamp));
     let bank_known = live.get("bank_streamed").as_bool() == Some(true);
@@ -235,14 +235,14 @@ pub(crate) fn hold_pass(job: &Job, life: &mut Life, live: &Value) -> (bool, Vec<
             waits.push(id);
             continue;
         }
-        let count_of = |name: &str| (crate::brain_plan::raw_holdings_count(job, name), crate::brain_plan::holdings_count(job, name));
+        let count_of = |name: &str| (crate::brain_plan::raw_holdings_count(job, name), crate::brain_plan::holdings_count(job, name, deps));
         let gaps = lifescape_planner::quest_shortfalls(&quest, &count_of);
         let reasons: Vec<String> = gaps.iter().map(QuestShortfall::describe).collect();
         match gate_move(&gaps, bank_known) {
             GateMove::Launch => {}
             GateMove::Release(locked) => {
                 let mut notes = Vec::new();
-                if let Some(service) = crate::market_service::shared() {
+                if let Some(service) = deps.market.clone() {
                     for (item, need, free) in &locked {
                         notes.extend(release_listings(&service, &job.account, item, *free, *need));
                     }
@@ -266,7 +266,7 @@ pub(crate) fn hold_pass(job: &Job, life: &mut Life, live: &Value) -> (bool, Vec<
             GateMove::Obtain(missing) => {
                 let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
                 let view = crate::brain_plan_read::BotView::of(life);
-                let fold = crate::brain_plan_read::with_plan_read(&view, live, |read| lifescape_planner::record_block_with(life, position, &missing, &level_of, read));
+                let fold = crate::brain_plan_read::with_plan_read(&view, live, |read| lifescape_planner::record_block_with(life, position, &missing, &level_of, read), deps);
                 push_history(life, &id, crate::brain_launch::block_outcome(&fold));
                 crate::logln!("brain {}: quest {quest} ({id}) not launched: {} -> obtained first", job.account, reasons.join("; "));
                 lifescape_planner::normalize(life);

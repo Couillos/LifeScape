@@ -60,9 +60,9 @@ fn ticks_since(stamp: i64) -> u64 {
 /// the goal's milestone (`brain_ambition::after_close`): a goal stuck on
 /// a market shortfall (a buy left unfilled or refused) bans nothing and
 /// never counts a milestone block (decision D3, user 2026-11-19).
-pub(crate) fn close_goal(life: &mut Life, live: &Value, stuck: bool) {
+pub(crate) fn close_goal(life: &mut Life, live: &Value, stuck: bool, deps: &crate::brain_deps::BrainDeps) {
     // A3: an equip goal stuck on gear nobody makes waits (no block, no ban).
-    let unmade = if stuck { crate::brain_gear::unmade_equip_piece(life, live) } else { None };
+    let unmade = if stuck { crate::brain_gear::unmade_equip_piece(life, live, deps) } else { None };
     let shortfall = close_goal_history(life, stuck, unmade.is_some());
     let end = match (stuck, shortfall, unmade) {
         (false, _, _) => GoalEnd::Done,
@@ -178,14 +178,14 @@ fn last_wait() -> &'static std::sync::Mutex<std::collections::HashMap<String, St
 /// Draw and append the next goal for a closed one (expired bans noted,
 /// milestones refreshed first). Returns the new goal's label, or `None`
 /// while nothing is drawable (typed reason logged once per change).
-pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
-    draw_next_with(life, live, false)
+pub(crate) fn draw_next(life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> Option<String> {
+    draw_next_with(life, live, false, deps)
 }
 
 /// `draw_next`, the answer weighed over the whole market when `whole`
 /// (the ambition goal set aside while it waits on a buy,
 /// `brain_wait_answer`).
-pub(crate) fn draw_next_with(life: &mut Life, live: &Value, whole: bool) -> Option<String> {
+pub(crate) fn draw_next_with(life: &mut Life, live: &Value, whole: bool, deps: &crate::brain_deps::BrainDeps) -> Option<String> {
     // The previous lot's claim on the order board ends with its goal,
     // its purchases and its engaged seats too.
     crate::market_claims::release(&life.account);
@@ -195,7 +195,7 @@ pub(crate) fn draw_next_with(life: &mut Life, live: &Value, whole: bool) -> Opti
     // no bid answered, no alchemy, the draw returns `MakeMarket`.
     let quoting = lifescape_planner::quoting(life);
     if !quoting {
-        crate::brain_ambition::before_draw(life, live);
+        crate::brain_ambition::before_draw(life, live, deps);
     }
     let level_of = |skill: &str| live_level(live, skill);
     // Producers respond to bids (point 7): a public bid this bot can make
@@ -205,10 +205,10 @@ pub(crate) fn draw_next_with(life: &mut Life, live: &Value, whole: bool) -> Opti
     // The alchemist (operator, 2026-11-18) answers no bid: its alchemy
     // first, else the planner's money that funds its buys.
     let alcher = lifescape_planner::is_alcher(life);
-    let answered = (!quoting && !alcher).then(|| crate::brain_bids::bid_goal_in(life, live, whole)).flatten()
+    let answered = (!quoting && !alcher).then(|| crate::brain_bids::bid_goal_in(life, live, whole, deps)).flatten()
         // Alchemy (2026-11-14): a stock that alchs for more than it sells,
         // runes in hand, worth the bot's time like a bid.
-        .or_else(|| crate::brain_alch::alch_goal_for(life, live))
+        .or_else(|| crate::brain_alch::alch_goal_for(life, live, deps))
         .map(|(goal, origin)| (goal, Some(origin)));
     // A milestone none of whose ways launches now (quarantine, this bot's
     // cooldowns) is skipped for the next one (tour 3 point 5).
@@ -218,7 +218,7 @@ pub(crate) fn draw_next_with(life: &mut Life, live: &Value, whole: bool) -> Opti
         // No idle bot (D-SIDE): every open milestone banned draws a
         // temporary side goal, the ambition and its milestones untouched;
         // the next draw returns to the ambition once a milestone is free.
-        Err(NoGoal::MilestonesBanned(skills)) => match side_goal_for(life, live, &skills) {
+        Err(NoGoal::MilestonesBanned(skills)) => match side_goal_for(life, live, &skills, deps) {
             Some((goal, origin)) => {
                 let why = if skills.is_empty() { "every open milestone cools".to_string() } else { format!("{} banned", skills.join(",")) };
                 crate::logln!("brain {}: side goal {} while {why}", life.account, goal_label(&goal));
@@ -246,12 +246,12 @@ pub(crate) fn draw_next_with(life: &mut Life, live: &Value, whole: bool) -> Opti
     // A production quota counts from the stock held now (never credited
     // with what the bot already had), its usable part: units locked by
     // the bot's own listings are not checked by the fill (b3gybcev).
-    let locks = crate::brain_locks::locked_items(&life.account);
+    let locks = crate::brain_locks::locked_items_in(deps.market.as_deref(), &life.account);
     let held_of = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item));
     // R7: tranches sized on the measured yields, nothing of a static
     // method filed ahead where the training guide will choose.
     let view = crate::brain_plan_read::BotView::of(life);
-    crate::brain_plan_read::with_plan_read(&view, live, |read| lifescape_planner::append_goal_with(life, next, &profile, &level_of, &held_of, read));
+    crate::brain_plan_read::with_plan_read(&view, live, |read| lifescape_planner::append_goal_with(life, next, &profile, &level_of, &held_of, read), deps);
     mark_drawn(life, origin.as_deref());
     let label = match origin.as_deref() {
         Some(side)
@@ -280,38 +280,38 @@ pub(crate) fn draw_next_with(life: &mut Life, live: &Value, whole: bool) -> Opti
 
 /// The side goal of a bot whose open milestones are all banned (D-SIDE):
 /// the best paying demand it makes with a free skill, else money.
-fn side_goal_for(life: &Life, live: &Value, banned: &[String]) -> Option<(GoalKind, String)> {
+fn side_goal_for(life: &Life, live: &Value, banned: &[String], deps: &crate::brain_deps::BrainDeps) -> Option<(GoalKind, String)> {
     let level_of = |skill: &str| live_level(live, skill);
     // Held OR listed: stock on the market already answers a bid.
     let held_of = |item: &str| crate::brain_ambition::live_count(live, item);
-    let demand = if life.profile.ironman { Vec::new() } else { crate::market_demand::demand_items(&crate::market_demand::signals_for(&life.account)) };
+    let demand = if life.profile.ironman { Vec::new() } else { crate::market_demand::demand_items(&crate::market_demand::signals_for(&life.account, deps)) };
     // A demand none of whose legs launches now (quarantine, this bot's
     // cooldowns) is never drawn (plan P2).
     let quarantined = crate::method_health::quarantined();
     let cooled = crate::brain_cool::active(life);
     let sick = |method: &str| quarantined.iter().any(|known| known == method) || lifescape_planner::cooldown::method_cooled(&cooled, method);
     // Only a demand that pays for the bot's time (A1 value comparison).
-    let paying = crate::brain_serve_value::paying_demand(life, live, &demand);
+    let paying = crate::brain_serve_value::paying_demand(life, live, &demand, deps);
     let pays = |wanted: &lifescape_planner::ambition_catalog::DemandItem| paying.contains(&wanted.item);
     lifescape_planner::side_goal_with(&level_of, banned, &demand, &held_of, life.profile.ironman, &sick, &pays)
 }
 
 /// Close the current goal (done or stuck) and append the next one.
 /// Returns the new goal's label, or `None` when nothing is left.
-pub(crate) fn succeed_goal(life: &mut Life, live: &Value, stuck: bool) -> Option<String> {
-    close_goal(life, live, stuck);
-    draw_next(life, live)
+pub(crate) fn succeed_goal(life: &mut Life, live: &Value, stuck: bool, deps: &crate::brain_deps::BrainDeps) -> Option<String> {
+    close_goal(life, live, stuck, deps);
+    draw_next(life, live, deps)
 }
 
 /// A goal closed earlier with nothing drawable then: retry the draw (a
 /// ban may have expired). Returns (label of the new goal, life changed).
-pub(crate) fn redraw(life: &mut Life, live: &Value) -> (Option<String>, bool) {
+pub(crate) fn redraw(life: &mut Life, live: &Value, deps: &crate::brain_deps::BrainDeps) -> (Option<String>, bool) {
     if !goal_closed(&life.history) {
         return (None, false);
     }
     let before = life.history.len();
     let ambition_before = life.ambition.clone();
-    let drawn = draw_next(life, live);
+    let drawn = draw_next(life, live, deps);
     let changed = drawn.is_some() || life.history.len() != before || life.ambition != ambition_before;
     (drawn, changed)
 }
@@ -355,6 +355,7 @@ mod tests {
     /// draws nothing (never a silent lowest-skill fallback).
     #[test]
     fn goals_follow_the_ambition_milestones() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         let mut smith = life_with(GoalKind::MaxSkills { skills: vec!["mining".to_string()], level: 5 });
         // Drawn now: the optional change stays throttled (no fleet read).
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
@@ -362,31 +363,32 @@ mod tests {
         // Computed smith ladder: smithing rungs from 10 (mining comes as
         // the ore sub-tasks need it).
         let snapshot = live(&[(14, 12)]);
-        let label = succeed_goal(&mut smith, &snapshot, false).expect("a goal");
+        let label = succeed_goal(&mut smith, &snapshot, false, deps).expect("a goal");
         assert_eq!(label, "smithing 10", "the first rung");
         let origin = smith.goal_origin.clone().expect("linked");
         let ambition = smith.ambition.as_ref().expect("smith");
         assert_eq!(ambition.milestones.iter().find(|stone| stone.id == origin).map(|stone| stone.status), Some(MilestoneStatus::Active));
         assert!(smith.history.iter().any(|entry| entry.outcome == "next:smithing 10"));
         // Skip to the quota: smithing 10 met, the bronze quota is drawn.
-        let label = succeed_goal(&mut smith, &live(&[(14, 12), (13, 10)]), false).expect("the quota");
+        let label = succeed_goal(&mut smith, &live(&[(14, 12), (13, 10)]), false, deps).expect("the quota");
         assert!(label.starts_with("produce bronze_"), "got {label}");
         assert!(matches!(smith.goal, GoalKind::Produce { count, .. } if count >= 10), "{:?}", smith.goal);
         let quota = smith.goal_origin.clone().expect("quota link");
-        succeed_goal(&mut smith, &live(&[(14, 12), (13, 10)]), false).expect("next");
+        succeed_goal(&mut smith, &live(&[(14, 12), (13, 10)]), false, deps).expect("next");
         let done = smith.ambition.as_ref().and_then(|ambition| ambition.milestones.iter().find(|stone| stone.id == quota).cloned()).expect("quota");
         assert_eq!(done.status, MilestoneStatus::Done);
         let mut bare = life_with(GoalKind::MaxSkills { skills: vec!["mining".to_string()], level: 5 });
         bare.ambition = None;
-        assert_eq!(succeed_goal(&mut bare, &snapshot, false), None, "no ambition, no goal");
+        assert_eq!(succeed_goal(&mut bare, &snapshot, false, deps), None, "no ambition, no goal");
     }
 
     #[test]
     fn done_woodcutter_moves_on_and_a_banned_fisher_never_redraws_fishing() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         let snapshot = live(&[(8, 17), (14, 16), (10, 5)]);
         assert_eq!(live_level(&snapshot, "woodcutting"), 17);
         let mut woodcutter = life_with(GoalKind::MaxSkills { skills: vec!["woodcutting".to_string()], level: 15 });
-        let label = succeed_goal(&mut woodcutter, &snapshot, false).expect("a next goal");
+        let label = succeed_goal(&mut woodcutter, &snapshot, false, deps).expect("a next goal");
         assert!(!label.starts_with("woodcutting"), "the lowest skill, not the one just done, got {label}");
         assert!(!woodcutter.nodes.is_empty(), "the new goal brings nodes");
         let mut fisher = life_with(GoalKind::MaxSkills { skills: vec!["fishing".to_string()], level: 10 });
@@ -398,7 +400,7 @@ mod tests {
             failed.last_error = "Failed: net never landed".to_string();
             fisher.nodes = vec![failed];
             fisher.history.push(HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
-            let label = succeed_goal(&mut fisher, &live(&[]), true).unwrap_or_default();
+            let label = succeed_goal(&mut fisher, &live(&[]), true, deps).unwrap_or_default();
             assert!(!label.starts_with("fishing"), "a banned skill is not redrawn while banned, got {label}");
             fisher.goal = GoalKind::MaxSkills { skills: vec!["fishing".to_string()], level: 10 };
         }
@@ -410,18 +412,20 @@ mod tests {
     /// skill (user 2026-11-22).
     #[test]
     fn an_idle_stuck_graph_bans_no_skill() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         let mut fisher = life_with(GoalKind::MaxSkills { skills: vec!["fishing".to_string()], level: 10 });
-        super::close_goal(&mut fisher, &live(&[]), true);
+        super::close_goal(&mut fisher, &live(&[]), true, deps);
         assert!(!fisher.history.iter().any(|entry| entry.outcome.starts_with("stuck:fishing@6000")), "no ban: {:?}", fisher.history);
     }
 
     /// The new goal climbs from the live level (attack 45 -> one tranche).
     #[test]
     fn the_next_goal_climbs_from_the_live_level() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         let mut life = life_with(GoalKind::MaxSkills { skills: vec!["woodcutting".to_string()], level: 15 });
         // Every skill high except attack at 45: attack 55 is drawn.
         let snapshot = live(&[(0, 45), (1, 60), (2, 60), (7, 60), (8, 60), (10, 60), (11, 60), (14, 60)]);
-        let label = succeed_goal(&mut life, &snapshot, false).expect("a goal");
+        let label = succeed_goal(&mut life, &snapshot, false, deps).expect("a goal");
         assert_eq!(label, "attack 55");
         let climbs: Vec<u8> = life.nodes.iter().filter_map(|node| match node.kind {
             NodeKind::ReachLevel { level, .. } => Some(level),
@@ -436,6 +440,7 @@ mod tests {
     /// ambition and its milestones untouched, origin `side:`.
     #[test]
     fn banned_milestones_draw_a_side_goal() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         let mut cook = life_with(GoalKind::MaxSkills { skills: vec!["cooking".to_string()], level: 5 });
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
         cook.ambition = new_ambition("cook", "coverage:cooking", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: now }).ok();
@@ -444,7 +449,7 @@ mod tests {
             cook.history.push(HistoryEntry { node: "goal".to_string(), started: now, ended: now, outcome: lifescape_planner::ban_entry(skill, 6000, &cause) });
         }
         let before = cook.ambition.clone();
-        let label = super::draw_next(&mut cook, &live(&[])).expect("a side goal, never idle");
+        let label = super::draw_next(&mut cook, &live(&[]), deps).expect("a side goal, never idle");
         assert_eq!(cook.goal, GoalKind::MakeMoney, "{label}");
         assert_eq!(cook.goal_origin.as_deref(), Some("side:money"));
         let stones = |life: &Life| life.ambition.as_ref().map(|ambition| ambition.milestones.iter().map(|stone| (stone.id.clone(), stone.status)).collect::<Vec<_>>());
@@ -454,8 +459,9 @@ mod tests {
 
     #[test]
     fn money_goals_restart_their_engagement() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         let mut rich = life_with(GoalKind::GetRich);
-        succeed_goal(&mut rich, &live(&[]), false).expect("money goes on");
+        succeed_goal(&mut rich, &live(&[]), false, deps).expect("money goes on");
         assert!(matches!(rich.goal, GoalKind::GetRich));
     }
 
@@ -464,6 +470,7 @@ mod tests {
     /// `unban:` per skill) and gives them a goal again.
     #[test]
     fn legacy_banned_bots_get_a_goal_again() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         let mut life = life_with(GoalKind::MaxSkills { skills: vec!["strength".to_string()], level: 30 });
         let mut done = Node::new("n1", NodeKind::ReachLevel { skill: "strength".to_string(), level: 30 }, Vec::new(), 30);
         done.status = NodeStatus::Done;
@@ -473,11 +480,11 @@ mod tests {
             HistoryEntry { node: "goal".to_string(), started: 0, ended: 0, outcome: format!("{STUCK_TAG}{every}") },
             HistoryEntry { node: "graph".to_string(), started: 0, ended: 0, outcome: "final".to_string() },
         ];
-        let (drawn, changed) = redraw(&mut life, &live(&[]));
+        let (drawn, changed) = redraw(&mut life, &live(&[]), deps);
         assert!(drawn.is_some() && changed, "a goal again");
         let lifted = life.history.iter().filter(|entry| entry.outcome.starts_with("unban:")).count();
         assert_eq!(lifted, lifescape_planner::TRAINABLE.len(), "one noted expiry per skill");
-        let (again, changed) = redraw(&mut life, &live(&[]));
+        let (again, changed) = redraw(&mut life, &live(&[]), deps);
         assert!(again.is_none() && !changed, "an open goal is never redrawn");
     }
 
@@ -511,6 +518,7 @@ mod tests {
     /// 3 times »); any other failure still counts one.
     #[test]
     fn a_market_shortfall_is_no_milestone_block() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         let cases = [
             ("market order for 5 iron_bar unfilled after 6000 ticks (held 0, 0 cancelled)", 0),
             ("market rejected: buyer holds 3 free coins, the raise needs 9", 0),
@@ -527,7 +535,7 @@ mod tests {
             buy.last_error = last_error.to_string();
             smith.nodes = vec![buy];
             smith.history.push(HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
-            super::close_goal(&mut smith, &live(&[]), true);
+            super::close_goal(&mut smith, &live(&[]), true, deps);
             let stone = smith.ambition.as_ref().and_then(|ambition| ambition.milestones.iter().find(|stone| stone.id == origin)).cloned().expect("milestone kept");
             assert_eq!(stone.blocked_count, blocks, "{last_error}: {stone:?}");
             assert_eq!(stone.status == MilestoneStatus::Blocked, blocks > 0, "{last_error}: {stone:?}");
@@ -540,6 +548,7 @@ mod tests {
     /// takes the next milestone.
     #[test]
     fn a_milestone_blocked_three_times_is_set_aside_not_redrawn() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         let mut smith = life_with(GoalKind::Produce { item: "iron_dagger".to_string(), count: 10 });
         smith.ambition = new_ambition("smith", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: 0 }).ok();
         let first = smith.ambition.as_ref().and_then(|ambition| lifescape_planner::next_milestone(ambition, &[])).map(|stone| stone.id.clone()).expect("a milestone");
@@ -551,7 +560,7 @@ mod tests {
             node.last_error = "Failed: no anvil in reach".to_string();
             smith.nodes = vec![node];
             smith.history.push(HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
-            super::close_goal(&mut smith, &live(&[]), true);
+            super::close_goal(&mut smith, &live(&[]), true, deps);
         }
         let ambition = smith.ambition.as_ref().expect("ambition kept");
         assert_eq!((ambition.kind.as_str(), ambition.revisions.len()), ("smith", 0), "never redrawn");
@@ -572,6 +581,7 @@ mod tests {
     /// is the bot's failure and counts a block.
     #[test]
     fn an_equip_milestone_waits_on_gear_nobody_makes() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         for (piece, blocks, waits) in [("amulet_of_power", 0, true), ("magic_staff", 1, false)] {
             let mut mage = life_with(GoalKind::EquipBest { style: "magic".to_string() });
             mage.ambition = new_ambition("mage", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: 0 }).ok();
@@ -587,7 +597,7 @@ mod tests {
             let equip = Node::new("n2", NodeKind::EquipBest { style: "magic".to_string() }, vec!["n1".to_string()], 1);
             mage.nodes = vec![buy, equip];
             mage.history.push(HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
-            super::close_goal(&mut mage, &live(&[]), true);
+            super::close_goal(&mut mage, &live(&[]), true, deps);
             let stone = mage.ambition.as_ref().and_then(|ambition| ambition.milestones.iter().find(|stone| stone.id == origin)).cloned().expect("milestone kept");
             assert_eq!(stone.blocked_count, blocks, "{piece}: {stone:?}");
             assert!(!lifescape_planner::set_aside(&stone), "{piece}");
@@ -608,13 +618,14 @@ mod tests {
     #[test]
     fn a_market_shortfall_cools_its_milestone() {
         fn shortfall(life: &mut Life) {
+            let deps = &crate::brain_deps::BrainDeps::live();
             let mut buy = Node::new("n1", NodeKind::ObtainItems { item: "iron_bar".to_string(), count: 5 }, Vec::new(), 5);
             buy.status = NodeStatus::Abandoned;
             buy.failures = 3;
             buy.last_error = "market rejected: buyer holds 3 free coins, the raise needs 9".to_string();
             life.nodes = vec![buy];
             life.history.push(HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
-            super::close_goal(life, &live(&[]), true);
+            super::close_goal(life, &live(&[]), true, deps);
         }
         let mut smith = life_with(GoalKind::Produce { item: "iron_dagger".to_string(), count: 10 });
         smith.ambition = new_ambition("smith", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: 0 }).ok();

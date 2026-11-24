@@ -13,14 +13,15 @@ use crate::brain_launch_pass::{Flow, LaunchPass, Picked, Save};
 /// with nothing else ready, a short money window fills the wait.
 /// `Err`: no node to launch, the pass ends with that save.
 pub(crate) fn pick_next_ready(pass: &mut LaunchPass) -> Result<usize, Save> {
+    let deps = &pass.deps.clone();
     let (orch, job) = (pass.orch, pass.job);
-    pass.dirty |= crate::brain_plan_read::resize_session_inputs(&mut pass.life, &pass.live);
+    pass.dirty |= crate::brain_plan_read::resize_session_inputs(&mut pass.life, &pass.live, deps);
     let waiting = &pass.waiting;
     let Some(position) = crate::cpu_profile::timed("next_ready", || lifescape_planner::next_ready_except(&pass.life, waiting)) else {
         // The hybrid (2026-11-20): an ambition goal waiting on a buy past
         // one filler window sets itself aside for a market answer of any
         // trade (`brain_wait_answer`); else the filler.
-        if !waiting.is_empty() && crate::cpu_profile::timed("wait_answer", || crate::brain_wait_answer::answer_while_waiting(&mut pass.life, &pass.live)) {
+        if !waiting.is_empty() && crate::cpu_profile::timed("wait_answer", || crate::brain_wait_answer::answer_while_waiting(&mut pass.life, &pass.live, deps)) {
             return Err(Save::Always);
         }
         if !waiting.is_empty() && crate::cpu_profile::timed("filler.launch", || crate::brain_filler::launch_filler(orch, job, &mut pass.life, &pass.live, waiting, &pass.deps)) {
@@ -63,6 +64,7 @@ pub(crate) fn quest_done(pass: &mut LaunchPass, position: usize) -> Result<Vec<S
 /// everything the brain knows about the bot (wallet, tools, site, fleet,
 /// market and money guides).
 pub(crate) fn build_ctx(pass: &mut LaunchPass, position: usize, quests_done: Vec<String>) -> Picked {
+    let deps = &pass.deps.clone();
     let job = pass.job;
     let ctx_phase = crate::cpu_profile::phase("ctx.build");
     let mut ctx = {
@@ -98,7 +100,7 @@ pub(crate) fn build_ctx(pass: &mut LaunchPass, position: usize, quests_done: Vec
     ctx.seats = inputs.seats.clone();
     crate::cpu_profile::timed("market.fill_ctx", || crate::brain_market::fill_ctx_in(&mut ctx, &life.nodes[position], live, &pass.deps));
     // Alchemy of its own stock is a money method too (2026-11-14).
-    crate::cpu_profile::timed("alch.publish", || crate::brain_alch::publish(&mut ctx, &life.nodes[position], life, live));
+    crate::cpu_profile::timed("alch.publish", || crate::brain_alch::publish(&mut ctx, &life.nodes[position], life, live, deps));
     // 100 % market lots read from the precomputed money guide (R5).
     crate::cpu_profile::timed("trade.publish", || crate::brain_trade::publish(&mut ctx, &life.nodes[position], life, live, job, &pass.deps));
     // The money guide's lines the bot may take (R7), its trade offers

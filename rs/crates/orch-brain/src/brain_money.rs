@@ -322,7 +322,7 @@ pub(crate) fn publish_keeping(ctx: &mut ReadyCtx, node: &Node, life: &Life, live
     };
     let levels = ctx.levels.clone();
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
-    let stock = crate::brain_alch::own_stock(live, &life.account, keep);
+    let stock = crate::brain_alch::own_stock(live, &life.account, keep, deps);
     let read = bot_rows(set, &level_of, &stock);
     let rows = read.all();
     for error in &read.errors {
@@ -330,10 +330,10 @@ pub(crate) fn publish_keeping(ctx: &mut ReadyCtx, node: &Node, life: &Life, live
     }
     // The job's holdings read once (`brain_plan::Holdings`), each object
     // counted once: the same figures as `holdings_count`.
-    let holdings = crate::brain_plan::Holdings::of(job);
+    let holdings = crate::brain_plan::Holdings::of(job, deps);
     let held = |item: &str| holdings.count(item) as f64;
     let asks = |item: &str| crate::brain_trade::cycle_asks(set, item);
-    let wallet = crate::brain_gear::free_coins(job, None);
+    let wallet = crate::brain_gear::free_coins(job, None, deps);
     let quests = ctx.quests_done.clone();
     let bot = BotState { level_of: &level_of, combat: ctx.combat, quests_done: &quests, held: &held, coins: Some(wallet as f64), ironman: life.profile.ironman, asks: &asks };
     let service = deps.market.clone();
@@ -400,12 +400,12 @@ pub fn run_claim(node: &Node, method: &str, budget_ticks: u64, per_6000: &dyn Fn
 /// product's units (`run_claim`) for twice its budget at most, until
 /// its report (`release_run`). A run that brings nothing to the market
 /// ends the node's previous claim.
-pub(crate) fn claim_launch(account: &str, node: &Node, method: &str, budget: Option<(u64, u64)>, live: &Value) {
+pub(crate) fn claim_launch(account: &str, node: &Node, method: &str, budget: Option<(u64, u64)>, live: &Value, deps: &crate::brain_deps::BrainDeps) {
     if !matches!(node.kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) {
         return;
     }
     let Some((_, ticks)) = budget else { return };
-    let snapshot = crate::rates_service::live_snapshot();
+    let snapshot = deps.rates.clone();
     let per_6000 = |method: &str, product: &str| match crate::brain_plan::farm_yield(&snapshot, method, &crate::rates_names::display_of(product), live) {
         Ok(rate) if rate > 0.0 => Some(rate),
         Ok(_) => None,
@@ -418,7 +418,7 @@ pub(crate) fn claim_launch(account: &str, node: &Node, method: &str, budget: Opt
         crate::market_claims::release_run(account, &node.id);
         return;
     };
-    let secs = crate::market_claims::claim_secs(ticks as f64, crate::market_eta::live_tick_ms());
+    let secs = crate::market_claims::claim_secs(ticks as f64, deps.clock.tick_ms());
     crate::market_claims::claim_run(account, &node.id, &product, units, secs);
     crate::logln!("brain {account}: {} claims {units} {product} on the order board ({method}, {ticks} ticks)", node.id);
 }

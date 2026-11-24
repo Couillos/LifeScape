@@ -136,11 +136,12 @@ fn live_state(rng: &mut Rng) -> Value {
 /// The body of `publish_on` as it stood before lot 1.1: `holdings_count`
 /// per object (a copy of the live state and the locks read each time).
 fn publish_reference(set: &GuideSet, ctx: &mut ReadyCtx, node: &Node, live: &Value, job: &Job) {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let levels = crate::brain_market::live_levels(live);
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
-    let held = |item: &str| crate::brain_plan::holdings_count(job, item) as f64;
+    let held = |item: &str| crate::brain_plan::holdings_count(job, item, deps) as f64;
     let asks = |item: &str| crate::brain_trade::cycle_asks(set, item);
-    let wallet = crate::brain_gear::free_coins(job, None);
+    let wallet = crate::brain_gear::free_coins(job, None, deps);
     let bot = BotState { level_of: &level_of, combat: ctx.combat, quests_done: &ctx.quests_done, held: &held, coins: Some(wallet as f64), ironman: false, asks: &asks };
     let claims = crate::market_claims::claimed_by_others(&job.account);
     let claimed = |item: &str| claims.get(item).copied().unwrap_or(0) as f64;
@@ -163,6 +164,7 @@ fn nodes_of(life: &Life) -> Vec<Node> {
 
 #[test]
 fn trades_are_identical_on_the_real_lives_through_the_production_readers() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lives");
     let lives = crate::brain_launch_equiv_tests::load_dir(&dir);
     assert!(lives.len() >= 9, "fixtures missing");
@@ -178,7 +180,7 @@ fn trades_are_identical_on_the_real_lives_through_the_production_readers() {
                 job.inner.lock().expect("job").live = Some(std::sync::Arc::new(live.clone()));
                 let (mut before, mut after) = (crate::brain_plan::ready_ctx(life, &node, &live), crate::brain_plan::ready_ctx(life, &node, &live));
                 publish_reference(&set, &mut before, &node, &live, &job);
-                crate::brain_trade::publish_on(&set, &mut after, &node, &live, &job);
+                crate::brain_trade::publish_on(&set, &mut after, &node, &live, &job, deps);
                 assert_eq!(before.trades, after.trades, "{} {} variant {variant}", life.account, node.id);
                 assert_eq!(before.trade_wallet, after.trade_wallet, "{} {} variant {variant}", life.account, node.id);
                 scenarios += 1;

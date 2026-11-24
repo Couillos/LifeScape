@@ -58,6 +58,7 @@ fn outcomes(life: &Life) -> Vec<String> {
 /// post-restart time only. The control (no downtime recorded) expires.
 #[test]
 fn a_buy_placed_before_a_seven_hour_stop_keeps_waiting() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let at = now();
     let pre = deadline() / 4;
     let post = 30;
@@ -66,7 +67,7 @@ fn a_buy_placed_before_a_seven_hour_stop_keeps_waiting() {
     assert_eq!(downtime::awake_secs(placed, at), pre + post);
     let job = probe_job("seven");
     let mut life = parked(placed);
-    let (changed, waiting) = crate::brain_filler::settle_parked(&job, &mut life);
+    let (changed, waiting) = crate::brain_filler::settle_parked(&job, &mut life, deps);
     assert!(!changed, "nothing moved: {:?}", outcomes(&life));
     assert_eq!(waiting, vec!["n9100".to_string()]);
     assert_eq!(outcomes(&life), vec!["awaiting_fill".to_string()]);
@@ -77,7 +78,7 @@ fn a_buy_placed_before_a_seven_hour_stop_keeps_waiting() {
     // Control: the same life with no downtime recorded expires (the live bug).
     downtime::set_for_test(Vec::new());
     let mut control = parked(placed);
-    let (changed, waiting) = crate::brain_filler::settle_parked(&job, &mut control);
+    let (changed, waiting) = crate::brain_filler::settle_parked(&job, &mut control, deps);
     assert!(changed && waiting.is_empty(), "control must expire");
     assert!(outcomes(&control).iter().any(|outcome| outcome == "failed" || outcome == "abandoned"));
 }
@@ -86,6 +87,7 @@ fn a_buy_placed_before_a_seven_hour_stop_keeps_waiting() {
 /// once their sum passes the deadline.
 #[test]
 fn a_wait_across_two_restarts_sums_the_up_periods() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let at = now();
     let d = deadline();
     let third = d / 3;
@@ -100,7 +102,7 @@ fn a_wait_across_two_restarts_sums_the_up_periods() {
         downtime::set_for_test(vec![(a, b), (c, e)]);
         assert_eq!(downtime::awake_secs(placed, at), awake_total);
         let mut life = parked(placed);
-        let (changed, waiting) = crate::brain_filler::settle_parked(&job, &mut life);
+        let (changed, waiting) = crate::brain_filler::settle_parked(&job, &mut life, deps);
         assert_eq!(changed, expired, "awake {awake_total} vs deadline {d}: {:?}", outcomes(&life));
         assert_eq!(waiting.len(), usize::from(!expired));
     }
@@ -110,6 +112,7 @@ fn a_wait_across_two_restarts_sums_the_up_periods() {
 /// Normal case: no downtime installed, the wait is the wall clock.
 #[test]
 fn without_downtime_the_wait_is_the_wall_clock() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     downtime::set_for_test(Vec::new());
     let at = now();
     assert_eq!(downtime::awake_secs(at - 500, at), 500);
@@ -117,9 +120,9 @@ fn without_downtime_the_wait_is_the_wall_clock() {
     assert_eq!(crate::brain_launch::seconds_since_history(&life, "n9100", "awaiting_fill"), Some(500));
     let job = probe_job("plain");
     let mut fresh = parked(at - 10);
-    assert_eq!(crate::brain_filler::settle_parked(&job, &mut fresh), (false, vec!["n9100".to_string()]));
+    assert_eq!(crate::brain_filler::settle_parked(&job, &mut fresh, deps), (false, vec!["n9100".to_string()]));
     let mut old = parked(at - deadline() - 10);
-    assert!(crate::brain_filler::settle_parked(&job, &mut old).0, "an expired wait still expires");
+    assert!(crate::brain_filler::settle_parked(&job, &mut old, deps).0, "an expired wait still expires");
 }
 
 fn write_life(dir: &Path, account: &str, ended: &[i64]) {

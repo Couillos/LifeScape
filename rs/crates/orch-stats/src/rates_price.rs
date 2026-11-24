@@ -28,8 +28,14 @@ pub fn price_estimate(store: &Store, item: &str) -> (f64, bool) {
 /// this thread (`store_pool`, never a fresh open per call). `None`: no
 /// service and the store cannot be read.
 pub fn price_of(item: &str) -> Option<(f64, bool)> {
-    if let Some(service) = crate::market_service::shared() {
-        return Some(price_estimate_memory(&service, item, crate::market_service::MarketService::now_clock()));
+    price_of_in(crate::market_service::shared().as_deref(), item)
+}
+
+/// `price_of` on the market handle the caller holds (the brain's
+/// `BrainDeps`): same answer, no read of the process-wide registry.
+pub fn price_of_in(market: Option<&crate::market_service::MarketService>, item: &str) -> Option<(f64, bool)> {
+    if let Some(service) = market {
+        return Some(price_estimate_memory(service, item, crate::market_service::MarketService::now_clock()));
     }
     let store = crate::store_pool::open(&crate::market_service::db_path()).ok()?;
     Some(price_estimate_sql(&store, item, crate::market_service::MarketService::now_clock()))

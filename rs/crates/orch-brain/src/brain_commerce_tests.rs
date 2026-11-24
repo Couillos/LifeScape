@@ -150,7 +150,8 @@ fn check(label: &str, life: &mut Life, rng: &mut Rng, round: usize, tally: &mut 
     let job = crate::jobs::Job::new(&account);
     job.inner.lock().expect("job").live = Some(std::sync::Arc::new(live.clone()));
     let quoting = lifescape_planner::quoting(life) || rng.chance(5);
-    let mut commerce = Commerce { job: &job, life, live: &live, quoting, dirty: false };
+    let deps = crate::brain_deps::BrainDeps::live();
+    let mut commerce = Commerce { job: &job, life, live: &live, deps: &deps, quoting, dirty: false };
     super::run(&mut commerce);
     let dirty = commerce.dirty;
     let after = view(life);

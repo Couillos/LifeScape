@@ -44,6 +44,7 @@ fn gather(orch: &Orchestrator, service: &MarketService) -> (Vec<MakerNeed>, Vec<
     jobs.sort_by(|left, right| left.account.cmp(&right.account));
     let flying = service.gifts_in_flight();
     let excluded: BTreeSet<String> = crate::economy_guard::excluded_accounts();
+    let deps = lifescape_orch_brain::brain_deps::BrainDeps::live();
     let (mut makers, mut donors, mut notes) = (Vec::new(), Vec::new(), Vec::new());
     let mut online: BTreeSet<String> = BTreeSet::new();
     for job in &jobs {
@@ -70,11 +71,11 @@ fn gather(orch: &Orchestrator, service: &MarketService) -> (Vec<MakerNeed>, Vec<
         };
         let readable = coins.is_some() && !life.profile.ironman;
         let next_purchase = match (&live, readable) {
-            (Some(live), true) => crate::brain_gear::next_gear_cost(job, &life, live) + crate::brain_tool_shop::next_kit_price(job, &life, live),
+            (Some(live), true) => crate::brain_gear::next_gear_cost(job, &life, live, &deps) + crate::brain_tool_shop::next_kit_price(job, &life, live, &deps),
             _ => 0,
         };
         // `committed_coins` counts the gifts it owes: named apart (`pending_out`).
-        let committed = if readable { (crate::brain_gear::committed_coins(&account, None) - pending_out).max(0) } else { 0 };
+        let committed = if readable { (crate::brain_gear::committed_coins(&account, None, &deps) - pending_out).max(0) } else { 0 };
         donors.push(DonorPurse { account, coins, committed, next_purchase, pending_out, ironman: life.profile.ironman, excluded: false, maker: false });
     }
     for (account, role) in crate::market_maker_report::maker_lives(&crate::paths::lives_dir()) {
@@ -174,9 +175,10 @@ mod tests {
     /// switches, one coin under it keeps playing.
     #[test]
     fn switch_reads_pack_plus_bank() {
+        let deps = &crate::brain_deps::BrainDeps::live();
         let job = crate::jobs::Job::new("mm_switch_test");
         job.inner.lock().expect("inner").live = Some(std::sync::Arc::new(snapshot(3_000, 100_000, true)));
-        let read = crate::brain_plan::holdings_count(&job, "coins");
+        let read = crate::brain_plan::holdings_count(&job, "coins", deps);
         assert_eq!(read, 103_000, "pack 3 000 + bank 100 000");
         assert_eq!(live_coins(&snapshot(3_000, 100_000, true)), Some(read), "fund-makers reads like the switch");
         let role = crate::market_maker::current_role(lifescape_planner::MakerRole::new(0, 11, 1));
@@ -184,7 +186,7 @@ mod tests {
         assert!(lifescape_planner::switch_due(&role, read), "funded: switches at its next pass");
         assert!(!lifescape_planner::switch_due(&role, read - 1));
         job.inner.lock().expect("inner").live = Some(std::sync::Arc::new(snapshot(3_000, 0, false)));
-        assert_eq!(crate::brain_plan::holdings_count(&job, "coins"), 3_000, "bank not streamed: under the target, never a false switch");
+        assert_eq!(crate::brain_plan::holdings_count(&job, "coins", deps), 3_000, "bank not streamed: under the target, never a false switch");
         assert_eq!(live_coins(&snapshot(3_000, 0, false)), None, "fund-makers never plans on an unread bank");
     }
 }

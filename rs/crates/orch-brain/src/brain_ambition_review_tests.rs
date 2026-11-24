@@ -63,8 +63,9 @@ fn achieved_woodcutter(account: &str) -> Life {
 /// the same ambition extended (the protected accounts: see below).
 #[test]
 fn a_need_led_ladder_end_redraws() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let mut jane = achieved_woodcutter("b0");
-    super::before_draw(&mut jane, &live());
+    super::before_draw(&mut jane, &live(), deps);
     let held = jane.ambition.as_ref().expect("an ambition");
     assert_eq!(held.revisions.last().map(|revision| revision.why.as_str()), Some("achieved"), "redrawn, not extended: {}", lifescape_planner::describe_ambition(held));
     assert_eq!(held.draw_rule, NEED_RULE, "drawn by need");
@@ -76,13 +77,14 @@ fn a_need_led_ladder_end_redraws() {
 /// (never a level draw); once held, a pass never replaces it.
 #[test]
 fn a_protected_account_always_ends_up_overall() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     for name in ["Zezima", "n0valyfe", "YOGOSUN"] {
         let mut protected = achieved_woodcutter(name);
-        super::before_draw(&mut protected, &live());
+        super::before_draw(&mut protected, &live(), deps);
         let held = protected.ambition.as_ref().expect("an ambition");
         assert_eq!(held.kind, lifescape_planner::OVERALL, "{name}");
         assert_eq!(held.revisions.last().map(|revision| revision.why.as_str()), Some("protected:overall"), "{name}");
-        super::before_draw(&mut protected, &live());
+        super::before_draw(&mut protected, &live(), deps);
         let kept = protected.ambition.as_ref().expect("an ambition");
         assert_eq!((kept.kind.as_str(), kept.revisions.len()), (lifescape_planner::OVERALL, 1), "{name}: kept, never replaced");
     }
@@ -92,10 +94,11 @@ fn a_protected_account_always_ends_up_overall() {
 /// the operator paths stop, they abandon nothing.
 #[test]
 fn a_refused_change_is_reported() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let overall = ambition(lifescape_planner::OVERALL, "protected:overall", 0);
     let mut zezima = life("Zezima", overall);
     let before = zezima.clone();
-    assert!(!super::assign_kind(&mut zezima, &live(), "cook", "operator:cook"));
+    assert!(!super::assign_kind(&mut zezima, &live(), "cook", "operator:cook", deps));
     assert_eq!(zezima, before);
 }
 
@@ -186,6 +189,7 @@ fn a_changed_ambition_replaces_the_goal_an_earlier_one_drew() {
 #[test]
 #[ignore]
 fn live_fleet_review_distribution() {
+    let deps = &crate::brain_deps::BrainDeps::live();
     let (Ok(lives_dir), Ok(db)) = (std::env::var("LIFESCAPE_REVIEW_LIVES"), std::env::var("LIFESCAPE_REVIEW_DB")) else {
         println!("set LIFESCAPE_REVIEW_LIVES and LIFESCAPE_REVIEW_DB (copies, never run/)");
         return;
@@ -293,7 +297,7 @@ fn live_fleet_review_distribution() {
         let inputs = super::DrawInputs { items, weights, gaps, surplus: surplus.clone(), value: Default::default(), held: Vec::new() };
         let level_of = |skill: &str| bot.level(skill);
         let now_bot = BotNow { level_of: &level_of, coins: 0, held: &|_| 0 };
-        let Some((next, why)) = super::build(&lives[index].account, &bot, &now_bot, first, &inputs, &[], Stamp { tick: 0, secs: now }) else { continue };
+        let Some((next, why)) = super::build(&lives[index].account, &bot, &now_bot, first, &inputs, &[], Stamp { tick: 0, secs: now }, deps) else { continue };
         moves.push(format!("{:<14} {:<12} -> {:<12} ({why})", lives[index].account, held.kind, next.kind));
         lives[index].ambition = Some(next);
     }

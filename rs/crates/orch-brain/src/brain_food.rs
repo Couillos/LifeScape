@@ -28,19 +28,19 @@ pub fn retarget_food(need: &str, price_of: &dyn Fn(&str) -> Option<i64>, larder:
 
 /// The needs of a fight's `Blocked` report, food retargeted to what the
 /// bot can buy or make (other methods and needs untouched).
-pub(crate) fn afford_food_needs(job: &Job, method: &str, missing: Vec<String>) -> Vec<String> {
+pub(crate) fn afford_food_needs(job: &Job, method: &str, missing: Vec<String>, deps: &crate::brain_deps::BrainDeps) -> Vec<String> {
     if !lifescape_planner::combat::is_fight_method(method) || !missing.iter().any(|need| lifescape_gamedata::food::heal(need) > 0) {
         return missing;
     }
-    let coins = crate::brain_plan::holdings_count(job, "coins");
-    let reader = crate::brain_bids::MarketReader::live(&job.account);
+    let coins = crate::brain_plan::holdings_count(job, "coins", deps);
+    let reader = crate::brain_bids::MarketReader::live(&job.account, deps);
     let price_of = |item: &str| reader.view(item).and_then(|view| view.best_ask().or(view.current));
     let live = job.inner.try_lock().map(|inner| inner.live_or_null()).unwrap_or_else(|_| crate::jobs::null_live());
     let levels = crate::brain_market::live_levels(&live);
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
     // Owned stacks (pack, bank) and worn gear, read once.
     let mut owned = crate::brain_plan::live_stacks(job);
-    for tool in crate::brain_plan::carried_tools(job) {
+    for tool in crate::brain_plan::carried_tools(job, deps) {
         if !owned.iter().any(|(name, _)| name.eq_ignore_ascii_case(&tool)) {
             owned.push((tool, 1));
         }

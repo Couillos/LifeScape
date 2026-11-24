@@ -82,12 +82,12 @@ pub fn guide_coins(ctx: &mut ReadyCtx, node: &Node, set: &crate::guides_store::G
 /// graph makes, `derived` gives its reservation price
 /// (`planner::derived_demand`): the bid's ceiling is the wallet's capped
 /// by it, and it opens at half of it when the book is cheaper.
-pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn Fn() -> Option<f64>) {
+pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn Fn() -> Option<f64>, deps: &crate::brain_deps::BrainDeps) {
     let NodeKind::ObtainItems { item, count } = &node.kind else { return };
     if !node.alternatives.iter().any(|alt| alt.method == "market:bid") {
         return;
     }
-    let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return };
+    let (Some(service), Some(id)) = (deps.market.clone(), obj_id(item)) else { return };
     // A partly filled bid (`matched`, remainder resting) still stands:
     // only open rows used to count, so bids piled up beside it.
     let resting = service.resting_rows(&job.account, id, lifescape_store::OrderSide::Buy);
@@ -225,21 +225,21 @@ fn forget_refusal(account: &str, item_id: i64) {
 /// units other producers claimed —; other inputs at the best ask or
 /// current price; the bot's own rates and its measured coin rate, D1).
 /// `None` otherwise.
-pub(crate) fn derived_reserve(life: &lifescape_planner::Life, index: usize, live: &Value) -> Option<f64> {
+pub(crate) fn derived_reserve(life: &lifescape_planner::Life, index: usize, live: &Value, deps: &crate::brain_deps::BrainDeps) -> Option<f64> {
     let node = life.nodes.get(index)?;
     let consumed = life.nodes.iter().any(|other| other.deps.contains(&node.id) && matches!(other.kind, NodeKind::ObtainItems { .. }));
     if !consumed || life.profile.ironman {
         return None;
     }
     let _phase = crate::cpu_profile::phase("market.derived_reserve");
-    let reader = crate::brain_bids::MarketReader::live(&life.account);
+    let reader = crate::brain_bids::MarketReader::live(&life.account, deps);
     crate::brain_bids::with_bot_state(life, live, |state| {
         let rate = crate::brain_bids::bot_rate(life);
         let value_of = |item: &str| lifescape_planner::derived_demand::product_value(reader.view(item).as_ref(), lifescape_planner::derived_demand::product_lot(&life.nodes, item));
         let input_price = |item: &str| reader.view(item).and_then(|view| view.best_ask().or(view.current)).unwrap_or(1) as f64;
         let prices = lifescape_planner::derived_demand::DerivedPrices { value_of: &value_of, input_price: &input_price, units_per_6000: state.units, coin_rate: rate };
         lifescape_planner::derived_demand::sale_reserve(&life.nodes, index, &life.goal, &prices)
-    })
+    }, deps)
 }
 
 /// True while `account` has a buyer deal on `item` in flight (live
@@ -266,9 +266,9 @@ pub fn buying_in_flight(account: &str, item: i64, deals: &[lifescape_store::Deal
 /// there, capped by the wallet (user 2026-11-18 levier 2). `reserve`:
 /// the input's reservation price when it feeds a product
 /// (`derived_reserve`): the ceiling never passes it.
-pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx, worth: Option<i64>, reserve: Option<f64>) -> Result<i64, String> {
+pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx, worth: Option<i64>, reserve: Option<f64>, deps: &crate::brain_deps::BrainDeps) -> Result<i64, String> {
     let NodeKind::ObtainItems { item, count } = &node.kind else { return Err("not an obtain node".to_string()) };
-    let service = crate::market_service::shared().ok_or("market service not running")?;
+    let service = deps.market.clone().ok_or("market service not running")?;
     let id = obj_id(item).ok_or_else(|| format!("unknown item {item}"))?;
     let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
     let ceiling = lifescape_planner::derived_demand::obtain_ceiling(lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity), reserve);
@@ -352,11 +352,11 @@ fn swept_unowned() -> &'static std::sync::Mutex<std::collections::HashSet<String
 
 /// One-time cleanup per account and daemon run: cancels the stale unsaid
 /// orders (`STALE_UNOWNED_REASON`), logged. Returns the count.
-pub fn release_stale_unowned(job: &Job, life: &lifescape_planner::Life) -> usize {
+pub fn release_stale_unowned(job: &Job, life: &lifescape_planner::Life, deps: &crate::brain_deps::BrainDeps) -> usize {
     if !swept_unowned().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(job.account.clone()) {
         return 0;
     }
-    let Some(service) = crate::market_service::shared() else { return 0 };
+    let Some(service) = deps.market.clone() else { return 0 };
     let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
     let wanted = crate::brain_wishlist::wanted_names(life);
     let mut closed = 0;
@@ -375,8 +375,8 @@ pub fn release_stale_unowned(job: &Job, life: &lifescape_planner::Life) -> usize
 /// One sweep (rate-limited per account): cancels the orphan need bids
 /// (reason `need_gone`). An expired fill wait no longer cancels its bid
 /// (M2): this sweep is where a need's bid ends when its node is gone.
-pub fn release_orphan_needs(job: &Job, life: &lifescape_planner::Life) -> usize {
-    release_stale_unowned(job, life);
+pub fn release_orphan_needs(job: &Job, life: &lifescape_planner::Life, deps: &crate::brain_deps::BrainDeps) -> usize {
+    release_stale_unowned(job, life, deps);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs_f64()).unwrap_or(0.0);
     {
         let mut table = last_sweep().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -385,7 +385,7 @@ pub fn release_orphan_needs(job: &Job, life: &lifescape_planner::Life) -> usize 
         }
         table.insert(job.account.clone(), now);
     }
-    let Some(service) = crate::market_service::shared() else { return 0 };
+    let Some(service) = deps.market.clone() else { return 0 };
     let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
     let wanted = crate::brain_wishlist::wanted_names(life);
     let mut closed = 0;
@@ -404,8 +404,8 @@ pub fn release_orphan_needs(job: &Job, life: &lifescape_planner::Life) -> usize 
 /// True once the account's buy on `item` (debug name) has run its course:
 /// no open or matched buy order on it, and no handover in flight. With
 /// holdings above the launch baseline, a partial buy landed.
-pub fn buy_closed(account: &str, item: &str) -> bool {
-    let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return false };
+pub fn buy_closed(account: &str, item: &str, deps: &crate::brain_deps::BrainDeps) -> bool {
+    let (Some(service), Some(id)) = (deps.market.clone(), obj_id(item)) else { return false };
     let store = service.lock_store();
     let order_live = store.account_orders(account).unwrap_or_default().iter().any(|row| {
         row.item_id == id
@@ -419,10 +419,10 @@ pub fn buy_closed(account: &str, item: &str) -> bool {
 /// Cancels the account's open buy orders on `item` (debug name): a
 /// landed obtain closes its standing bid (reason `need_met`). An expired
 /// fill wait keeps its bid (plan marché M2).
-pub fn cancel_open_buys(account: &str, item: &str) -> usize {
+pub fn cancel_open_buys(account: &str, item: &str, deps: &crate::brain_deps::BrainDeps) -> usize {
     // The need is met: a bid answer's reservation of these asks ends.
     crate::market_claims::purchase_done(account, item);
-    let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return 0 };
+    let (Some(service), Some(id)) = (deps.market.clone(), obj_id(item)) else { return 0 };
     service.cancel_open_because(account, id, lifescape_store::OrderSide::Buy, "need_met")
 }
 
