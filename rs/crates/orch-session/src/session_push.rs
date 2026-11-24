@@ -7,7 +7,10 @@
 //! fire-and-forget with a short bound: a lost frame is no worse than a
 //! missed heartbeat, the next pump pushes the full state again.
 
-use lifescape_json::{Value, object, str_value};
+use lifescape_json::{Value, str_value};
+
+use crate::frame_codec::{EventFrame, ReportFrame, SnapshotFrame};
+use crate::job_state::{Phase, Status};
 
 fn send_push(frame: &Value) {
     // E2 persistent hub first (one stream per worker life); legacy
@@ -24,14 +27,14 @@ fn send_push(frame: &Value) {
 /// time, so the daemon reads them from the frame instead of a `status`
 /// round trip.
 pub(crate) fn snapshot_frame(account: &str, snapshot: &Value, phase: &str, status: &str) -> Value {
-    object(vec![
-        ("type", str_value("snapshot")),
-        ("account", str_value(account)),
-        ("phase", str_value(phase)),
-        ("status", str_value(status)),
-        ("sent", Value::Float(crate::session::now_secs())),
-        ("snapshot", snapshot.clone()),
-    ])
+    SnapshotFrame {
+        account: account.to_string(),
+        phase: Some(Phase::parse(phase)),
+        status: Some(Status::parse(status)),
+        sent: Some(crate::session::now_secs()),
+        snapshot: snapshot.clone(),
+    }
+    .into_value()
 }
 
 /// Push the full live state to the daemon (fire-and-forget).
@@ -58,11 +61,7 @@ pub(crate) fn push_light(light: Value, phase: &str) {
 /// other push frame: a lost report is a missed heartbeat line, the next
 /// run pushes again — and the session log keeps the same JSON).
 pub(crate) fn push_task_report(account: &str, report: &Value) {
-    send_push(&object(vec![
-        ("type", str_value("task_report")),
-        ("account", str_value(account)),
-        ("report", report.clone()),
-    ]));
+    send_push(&ReportFrame { account: account.to_string(), report: report.clone() }.encode());
 }
 
 /// Structured event frame: tick + position ride along, the log keeps only
@@ -80,28 +79,18 @@ pub(crate) fn event_frame(
     message: &str,
     pos: (i32, i32, i32),
 ) -> Value {
-    object(vec![
-        ("type", str_value("event")),
-        ("account", str_value(account)),
-        ("kind", str_value(kind)),
-        ("event", str_value(event)),
-        ("resolved", Value::Bool(resolved)),
-        ("tick", Value::Int(tick as i64)),
-        ("script", str_value(script)),
-        (
-            "args",
-            Value::Arr(args.iter().map(|arg| str_value(arg)).collect()),
-        ),
-        ("message", str_value(message)),
-        (
-            "at",
-            Value::Arr(vec![
-                Value::Int(i64::from(pos.0)),
-                Value::Int(i64::from(pos.1)),
-                Value::Int(i64::from(pos.2)),
-            ]),
-        ),
-    ])
+    EventFrame {
+        account: account.to_string(),
+        kind: kind.to_string(),
+        event: event.to_string(),
+        resolved,
+        tick: tick as i64,
+        script: script.to_string(),
+        args: args.iter().map(|arg| str_value(arg)).collect(),
+        message: message.to_string(),
+        at: Value::Arr(vec![Value::Int(i64::from(pos.0)), Value::Int(i64::from(pos.1)), Value::Int(i64::from(pos.2))]),
+    }
+    .encode()
 }
 
 /// Push a structured event to the daemon (fire-and-forget).
@@ -168,5 +157,25 @@ mod tests {
         assert_eq!(framed.get("phase").as_str(), Some("running"));
         assert_eq!(framed.get("status").as_str(), Some("running"));
         assert_eq!(framed.get("type").as_str(), Some("snapshot_light"));
+    }
+
+    /// Lot 5.2: what the worker's encoders write is what the daemon's
+    /// decoder reads back, key for key (every frame type).
+    #[test]
+    fn the_workers_frames_round_trip_through_the_codec() {
+        use crate::frame_codec::Frame;
+        let state = object(vec![("account", str_value("t01")), ("ticks", Value::Int(5)), ("position", Value::Arr(vec![Value::Int(0), Value::Int(3222), Value::Int(3218)]))]);
+        let light = crate::heartbeat_flows::light_value("t01", "mining", "running", (0, 3228, 3298), 100, "Lumbridge", "fight", 1795477612.5, Value::Arr(vec![Value::Arr(vec![Value::Int(837), Value::Int(3231), Value::Int(3301)])]), Value::Arr(Vec::new()));
+        let frames = vec![
+            snapshot_frame("t01", &state, "running", "running"),
+            light_with_phase(light.clone(), "running"),
+            light,
+            event_frame("t01", "script_error", "unknown", true, 9, "fishing", &["a".to_string()], "boom", (0, 3200, 3200)),
+            object(vec![("type", str_value("task_report")), ("account", str_value("t01")), ("report", object(vec![("stop", str_value("goal_reached"))]))]),
+        ];
+        for frame in frames {
+            let decoded = Frame::decode(frame.clone()).expect("a frame the daemon takes");
+            assert_eq!(decoded.encode(), frame);
+        }
     }
 }

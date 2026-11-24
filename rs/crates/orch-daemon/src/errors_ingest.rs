@@ -72,11 +72,11 @@ fn send(intake: Intake) {
 }
 
 /// A pushed worker event; only `script_error` events become rows.
-pub fn observe_event(account: &str, frame: &Value) {
-    if frame.get("kind").as_str() != Some("script_error") {
+pub fn observe_event(account: &str, frame: &crate::frame_codec::EventFrame) {
+    if frame.kind != "script_error" {
         return;
     }
-    send(Intake::Event { account: account.to_string(), frame: frame.clone(), clock: now_clock() });
+    send(Intake::Event { account: account.to_string(), frame: frame.encode(), clock: now_clock() });
 }
 
 /// A pushed task report; only failed/blocked stops become rows. The

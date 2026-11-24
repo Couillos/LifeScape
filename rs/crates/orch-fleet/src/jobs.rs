@@ -13,6 +13,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use lifescape_json::{Value, object, str_value};
+use crate::frame_codec::SessionFacts;
 use crate::job_state::{Phase, Status};
 use crate::paths;
 
@@ -230,16 +231,17 @@ impl Job {
         self.inner.try_lock().ok().and_then(|inner| inner.frame.clone())
     }
 
-    /// Read a heartbeat frame's `phase` and `status` (lot 4.2): the view is
+    /// Apply the session facts of a heartbeat frame (lot 4.2, decoded by
+    /// `frame_codec`, lot 5.2): the view is
     /// recorded and, on a supervised job, the phase and status are applied
     /// unless a `status` reply or a command set them after the frame was
     /// sent. An older worker's frame (no `phase`) is ignored. A wedged job
     /// drops the frame (the next one comes within a second).
-    pub fn note_frame(&self, frame: &Value, now: f64) -> Option<FrameEffect> {
-        let phase = Phase::parse(frame.get("phase").as_str()?);
-        let status_text = frame.get("status").as_str().unwrap_or("");
-        let status = Status::parse(status_text);
-        let sent = frame.get("sent").as_f64().or_else(|| frame.get("updated").as_f64()).unwrap_or(now);
+    pub fn note_frame(&self, facts: &SessionFacts, now: f64) -> Option<FrameEffect> {
+        let phase = facts.phase.clone();
+        let status_given = facts.status.is_some();
+        let status = facts.status.clone().unwrap_or_default();
+        let sent = facts.sent.unwrap_or(now);
         let mut inner = self.inner.try_lock().ok()?;
         inner.frame_seq += 1;
         let seq = inner.frame_seq;
@@ -251,7 +253,7 @@ impl Job {
                 effect.phase_changed = true;
                 inner.phase = phase;
             }
-            if !status_text.is_empty() && inner.status != status {
+            if status_given && !status.as_str().is_empty() && inner.status != status {
                 effect.status_changed = true;
                 inner.status = status;
             }
@@ -615,13 +617,16 @@ mod tests {
         assert!(job.inner.lock().unwrap().held, "hold read back from the worker");
     }
 
-    fn frame(phase: &str, status: &str, sent: f64) -> Value {
-        lifescape_json::object(vec![
+    /// The facts of a light frame, read by the production decoder.
+    fn frame(phase: &str, status: &str, sent: f64) -> SessionFacts {
+        let line = lifescape_json::object(vec![
             ("type", str_value("snapshot_light")),
+            ("account", str_value("b1")),
             ("phase", str_value(phase)),
             ("status", str_value(status)),
             ("sent", Value::Float(sent)),
-        ])
+        ]);
+        crate::frame_codec::Frame::decode(line).expect("a light frame").session_facts().expect("a phase")
     }
 
     /// Lot 4.2: a frame sets phase and status, records its view, and is
@@ -650,7 +655,8 @@ mod tests {
         assert_eq!(closed.note_frame(&frame("running", "running", 10.0), 10.0), Some(FrameEffect::default()));
         assert_eq!(closed.inner.lock().unwrap().phase, Phase::Idle);
         // A frame without a phase (older worker) is not a frame view.
-        assert_eq!(job.note_frame(&lifescape_json::object(vec![("type", str_value("snapshot_light"))]), 300.0), None);
+        let bare = lifescape_json::object(vec![("type", str_value("snapshot_light")), ("account", str_value("b1"))]);
+        assert_eq!(crate::frame_codec::Frame::decode(bare).expect("decodes").session_facts(), None);
     }
 
     #[test]

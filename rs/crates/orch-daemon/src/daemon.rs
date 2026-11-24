@@ -15,6 +15,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::frame_codec::{Frame, FrameError, SessionFacts};
 use crate::jobs::{Job, now_secs, resolve_state};
 use lifescape_json::{self as json, Value, object, str_value};
 use crate::paths;
@@ -525,18 +526,15 @@ impl Orchestrator {
     /// hub passes the length of the line it received: no re-serialisation
     /// of every frame just to count it, lot 1.3).
     pub fn ingest_push_sized(&self, frame: &Value, bytes: u64) -> Value {
-        self.ingest_push_with(frame, bytes, None)
+        self.ingest_push_owned(frame.clone(), bytes)
     }
 
     /// `ingest_push_sized` for a frame the caller gives up (the push hub):
     /// a full snapshot's tree is MOVED into the job, never copied out of
-    /// the frame (lot 1.5, 35 to 85 KB per bot every few seconds).
-    pub fn ingest_push_owned(&self, mut frame: Value, bytes: u64) -> Value {
-        let snapshot = match &mut frame {
-            Value::Obj(map) if map.get("type").and_then(Value::as_str) == Some("snapshot") => map.remove("snapshot"),
-            _ => None,
-        };
-        self.ingest_push_with(&frame, bytes, snapshot)
+    /// the frame (lot 1.5, 35 to 85 KB per bot every few seconds). The
+    /// line is decoded once, here (`frame_codec`, lot 5.2).
+    pub fn ingest_push_owned(&self, frame: Value, bytes: u64) -> Value {
+        self.ingest_frame(Frame::decode(frame), bytes)
     }
 
     /// The push hub's entry (lot 4.3): ingest the frame, then, for a task
@@ -544,32 +542,40 @@ impl Orchestrator {
     /// drain stays as the fallback; `Job::take_report` gives the report to
     /// whoever asks first.
     pub fn ingest_push_and_wake(self: &Arc<Self>, frame: Value, bytes: u64) -> Value {
-        let account = frame.get("account").as_str().unwrap_or("").to_string();
-        let is_report = frame.get("type").as_str() == Some("task_report");
-        let reply = self.ingest_push_owned(frame, bytes);
-        if is_report && reply.get("ok").as_bool() == Some(true) {
-            let job = self.jobs.lock().unwrap().get(&account).cloned();
-            if let Some(job) = job {
-                let fleet: Arc<dyn crate::fleet::Fleet> = self.clone();
-                crate::brain::on_report_push(&fleet, &job);
+        let decoded = Frame::decode(frame);
+        let report_for = match &decoded {
+            Ok(Frame::TaskReport(report)) => Some(report.account.clone()),
+            _ => None,
+        };
+        let reply = self.ingest_frame(decoded, bytes);
+        if let Some(account) = report_for {
+            if reply.get("ok").as_bool() == Some(true) {
+                let job = self.jobs.lock().unwrap().get(&account).cloned();
+                if let Some(job) = job {
+                    let fleet: Arc<dyn crate::fleet::Fleet> = self.clone();
+                    crate::brain::on_report_push(&fleet, &job);
+                }
             }
         }
         reply
     }
 
     /// Lot 4.2: the phase and status a heartbeat frame carries.
-    fn note_frame_state(&self, job: &Arc<Job>, frame: &Value) {
+    fn note_frame_state(&self, job: &Arc<Job>, facts: Option<SessionFacts>) {
         // Lot 4.4: a phase turning idle asks the brain for a decision now
         // (the report may have been folded a few ms before the frame).
-        if job.note_frame(frame, now_secs()).is_some_and(|effect| effect.became_idle) {
+        if facts.and_then(|facts| job.note_frame(&facts, now_secs())).is_some_and(|effect| effect.became_idle) {
             crate::wake_hub::post(&job.account, crate::wake_hub::Event::Idle);
         }
     }
 
-    /// The ingest: `taken` is the snapshot already moved out of `frame`.
-    fn ingest_push_with(&self, frame: &Value, bytes: u64, taken: Option<Value>) -> Value {
+    /// The ingest of a decoded frame.
+    fn ingest_frame(&self, decoded: Result<Frame, FrameError>, bytes: u64) -> Value {
         crate::res_stats::record_push(bytes);
-        let account = frame.get("account").as_str().unwrap_or("").to_string();
+        let account = match &decoded {
+            Ok(frame) => frame.account().to_string(),
+            Err(error) => error.account().to_string(),
+        };
         if account.is_empty() {
             return object(vec![("ok", Value::Bool(false)), ("error", str_value("account is required"))]);
         }
@@ -582,15 +588,24 @@ impl Orchestrator {
                 ]);
             }
         };
-        match frame.get("type").as_str().unwrap_or("") {
-            "snapshot" => {
+        let frame = match decoded {
+            Ok(frame) => frame,
+            Err(FrameError::UnknownType { kind, .. }) => {
+                return object(vec![("ok", Value::Bool(false)), ("error", str_value(&format!("unknown push type {kind:?}")))]);
+            }
+            Err(FrameError::NotAnObject) => unreachable!("a non-object frame names no account"),
+        };
+        let facts = frame.session_facts();
+        match frame {
+            Frame::Snapshot(full) => {
+                // The tree is MOVED into the job (lot 1.5).
                 if let Ok(mut inner) = job.inner.try_lock() {
-                    inner.live = Some(Arc::new(taken.unwrap_or_else(|| frame.get("snapshot").clone())));
+                    inner.live = Some(Arc::new(full.snapshot));
                 }
-                self.note_frame_state(&job, frame);
+                self.note_frame_state(&job, facts);
                 object(vec![("ok", Value::Bool(true))])
             }
-            "snapshot_light" => {
+            Frame::Light(light) => {
                 // E4 two-flow: merge the light keys into the last full
                 // state (or hold the light alone before the first full).
                 crate::res_stats::record_light();
@@ -598,52 +613,48 @@ impl Orchestrator {
                     match inner.live.as_mut() {
                         // Copy-on-write: the tree is copied only while a
                         // reader still holds the previous pointer.
-                        Some(cached) => crate::heartbeat_flows::merge_light(Arc::make_mut(cached), frame),
-                        None => inner.live = Some(Arc::new(frame.clone())),
+                        Some(cached) => light.merge_into(Arc::make_mut(cached)),
+                        None => inner.live = Some(Arc::new(light.encode())),
                     }
                 }
-                self.note_frame_state(&job, frame);
+                self.note_frame_state(&job, facts);
                 object(vec![("ok", Value::Bool(true))])
             }
-            "event" => {
-                let kind = frame.get("kind").as_str().unwrap_or("").to_string();
-                let name = frame.get("event").as_str().unwrap_or("unknown").to_string();
-                let resolved = frame.get("resolved").as_bool().unwrap_or(false);
-                let tick = frame.get("tick").as_i64().unwrap_or(0);
-                let args = frame.get("args").as_arr().cloned().unwrap_or_default();
-                let message = frame.get("message").as_str().unwrap_or("");
+            Frame::Event(event) => {
+                let (kind, name, resolved, tick) = (event.kind.as_str(), event.event.as_str(), event.resolved, event.tick);
+                let message = event.message.as_str();
                 if message.is_empty() {
                     crate::logln!("job {account}: event {name} kind={kind} resolved={resolved} t={tick} (push)");
                 } else {
                     crate::logln!("job {account}: event {name} kind={kind} resolved={resolved} t={tick} (push): {message}");
                 }
-                crate::errors_ingest::observe_event(&account, frame);
+                crate::errors_ingest::observe_event(&account, &event);
                 {
                     let Ok(mut inner) = job.inner.try_lock() else {
                         return object(vec![("ok", Value::Bool(false)), ("error", str_value("contended"))]);
                     };
                     if kind == "script_error" {
                         inner.last_error = Some(object(vec![
-                            ("where", str_value(frame.get("script").as_str().unwrap_or(""))),
+                            ("where", str_value(&event.script)),
                             ("type", str_value("script_error")),
-                            ("message", str_value(frame.get("message").as_str().unwrap_or(""))),
-                            ("at", frame.get("at").clone()),
+                            ("message", str_value(&event.message)),
+                            ("at", event.at.clone()),
                             ("at_unix", Value::Float(now_secs())),
                             ("tick", Value::Int(tick)),
                         ]));
                     }
                     let mut entry = std::collections::BTreeMap::new();
-                    entry.insert("event".to_string(), str_value(&name));
+                    entry.insert("event".to_string(), str_value(name));
                     entry.insert("resolved".to_string(), Value::Bool(resolved));
-                    entry.insert("args".to_string(), Value::Arr(args));
+                    entry.insert("args".to_string(), Value::Arr(event.args.clone()));
                     entry.insert("at".to_string(), Value::Float(now_secs()));
                     inner.last_event = Some(Value::Obj(entry));
                 }
                 self.write_state(&job);
                 object(vec![("ok", Value::Bool(true))])
             }
-            "task_report" => {
-                let report = frame.get("report").clone();
+            Frame::TaskReport(carried) => {
+                let report = carried.report.clone();
                 crate::logln!(
                     "job {account}: task_report stop={} activity={} ticks={} (push)",
                     report.get("stop").as_str().unwrap_or("?"),
@@ -663,10 +674,6 @@ impl Orchestrator {
                 self.write_state(&job);
                 object(vec![("ok", Value::Bool(true))])
             }
-            other => object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value(&format!("unknown push type {other:?}"))),
-            ]),
         }
     }
 

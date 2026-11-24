@@ -13,7 +13,10 @@
 
 use std::sync::Arc;
 
-use lifescape_json::{Value, object, str_value};
+use lifescape_json::{Value, str_value};
+
+use crate::frame_codec::LightFrame;
+use crate::job_state::Status;
 
 use crate::session::{Shared, now_secs, write_heartbeat};
 use crate::session_heartbeat::heartbeat_value;
@@ -82,26 +85,21 @@ pub fn light_value(
     npcs_at: Value,
     players_at: Value,
 ) -> Value {
-    object(vec![
-        ("type", str_value("snapshot_light")),
-        ("account", str_value(account)),
-        ("script", str_value(script)),
-        ("status", str_value(status)),
-        (
-            "position",
-            Value::Arr(vec![
-                Value::Int(i64::from(position.0)),
-                Value::Int(i64::from(position.1)),
-                Value::Int(i64::from(position.2)),
-            ]),
-        ),
-        ("ticks", Value::Int(ticks as i64)),
-        ("zone", str_value(zone)),
-        ("intention", str_value(intention)),
-        ("updated", Value::Float(updated)),
-        ("npcs_at", npcs_at),
-        ("players_at", players_at),
-    ])
+    LightFrame {
+        account: account.to_string(),
+        script: Some(script.to_string()),
+        status: Some(Status::parse(status)),
+        phase: None,
+        position: Some([i64::from(position.0), i64::from(position.1), i64::from(position.2)]),
+        ticks: Some(ticks as i64),
+        zone: Some(zone.to_string()),
+        intention: Some(intention.to_string()),
+        updated: Some(updated),
+        sent: None,
+        npcs_at: Some(npcs_at),
+        players_at: Some(players_at),
+    }
+    .encode()
 }
 
 pub use crate::jobs::merge_light;
