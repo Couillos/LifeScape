@@ -539,6 +539,24 @@ impl Orchestrator {
         self.ingest_push_with(&frame, bytes, snapshot)
     }
 
+    /// The push hub's entry (lot 4.3): ingest the frame, then, for a task
+    /// report, wake the brain for that account at once. The supervisor's
+    /// drain stays as the fallback; `Job::take_report` gives the report to
+    /// whoever asks first.
+    pub fn ingest_push_and_wake(self: &Arc<Self>, frame: Value, bytes: u64) -> Value {
+        let account = frame.get("account").as_str().unwrap_or("").to_string();
+        let is_report = frame.get("type").as_str() == Some("task_report");
+        let reply = self.ingest_push_owned(frame, bytes);
+        if is_report && reply.get("ok").as_bool() == Some(true) {
+            let job = self.jobs.lock().unwrap().get(&account).cloned();
+            if let Some(job) = job {
+                let fleet: Arc<dyn crate::fleet::Fleet> = self.clone();
+                crate::brain::on_report_push(&fleet, &job);
+            }
+        }
+        reply
+    }
+
     /// Lot 4.2: the phase and status a heartbeat frame carries.
     fn note_frame_state(&self, job: &Arc<Job>, frame: &Value) {
         let _effect = job.note_frame(frame, now_secs());

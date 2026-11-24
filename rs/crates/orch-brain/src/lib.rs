@@ -88,6 +88,8 @@ mod brain_launch_inputs_tests;
 #[cfg(test)]
 mod brain_raw_world_tests;
 #[cfg(test)]
+mod brain_wake_tests;
+#[cfg(test)]
 mod brain_launch_reference;
 #[cfg(test)]
 mod brain_upkeep_equiv_tests;

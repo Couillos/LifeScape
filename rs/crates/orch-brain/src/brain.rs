@@ -506,7 +506,38 @@ fn queued_ticks() -> &'static std::sync::Mutex<std::collections::HashSet<String>
 /// decide in parallel; shared tables are behind their own locks.
 const BRAIN_SHARDS: usize = 4;
 
-type BrainSender = std::sync::mpsc::SyncSender<(String, Option<Value>)>;
+/// What a brain mailbox carries (lot 4.3): one typed message per account
+/// event, processed in order by the account's shard. A `Tick` is the
+/// paced safety pass, a `Report` a task report to fold then decide on, a
+/// `Wake` an event that asks for a decision now without a report.
+#[derive(Debug)]
+pub(crate) enum Mail {
+    Tick,
+    Report(Value),
+    /// The reason is kept for traces and tests; the brain decides the same way.
+    Wake(#[allow(dead_code)] WakeReason),
+}
+
+/// Why the brain was woken for an account (counted per reason on the
+/// `cpu-profile supervise` line as `wake_<reason>`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WakeReason {
+    /// The phase turned idle (frame): the bot can take a node.
+    Idle,
+    /// An order of the account was filled, or any other state change.
+    Event,
+}
+
+impl WakeReason {
+    fn label(self) -> &'static str {
+        match self {
+            WakeReason::Idle => "wake_idle",
+            WakeReason::Event => "wake_event",
+        }
+    }
+}
+
+type BrainSender = std::sync::mpsc::SyncSender<(String, Mail)>;
 
 fn inbox() -> &'static std::sync::Mutex<Option<Vec<BrainSender>>> {
     static INBOX: std::sync::OnceLock<std::sync::Mutex<Option<Vec<BrainSender>>>> = std::sync::OnceLock::new();
@@ -533,7 +564,7 @@ fn ensure_brain(orch: &Arc<dyn Fleet>) {
     let mut senders = Vec::with_capacity(BRAIN_SHARDS);
     let mut receivers = Vec::with_capacity(BRAIN_SHARDS);
     for _ in 0..BRAIN_SHARDS {
-        let (sender, receiver) = std::sync::mpsc::sync_channel::<(String, Option<Value>)>(INBOX_CAPACITY);
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<(String, Mail)>(INBOX_CAPACITY);
         senders.push(sender);
         receivers.push(receiver);
     }
@@ -547,7 +578,11 @@ fn ensure_brain(orch: &Arc<dyn Fleet>) {
             .name(format!("brain-tick-{index}"))
             .spawn(move || {
                 crate::cpu_profile::mark_brain_thread();
-                while let Ok((account, report)) = receiver.recv() {
+                while let Ok((account, mail)) = receiver.recv() {
+                    let report = match mail {
+                        Mail::Report(report) => Some(report),
+                        Mail::Tick | Mail::Wake(_) => None,
+                    };
                     if report.is_none() {
                         queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&account);
                     }
@@ -616,11 +651,12 @@ pub fn on_supervise(orch: &Arc<dyn Fleet>, job: &Arc<Job>, report: Option<Value>
     if had_report {
         crate::brain_inflight::queued(&job.account);
     }
+    let mail = report.map_or(Mail::Tick, Mail::Report);
     let queued = inbox()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .as_ref()
-        .map(|senders| senders[shard_of(&job.account, senders.len())].try_send((job.account.clone(), report)))
+        .map(|senders| senders[shard_of(&job.account, senders.len())].try_send((job.account.clone(), mail)))
         .is_some_and(|sent| sent.is_ok());
     if had_report && !queued {
         crate::brain_inflight::folded(&job.account);
@@ -638,6 +674,47 @@ pub fn on_supervise(orch: &Arc<dyn Fleet>, job: &Arc<Job>, report: Option<Value>
             _ => "",
         };
         crate::logln!("brain {}: inbox full, tick deferred to next pass{note}", job.account);
+    }
+}
+
+/// True while a plain tick or a wake of `account` waits in its mailbox.
+#[cfg(test)]
+pub(crate) fn tick_waiting(account: &str) -> bool {
+    queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(account)
+}
+
+/// A task report received on the heartbeat channel (lot 4.3): take the
+/// pending-report flag at once and hand the report to the account's shard,
+/// instead of waiting for the supervisor's next sweep. The flag is taken
+/// under the job lock (`Job::take_report`): whoever takes it first folds
+/// the report, the other path finds nothing (no double fold). `false`
+/// when the flag was already taken or the job is wedged (the supervisor
+/// drain stays as the fallback).
+pub fn on_report_push(orch: &Arc<dyn Fleet>, job: &Arc<Job>) -> bool {
+    let Some(report) = job.take_report() else { return false };
+    crate::cpu_profile::supervise().record_n("wake_report", 1, 0, 0);
+    on_supervise(orch, job, Some(report));
+    true
+}
+
+/// An event asks for a decision now (lot 4.4): a message in the account's
+/// mailbox, deduplicated with the plain tick already waiting (one pending
+/// pass per account), never paced by `PLAIN_TICK_SECS`.
+pub fn wake(orch: &Arc<dyn Fleet>, job: &Arc<Job>, reason: WakeReason) {
+    ensure_brain(orch);
+    let first = queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(job.account.clone());
+    if !first {
+        return;
+    }
+    crate::cpu_profile::supervise().record_n(reason.label(), 1, 0, 0);
+    let queued = inbox()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .map(|senders| senders[shard_of(&job.account, senders.len())].try_send((job.account.clone(), Mail::Wake(reason))))
+        .is_some_and(|sent| sent.is_ok());
+    if !queued {
+        queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&job.account);
     }
 }
 

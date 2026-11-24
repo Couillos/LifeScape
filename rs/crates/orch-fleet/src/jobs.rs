@@ -211,6 +211,18 @@ impl Job {
         }
     }
 
+    /// Take the pending task report (lot 4.3): flag and report under ONE
+    /// lock, so of several consumers (heartbeat reader, supervisor drain)
+    /// exactly one gets it. `None` when nothing is pending or the job is
+    /// wedged (the flag then waits for the next consumer).
+    pub fn take_report(&self) -> Option<Value> {
+        let mut inner = self.inner.try_lock().ok()?;
+        if !std::mem::replace(&mut inner.report_pending, false) {
+            return None;
+        }
+        inner.last_report.clone()
+    }
+
     /// The frame view as last recorded (lot 4.2), `None` before the first
     /// frame or when the job is wedged.
     pub fn frame_view(&self) -> Option<FrameView> {
