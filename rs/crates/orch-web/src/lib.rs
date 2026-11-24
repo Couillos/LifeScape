@@ -15,6 +15,9 @@ pub mod web_items;
 pub mod web_lives;
 pub mod web_market;
 pub mod web_rates_view;
+pub mod web_routes;
+#[cfg(test)]
+mod web_routes_tests;
 pub mod web_ws;
 #[cfg(test)]
 mod hiscores_web_tests;

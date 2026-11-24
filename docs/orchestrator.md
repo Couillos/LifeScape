@@ -12,6 +12,7 @@ Le daemon héberge aussi le service de navigation : un snapshot
 (monde + tables + version) chargé au démarrage (`plan_service.rs`),
 servi sur `run/pathfinding.sock`. Les workers ne portent que le handle
 (`plan_client`) et la version épinglée — aucune carte en worker.
+Les routes GET du tableau de bord sont une table (`orch-web/src/web_routes.rs` : pages statiques, routes d'API, préfixes ; `web.rs` ne garde que la boucle HTTP).
 Les opérations du service sont typées (`nav::service_ops::NavOp`) et celles du
 marché aussi (`scripts::market_ops::MarketOp`) ; le démon lui-même (`market_eta`)
 planifie par `plan_service::service()` en direct, sans passer par la socket.

@@ -1,0 +1,46 @@
+/? 200 text/html; charset=utf-8 no-store file
+/spectator.js? 200 application/javascript no-store file
+/items? 200 text/html; charset=utf-8 no-store file
+/items.js? 200 application/javascript no-store file
+/market? 200 text/html; charset=utf-8 no-store file
+/market.js? 200 application/javascript no-store file
+/chart.js? 200 application/javascript no-store file
+/table.js? 200 application/javascript no-store file
+/rates? 200 text/html; charset=utf-8 no-store file
+/rates.js? 200 application/javascript no-store file
+/brain.js? 200 application/javascript no-store file
+/hiscores? 200 text/html; charset=utf-8 no-store file
+/hiscores.js? 200 application/javascript no-store file
+/xp? 200 text/html; charset=utf-8 no-store file
+/xp.js? 200 application/javascript no-store file
+/life? 200 text/html; charset=utf-8 no-store file
+/life.js? 200 application/javascript no-store file
+/economy? 200 text/html; charset=utf-8 no-store file
+/economy.js? 200 application/javascript no-store file
+/errors? 200 text/html; charset=utf-8 no-store file
+/errors.js? 200 application/javascript no-store file
+/guides-money? 200 text/html; charset=utf-8 no-store file
+/guides-training? 200 text/html; charset=utf-8 no-store file
+/guides.js? 200 application/javascript no-store file
+/api/status? 200 application/json no-store 791bdb4b661b8e22
+/api/map? 200 application/json no-store fec46e700204497f
+/api/state/smith? 200 application/json no-store 298b30bbeba3a375
+/api/state? 200 application/json no-store 298b30bbeba3a375
+/api/scripts? 200 application/json no-store 0eff3ab316a70ad4
+/api/accounts? 200 application/json no-store 591d80e3b8983150
+/api/logs/smith?lines=5 200 application/json no-store 2054f76aec9b198d
+/api/logs/smith?lines=x 200 application/json no-store fe8db8ba81e23aea
+/api/logs? 200 application/json no-store 46ec3c7a47065579
+/mapscene/abc.png? 404 application/json no-store e76ca992da27c107
+/mapscene/12.jpg? 404 application/json no-store e76ca992da27c107
+/map-8762ed9c85f8b53a/manifest.json? 200 application/json public, max-age=31536000, immutable bfb1a545ee4670e8
+/map-8762ed9c85f8b53a/missing.png? 500 application/json no-store 75c608dbc0ce99cd
+/map-xyz/manifest.json? 404 application/json no-store e76ca992da27c107
+/nope? 404 application/json no-store e76ca992da27c107
+/api/nope? 404 application/json no-store e76ca992da27c107
+/api? 404 application/json no-store e76ca992da27c107
+/a/b/c? 404 application/json no-store e76ca992da27c107
+//items//? 200 text/html; charset=utf-8 no-store file
+/items/extra? 404 application/json no-store e76ca992da27c107
+/api/market? 404 application/json no-store e76ca992da27c107
+/api/items/unknown? 404 application/json no-store e76ca992da27c107
