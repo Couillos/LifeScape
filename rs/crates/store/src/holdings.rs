@@ -88,6 +88,13 @@ impl Store {
         Ok(found.flatten())
     }
 
+    /// Time of the newest hourly holdings point (0 when none): the fleet's
+    /// piles change when this does.
+    pub fn holdings_stamp(&self) -> Result<i64, Error> {
+        let mut statement = self.connection.prepare_cached("SELECT COALESCE(MAX(taken_at), 0) FROM holdings_hourly")?;
+        Ok(statement.query_row([], |row| row.get::<_, i64>(0))?)
+    }
+
     /// Every item count of the last hourly point taken at or before
     /// `clock` (`(taken_at, [(item, count)])`), `None` when no point is
     /// that old: the 24 h baseline of the item holdings list.

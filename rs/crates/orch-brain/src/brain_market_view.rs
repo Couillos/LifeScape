@@ -122,6 +122,12 @@ fn generation_of(books: &HashMap<i64, lifescape_market::Book>) -> u64 {
     books.values().fold(books.len() as u64, |sum, book| sum.wrapping_add(book.version()))
 }
 
+/// The generation of the live books (`SharedBooks::generation` of a copy
+/// built now), without building the copy.
+pub(crate) fn books_generation(service: &MarketService) -> u64 {
+    generation_of(&service.lock_engine().books)
+}
+
 /// Reads the rows of every book in a fixed order (by object id: the old
 /// read walked a hash map, so the order of rows of equal price was never
 /// specified).

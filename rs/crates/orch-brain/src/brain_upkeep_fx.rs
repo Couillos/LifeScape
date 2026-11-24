@@ -174,7 +174,8 @@ impl UpkeepFx for LiveUpkeepFx<'_> {
     }
 
     fn redraw(&self, life: &mut Life) -> (Option<String>, bool) {
-        crate::brain_succession::redraw(life, self.live)
+        // Behind the gate (lot 3.3, `LIFESCAPE_REDRAW_GATE`, shadow by default).
+        crate::brain_redraw_gate::redraw(life, self.live, crate::brain_succession::redraw)
     }
 
     fn redraw_neediest(&self, life: &mut Life, why: &str) {
