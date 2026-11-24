@@ -2120,6 +2120,8 @@ dans l'ordre, et le contexte vu par les effets. Neuf vies committées
 
 **Lectures de la passe (phase 3, 2026-11-24).** Les lectures de marché, taux, guides, foule et horloge de la passe de lancement passent par `BrainDeps` (`brain_deps`) ; les ordres et accords d'un compte sont servis par une copie du magasin numérotée par changement ; le tirage d'un but fermé est retenté seulement si l'empreinte de ses entrées a changé (porte `brain_redraw_gate`, interrupteur `LIFESCAPE_REDRAW_GATE`, `shadow` par défaut) ; les lignes du guide d'argent, la sortie rapide de `resize_session_inputs` et le registre de quarantaine sont mémorisés. Détails, preuves et singletons restants : `docs/orchestrator.md`.
 
+**Frontières typées (phase 5, 2026-11-24).** Toutes les passes du cerveau lisent marché, taux, guides, foule et horloge par `BrainDeps` (lot 3.5 achevé : plus de surcharge de fil du marché dans les bancs) ; `Phase` et `Status` des jobs, les trames de battement (`frame_codec`), les commandes ouvrier (`WorkerCommand`) et leurs erreurs (`CallError::Refused(Refusal::Busy)` : un lancement refusé n'a pas tourné, le noeud revient prêt sans échec compté, P2-5) sont des types ; la configuration est lue une fois dans `main`. Détails et preuves : `docs/orchestrator.md`, `docs/decisions.md`.
+
 ## L'entretien de la vie et l'état du graphe dans le planner (lot 4, refonte neutre, 2026-11-23)
 
 Les étapes 2 (entretien de la vie) et 7 (état du graphe) de la passe de
