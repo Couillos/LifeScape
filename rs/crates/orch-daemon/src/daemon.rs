@@ -524,6 +524,22 @@ impl Orchestrator {
     /// hub passes the length of the line it received: no re-serialisation
     /// of every frame just to count it, lot 1.3).
     pub fn ingest_push_sized(&self, frame: &Value, bytes: u64) -> Value {
+        self.ingest_push_with(frame, bytes, None)
+    }
+
+    /// `ingest_push_sized` for a frame the caller gives up (the push hub):
+    /// a full snapshot's tree is MOVED into the job, never copied out of
+    /// the frame (lot 1.5, 35 to 85 KB per bot every few seconds).
+    pub fn ingest_push_owned(&self, mut frame: Value, bytes: u64) -> Value {
+        let snapshot = match &mut frame {
+            Value::Obj(map) if map.get("type").and_then(Value::as_str) == Some("snapshot") => map.remove("snapshot"),
+            _ => None,
+        };
+        self.ingest_push_with(&frame, bytes, snapshot)
+    }
+
+    /// The ingest: `taken` is the snapshot already moved out of `frame`.
+    fn ingest_push_with(&self, frame: &Value, bytes: u64, taken: Option<Value>) -> Value {
         crate::res_stats::record_push(bytes);
         let account = frame.get("account").as_str().unwrap_or("").to_string();
         if account.is_empty() {
@@ -541,7 +557,7 @@ impl Orchestrator {
         match frame.get("type").as_str().unwrap_or("") {
             "snapshot" => {
                 if let Ok(mut inner) = job.inner.try_lock() {
-                    inner.live = Some(frame.get("snapshot").clone());
+                    inner.live = Some(Arc::new(taken.unwrap_or_else(|| frame.get("snapshot").clone())));
                 }
                 object(vec![("ok", Value::Bool(true))])
             }
@@ -551,8 +567,10 @@ impl Orchestrator {
                 crate::res_stats::record_light();
                 if let Ok(mut inner) = job.inner.try_lock() {
                     match inner.live.as_mut() {
-                        Some(cached) => crate::heartbeat_flows::merge_light(cached, frame),
-                        None => inner.live = Some(frame.clone()),
+                        // Copy-on-write: the tree is copied only while a
+                        // reader still holds the previous pointer.
+                        Some(cached) => crate::heartbeat_flows::merge_light(Arc::make_mut(cached), frame),
+                        None => inner.live = Some(Arc::new(frame.clone())),
                     }
                 }
                 object(vec![("ok", Value::Bool(true))])

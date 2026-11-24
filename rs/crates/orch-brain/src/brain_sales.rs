@@ -476,7 +476,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     last_pass().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(job.account.clone(), now);
     let worn = crate::brain_plan::worn_names(job);
     let mut wished: Vec<String> = crate::brain_wishlist::wishlist(job, life).into_iter().map(|wish| wish.item).collect();
-    let live = job.inner.try_lock().ok().and_then(|inner| inner.live_copy()).unwrap_or(Value::Null);
+    let live = job.inner.try_lock().ok().map(|inner| inner.live_or_null()).unwrap_or_else(crate::jobs::null_live);
     // Kept and worn gear keep ONE spare copy, never the whole stack
     // (2026-11-14: a worn bronze med helm protected 88 looted copies).
     let mut gear = crate::brain_gear::ladder_keep(job, life, &live);

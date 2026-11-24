@@ -111,8 +111,8 @@ pub fn wishes(style: Style, levels: &[(&str, i64)], owned: &[String], tools: &[&
     out
 }
 
-fn live_of(job: &Job) -> Value {
-    job.inner.try_lock().ok().and_then(|inner| inner.live_copy()).unwrap_or(Value::Null)
+fn live_of(job: &Job) -> std::sync::Arc<Value> {
+    job.inner.try_lock().ok().map(|inner| inner.live_or_null()).unwrap_or_else(crate::jobs::null_live)
 }
 
 /// The bot's current wishes (empty without a live snapshot). Melee and

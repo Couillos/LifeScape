@@ -167,7 +167,7 @@ fn daemon_main() -> i32 {
         let inner = orch.clone();
         let dispatch: Arc<dyn Fn(Value, u64) + Send + Sync> =
             Arc::new(move |frame: Value, bytes: u64| {
-                let _ = inner.ingest_push_sized(&frame, bytes);
+                let _ = inner.ingest_push_owned(frame, bytes);
             });
         if let Err(error) = lifescape_orchestrator::push_hub::start_push_hub(dispatch) {
             eprintln!("push hub unavailable ({error}); workers fall back to one-shot pushes");

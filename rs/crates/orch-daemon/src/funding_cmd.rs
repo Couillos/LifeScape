@@ -49,8 +49,8 @@ fn gather(orch: &Orchestrator, service: &MarketService) -> (Vec<MakerNeed>, Vec<
     for job in &jobs {
         let account = job.account.clone();
         online.insert(account.clone());
-        let live = job.inner.try_lock().ok().and_then(|inner| inner.live_copy());
-        let coins = live.as_ref().and_then(live_coins);
+        let live = job.inner.try_lock().ok().and_then(|inner| inner.live_shared());
+        let coins = live.as_deref().and_then(live_coins);
         let pending_in = sum_for(&flying, &|gift| gift.1 == account);
         let pending_out = sum_for(&flying, &|gift| gift.0 == account);
         let is_excluded = excluded.contains(&account.to_lowercase());
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn switch_reads_pack_plus_bank() {
         let job = crate::jobs::Job::new("mm_switch_test");
-        job.inner.lock().expect("inner").live = Some(snapshot(3_000, 100_000, true));
+        job.inner.lock().expect("inner").live = Some(std::sync::Arc::new(snapshot(3_000, 100_000, true)));
         let read = crate::brain_plan::holdings_count(&job, "coins");
         assert_eq!(read, 103_000, "pack 3 000 + bank 100 000");
         assert_eq!(live_coins(&snapshot(3_000, 100_000, true)), Some(read), "fund-makers reads like the switch");
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(role.capital_target, 103_000, "the common target");
         assert!(lifescape_planner::switch_due(&role, read), "funded: switches at its next pass");
         assert!(!lifescape_planner::switch_due(&role, read - 1));
-        job.inner.lock().expect("inner").live = Some(snapshot(3_000, 0, false));
+        job.inner.lock().expect("inner").live = Some(std::sync::Arc::new(snapshot(3_000, 0, false)));
         assert_eq!(crate::brain_plan::holdings_count(&job, "coins"), 3_000, "bank not streamed: under the target, never a false switch");
         assert_eq!(live_coins(&snapshot(3_000, 0, false)), None, "fund-makers never plans on an unread bank");
     }

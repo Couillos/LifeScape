@@ -125,7 +125,7 @@ fn filler_bench() {
         let life = crate::brain::load_life(account).expect("life");
         let live = crate::paths::read_json(&crate::paths::user_paths(account).0).unwrap_or(Value::Null);
         let job = crate::jobs::Job::new(account);
-        job.inner.lock().expect("job").live = Some(live.clone());
+        job.inner.lock().expect("job").live = Some(std::sync::Arc::new(live.clone()));
         let (node, ctx) = timed("filler window_ctx", 3, || crate::brain_filler::window_ctx(&job, &life, &live, "n1"));
         timed("brain_alch::kept_except", 3, || crate::brain_alch::kept_except(&life, &live, Some(&node.id)).len());
         timed("brain_alch::publish", 3, || {

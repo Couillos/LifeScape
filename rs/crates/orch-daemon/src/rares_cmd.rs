@@ -46,7 +46,7 @@ pub(crate) fn rares_lines(accounts: &[String]) -> Result<Vec<String>, String> {
         .filter(|account| counted(account, &excluded))
         .map(|account| BotReach {
             account: account.clone(),
-            levels: crate::brain_ambition::account_levels(account, crate::jobs::live_of(account).as_ref()),
+            levels: crate::brain_ambition::account_levels(account, crate::jobs::live_of(account).as_deref()),
             quests_done: crate::brain::load_life(account).map(|life| crate::brain_rescue::quests_done(&life)).unwrap_or_default(),
         })
         .collect();

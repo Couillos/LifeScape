@@ -29,7 +29,7 @@ pub(crate) fn open<'a>(orch: &'a Arc<dyn Fleet>, job: &'a Arc<Job>) -> Option<La
     // "not on the island" launched fishing there). A contended lock is
     // the same: next pass.
     let live = match job.inner.try_lock() {
-        Ok(inner) => inner.live_copy(),
+        Ok(inner) => inner.live_shared(),
         Err(_) => return None,
     };
     let live = live?;

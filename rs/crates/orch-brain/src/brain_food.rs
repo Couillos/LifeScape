@@ -14,7 +14,6 @@
 //! jim_ellis (29 coins) asked herring he could neither buy nor make, its
 //! coins came from the very hunt that needed it.
 
-use lifescape_json::Value;
 
 use crate::jobs::Job;
 
@@ -36,7 +35,7 @@ pub(crate) fn afford_food_needs(job: &Job, method: &str, missing: Vec<String>) -
     let coins = crate::brain_plan::holdings_count(job, "coins");
     let reader = crate::brain_bids::MarketReader::live(&job.account);
     let price_of = |item: &str| reader.view(item).and_then(|view| view.best_ask().or(view.current));
-    let live = job.inner.try_lock().map(|inner| inner.live_copy()).unwrap_or(None).unwrap_or(Value::Null);
+    let live = job.inner.try_lock().map(|inner| inner.live_or_null()).unwrap_or_else(|_| crate::jobs::null_live());
     let levels = crate::brain_market::live_levels(&live);
     let level_of = |skill: &str| levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level).unwrap_or(1);
     // Owned stacks (pack, bank) and worn gear, read once.

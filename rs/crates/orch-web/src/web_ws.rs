@@ -578,7 +578,7 @@ mod tests {
             )
         }
         let job = Arc::new(crate::jobs::Job::new("bob"));
-        job.inner.lock().unwrap().live = Some(object(vec![
+        job.inner.lock().unwrap().live = Some(Arc::new(object(vec![
             ("account", str_value("bob")),
             ("npcs", Value::Arr(vec![object(vec![
                 ("nid", Value::Int(837)),
@@ -586,7 +586,7 @@ mod tests {
                 ("x", Value::Int(3230)),
                 ("z", Value::Int(3301)),
             ])])),
-        ]));
+        ])));
         let dispatch: Dispatch = {
             let job = job.clone();
             Arc::new(move |request: Value| match request.get("cmd").as_str().unwrap_or("") {
@@ -596,7 +596,7 @@ mod tests {
         };
         let ingest = |frame: &Value| {
             let mut inner = job.inner.lock().unwrap();
-            crate::heartbeat_flows::merge_light(inner.live.as_mut().expect("full cached"), frame);
+            crate::heartbeat_flows::merge_light(Arc::make_mut(inner.live.as_mut().expect("full cached")), frame);
         };
         ingest(&light(100, 3231, 3229));
         let (first, full) = state_payload(&dispatch, "bob", None);
@@ -651,7 +651,7 @@ mod tests {
                 inner.status = status.to_string();
                 inner.paused = paused;
                 inner.script = script.map(str::to_string);
-                inner.live = live;
+                inner.live = live.map(Arc::new);
             }
             jobs.push(job);
         }

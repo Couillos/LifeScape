@@ -148,7 +148,7 @@ fn check(label: &str, life: &mut Life, rng: &mut Rng, round: usize, tally: &mut 
     let live = live_of(rng);
     let account = format!("{}{}_{round}_{}", super::PROBE_PREFIX, life.account, rng.next());
     let job = crate::jobs::Job::new(&account);
-    job.inner.lock().expect("job").live = Some(live.clone());
+    job.inner.lock().expect("job").live = Some(std::sync::Arc::new(live.clone()));
     let quoting = lifescape_planner::quoting(life) || rng.chance(5);
     let mut commerce = Commerce { job: &job, life, live: &live, quoting, dirty: false };
     super::run(&mut commerce);

@@ -52,7 +52,7 @@ pub struct JobInner {
     pub supervise: bool,
     /// Last pushed snapshot (worker push frames): the front reads this,
     /// the disk is only the adoption fallback before the first push arrived.
-    pub live: Option<Value>,
+    pub live: Option<Arc<Value>>,
     /// A task report arrived since the last supervision pass: the single
     /// supervisor drains it immediately (brain trigger hook, E8).
     pub report_pending: bool,
@@ -74,12 +74,33 @@ pub fn sort_status_rows(rows: &mut [Value]) {
     });
 }
 
+/// The `null` state shared by every reader that found no snapshot.
+pub fn null_live() -> Arc<Value> {
+    static NULL: OnceLock<Arc<Value>> = OnceLock::new();
+    NULL.get_or_init(|| Arc::new(Value::Null)).clone()
+}
+
 impl JobInner {
-    /// Deep copy of the last pushed snapshot (35 to 85 KB of JSON tree),
-    /// tallied for the brain thread (`cpu-profile tally`: `live_copy`).
+    /// The last pushed snapshot as a pointer (lot 1.5): the 35 to 85 KB
+    /// tree is shared, never copied by a reader. A push replaces the
+    /// pointer; a light merge copies the tree only while a reader still
+    /// holds the previous one (`Arc::make_mut`). Tallied for the brain
+    /// thread (`cpu-profile tally`: `live_shared`).
+    pub fn live_shared(&self) -> Option<Arc<Value>> {
+        crate::cpu_profile::tally("live_shared");
+        self.live.clone()
+    }
+
+    /// `live_shared`, `null` when no snapshot arrived yet.
+    pub fn live_or_null(&self) -> Arc<Value> {
+        self.live_shared().unwrap_or_else(null_live)
+    }
+
+    /// Deep copy of the snapshot, for the rare reader that needs an owned
+    /// tree. Tallied (`live_copy`): the brain's per-pass copies are now 0.
     pub fn live_copy(&self) -> Option<Value> {
         crate::cpu_profile::tally("live_copy");
-        self.live.clone()
+        self.live.as_deref().cloned()
     }
 }
 
@@ -165,7 +186,7 @@ impl Job {
         let (status, paused, script, from_live) = match self.inner.try_lock() {
             Ok(guard) => {
                 let pick = |bot: &Value| [bot.get("combat").clone(), bot.get("position").clone(), bot.get("zone").clone(), bot.get("hitpoints").clone()];
-                let from_live = guard.live.as_ref().map(pick);
+                let from_live = guard.live.as_ref().map(|live| pick(live));
                 let script = match &guard.script {
                     Some(name) => Value::Str(name.clone()),
                     None => Value::Null,
@@ -206,7 +227,7 @@ impl Job {
         // only the last-breath fallback before the first push arrives.
         let (live, inner) = match self.inner.try_lock() {
             Ok(guard) => {
-                let live = guard.live_copy();
+                let live = guard.live_shared();
                 let copied = (
                     guard.phase.clone(),
                     guard.script.clone(),
@@ -246,7 +267,7 @@ impl Job {
             last_code,
             requirements,
         ) = inner;
-        let bot = live.unwrap_or_else(|| paths::read_json(&partial).unwrap_or(Value::Null));
+        let bot = live.unwrap_or_else(|| Arc::new(paths::read_json(&partial).unwrap_or(Value::Null)));
         let mut intention = bot.get("intention").as_str().unwrap_or("").to_string();
         if phase == "running"
             && matches!(
@@ -473,10 +494,10 @@ pub fn supervised() -> &'static Mutex<Vec<(Arc<dyn crate::fleet::Fleet>, Arc<Job
 /// Live snapshot of a supervised account (`None`: not supervised, no
 /// snapshot yet, or its job is busy): the market's seller quote prices
 /// with the bot's own levels (`market_seller`).
-pub fn live_of(account: &str) -> Option<Value> {
+pub fn live_of(account: &str) -> Option<Arc<Value>> {
     let job = supervised().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().find(|(_, job)| job.account == account).map(|(_, job)| job.clone())?;
     let inner = job.inner.try_lock().ok()?;
-    inner.live_copy()
+    inner.live_shared()
 }
 
 /// Merge a light frame into the cached full state: only the light keys
@@ -543,5 +564,44 @@ mod tests {
         let state = job.describe();
         assert!(state.get("last_error").is_null(), "a later clean run clears it");
         assert_eq!(state.get("previous_error").get("type").as_str(), Some("Blocked"));
+    }
+
+    /// Lot 1.5: readers take the pointer, never a copy; a light merge
+    /// copies the tree only while a reader still holds the old pointer
+    /// (the reader keeps its consistent snapshot), else merges in place.
+    #[test]
+    fn readers_share_the_snapshot_and_a_merge_copies_only_for_them() {
+        let job = Job::new("t03");
+        let full = object(vec![
+            ("position", Value::Arr(vec![Value::Int(0), Value::Int(3200), Value::Int(3200)])),
+            ("trail", Value::Arr((0..400).map(Value::Int).collect())),
+        ]);
+        job.inner.lock().unwrap().live = Some(Arc::new(full));
+        let first = job.inner.lock().unwrap().live_or_null();
+        let second = job.inner.lock().unwrap().live_shared().expect("live");
+        assert!(Arc::ptr_eq(&first, &second), "two readers, one tree");
+        assert!(Arc::ptr_eq(&first, job.inner.lock().unwrap().live.as_ref().unwrap()));
+        let light = object(vec![("position", Value::Arr(vec![Value::Int(0), Value::Int(3201), Value::Int(3200)]))]);
+        let merge = |job: &Job| {
+            let mut inner = job.inner.lock().unwrap();
+            let Some(cached) = inner.live.as_mut() else { return };
+            if let (Value::Obj(map), Value::Obj(update)) = (Arc::make_mut(cached), &light) {
+                for (key, value) in update {
+                    map.insert(key.clone(), value.clone());
+                }
+            }
+        };
+        merge(&job);
+        assert_eq!(first.get("position").as_arr().map(|cells| cells[1].as_i64()), Some(Some(3200)), "a reader's snapshot never changes under it");
+        let now = job.inner.lock().unwrap().live_or_null();
+        assert_eq!(now.get("position").as_arr().map(|cells| cells[1].as_i64()), Some(Some(3201)));
+        assert!(!Arc::ptr_eq(&first, &now));
+        drop((first, second));
+        let before = Arc::as_ptr(&now);
+        drop(now);
+        merge(&job);
+        let after = Arc::as_ptr(job.inner.lock().unwrap().live.as_ref().unwrap());
+        assert_eq!(before, after, "no reader holds it: merged in place, no copy");
+        assert!(Arc::ptr_eq(&null_live(), &null_live()), "the null state is one shared value");
     }
 }

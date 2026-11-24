@@ -40,7 +40,7 @@ pub(crate) struct LaunchPass<'a> {
     pub orch: &'a Arc<dyn Fleet>,
     pub job: &'a Arc<Job>,
     pub life: Life,
-    pub live: Value,
+    pub live: std::sync::Arc<Value>,
     pub inputs: LaunchInputs,
     /// The pass changed the life (saved by the stopping step as asked).
     pub dirty: bool,

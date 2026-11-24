@@ -48,7 +48,7 @@ pub(crate) fn fleet_roster() -> (Vec<lifescape_planner::FleetBot>, Vec<(String, 
         .iter()
         .map(|life| {
             let snapshot = crate::jobs::live_of(&life.account);
-            crate::brain_ambition::fleet_bot(life, crate::brain_ambition::account_levels(&life.account, snapshot.as_ref()))
+            crate::brain_ambition::fleet_bot(life, crate::brain_ambition::account_levels(&life.account, snapshot.as_deref()))
         })
         .collect();
     // The open level milestones of every ambition: who climbs where.

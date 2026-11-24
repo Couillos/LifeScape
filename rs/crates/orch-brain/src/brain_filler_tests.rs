@@ -374,7 +374,7 @@ fn a_filler_pick_reads_the_same_holdings_from_the_cache() {
         ("worn", lifescape_json::Value::Arr(vec![stack("bronze_platebody", 1)])),
     ]);
     let job = crate::jobs::Job::new("filler_holdings_probe");
-    job.inner.lock().expect("job").live = Some(live.clone());
+    job.inner.lock().expect("job").live = Some(std::sync::Arc::new(live.clone()));
     let cached = crate::brain_plan::Holdings::of(&job);
     for item in ["coins", "iron_ore", "coal", "raw_trout", "rune_pickaxe", "bronze_platebody", "yew_logs", "iron_ore", "coal"] {
         assert_eq!(cached.count(item), crate::brain_plan::holdings_count(&job, item), "{item}");

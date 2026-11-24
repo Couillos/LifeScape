@@ -266,9 +266,9 @@ impl MarketService {
     /// all (no live snapshot, no save: deleted) lose every order.
     pub(crate) fn audit_round(&self, jobs: &[std::sync::Arc<Job>], save_dir: &str) -> usize {
         let now = crate::jobs::now_secs();
-        let mut lives: HashMap<String, Value> = HashMap::new();
+        let mut lives: HashMap<String, std::sync::Arc<Value>> = HashMap::new();
         for job in jobs {
-            if let Ok(Some(live)) = job.inner.try_lock().map(|inner| inner.live_copy()) {
+            if let Ok(Some(live)) = job.inner.try_lock().map(|inner| inner.live_shared()) {
                 if live.get("updated").as_f64().is_some_and(|at| now - at < 120.0) {
                     lives.insert(job.account.to_lowercase(), live);
                 }
@@ -288,7 +288,7 @@ impl MarketService {
         }
         let mut cancelled = 0usize;
         for (account, orders) in by_account {
-            let Some((coins, stock)) = witness(&account, lives.get(&account.to_lowercase()), save_dir) else {
+            let Some((coins, stock)) = witness(&account, lives.get(&account.to_lowercase()).map(|live| &**live), save_dir) else {
                 cancelled += self.cancel_rows(&account, &orders.iter().map(|order| order.order_id).collect::<Vec<_>>(), "no witness (account gone)");
                 continue;
             };
@@ -418,7 +418,7 @@ impl MarketService {
             .unwrap_or(995);
         let now = crate::jobs::now_secs();
         for job in jobs {
-            let live = match job.inner.try_lock().map(|inner| inner.live_copy()) {
+            let live = match job.inner.try_lock().map(|inner| inner.live_shared()) {
                 Ok(Some(live)) => live,
                 _ => continue,
             };

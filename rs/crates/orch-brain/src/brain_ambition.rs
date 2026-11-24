@@ -154,10 +154,10 @@ pub(crate) fn other_lives(account: &str) -> Vec<Life> {
     out
 }
 
-fn live_of(orch: &dyn Fleet, account: &str) -> Option<Value> {
+fn live_of(orch: &dyn Fleet, account: &str) -> Option<std::sync::Arc<Value>> {
     let job = orch.jobs().try_lock().ok()?.get(account).cloned()?;
     let inner = job.inner.try_lock().ok()?;
-    inner.live_copy()
+    inner.live_shared()
 }
 /// Gaps the rest of the fleet leaves open, whether another bot holds
 /// this life's primary group too, and the kinds the other bots hold
@@ -271,11 +271,14 @@ pub(crate) fn ensure(orch: &dyn Fleet, life: &mut Life, live: &Value) -> bool {
     let _guard = fleet_guard().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let demand = crate::market_demand::kind_demand();
     let others = other_lives(&life.account);
-    let mut bots = vec![(fleet_bot(life, account_levels(&life.account, Some(live))), Some(live.clone()))];
-    for other in &others {
-        let snapshot = live_of(orch, &other.account);
-        bots.push((fleet_bot(other, account_levels(&other.account, snapshot.as_ref())), snapshot));
+    // The snapshots are borrowed (the bot's own) or shared pointers (the
+    // others', lot 1.5): no copy of a 35 to 85 KB tree per bot.
+    let snapshots: Vec<Option<std::sync::Arc<Value>>> = others.iter().map(|other| live_of(orch, &other.account)).collect();
+    let mut bots: Vec<(FleetBot, Option<&Value>)> = vec![(fleet_bot(life, account_levels(&life.account, Some(live))), Some(live))];
+    for (other, snapshot) in others.iter().zip(&snapshots) {
+        bots.push((fleet_bot(other, account_levels(&other.account, snapshot.as_deref())), snapshot.as_deref()));
     }
+    let null = Value::Null;
     let fleet: Vec<FleetBot> = bots.iter().map(|(bot, _)| bot.clone()).collect();
     let stamp = stamp_now();
     let inputs = DrawInputs::from_demand(demand, Vec::new(), Vec::new());
@@ -283,10 +286,10 @@ pub(crate) fn ensure(orch: &dyn Fleet, life: &mut Life, live: &Value) -> bool {
     let assignments = crate::brain_value::with_context(&inputs.value, &inputs.surplus, |context| lifescape_planner::assign_by_value(&fleet, &inputs.weights, context));
     for assignment in assignments {
         let Some((bot, snapshot)) = bots.iter().find(|(bot, _)| bot.account == assignment.account) else { continue };
-        let snapshot = snapshot.clone().unwrap_or(Value::Null);
+        let snapshot = snapshot.unwrap_or(&null);
         let level_of = |skill: &str| bot.level(skill);
-        let held = |item: &str| live_count(&snapshot, item);
-        let now = BotNow { level_of: &level_of, coins: live_coins(&snapshot), held: &held };
+        let held = |item: &str| live_count(snapshot, item);
+        let now = BotNow { level_of: &level_of, coins: live_coins(snapshot), held: &held };
         let first = (assignment.kind.clone(), assignment.why.clone());
         let Some((ambition, _)) = build(&assignment.account, bot, &now, first, &inputs, &[], stamp) else {
             crate::logln!("brain {}: no ambition buildable, left unassigned", assignment.account);

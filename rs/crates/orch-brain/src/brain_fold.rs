@@ -443,7 +443,7 @@ pub(crate) fn handle_report(orch: &Arc<dyn Fleet>, job: &Arc<Job>, report: &Valu
                 // need. The block reads the measured plan (R7).
                 let needs = crate::brain_tools::plain_needs(needs);
                 let level_of = |skill: &str| reach_level(report, skill).unwrap_or(1);
-                let live = job.inner.try_lock().map(|inner| inner.live_copy()).unwrap_or(None).unwrap_or(lifescape_json::Value::Null);
+                let live = job.inner.try_lock().map(|inner| inner.live_or_null()).unwrap_or_else(|_| crate::jobs::null_live());
                 let view = crate::brain_plan_read::BotView::of(&life);
                 // A load that ran dry after making units is a stock-out:
                 // the obtain is filed as ever, the block never counts

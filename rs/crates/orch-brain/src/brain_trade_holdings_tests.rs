@@ -175,7 +175,7 @@ fn trades_are_identical_on_the_real_lives_through_the_production_readers() {
                 rng.next();
                 let live = live_state(&mut rng);
                 let job = Arc::new(Job::new(&format!("{}trade_{}", crate::brain_commerce::PROBE_PREFIX, life.account)));
-                job.inner.lock().expect("job").live = Some(live.clone());
+                job.inner.lock().expect("job").live = Some(std::sync::Arc::new(live.clone()));
                 let (mut before, mut after) = (crate::brain_plan::ready_ctx(life, &node, &live), crate::brain_plan::ready_ctx(life, &node, &live));
                 publish_reference(&set, &mut before, &node, &live, &job);
                 crate::brain_trade::publish_on(&set, &mut after, &node, &live, &job);

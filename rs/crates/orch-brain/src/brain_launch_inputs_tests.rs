@@ -71,7 +71,7 @@ fn live_snapshot() -> Value {
 
 fn probe_job(tag: &str) -> Arc<Job> {
     let job = Arc::new(Job::new(&format!("{}inputs_{tag}", crate::brain_commerce::PROBE_PREFIX)));
-    job.inner.lock().expect("job").live = Some(live_snapshot());
+    job.inner.lock().expect("job").live = Some(std::sync::Arc::new(live_snapshot()));
     job
 }
 
